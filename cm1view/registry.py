@@ -6,7 +6,7 @@ import os
 import threading
 
 from .fields import Fields
-from .run import CM1Run
+from .run import CM1Run, VolumeCache
 
 _RECENT = os.path.join(os.path.expanduser("~"), ".cache", "cm1view", "recent.json")
 
@@ -75,12 +75,14 @@ def remember(path):
 
 
 class Registry:
-    """CM1Run + Fields per run directory.  Opening a new run frees the 3D caches of
-    the others, so memory stays within one run's budget."""
+    """CM1Run + Fields per run directory.  All runs share one 3D cache (one memory
+    budget, least recently used evicted first), so tabs on different runs do not
+    empty each other's cache."""
 
     def __init__(self, default, cache_gb, workers):
         self.default = os.path.abspath(default)
         self.cache_gb, self.workers = cache_gb, workers
+        self.cache = VolumeCache(cache_gb)
         self._runs = {}
         self._lock = threading.Lock()
 
@@ -88,9 +90,8 @@ class Registry:
         path = os.path.abspath(path or self.default)
         with self._lock:
             if path not in self._runs:
-                run = CM1Run(path, cache_gb=self.cache_gb, workers=self.workers)
-                for other, _ in self._runs.values():
-                    other.clear_cache()
+                run = CM1Run(path, cache_gb=self.cache_gb, workers=self.workers,
+                             cache=self.cache)
                 self._runs[path] = (run, Fields(run))
             remember(path)
             return self._runs[path]

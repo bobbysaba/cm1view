@@ -392,13 +392,21 @@ class Fields:
         with self._lock:
             for k in [k for k in self._planes if k[1] == t and k[0] in dep]:
                 del self._planes[k]
+        self.run.forget(dep, t)
 
     def volume(self, name, t, storm=None):
         d = self.defs[name]
         if d.derived:
-            self.run.load_volumes(d.deps, t)
-            return np.asarray(d.func(lambda n: self.run.volume(n, t), self._ctx(d, storm)),
-                              dtype=np.float32)
+            # derived volumes are cached too (as '~name', '~name@u,v' if storm-relative)
+            ctx = self._ctx(d, storm)
+            key = f"~{name}" + ("@{:.3f},{:.3f}".format(*ctx["storm"]) if d.storm else "")
+            vol = self.run.cached(key, t)
+            if vol is None:
+                self.run.load_volumes(d.deps, t)
+                vol = np.asarray(d.func(lambda n: self.run.volume(n, t), ctx),
+                                 dtype=np.float32)
+                self.run._insert(key, t, vol)
+            return vol
         vol = self.run.volume(name, t)
         return vol if d.scale == 1.0 else vol * np.float32(d.scale)
 

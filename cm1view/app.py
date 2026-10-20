@@ -556,8 +556,8 @@ class Viewer:
         self.rp_modal = pn.Modal(
             _html('<div class="cv-maptitle" style="font-size:16px"><b>Open a CM1 run</b>'
                   '</div><div class="cv-hint">Type or paste a run directory, or pick one '
-                  'below. Opening a run reloads the page; 3D caches of other runs are '
-                  'freed.</div>'),
+                  'below. Opening a run reloads the page; open runs share one 3D cache '
+                  '(least recently used fields are freed first).</div>'),
             self.rp_path, self.rp_msg, pn.Row(self.rp_list, self.rp_dirs, margin=0),
             self.rp_recent, pn.Row(self.rp_open),
             _html(f'<div class="cv-h" style="margin-top:14px">This run</div>'
@@ -1315,7 +1315,23 @@ class Viewer:
             pn.state.add_periodic_callback(self._update_cache_html, period=3000)
         self._update_cache_html()
 
+    def close(self):
+        """The browser session ended: stop its jobs and free its threads and data
+        (otherwise every page load leaves a thread and ~20 MB behind)."""
+        for k in self.gen:
+            self.gen[k] += 1  # running jobs see a newer generation and stop
+        if self._play_cb is not None:
+            self._play_cb.stop()
+        for p in self.pools.values():
+            p.shutdown(wait=False, cancel_futures=True)
+        self._figs, self.results, self._snd_last, self._s3 = {}, [], None, None
+        self._closed = True
+
+    _closed = False
+
     def _schedule(self, fn):
+        if self._closed:  # session gone: late results are dropped
+            return
         if self.doc is not None:
             self.doc.add_next_tick_callback(fn)
         else:  # e.g. tests without a server
@@ -1751,6 +1767,9 @@ class Viewer:
         if g != self.gen["map"]:
             return
         try:
+            if any(pdecomp.is_pdecomp(self.F, n) for n in
+                   [spec["fill"]["var"]] + [o["var"] for o in spec["ov"] if o["on"]]):
+                pdecomp.source(self.run, spec["t"])  # file version tag, off the page thread
             res = render.compute_map(self.F, spec)
         except (MissingAtTime, FileBusy) as e:  # fields at other times only / being written
             res = e
@@ -1828,7 +1847,7 @@ class Viewer:
         if note:
             parts.append(f'<span>storm-relative vorticity {note[2]}</span>')
         if any(pdecomp.is_pdecomp(F, n) for n in names):
-            kind, desc = pdecomp.source(run, spec["t"])
+            kind, desc = pdecomp.source(run, spec["t"], block=False)
             col = "#fbbf24" if kind == "file-old" else "inherit"
             parts.append(f'<span style="color:{col}">pressure decomposition {desc}</span>')
         stride = res["win"][4]
@@ -1853,7 +1872,10 @@ class Viewer:
         if key not in _BASE_CACHE:
             if not all(run.has(v) for v in BASE_VARS):
                 return None
-            _BASE_CACHE[key] = {v: run.read_column(v, 0, 0, 0) for v in BASE_VARS}
+            # horizontally uniform: the domain mean is the column, and mean_profiles
+            # reads in the reader processes (a column costs a full read anyway)
+            _BASE_CACHE[key] = {v: np.asarray(p, np.float32)
+                                for v, p in run.mean_profiles(BASE_VARS, 0).items()}
         b = _BASE_CACHE[key]
         storm, custom = self._item_storm(spec, spec["t"])
         return thermo.analyze(run.z * 1000.0, b["prs0"], b["th0"], b["qv0"],
@@ -2353,6 +2375,8 @@ class Viewer:
         if final:
             self.trk_stop_btn.disabled = True
             self.trk_status.object = self._track_summary()
+            if self._storm_fields_shown():
+                self.request_map()
             if self.points and (self.storm.value == "track"
                                 or any(k == "trk" for k, _, _ in self.points)):
                 self.request_soundings()
@@ -2398,7 +2422,9 @@ class Viewer:
         if not ts:
             self.trk_status.object = self._track_summary()
         self._update_track_now()
-        if self._storm_fields_shown():  # their storm motion comes from the track
+        # storm-relative fields take their motion from the track: redraw, but not for
+        # every fix while auto-tracking (that ends with one redraw in _apply_track)
+        if self._storm_fields_shown() and self.trk_stop_btn.disabled:
             self.request_map()
 
     def _update_track_now(self):
@@ -2518,7 +2544,11 @@ class Viewer:
                 aspect = (W * spec["ztop"]) / (max(s[-1], 1e-6) * H)
                 out["vec"] = render.section_vectors(s, zq, upar, w, n_across=spec["density"],
                                                     aspect=aspect, ref_speed=spec["ref"])
+            if any(pdecomp.is_pdecomp(F, n) for n in (spec["fill"], spec["cont"])):
+                pdecomp.source(run, t)  # file version tag, off the page thread
             res = out
+        except (MissingAtTime, FileBusy) as e:  # expected: no traceback
+            res = e
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             res = e
@@ -2561,7 +2591,8 @@ class Viewer:
             f'<b>{d.label}</b>{cont} · A ({xa:.1f}, {ya:.1f}) → B ({xb:.1f}, {yb:.1f}) km, '
             f'{s[-1]:.1f} km long'
             + (f' · storm-relative vorticity {spec["fnote"][2]}' if spec["fnote"] else "")
-            + (f' · pressure decomposition {pdecomp.source(self.run, spec["t"])[1]}'
+            + (f' · pressure decomposition '
+               f'{pdecomp.source(self.run, spec["t"], block=False)[1]}'
                if any(pdecomp.is_pdecomp(F, n) for n in (spec["fill"], spec["cont"])) else "")
             + '</div>')
 
@@ -2667,6 +2698,8 @@ class Viewer:
             s3 = dict(t=t, stream=stream, off=self._frame_offset(ss["frame"], spec["storm"]),
                       frame=ss["frame"])
             res = (fig, notes, nf, stride, s3)
+        except (MissingAtTime, FileBusy) as e:  # expected: no traceback
+            res = e
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             res = e
@@ -2732,7 +2765,7 @@ class Viewer:
         or only in the file from the earlier (pre-fix) script."""
         run, label = self.run, None
         if any(pdecomp.is_pdecomp(self.F, n) for n in names) and pdecomp.can_compute(run):
-            kind, _ = pdecomp.source(run, t)
+            kind, _ = pdecomp.source(run, t, block=False)
             write = self.pd_write.value and pdecomp.writable(run, t)
             par = len(os.sched_getaffinity(0)) > 1  # ~45 s with 4 CPUs; writing ~+40 s
             est = {(True, False): "~45 s", (True, True): "~1.5 min",
@@ -2779,6 +2812,9 @@ class Viewer:
         else:
             where = ("written to " + os.path.basename(self.run.files[t]) if res["wrote"]
                      else "kept in memory, not written to the file")
+            if res.get("write_error"):
+                where = (f'<span style="color:#f87171">kept in memory; writing to the file '
+                         f'failed: {res["write_error"]}</span>')
             self._set_status(f'Pressure decomposition for {self.run.time_label(t)} computed '
                              f'in {res["elapsed"]:.0f} s with {pdecomp.script_name()}; {where}')
             self.F.forget(t, pdecomp.NAMES)
@@ -2921,6 +2957,7 @@ def create_app(reg, maxpix=900):
         error = f"Could not open {want}: {e}. Showing the default run instead."
         run, fields = reg.get()
     v = Viewer(run, fields, maxpix=maxpix, error=error)
+    pn.state.on_session_destroyed(lambda ctx: v.close())
     # the template only supplies the dark theme: header and margins are hidden so the
     # visualisations fill the window and the controls float over them
     chrome = ("#header{display:none !important} #main{padding:0 !important;"

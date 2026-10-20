@@ -52,6 +52,25 @@ def _read_volume_worker(path, name, stag, outdir):
     return out
 
 
+def _box(v, stag, i0, i1, j0, j1):
+    """Columns [j0:j1, i0:i1] of an open (time, z, y, x) variable, on scalar points."""
+    if stag == "x":
+        a = np.asarray(v[0, :, j0:j1, i0:i1 + 1], dtype=np.float32)
+        return 0.5 * (a[..., :-1] + a[..., 1:])
+    if stag == "y":
+        a = np.asarray(v[0, :, j0:j1 + 1, i0:i1], dtype=np.float32)
+        return 0.5 * (a[:, :-1] + a[:, 1:])
+    a = np.asarray(v[0, :, j0:j1, i0:i1], dtype=np.float32)
+    return 0.5 * (a[:-1] + a[1:]) if stag == "z" else a
+
+
+def _read_box_worker(path, name, stag, box):
+    """Process-pool worker: columns of one 3D field (small: returned directly)."""
+    with netCDF4.Dataset(path) as d:
+        d.set_auto_mask(False)
+        return _box(d[name], stag, *box)
+
+
 def _mean_profile_worker(path, name, stag):
     """Process-pool worker: horizontal mean profile of one 3D field."""
     with netCDF4.Dataset(path) as d:
@@ -75,6 +94,54 @@ def parse_namelist(path):
                 except ValueError:
                     out[key] = val
     return out
+
+
+class VolumeCache:
+    """LRU of full 3D volumes shared by all open runs, within one memory budget.
+    Keys are (run path, name, time index)."""
+
+    def __init__(self, cache_gb):
+        self.bytes = int(cache_gb * 1024**3)
+        self._d = OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        with self.lock:
+            v = self._d.get(key)
+            if v is not None:
+                self._d.move_to_end(key)
+            return v
+
+    def put(self, key, vol, protect=()):
+        """Insert, then evict least-recently-used entries over the budget, never the
+        new one nor those in `protect` (the rest of the same request)."""
+        with self.lock:
+            self._d[key] = vol
+            self._d.move_to_end(key)
+            total = sum(a.nbytes for a in self._d.values())
+            for k in list(self._d):
+                if total <= self.bytes:
+                    break
+                if k != key and k not in protect:
+                    total -= self._d.pop(k).nbytes
+
+    def drop(self, pred):
+        """Remove entries whose key satisfies pred(key); returns the bytes freed."""
+        with self.lock:
+            ks = [k for k in self._d if pred(k)]
+            return sum(self._d.pop(k).nbytes for k in ks)
+
+    def trim(self, nbytes):
+        """Evict least-recently-used entries until `nbytes` are freed."""
+        freed = 0
+        with self.lock:
+            while self._d and freed < nbytes:
+                freed += self._d.popitem(last=False)[1].nbytes
+        return freed
+
+    def info(self):
+        with self.lock:
+            return sum(a.nbytes for a in self._d.values()), len(self._d)
 
 
 class MissingAtTime(LookupError):
@@ -116,13 +183,13 @@ class VarInfo:
 
 
 class CM1Run:
-    def __init__(self, path, cache_gb=12.0, workers=None):
+    def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         self.path = os.path.abspath(path)
         self.files = sorted(glob.glob(os.path.join(self.path, "cm1out_[0-9]*.nc")))
         if not self.files:
             raise FileNotFoundError(f"no cm1out_NNNNNN.nc files found in {self.path}")
 
-        with netCDF4.Dataset(self.files[0]) as d:
+        with IO_LOCK, netCDF4.Dataset(self.files[0]) as d:
             self.xh = np.asarray(d["xh"][:], dtype=np.float64)  # km
             self.yh = np.asarray(d["yh"][:], dtype=np.float64)
             self.z = np.asarray(d["z"][:], dtype=np.float64)
@@ -147,7 +214,7 @@ class CM1Run:
         self.var_times = {}
         for n in sorted(set().union(*names) - set(self.vars)):
             ts = [t for t, ns in enumerate(names) if n in ns]
-            with netCDF4.Dataset(self.files[ts[-1]]) as d:
+            with IO_LOCK, netCDF4.Dataset(self.files[ts[-1]]) as d:
                 info = _var_info(n, d[n])
             if info is not None:
                 self.vars[n] = info
@@ -161,9 +228,11 @@ class CM1Run:
         self.extra = OrderedDict()
         self._writing = set()  # times whose file is being written: no reads meanwhile
 
-        self.cache_bytes = int(cache_gb * 1024**3)
-        self._cache = OrderedDict()  # (name, tindex) -> float32 (nk, nj, ni)
-        self._cache_lock = threading.Lock()
+        # full 3D volumes (float32, nk x nj x ni), possibly shared with other runs
+        self._vc = cache if cache is not None else VolumeCache(cache_gb)
+        self._cache_lock = threading.Lock()  # guards self.extra
+        self._inflight = {}  # (name, t) -> Event: being read by some job right now
+        self._inflight_lock = threading.Lock()
         self._open = OrderedDict()  # tindex -> netCDF4.Dataset
         if workers is None:
             workers = len(os.sched_getaffinity(0))
@@ -196,7 +265,7 @@ class CM1Run:
             pass
         times, names = [], []
         for f in self.files:
-            with netCDF4.Dataset(f) as d:
+            with IO_LOCK, netCDF4.Dataset(f) as d:  # (netCDF/HDF5 is not thread safe)
                 times.append(float(d["time"][0]))
                 names.append(sorted(n for n, v in d.variables.items()
                                     if v.dimensions[:1] == ("time",) and v.ndim in (3, 4)))
@@ -254,9 +323,7 @@ class CM1Run:
                             self.vars[n] = _var_info(n, d[n])
                             if n in self.var_times:
                                 self.var_times[n] = self.var_times[n] | {t}
-        with self._cache_lock:  # cached volumes of rewritten fields are stale
-            for n in names:
-                self._cache.pop((n, t), None)
+        self.forget(names, t)  # cached volumes of rewritten fields are stale
 
     def _ds(self, t):
         self._not_writing(t)
@@ -272,15 +339,21 @@ class CM1Run:
             self._open.move_to_end(t)
         return d
 
+    @property
+    def cache_bytes(self):
+        return self._vc.bytes
+
     def cached(self, name, t):
         with self._cache_lock:
             vol = self.extra.get((name, t))
-            if vol is not None:
-                return vol
-            vol = self._cache.get((name, t))
-            if vol is not None:
-                self._cache.move_to_end((name, t))
-            return vol
+        return vol if vol is not None else self._vc.get((self.path, name, t))
+
+    def forget(self, names, t):
+        """Drop cached volumes of `names` at time t (and derived volumes named
+        '~name...' built from them)."""
+        names = set(names)
+        self._vc.drop(lambda k: k[0] == self.path and k[2] == t
+                      and (k[1] in names or k[1].split("@")[0].lstrip("~") in names))
 
     def read_level(self, name, t, k=0):
         """One horizontal level of a native field (2D fields ignore k)."""
@@ -326,48 +399,22 @@ class CM1Run:
             return a
         return (1.0 - w) * a + w * self.read_level(name, t, k1)
 
-    def read_column(self, name, t, i, j):
-        """A single column without populating the cache (slow: ~1-3 s)."""
-        info = self.vars[name]
-        with IO_LOCK:
-            v = self._ds(t)[name]
-            if info.stag == "x":
-                a = 0.5 * (v[0, :, j, i] + v[0, :, j, i + 1])
-            elif info.stag == "y":
-                a = 0.5 * (v[0, :, j, i] + v[0, :, j + 1, i])
-            else:
-                a = np.asarray(v[0, :, j, i], dtype=np.float32)
-                if info.stag == "z":
-                    a = 0.5 * (a[:-1] + a[1:])
-        return np.asarray(a, dtype=np.float32)
-
     def read_box(self, name, t, i0, i1, j0, j1):
         """Columns [j0:j1, i0:i1] of a 3D field without populating the cache.  With
         one horizontal level per chunk this costs about as much as a full read, but
-        keeps the cache for the times being browsed."""
+        keeps the cache for the times being browsed.  Read in a reader process when
+        there are several CPUs (the in-process read would hold IO_LOCK for seconds)."""
         info = self.vars[name]
+        self._check(name, t)
+        self._not_writing(t)
+        if self.workers > 1:
+            return self._get_pool().submit(_read_box_worker, self.files[t], name, info.stag,
+                                           (i0, i1, j0, j1)).result()
         with IO_LOCK:
-            v = self._ds(t)[name]
-            if info.stag == "x":
-                a = np.asarray(v[0, :, j0:j1, i0:i1 + 1], dtype=np.float32)
-                a = 0.5 * (a[..., :-1] + a[..., 1:])
-            elif info.stag == "y":
-                a = np.asarray(v[0, :, j0:j1 + 1, i0:i1], dtype=np.float32)
-                a = 0.5 * (a[:, :-1] + a[:, 1:])
-            else:
-                a = np.asarray(v[0, :, j0:j1, i0:i1], dtype=np.float32)
-                if info.stag == "z":
-                    a = 0.5 * (a[:-1] + a[1:])
-        return a
+            return _box(self._ds(t)[name], info.stag, i0, i1, j0, j1)
 
-    def _insert(self, name, t, vol):
-        with self._cache_lock:
-            self._cache[(name, t)] = vol
-            self._cache.move_to_end((name, t))
-            total = sum(a.nbytes for a in self._cache.values())
-            while total > self.cache_bytes and len(self._cache) > 1:
-                _, old = self._cache.popitem(last=False)
-                total -= old.nbytes
+    def _insert(self, name, t, vol, protect=()):
+        self._vc.put((self.path, name, t), vol, {(self.path, n, t) for n in protect})
 
     def _read_volume_local(self, name, t):
         info = self.vars[name]
@@ -378,25 +425,50 @@ class CM1Run:
     def volume(self, name, t):
         vol = self.cached(name, t)
         if vol is None:
-            self._check(name, t)
-            vol = self._read_volume_local(name, t)
-            self._insert(name, t, vol)
+            self.load_volumes([name], t)
+            vol = self.cached(name, t)
+            if vol is None:  # evicted at once by another job: read it uncached
+                self._check(name, t)
+                vol = self._read_volume_local(name, t)
         return vol
 
     def load_volumes(self, names, t, progress=None, cancelled=None):
-        """Ensure several full 3D fields are cached; reads in parallel when
-        more than one CPU is available.  Returns False if cancelled."""
-        missing = [n for n in dict.fromkeys(names) if self.cached(n, t) is None]
-        for n in missing:
-            self._check(n, t)
-        if missing:
+        """Ensure several full 3D fields are cached; reads in reader processes (in
+        parallel) when there is more than one CPU.  A field another job is already
+        reading is waited for, not read twice.  Returns False if cancelled."""
+        names = list(dict.fromkeys(names))
+        for _ in range(3):  # (only repeats if a waited-for field was evicted at once)
+            missing = [n for n in names if self.cached(n, t) is None]
+            if not missing:
+                return True
+            for n in missing:
+                self._check(n, t)
             self._not_writing(t)
+            mine, waits = [], []
+            with self._inflight_lock:
+                for n in missing:
+                    ev = self._inflight.get((n, t))
+                    if ev is None:
+                        self._inflight[(n, t)] = threading.Event()
+                        mine.append(n)
+                    else:
+                        waits.append(ev)
+            try:
+                if mine and not self._read_into_cache(mine, t, names, progress, cancelled):
+                    return False
+            finally:
+                with self._inflight_lock:
+                    for n in mine:
+                        self._inflight.pop((n, t)).set()
+            for ev in waits:
+                ev.wait()
+        return True
+
+    def _read_into_cache(self, missing, t, protect, progress, cancelled):
         total, done = len(missing), 0
         if progress:
-            progress(done, total, missing[0] if missing else "")
-        if not missing:
-            return True
-        if self.workers > 1 and len(missing) > 1 and self._shm:
+            progress(done, total, missing[0])
+        if self.workers > 1 and self._shm:
             futs = {
                 self._get_pool().submit(
                     _read_volume_worker,
@@ -413,7 +485,7 @@ class CM1Run:
                 n = futs[fut]
                 path = fut.result()
                 try:
-                    self._insert(n, t, np.load(path))
+                    self._insert(n, t, np.load(path), protect)
                 finally:
                     os.remove(path)
                 done += 1
@@ -425,7 +497,7 @@ class CM1Run:
                 return False
             if progress:
                 progress(done, total, n)
-            self._insert(n, t, self._read_volume_local(n, t))
+            self._insert(n, t, self._read_volume_local(n, t), protect)
             done += 1
             if progress:
                 progress(done, total, n)
@@ -455,7 +527,7 @@ class CM1Run:
         total = len(todo)
         if progress and todo:
             progress(0, total, todo[0])
-        if self.workers > 1 and len(todo) > 1:
+        if self.workers > 1 and todo:
             from concurrent.futures import as_completed
 
             futs = {self._get_pool().submit(_mean_profile_worker, self.files[t], n,
@@ -475,24 +547,18 @@ class CM1Run:
 
     # ------------------------------------------------------------------ misc
     def cache_info(self):
-        with self._cache_lock:
-            used = sum(a.nbytes for a in self._cache.values())
-            n = len(self._cache)
+        """(GB used, GB budget, fields) of the 3D cache (shared by the open runs)."""
+        used, n = self._vc.info()
         return used / 1024**3, self.cache_bytes / 1024**3, n
 
     def clear_cache(self):
-        with self._cache_lock:
-            self._cache.clear()
+        """Free this run's cached volumes."""
+        self._vc.drop(lambda k: k[0] == self.path)
 
     def trim_cache(self, nbytes):
-        """Evict least-recently-used cached volumes until `nbytes` are freed (or the
-        cache is empty).  Returns the bytes freed."""
-        freed = 0
-        with self._cache_lock:
-            while self._cache and freed < nbytes:
-                _, old = self._cache.popitem(last=False)
-                freed += old.nbytes
-        return freed
+        """Evict least-recently-used cached volumes (of any run) until `nbytes` are
+        freed (or the cache is empty).  Returns the bytes freed."""
+        return self._vc.trim(nbytes)
 
     def ij(self, x, y):
         """Nearest scalar-grid indices for a position in km."""

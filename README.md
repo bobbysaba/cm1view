@@ -134,7 +134,8 @@ resolution, reflectivity floor).
 **Switching runs.** Click the run name in the header. You can type a directory, pick
 one of the runs next to the current one (*Runs here*), browse with *Folders* (↑ .. goes
 up, a click opens a folder; ● marks folders with CM1 output), or pick a recent run. This reloads the page
-with `?run=/path`. Opening a run frees the 3D caches of the other runs.
+with `?run=/path`. Open runs share one 3D cache (`--cache-gb`); the least recently used
+fields are freed first, so tabs on different runs do not empty each other's cache.
 
 **Performance.** CM1 stores each 3D field one horizontal level per chunk. Plan views
 are therefore instant, but anything that needs whole columns (soundings, sections, 3D)

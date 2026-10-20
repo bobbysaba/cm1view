@@ -38,6 +38,7 @@ MAX_TIMES = 2      # computed times kept in memory (6 float32 volumes each)
 
 _lock = threading.Lock()
 _running = {}      # (run path, t) -> started (time.time())
+_one = threading.Lock()  # one decomposition at a time per server (~40 GB each)
 
 
 def script():
@@ -79,21 +80,26 @@ def available(run, t):
 _version_cache = {}
 
 
-def source(run, t):
+def source(run, t, block=True):
     """Where the decomposition at time t comes from: ('computed' | 'file-fixed' |
-    'file-old' | 'busy' | None, description)."""
+    'file-old' | 'busy' | 'pending' | None, description).  block=False (from the
+    page-updating thread) never waits for the file lock: 'pending' if the file's
+    version tag has not been read yet (the background jobs read it)."""
     from .run import FileBusy
 
     kind = None
     if run.in_file("p_b", t):
         key = (run.path, t)
         if key not in _version_cache:
+            if not IO_LOCK.acquire(blocking=block):
+                return "pending", "checking the output file"
             try:
-                with IO_LOCK:
-                    v = run._ds(t)["p_b"]
-                    _version_cache[key] = getattr(v, "pdecomp_version", "")
+                v = run._ds(t)["p_b"]
+                _version_cache[key] = getattr(v, "pdecomp_version", "")
             except FileBusy:
                 return "busy", "being written to the output file"
+            finally:
+                IO_LOCK.release()
         ver = _version_cache[key]
         kind = "file-fixed" if ver else "file-old"
     if all((n, t) in run.extra for n in NAMES):
@@ -213,23 +219,28 @@ def _worker(script_path, run_path, file0, file_t, pre0, pre_t, nthreads, outdir,
             solver = P.setup_pressure_solver(dom, base, periodic)
             out = P.pressure_decomposition(file_t, dom, base, solver, write=False)
         del at
-        wrote = False
-        if write:
-            ready.set()
-            if not go.wait(600):
-                raise RuntimeError("the viewer did not release the file for writing")
-            ds = nc_dataset(file_t, "r+")
-            try:
-                P.write_data(ds, out)
-            finally:
-                ds.close()
-            wrote = True
+    # the in-memory copy first: a failed write must not lose the computation
     paths, tag = {}, uuid.uuid4().hex
     for n in NAMES:
         p = os.path.join(outdir, f"cm1view-pdecomp-{os.getpid()}-{tag}-{n}.npy")
         np.save(p, np.asarray(out[n], dtype=np.float32))
         paths[n] = p
-    return paths, log.getvalue(), wrote
+    wrote, werr = False, None
+    if write:
+        ready.set()
+        if not go.wait(600):
+            return paths, log.getvalue(), False, "the viewer did not release the file"
+        try:
+            with contextlib.redirect_stdout(log):
+                ds = nc_dataset(file_t, "r+")
+                try:
+                    P.write_data(ds, out)
+                finally:
+                    ds.close()
+            wrote = True
+        except Exception as e:  # noqa: BLE001  (e.g. the file is open elsewhere)
+            werr = f"{type(e).__name__}: {e}"
+    return paths, log.getvalue(), wrote, werr
 
 
 def writable(run, t):
@@ -247,7 +258,14 @@ def compute(run, t, progress=None, write=False):
             raise RuntimeError(f"already being computed for {run.time_label(t)}")
         _running[key] = time.time()
     try:
-        return _compute(run, t, progress, write)
+        t_wait = time.time()
+        while not _one.acquire(timeout=1.0):  # another one is running: wait for it
+            if progress:
+                progress(time.time() - t_wait, "waiting for another decomposition")
+        try:
+            return _compute(run, t, progress, write)
+        finally:
+            _one.release()
     finally:
         with _lock:
             _running.pop(key, None)
@@ -313,7 +331,7 @@ def _compute(run, t, progress, write):
             pre0, pre_t = {}, {}  # the worker owns (and removes) them now
             while True:
                 try:
-                    paths, log, wrote = fut.result(timeout=1.0)
+                    paths, log, wrote, werr = fut.result(timeout=1.0)
                     break
                 except FutTimeout:
                     if write and not began and ready.is_set():
@@ -346,7 +364,9 @@ def _compute(run, t, progress, write):
         for old in times[:-MAX_TIMES]:
             for n in NAMES:
                 run.extra.pop((n, old), None)
-    return dict(elapsed=time.time() - t0, wrote=wrote, parallel=parallel, log=log)
+    source(run, t)  # read the (new) version tag here, not in the page-updating thread
+    return dict(elapsed=time.time() - t0, wrote=wrote, parallel=parallel, log=log,
+                write_error=werr)
 
 
 def _read_raw(path, name, outdir):
