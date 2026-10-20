@@ -46,10 +46,22 @@ it (⤢) gives the panel the whole window; **Map** brings the map back. Less-use
 in the Sounding and Track tabs sit behind **⚙ Settings**.
 
 **Zooming soundings.** Click the skew-T/hodograph or the profile panels to expand the
-panel. All sounding controls stay available. In the expanded view the graphics (SVG,
-sharp at any zoom) are zoomable: drag a box to zoom into it, Shift-drag or right-drag to
-pan, Ctrl/⌘-scroll or pinch to zoom, double-click or ⟲ to reset, ⤓ to save the image.
-The zoom is kept while the sounding updates (e.g. stepping in time). The
+panel. All sounding controls stay available. In the expanded view, drag a box on the
+skew-T, the hodograph or a profile panel: the figure is redrawn with that panel's axes
+limits (temperature / pressure, u / v, value / height), so axes, labels and line widths
+stay intact (zoomed skew-Ts fill their panel; barbs and labels follow the zoom). −
+widens the view, double-click or ⟲ returns to the full view, ⤓ saves the image (SVG).
+The zoom is kept while the sounding updates (e.g. stepping in time); switching m/s ↔ kt
+or the profile top resets the affected panels.
+
+**Plot style** (🎨 in the Sounding tab): colours of temperature, dewpoint, parcel and
+base state; widths of the T/Td, parcel, hodograph and profile lines; skew-T top and
+temperature range; hodograph ring spacing and top; CAPE/CIN shading, wind barbs and
+adiabats on or off. Changes only redraw (no new analysis). *Default style* resets them.
+
+**Level units.** In the parameter table, click the units cell (m ⇄) of a level row
+(LCL, LFC, EL, MU parcel, freezing level, effective inflow) to show it in hPa; click
+again for metres. The choice stays while the soundings update. The
 **Profile panels … km AGL** selector just above the profile panels sets their height
 range. It does not change the skew-T.
 
@@ -120,7 +132,8 @@ resolution, reflectivity floor).
 - Once a scene is shown, changing a 3D control re-renders it.
 
 **Switching runs.** Click the run name in the header. You can type a directory, pick
-one of the runs next to the current one, or pick a recent run. This reloads the page
+one of the runs next to the current one (*Runs here*), browse with *Folders* (↑ .. goes
+up, a click opens a folder; ● marks folders with CM1 output), or pick a recent run. This reloads the page
 with `?run=/path`. Opening a run frees the 3D caches of the other runs.
 
 **Performance.** CM1 stores each 3D field one horizontal level per chunk. Plan views

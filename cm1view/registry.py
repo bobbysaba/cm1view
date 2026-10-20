@@ -34,6 +34,28 @@ def sibling_runs(path, limit=60):
     return sorted(out)
 
 
+def subfolders(path, limit=400):
+    """{label: path} for a folder browser: '..' first, then the subfolders of `path`
+    (hidden ones skipped); folders that hold CM1 output are marked ● with a file count."""
+    path = os.path.abspath(path)
+    out = {}
+    parent = os.path.dirname(path)
+    if parent != path:
+        out["↑  ..  (" + os.path.basename(parent.rstrip("/") or "/") + ")"] = parent
+    try:
+        names = sorted(e.name for e in os.scandir(path)
+                       if e.is_dir(follow_symlinks=True) and not e.name.startswith("."))
+    except OSError:
+        return out
+    for n in names[:limit]:
+        d = os.path.join(path, n)
+        k = count_files(d)
+        out[f"●  {n}   ({k} files)" if k else f"▸  {n}"] = d
+    if len(names) > limit:
+        out[f"… {len(names) - limit} more (type the name)"] = path
+    return out
+
+
 def recent_runs():
     try:
         with open(_RECENT) as f:

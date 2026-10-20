@@ -27,7 +27,7 @@ from . import pdecomp  # noqa: E402
 from . import registry, render, sounding_plot as sp, thermo, track as trk, volume3d  # noqa: E402
 from .run import FileBusy, MissingAtTime  # noqa: E402
 from .fields import CMAPS, palette  # noqa: E402
-from .zoomview import ZoomImage  # noqa: E402
+from .zoomview import ParamTable, ZoomImage  # noqa: E402
 from .theme import (  # noqa: E402
     ACCENT, BG, CSS, GRID, MUTED, PANEL, POINT_COLORS, POINT_LABELS, TEXT,
 )
@@ -71,6 +71,17 @@ def _svg(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="svg", facecolor=fig.get_facecolor())
     return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+# run picker dialog in the dark theme (Panel's dialog box is white by default)
+RP_DARK = f"""
+.dialog-content {{ background-color: {PANEL} !important; color: {TEXT};
+  border: 1px solid {GRID}; border-radius: 12px; padding: 14px 16px 20px 16px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.55); }}
+.dialog-overlay {{ background-color: rgba(5, 8, 14, 0.78) !important; }}
+.pnx-dialog-close {{ color: {MUTED} !important; }}
+.pnx-dialog-close:hover {{ color: {TEXT} !important; }}
+"""
 
 
 # Map ranges: equal km per pixel in x and y at every plot size.  The pan/zoom limits
@@ -449,6 +460,42 @@ class Viewer:
         self.follow = pn.widgets.Checkbox(name="Follow time", value=True,
                                           margin=(5, 10, 14, 10))
 
+        # ---- sounding plot style (redraws only) and zoom limits
+        st = sp.STYLE
+        ck = dict(margin=(5, 10, 14, 10))
+        self.ps = dict(
+            t=pn.widgets.ColorPicker(name="Temperature", value=st["t_color"], width=86),
+            td=pn.widgets.ColorPicker(name="Dewpoint", value=st["td_color"], width=86),
+            parcel=pn.widgets.ColorPicker(name="Parcel", value=st["parcel_color"], width=86),
+            base=pn.widgets.ColorPicker(name="Base state", value=st["base_color"], width=86),
+            lw=pn.widgets.FloatSlider(name="T / Td width", start=0.5, end=5, step=0.1,
+                                      value=st["lw"], width=130),
+            parcel_lw=pn.widgets.FloatSlider(name="Parcel width", start=0.5, end=4, step=0.1,
+                                             value=st["parcel_lw"], width=130),
+            hodo_lw=pn.widgets.FloatSlider(name="Hodograph width", start=0.5, end=5, step=0.1,
+                                           value=st["hodo_lw"], width=130),
+            prof_lw=pn.widgets.FloatSlider(name="Profile width", start=0.5, end=4, step=0.1,
+                                           value=st["prof_lw"], width=130),
+            ptop=pn.widgets.Select(name="Skew-T top (hPa)", value=100,
+                                   options=[100, 150, 200, 250, 300, 400, 500, 600, 700],
+                                   width=110),
+            tmin=pn.widgets.FloatInput(name="T left (°C)", value=None, placeholder="auto",
+                                       width=90),
+            tmax=pn.widgets.FloatInput(name="T right (°C)", value=None, placeholder="auto",
+                                       width=90),
+            ring=pn.widgets.Select(name="Hodograph rings", value=0,
+                                   options={"Auto": 0, "5": 5, "10": 10, "20": 20}, width=110),
+            htop=pn.widgets.Select(name="Hodograph top (km)", value=12,
+                                   options=[3, 6, 9, 12, 15], width=120),
+            shade=pn.widgets.Checkbox(name="CAPE / CIN shading", value=st["shade"], **ck),
+            barbs=pn.widgets.Checkbox(name="Wind barbs", value=st["barbs"], **ck),
+            guides=pn.widgets.Checkbox(name="Adiabats & mixing lines", value=st["guides"], **ck),
+        )
+        self.ps_reset = pn.widgets.Button(name="Default style", button_type="light",
+                                          button_style="outline", height=32,
+                                          margin=(5, 4, 8, 10))
+        self.snd_lim = {}  # zoom: skew, hodo, prof_z, prof_x (see _on_zoom_box)
+
         self.status = _html()
         # pressure decomposition for the shown time (map caption / cross-section tab)
         pdb = dict(button_type="warning", button_style="outline", height=30,
@@ -491,7 +538,9 @@ class Viewer:
         self.rp_path = pn.widgets.TextInput(name="Run directory (contains cm1out_NNNNNN.nc)",
                                             value=run.path, width=620)
         self.rp_msg = _html()
-        self.rp_list = pn.widgets.Select(name="Runs here", options={}, width=620, size=7)
+        self.rp_list = pn.widgets.Select(name="Runs here", options={}, width=330, size=11)
+        # folder browser: '..' and the subfolders of the typed path (● = has output)
+        self.rp_dirs = pn.widgets.Select(name="Folders", options={}, width=280, size=11)
         recent = [p for p in registry.recent_runs() if p != run.path]
         self.rp_recent = pn.widgets.Select(
             name="Recent", options={"—": ""} | {p: p for p in recent}, value="", width=620)
@@ -509,13 +558,14 @@ class Viewer:
                   '</div><div class="cv-hint">Type or paste a run directory, or pick one '
                   'below. Opening a run reloads the page; 3D caches of other runs are '
                   'freed.</div>'),
-            self.rp_path, self.rp_msg, self.rp_list, self.rp_recent,
-            pn.Row(self.rp_open),
+            self.rp_path, self.rp_msg, pn.Row(self.rp_list, self.rp_dirs, margin=0),
+            self.rp_recent, pn.Row(self.rp_open),
             _html(f'<div class="cv-h" style="margin-top:14px">This run</div>'
                   f'<div class="cv-run"><b>{run.path}</b><br>{run.ni}×{run.nj}×{run.nk} · '
                   f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
                   f'({run.umove:g}, {run.vmove:g}) m/s</div>'),
-            pn.Row(self.cache_html, self.clear_btn), width=680, margin=10)
+            pn.Row(self.cache_html, self.clear_btn), width=680, margin=10,
+            stylesheets=[RP_DARK])
 
         self._rp_busy = False
 
@@ -536,17 +586,25 @@ class Viewer:
                 self.rp_msg.object = ('<div class="cv-status" style="color:#f87171">'
                                       'Not a directory</div>')
             self.rp_open.disabled = n == 0
-            if os.path.isdir(p):
-                runs = registry.sibling_runs(p)
+            base = p if os.path.isdir(p) else os.path.dirname(p)
+            if os.path.isdir(base):
+                runs = registry.sibling_runs(base)
                 self._rp_busy = True
                 try:
                     self.rp_list.options = {"/".join(r.split("/")[-3:]): r for r in runs}
                     self.rp_list.value = p if p in runs else None
+                    self.rp_dirs.options = registry.subfolders(base)
+                    self.rp_dirs.value = None
                 finally:
                     self._rp_busy = False
 
+        def browse(ev):  # into a folder: it becomes the path, the lists follow it
+            if ev.new and not self._rp_busy:
+                self.rp_path.param.update(value=ev.new, value_input=ev.new)
+
         self.rp_list.param.watch(pick, "value")
         self.rp_recent.param.watch(pick, "value")
+        self.rp_dirs.param.watch(browse, "value")
         self.rp_path.param.watch(check, "value_input")
         self.rp_path.param.watch(check, "value")
         self.rp_path.param.trigger("value")
@@ -823,7 +881,8 @@ class Viewer:
         self.skew_png = self._zoom_image("skewt_hodograph.svg",
                                          styles={"flex": "1 1 640px", "min-width": "0"})
         self.prof_png = self._zoom_image("profiles.svg")
-        self.params = _html(styles={"flex": "1 1 380px", "min-width": "0"})
+        self.params = ParamTable(stylesheets=[CSS], sizing_mode="stretch_width",
+                                 styles={"flex": "1 1 380px", "min-width": "0"})
         self.snd_head = _html(
             '<div class="cv-empty">Click anywhere on the map to drop a sounding. '
             '<kbd>Shift</kbd>-click to add up to four for comparison.</div>',
@@ -937,11 +996,20 @@ class Viewer:
                              self.storm_follow, flex_wrap="wrap", align_items="flex-end",
                              gap="0 4px", sizing_mode="stretch_width",
                              styles={"border-top": f"1px solid {GRID}"})
+        ps = self.ps
+        snd_look = pn.FlexBox(*[ps[k] for k in ("t", "td", "parcel", "base", "lw", "parcel_lw",
+                                                "hodo_lw", "prof_lw", "ptop", "tmin", "tmax",
+                                                "ring", "htop", "shade", "barbs", "guides")],
+                              self.ps_reset, flex_wrap="wrap", align_items="flex-end",
+                              gap="0 6px", sizing_mode="stretch_width",
+                              styles={"border-top": f"1px solid {GRID}"})
+        look_btn = _settings_toggle(snd_look)
+        look_btn.name = "🎨 Plot style"
         snd_opts = pn.Column(
             pn.FlexBox(self.mean_btn, self.pin_btn, self.snd_clear, self.compare,
-                       _settings_toggle(snd_set), flex_wrap="wrap", align_items="center",
-                       gap="0 4px", sizing_mode="stretch_width"),
-            snd_set, sizing_mode="stretch_width", margin=0)
+                       _settings_toggle(snd_set), look_btn, flex_wrap="wrap",
+                       align_items="center", gap="0 4px", sizing_mode="stretch_width"),
+            snd_set, snd_look, sizing_mode="stretch_width", margin=0)
         d = self.xs_drawer = Drawer()
         xs_style = d.add("fill", "Fill style", self.xs_cmap, self.xs_rev, self.xs_auto,
                          self.xs_min, self.xs_max)
@@ -1165,7 +1233,22 @@ class Viewer:
         self.snd_clear.on_click(self._on_clear_soundings)
         for w in (self.storm_u, self.storm_v, self.parcel, self.wunits, self.avg,
                   self.prof_top, self.base_on, self.compare):
-            w.param.watch(rs, "value")
+            w.param.watch(rs, "value", precedence=1)  # after the zoom resets below
+        rl = lambda *e: self._restyle()  # noqa: E731
+        for k, w in self.ps.items():
+            w.param.watch(rl, "value_throttled" if isinstance(w, pn.widgets.FloatSlider)
+                          else "value")
+        self.ps_reset.on_click(self._on_style_reset)
+
+        def unzoom(*keys):
+            def f(*e):
+                for k in keys:
+                    self.snd_lim.pop(k, None)
+            return f
+        # zoom limits in wind units / below the profile top no longer fit
+        # (before the sounding request those changes also trigger)
+        self.wunits.param.watch(unzoom("hodo", "prof_x"), "value")
+        self.prof_top.param.watch(unzoom("prof_z", "prof_x"), "value")
         rx = lambda *e: self.request_xsec()  # noqa: E731
         for w in (self.xs_cont, self.xs_levels, self.xs_vecs, self.xs_cmap, self.xs_rev,
                   self.xs_ccolor, self.xs_negdash, self.xs_vframe, self.xs_vref,
@@ -1326,6 +1409,9 @@ class Viewer:
         z = ZoomImage(filename=filename, interactive=self.full, sizing_mode="stretch_width",
                       visible=kw.pop("visible", False), **kw)
         z.param.watch(lambda e: self._set_full(True), "clicks")  # click: expand
+        z.param.watch(partial(self._on_zoom_box, z), "box")
+        z.param.watch(lambda e: self._on_zoom_out(z), "zoom_out")
+        z.param.watch(lambda e: self._on_zoom_reset(z), "resets")
         return z
 
     def _zoom_images(self):
@@ -1792,7 +1878,7 @@ class Viewer:
             self.results = []
             self.skew_png.visible = self.prof_png.visible = self.snd_tabs.visible = False
             self.prof_row.visible = False
-            self.params.object = ""
+            self.params.html = ""
             self.snd_head.object = ('<div class="cv-empty">Click anywhere on the map to drop '
                                     'a sounding. <kbd>Shift</kbd>-click to add up to four '
                                     'for comparison.</div>')
@@ -1802,7 +1888,7 @@ class Viewer:
                     custom=(self.storm_u.value or 0.0, self.storm_v.value or 0.0),
                     parcel=self.parcel.value, units=self.wunits.value,
                     zmax=float(self.prof_top.value), base=self.base_on.value,
-                    style=self.compare.value,
+                    style=self.compare.value, look=self._look(), lim=self._lim_copy(),
                     xy=[self._snd_xy(k, w, self.t if tp is None else tp)
                         for k, w, tp in self.points],
                     trk_motion=trk.motion(self.run, self.fixes) if self.fixes else {})
@@ -1883,24 +1969,13 @@ class Viewer:
                 raise ValueError("no tracked meso at this time for the storm-following "
                                  "sounding(s)")
             base = self._base_result(spec) if spec["base"] else None
-            st = spec["style"]
             short = [(lab.split(" ")[0] + (" mean" if "mean" in lab else "")
                       + (" box" if " box " in lab else "")
                       + (" meso" if "meso" in lab else "")
                       + (f' {lab.split("@ ")[1]}' if "@ " in lab else ""), c, r)
                      for lab, c, r in items]  # table column headers
             html = sp.params_html(short, base, spec["units"])
-            if st == "tabs" and len(items) > 1:
-                pngs = [(lab, _svg(sp.skewt_hodo_figure([it], base, spec["parcel"],
-                                                        spec["units"])),
-                         _svg(sp.profiles_figure([it], base, spec["zmax"], spec["units"])))
-                        for it in items for lab in [it[0]]]
-            else:
-                pngs = [(None, _svg(sp.skewt_hodo_figure(items, base, spec["parcel"],
-                                                         spec["units"], style=st)),
-                         _svg(sp.profiles_figure(items, base, spec["zmax"], spec["units"],
-                                                 style=st)))]
-            res = (pngs, html, items)
+            res = (self._draw_figs(items, base, spec), html, items, base)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             res = e
@@ -1915,8 +1990,9 @@ class Viewer:
         if isinstance(res, Exception):
             self._set_status(f'<span style="color:#f87171">Sounding error: {res}</span>')
             return
-        pngs, html, items = res
+        draws, html, items, base = res
         self.results = items
+        self._snd_last = (items, base, spec)
         run = self.run
         avg = "single column" if spec["avg"] == 0 else f'{spec["avg"]:g} km box mean'
         if all(k == "mean" or len(w) == 4 for k, w, _ in spec["points"]):
@@ -1925,30 +2001,201 @@ class Viewer:
                        for lab, c, r in items)
         self.snd_head.object = (f'<div class="cv-maptitle">t = {run.time_label(spec["t"])} · '
                                 f'{avg} · {pts}</div>')
-        if pngs[0][0] is None:
-            self.skew_png.src, self.prof_png.src = pngs[0][1], pngs[0][2]
-            self.skew_png.visible = self.prof_png.visible = True
-            self.snd_tabs.visible = False
-        else:
-            active = self.snd_tabs.active
-            names = [lab.replace(" km", "") for lab, _, _ in pngs]
-            if self._snd_tab_names == names:  # same soundings: keep each tab's zoom
-                for tab, (_, a, b) in zip(self.snd_tabs, pngs):
-                    tab[0].src, tab[1].src = a, b
-            else:
-                self.snd_tabs[:] = [(lab.replace(" km", ""), pn.Column(
-                    self._zoom_image("skewt_hodograph.svg", visible=True, src=a),
-                    self._zoom_image("profiles.svg", visible=True, src=b),
-                    sizing_mode="stretch_width")) for lab, a, b in pngs]
-                self._snd_tab_names = names
-            self.snd_tabs.active = min(active, len(pngs) - 1)
-            self.skew_png.visible = self.prof_png.visible = False
-            self.snd_tabs.visible = True
-        self.params.object = html
+        self._show_figs(draws)
+        self.params.html = html
         self.prof_row.visible = True
         self._set_status("")
         if self.vec_on.value and self.vec_frame.value == "storm":
             self.request_map()
+
+    def _draw_figs(self, items, base, spec):
+        """[(tab label or None, skew-T/hodograph figure, its SVG, profiles figure, its
+        SVG)]: one entry, or one per sounding in the Tabs comparison style."""
+        st, look, lim = spec["style"], spec["look"], spec["lim"]
+        groups = [(it[0], [it]) for it in items] if st == "tabs" and len(items) > 1 \
+            else [(None, items)]
+        out = []
+        for lab, its in groups:
+            fs = sp.skewt_hodo_figure(its, base, spec["parcel"], spec["units"],
+                                      style="lines" if lab else st, look=look, limits=lim)
+            fp = sp.profiles_figure(its, base, spec["zmax"], spec["units"],
+                                    style="lines" if lab else st, look=look,
+                                    limits=dict(z=lim.get("prof_z"), x=lim.get("prof_x")))
+            out.append((lab, fs, _svg(fs), fp, _svg(fp)))
+        return out
+
+    def _show_figs(self, draws):
+        """Put drawn sounding figures on the page; remembers each image's figure so a
+        dragged box can be turned into axes limits."""
+        self._figs = {}
+        if draws[0][0] is None:
+            _, fs, a, fp, b = draws[0]
+            self.skew_png.src, self.prof_png.src = a, b
+            self._figs = {self.skew_png: fs, self.prof_png: fp}
+            self.skew_png.visible = self.prof_png.visible = True
+            self.snd_tabs.visible = False
+        else:
+            active = self.snd_tabs.active
+            names = [lab.replace(" km", "") for lab, *_ in draws]
+            if self._snd_tab_names != names:
+                self.snd_tabs[:] = [(name, pn.Column(
+                    self._zoom_image("skewt_hodograph.svg", visible=True),
+                    self._zoom_image("profiles.svg", visible=True),
+                    sizing_mode="stretch_width")) for name in names]
+                self._snd_tab_names = names
+            for tab, (_, fs, a, fp, b) in zip(self.snd_tabs, draws):
+                tab[0].src, tab[1].src = a, b
+                self._figs[tab[0]], self._figs[tab[1]] = fs, fp
+            self.snd_tabs.active = min(active, len(draws) - 1)
+            self.skew_png.visible = self.prof_png.visible = False
+            self.snd_tabs.visible = True
+        for z in self._figs:
+            z.done += 1
+
+    # ---------------------------------------------------------- restyle / zoom
+    def _look(self):
+        ps = self.ps
+        return dict(t_color=ps["t"].value, td_color=ps["td"].value,
+                    parcel_color=ps["parcel"].value, base_color=ps["base"].value,
+                    lw=ps["lw"].value, parcel_lw=ps["parcel_lw"].value,
+                    hodo_lw=ps["hodo_lw"].value, prof_lw=ps["prof_lw"].value,
+                    shade=ps["shade"].value, barbs=ps["barbs"].value,
+                    guides=ps["guides"].value, ptop=float(ps["ptop"].value),
+                    tmin=ps["tmin"].value, tmax=ps["tmax"].value,
+                    ring=float(ps["ring"].value) or None, hodo_top=float(ps["htop"].value))
+
+    def _restyle(self):
+        """Redraw the shown soundings with the current style and zoom (no new analysis)."""
+        if self._hold_style or not self.points or not getattr(self, "_snd_last", None):
+            return
+        if self.snd_col.loading:  # a new analysis is on its way: let it use them
+            self.request_soundings()
+            return
+        items, base, spec = self._snd_last
+        spec = dict(spec, look=self._look(), lim=self._lim_copy())
+        self.gen["snd"] += 1
+        g = self.gen["snd"]
+
+        def job():
+            try:
+                draws = self._draw_figs(items, base, spec)
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                draws = e
+            if g == self.gen["snd"]:
+                self._schedule(partial(apply, draws))
+
+        def apply(draws):
+            if g != self.gen["snd"]:
+                return
+            if isinstance(draws, Exception):
+                self._set_status(f'<span style="color:#f87171">Sounding error: {draws}</span>')
+                return
+            self._snd_last = (items, base, spec)
+            self._show_figs(draws)
+        self.pools["snd"].submit(job)
+
+    def _on_style_reset(self, ev):
+        st = sp.STYLE
+        defaults = dict(t=st["t_color"], td=st["td_color"], parcel=st["parcel_color"],
+                        base=st["base_color"], lw=st["lw"], parcel_lw=st["parcel_lw"],
+                        hodo_lw=st["hodo_lw"], prof_lw=st["prof_lw"], ptop=100, tmin=None,
+                        tmax=None, ring=0, htop=12, shade=st["shade"], barbs=st["barbs"],
+                        guides=st["guides"])
+        self._hold_style = True
+        try:
+            for k, v in defaults.items():
+                self.ps[k].value = v
+        finally:
+            self._hold_style = False
+        self._restyle()
+
+    _hold_style = False
+
+    def _lim_copy(self):
+        lim = dict(self.snd_lim)
+        if "prof_x" in lim:
+            lim["prof_x"] = dict(lim["prof_x"])
+        return lim
+
+    def _on_zoom_box(self, z, ev):
+        """A box dragged on a sounding image -> axes limits of the panel under it."""
+        fig = getattr(self, "_figs", {}).get(z)
+        b = ev.new
+        if fig is None or not b or len(b) < 4:
+            z.done += 1
+            return
+        W, H = fig.bbox.width, fig.bbox.height
+        x0, x1 = b[0] * W, b[2] * W
+        y0, y1 = (1.0 - b[3]) * H, (1.0 - b[1]) * H  # display y grows upward
+        cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+        hit = next(((k, ax) for k, ax in fig.cv_axes.items() if ax.bbox.contains(cx, cy)),
+                   None)
+        if hit is None:
+            z.done += 1
+            return
+        key, ax = hit
+        bb = ax.bbox
+        x0, x1 = max(x0, bb.x0), min(x1, bb.x1)
+        y0, y1 = max(y0, bb.y0), min(y1, bb.y1)
+        inv = ax.transData.inverted()
+        (a0, b0), (a1, b1) = inv.transform([(x0, y0), (x1, y1)])
+        if key == "skew":  # x limits are the temperatures along the bottom edge
+            t_left, p_bot = a0, b0
+            t_right = inv.transform([(x1, y0)])[0][0]
+            p_top = inv.transform([(x0, y1)])[0][1]
+            self.snd_lim["skew"] = (float(t_left), float(t_right), float(p_bot), float(p_top))
+        elif key == "hodo":
+            self.snd_lim["hodo"] = (float(a0), float(a1), float(b0), float(b1))
+        else:
+            self.snd_lim["prof_z"] = (float(b0), float(b1))
+            self.snd_lim.setdefault("prof_x", {})[int(key[4:])] = (float(a0), float(a1))
+        self._restyle()
+
+    def _on_zoom_out(self, z):
+        """Widen the zoomed panels of this image by 1.6 (pressure in log p)."""
+        fig = getattr(self, "_figs", {}).get(z)
+        lim, f = self.snd_lim, 1.6
+        if fig is None or not any(k in lim for k in self._lim_keys(fig)):
+            z.done += 1
+            return
+
+        def widen(a, b):
+            c, h = 0.5 * (a + b), 0.5 * (b - a) * f
+            return c - h, c + h
+
+        if "skew" in lim and "skew" in fig.cv_axes:
+            t0, t1, pb, pt = lim["skew"]
+            lb, lt = widen(np.log(pb), np.log(pt))
+            pb, pt = min(np.exp(lb), 1100.0), max(np.exp(lt), 50.0)
+            lim["skew"] = (*widen(t0, t1), pb, pt)
+        if "hodo" in lim and "hodo" in fig.cv_axes:
+            u0, u1, v0, v1 = lim["hodo"]
+            lim["hodo"] = (*widen(u0, u1), *widen(v0, v1))
+        if "prof_z" in lim and "prof0" in fig.cv_axes:
+            z0, z1 = widen(*lim["prof_z"])
+            lim["prof_z"] = (max(z0, 0.0), z1)
+            lim["prof_x"] = {i: widen(*x) for i, x in lim.get("prof_x", {}).items()}
+        self._restyle()
+
+    def _on_zoom_reset(self, z):
+        fig = getattr(self, "_figs", {}).get(z)
+        keys = self._lim_keys(fig) if fig is not None else ()
+        if not any(k in self.snd_lim for k in keys):
+            z.done += 1
+            return
+        for k in keys:
+            self.snd_lim.pop(k, None)
+        self._restyle()
+
+    @staticmethod
+    def _lim_keys(fig):
+        ks = []
+        if "skew" in fig.cv_axes:
+            ks += ["skew", "hodo"]
+        if "prof0" in fig.cv_axes:
+            ks += ["prof_z", "prof_x"]
+        return ks
 
     # ================================================================ meso track
     def _trk_opts(self):
