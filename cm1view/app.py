@@ -25,7 +25,7 @@ from bokeh.transform import transform  # noqa: E402
 
 from . import pdecomp  # noqa: E402
 from . import registry, render, sounding_plot as sp, thermo, track as trk, volume3d  # noqa: E402
-from .run import MissingAtTime  # noqa: E402
+from .run import FileBusy, MissingAtTime  # noqa: E402
 from .fields import CMAPS, palette  # noqa: E402
 from .zoomview import ZoomImage  # noqa: E402
 from .theme import (  # noqa: E402
@@ -451,13 +451,17 @@ class Viewer:
 
         self.status = _html()
         # pressure decomposition for the shown time (map caption / cross-section tab)
-        pdb = dict(button_type="warning", button_style="outline", height=30, visible=False,
+        pdb = dict(button_type="warning", button_style="outline", height=30,
                    description="Run phd_scripts/pdecomp_new_fixed.py on this output time "
-                               "(separate process, ~30 GB, about 1.5 min); the result is "
-                               "kept in memory, not written to the file")
+                               "in a separate process (~45 s and ~40 GB with 4 CPUs, "
+                               "~80 s and ~30 GB on one)")
+        self.pd_write = pn.widgets.Checkbox(
+            name="Write into the output file", value=True, margin=(10, 4, 0, 10),
+            styles={"pointer-events": "auto"})  # with the script's own write_data
         self.pd_btn = pn.widgets.Button(margin=(4, 0, 6, 0),
                                         styles={"pointer-events": "auto"}, **pdb)
-        self.xs_pd_btn = pn.widgets.Button(margin=(4, 4), **pdb)
+        self.pd_row = pn.Row(self.pd_btn, self.pd_write, margin=0, visible=False)
+        self.xs_pd_btn = pn.widgets.Button(margin=(4, 4), visible=False, **pdb)
         self.cache_html = _html()
         self.clear_btn = pn.widgets.Button(name="Clear cache", button_type="default",
                                            button_style="outline", width=100, height=28,
@@ -1104,7 +1108,7 @@ class Viewer:
         floor = {"position": "absolute", "left": "70px", "bottom": "56px", "z-index": "20",
                  "pointer-events": "none", "background": "rgba(11,15,23,0.75)",
                  "border-radius": "8px", "padding": "0 8px"}
-        caption = pn.Column(self.map_title, self.hint, self.status, self.pd_btn, styles=floor,
+        caption = pn.Column(self.map_title, self.hint, self.status, self.pd_row, styles=floor,
                             margin=0)
         self.map_area = map_area = pn.Column(
             self.map_bar, pn.pane.Bokeh(self.fig, sizing_mode="stretch_both"), caption,
@@ -1218,6 +1222,7 @@ class Viewer:
         self._update_region_html()
         self.clear_btn.on_click(self._on_clear_cache)
         self.pd_btn.on_click(self._on_pd_compute)
+        self.pd_write.param.watch(lambda e: self.request_map(), "value")  # relabel
         self.xs_pd_btn.on_click(self._on_pd_compute)
         self.clear_pts.on_click(self._on_clear_points)
         self._on_mode(None, init=True)
@@ -1661,7 +1666,7 @@ class Viewer:
             return
         try:
             res = render.compute_map(self.F, spec)
-        except MissingAtTime as e:  # e.g. post-processed fields at other times only
+        except (MissingAtTime, FileBusy) as e:  # fields at other times only / being written
             res = e
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
@@ -1675,7 +1680,9 @@ class Viewer:
         names = [spec["fill"]["var"]] + [o["var"] for o in spec["ov"] if o["on"]]
         self._pd_button(self.pd_btn, names, spec["t"])
         if isinstance(res, Exception):
-            if isinstance(res, MissingAtTime) and res.name in pdecomp.NAMES:
+            if isinstance(res, FileBusy):
+                self._set_status(f'<span class="busy">{res}</span>')
+            elif isinstance(res, MissingAtTime) and res.name in pdecomp.NAMES:
                 self._set_status(f'<span style="color:#fbbf24">{res}.</span>')
             else:
                 self._set_status(f'<span style="color:#f87171">Map error: {res}</span>')
@@ -2479,34 +2486,41 @@ class Viewer:
         run, label = self.run, None
         if any(pdecomp.is_pdecomp(self.F, n) for n in names) and pdecomp.can_compute(run):
             kind, _ = pdecomp.source(run, t)
+            write = self.pd_write.value and pdecomp.writable(run, t)
+            par = len(os.sched_getaffinity(0)) > 1  # ~45 s with 4 CPUs; writing ~+40 s
+            est = {(True, False): "~45 s", (True, True): "~1.5 min",
+                   (False, False): "~1.5 min", (False, True): "~2 min"}[(par, write)]
             if kind is None:
-                label = f"Compute pressure decomposition for {run.time_label(t)} (~1.5 min)"
+                label = (f"Compute pressure decomposition for {run.time_label(t)}"
+                         f"{' and write it to the file' if write else ''} ({est})")
             elif kind == "file-old":
-                label = f"Recompute {run.time_label(t)} with pdecomp_new_fixed.py (~1.5 min)"
+                label = (f"Recompute {run.time_label(t)} with pdecomp_new_fixed.py"
+                         f"{' and overwrite it in the file' if write else ''} ({est})")
         busy = pdecomp.running(run, t) is not None
         if busy:
             label = f"Computing pressure decomposition for {run.time_label(t)}…"
-        btn.param.update(visible=label is not None, name=label or "", disabled=busy)
+        btn.param.update(name=label or "", disabled=busy)
+        (self.pd_row if btn is self.pd_btn else btn).visible = label is not None
+        self.pd_write.disabled = busy
 
     def _on_pd_compute(self, ev):
         t = self.t
         if pdecomp.running(self.run, t) is not None:
             return
         for b in (self.pd_btn, self.xs_pd_btn):
-            if b.visible:
-                b.param.update(disabled=True, name=f"Computing pressure decomposition for "
-                                                   f"{self.run.time_label(t)}…")
-        self.pools["pd"].submit(self._pd_job, t)
+            b.param.update(disabled=True, name=f"Computing pressure decomposition for "
+                                               f"{self.run.time_label(t)}…")
+        self.pd_write.disabled = True
+        self.pools["pd"].submit(self._pd_job, t, self.pd_write.value)
 
-    def _pd_job(self, t):
+    def _pd_job(self, t, write):
         run = self.run
 
-        def prog(el, _msg):
+        def prog(el, phase):
             self._status_async(f'<span class="busy">● Pressure decomposition for '
-                               f'{run.time_label(t)}: {el:.0f} s (typically '
-                               f'~{pdecomp.EXPECT_S:.0f} s on one CPU)…</span>')
+                               f'{run.time_label(t)}: {phase} … {el:.0f} s</span>')
         try:
-            res = pdecomp.compute(run, t, prog)
+            res = pdecomp.compute(run, t, prog, write=write and pdecomp.writable(run, t))
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             res = e
@@ -2516,9 +2530,10 @@ class Viewer:
         if isinstance(res, Exception):
             self._set_status(f'<span style="color:#f87171">{res}</span>')
         else:
+            where = ("written to " + os.path.basename(self.run.files[t]) if res["wrote"]
+                     else "kept in memory, not written to the file")
             self._set_status(f'Pressure decomposition for {self.run.time_label(t)} computed '
-                             f'in {res[0]:.0f} s (pdecomp_new_fixed.py; kept in memory, not '
-                             f'written to the file)')
+                             f'in {res["elapsed"]:.0f} s with pdecomp_new_fixed.py; {where}')
             self.F.forget(t, pdecomp.NAMES)
         self._pd_button(self.pd_btn, [self.fill_var.value] +
                         [o["var"].value for o in self.ovs if o["on"].value], self.t)

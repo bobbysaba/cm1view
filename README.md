@@ -148,13 +148,20 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
   and the total. Where post-processing wrote them into the output files they are read
   from there (any file subset; the map title says which script version wrote them, and
   warns for files written before `pdecomp_new_fixed.py`). Elsewhere, a *Compute pressure
-  decomposition* button runs `phd_scripts/pdecomp_new_fixed.py` itself (unchanged,
-  `write=False`) on that time in a separate process: about 80 s and ~30 GB peak on one
-  CPU. If the job lacks the memory, the 3D cache is emptied first; if still short, it
-  says so. Results stay in memory for the last 2 computed times and are never written
-  to the files. For older-script files the button offers *Recompute*, which then takes
-  precedence. Use `--pdecomp-script` or `$CM1VIEW_PDECOMP` for another script with the
-  same functions.
+  decomposition* button runs `phd_scripts/pdecomp_new_fixed.py` itself (its own math,
+  unchanged) on that time in a separate process. With several CPUs its inputs are read
+  in parallel first and its FFTs use several threads: ~45 s and ~40 GB peak with 4 CPUs
+  (~80 s and ~30 GB on one; the rest of the script is single-threaded NumPy, so more
+  CPUs do not help further). If the job lacks the memory, the 3D cache is emptied first;
+  if still short, it says so.
+  *Write into the output file* (on by default) then writes the result with the script's
+  own `write_data` (float64, `pdecomp_version` attribute; about +40 s and +9 GB per
+  file for a 1280×1280×115 grid), replacing values from older scripts. While it writes,
+  the viewer releases that one file and reports it as busy. If the job is killed during
+  a write, the file can be left damaged, as with the script itself. Unticked, the
+  result is kept in memory only. The last 2 computed times stay in memory either way.
+  For older-script files the button offers *Recompute … and overwrite*. Use
+  `--pdecomp-script` or `$CM1VIEW_PDECOMP` for another script with the same functions.
   Add more in `cm1view/fields.py` (`_make_fields`).
 - Plotly is vendored in `_vendor/` because the `npl` env does not include it.
 

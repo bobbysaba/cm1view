@@ -85,6 +85,10 @@ class MissingAtTime(LookupError):
         self.name, self.t = name, t
 
 
+class FileBusy(LookupError):
+    """The output file of this time is being written (e.g. pressure decomposition)."""
+
+
 def _var_info(name, v):
     """VarInfo of a netCDF variable, or None if it is not a (time, ...) 2D/3D field."""
     dims = v.dimensions
@@ -155,6 +159,7 @@ class CM1Run:
         # fields computed here (not in the files), consulted before the files:
         # (name, t) -> float32 (nk, nj, ni); never evicted by the cache
         self.extra = OrderedDict()
+        self._writing = set()  # times whose file is being written: no reads meanwhile
 
         self.cache_bytes = int(cache_gb * 1024**3)
         self._cache = OrderedDict()  # (name, tindex) -> float32 (nk, nj, ni)
@@ -224,7 +229,37 @@ class CM1Run:
                                      f"{self.time_label(t)}{where}")
 
     # ------------------------------------------------------------------ io
+    def _not_writing(self, t):
+        if t in self._writing:
+            raise FileBusy(f"the output file at {self.time_label(t)} is being written "
+                           f"(pressure decomposition); it is readable again in a moment")
+
+    def begin_write(self, t):
+        """Close this process's handle on file t and refuse reads of it until
+        end_write(t), so another process can open it for writing."""
+        with IO_LOCK:
+            self._writing.add(t)
+            d = self._open.pop(t, None)
+            if d is not None:
+                d.close()
+
+    def end_write(self, t, names=()):
+        """File t is readable again; `names` were written into it."""
+        with IO_LOCK:
+            self._writing.discard(t)
+            if names:
+                with netCDF4.Dataset(self.files[t]) as d:
+                    for n in names:
+                        if n in d.variables:
+                            self.vars[n] = _var_info(n, d[n])
+                            if n in self.var_times:
+                                self.var_times[n] = self.var_times[n] | {t}
+        with self._cache_lock:  # cached volumes of rewritten fields are stale
+            for n in names:
+                self._cache.pop((n, t), None)
+
     def _ds(self, t):
+        self._not_writing(t)
         d = self._open.get(t)
         if d is None:
             d = netCDF4.Dataset(self.files[t])
@@ -354,6 +389,8 @@ class CM1Run:
         missing = [n for n in dict.fromkeys(names) if self.cached(n, t) is None]
         for n in missing:
             self._check(n, t)
+        if missing:
+            self._not_writing(t)
         total, done = len(missing), 0
         if progress:
             progress(done, total, missing[0] if missing else "")
@@ -413,6 +450,8 @@ class CM1Run:
                 out[n] = self._means[(n, t)] = vol.mean(axis=(1, 2), dtype=np.float64)
             else:
                 todo.append(n)
+        if todo:
+            self._not_writing(t)
         total = len(todo)
         if progress and todo:
             progress(0, total, todo[0])
