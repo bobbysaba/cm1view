@@ -452,7 +452,7 @@ class Viewer:
         self.status = _html()
         # pressure decomposition for the shown time (map caption / cross-section tab)
         pdb = dict(button_type="warning", button_style="outline", height=30,
-                   description="Run phd_scripts/pdecomp_new_fixed.py on this output time "
+                   description=f"Run phd_scripts/{pdecomp.script_name()} on this output time "
                                "in a separate process (~45 s and ~40 GB with 4 CPUs, "
                                "~80 s and ~30 GB on one)")
         self.pd_write = pn.widgets.Checkbox(
@@ -2494,7 +2494,7 @@ class Viewer:
                 label = (f"Compute pressure decomposition for {run.time_label(t)}"
                          f"{' and write it to the file' if write else ''} ({est})")
             elif kind == "file-old":
-                label = (f"Recompute {run.time_label(t)} with pdecomp_new_fixed.py"
+                label = (f"Recompute {run.time_label(t)} with {pdecomp.script_name()}"
                          f"{' and overwrite it in the file' if write else ''} ({est})")
         busy = pdecomp.running(run, t) is not None
         if busy:
@@ -2533,7 +2533,7 @@ class Viewer:
             where = ("written to " + os.path.basename(self.run.files[t]) if res["wrote"]
                      else "kept in memory, not written to the file")
             self._set_status(f'Pressure decomposition for {self.run.time_label(t)} computed '
-                             f'in {res["elapsed"]:.0f} s with pdecomp_new_fixed.py; {where}')
+                             f'in {res["elapsed"]:.0f} s with {pdecomp.script_name()}; {where}')
             self.F.forget(t, pdecomp.NAMES)
         self._pd_button(self.pd_btn, [self.fill_var.value] +
                         [o["var"].value for o in self.ovs if o["on"].value], self.t)

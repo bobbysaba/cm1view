@@ -25,8 +25,11 @@ import numpy as np
 from .run import IO_LOCK, VarInfo
 
 NAMES = ("p_b", "p_l", "p_nl", "acc_b", "acc_l", "acc_nl")
-SCRIPT = os.environ.get("CM1VIEW_PDECOMP",
-                        "/glade/work/rasaba/phd_scripts/pdecomp_new_fixed.py")
+_PHD = "/glade/work/rasaba/phd_scripts"
+# the multi-CPU version (same math) when it is there, else the original fixed script
+SCRIPT = os.environ.get("CM1VIEW_PDECOMP") or next(
+    (p for p in (f"{_PHD}/pdecomp_new_fixed_mp.py", f"{_PHD}/pdecomp_new_fixed.py")
+     if os.path.isfile(p)), f"{_PHD}/pdecomp_new_fixed.py")
 NEEDS = ("th", "qv", "pi", "rho", "prs")
 NEED_GB = 34.0     # free memory wanted before starting (serial reads: peak ~30 GB)
 NEED_GB_PAR = 44.0  # inputs read in parallel up front: peak ~40 GB, ~45 s with 4 CPUs
@@ -39,6 +42,10 @@ _running = {}      # (run path, t) -> started (time.time())
 
 def script():
     return SCRIPT if os.path.isfile(SCRIPT) else None
+
+
+def script_name():
+    return os.path.basename(SCRIPT)
 
 
 def can_compute(run):
@@ -91,9 +98,9 @@ def source(run, t):
         kind = "file-fixed" if ver else "file-old"
     if all((n, t) in run.extra for n in NAMES):
         if kind == "file-fixed":
-            return "computed", ("computed here with pdecomp_new_fixed.py and written to the "
-                                "output file")
-        return "computed", "computed here with pdecomp_new_fixed.py (in memory only)"
+            return "computed", (f"computed here with {script_name()} and written to the "
+                                f"output file")
+        return "computed", f"computed here with {script_name()} (in memory only)"
     if kind == "file-fixed":
         return kind, f"from the output file ({_version_cache[(run.path, t)]})"
     if kind == "file-old":
