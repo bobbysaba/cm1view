@@ -3,8 +3,11 @@
 ZoomImage: a sounding graphic.  Not interactive (narrow panel): a click increments
 `clicks`, which the app uses to open the expanded view.  Interactive: dragging a box
 sets `box` (image fractions, y down) and the app redraws the figure with the axes
-limits of that box, so axes, labels and line widths stay intact; the − button
-(`zoom_out`) widens the view, double-click or ⟲ (`resets`) goes back to the full view.
+limits of that box, so axes, labels and line widths stay intact.  After a zoom, dragging
+pans instead (`pan`: start point and offset, image fractions; the image follows the
+pointer until the redraw arrives); Shift-drag does the other mode, the ✥/⬚ button
+switches.  The − button (`zoom_out`) widens the view, double-click or ⟲ (`resets`) goes
+back to the full view (and to box mode).
 
 ParamTable: the parameter table.  Clicking the units cell of a level row (LCL, LFC,
 ...) switches that row between metres and hPa; the choice (`alt_rows`) survives
@@ -21,6 +24,8 @@ class ZoomImage(JSComponent):
     interactive = param.Boolean(default=False)
     clicks = param.Integer(default=0)
     box = param.List(default=[], doc="[x0, y0, x1, y1, nonce]: dragged box, image fractions")
+    pan = param.List(default=[], doc="[x, y, dx, dy, nonce]: pan drag start and offset, "
+                                     "image fractions")
     zoom_out = param.Integer(default=0)
     resets = param.Integer(default=0)
     done = param.Integer(default=0, doc="bumped by the app when it has answered a zoom")
@@ -32,7 +37,10 @@ export function render({ model, el }) {
   const band = document.createElement('div'); band.className = 'band';
   const bar = document.createElement('div'); bar.className = 'bar';
   const hint = document.createElement('div'); hint.className = 'hint';
-  hint.textContent = 'drag a box to zoom (axes redraw) · − zoom out · double-click: full view';
+  let panMode = false;
+  const setHint = () => { hint.textContent = panMode
+    ? 'drag to pan · Shift-drag: zoom box · − zoom out · double-click: full view'
+    : 'drag a box to zoom · Shift-drag: pan · − zoom out · double-click: full view'; };
   const btn = (txt, title, fn) => {
     const b = document.createElement('button'); b.textContent = txt; b.title = title;
     b.onpointerdown = (e) => e.stopPropagation();
@@ -40,8 +48,16 @@ export function render({ model, el }) {
   box.append(img, band, bar, hint); el.append(box);
 
   const busy = () => box.classList.add('busy');
+  const modeBtn = btn('', '', () => setPan(!panMode));
+  function setPan(on) {
+    panMode = on; box.classList.toggle('panning', on);
+    modeBtn.textContent = on ? '⬚' : '✥';
+    modeBtn.title = on ? 'Switch to box zoom' : 'Switch to pan';
+    setHint();
+  }
   btn('−', 'Zoom out', () => { busy(); model.zoom_out = model.zoom_out + 1; });
-  btn('⟲', 'Full view (double-click)', () => { busy(); model.resets = model.resets + 1; });
+  btn('⟲', 'Full view (double-click)', () => {
+    busy(); setPan(false); model.resets = model.resets + 1; });
   btn('⤓', 'Save image', () => {
     const a = document.createElement('a'); a.href = model.src; a.download = model.filename;
     document.body.append(a); a.click(); a.remove(); });
@@ -53,10 +69,11 @@ export function render({ model, el }) {
     box.classList.toggle('live', model.interactive);
     box.title = model.interactive ? '' : 'Click to expand';
   }
+  const unshift = () => { img.style.transform = ''; };
   function setSrc() {
     img.onload = () => {
       box.style.aspectRatio = `${img.naturalWidth} / ${img.naturalHeight}`;
-      box.classList.remove('busy');
+      box.classList.remove('busy'); unshift();
     };
     img.src = model.src;
   }
@@ -64,12 +81,14 @@ export function render({ model, el }) {
     if (!model.interactive) model.clicks = model.clicks + 1; });
   box.addEventListener('pointerdown', (e) => {
     if (!model.interactive || e.button !== 0) return;
-    const [x, y] = pos(e); drag = { x, y };
+    const [x, y] = pos(e); drag = { x, y, pan: panMode !== e.shiftKey };
     box.setPointerCapture(e.pointerId); e.preventDefault();
   });
   box.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const [x, y] = pos(e);
+    if (drag.pan) {
+      img.style.transform = `translate(${x - drag.x}px, ${y - drag.y}px)`; return; }
     Object.assign(band.style, { display: 'block', left: Math.min(x, drag.x) + 'px',
       top: Math.min(y, drag.y) + 'px', width: Math.abs(x - drag.x) + 'px',
       height: Math.abs(y - drag.y) + 'px' });
@@ -78,22 +97,28 @@ export function render({ model, el }) {
     if (!drag) return;
     const d = drag; drag = null; band.style.display = 'none';
     const [x, y] = pos(e);
-    if (Math.abs(x - d.x) < 8 || Math.abs(y - d.y) < 8) return;
     const W = box.clientWidth, H = box.clientHeight;
-    busy();
+    if (d.pan) {
+      if (Math.hypot(x - d.x, y - d.y) < 4) { unshift(); return; }
+      busy();
+      model.pan = [d.x / W, d.y / H, (x - d.x) / W, (y - d.y) / H, Date.now()];
+      return;
+    }
+    if (Math.abs(x - d.x) < 8 || Math.abs(y - d.y) < 8) return;
+    busy(); setPan(true);
     model.box = [Math.min(x, d.x) / W, Math.min(y, d.y) / H,
                  Math.max(x, d.x) / W, Math.max(y, d.y) / H, Date.now()];
   };
   box.addEventListener('pointerup', end);
   box.addEventListener('pointercancel', end);
   box.addEventListener('dblclick', () => {
-    if (model.interactive) { busy(); model.resets = model.resets + 1; } });
+    if (model.interactive) { busy(); setPan(false); model.resets = model.resets + 1; } });
   // nothing to redraw: the app answers with the same image, so drop the busy look
-  model.on("done", () => box.classList.remove("busy"));
+  model.on("done", () => { box.classList.remove("busy"); unshift(); });
 
   model.on('src', setSrc);
   model.on('interactive', setMode);
-  setSrc(); setMode();
+  setSrc(); setMode(); setPan(false);
 }
 """
 
@@ -103,6 +128,8 @@ export function render({ model, el }) {
 .zv img { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
           max-width: none; display: block; transition: opacity .15s; }
 .zv.live { cursor: crosshair; outline: 1px solid #253045; }
+.zv.live.panning { cursor: grab; }
+.zv.live.panning:active { cursor: grabbing; }
 .zv.busy img { opacity: .55; }
 .zv .band { position: absolute; display: none; border: 1px dashed #22d3ee;
             background: rgba(34, 211, 238, .12); pointer-events: none; }
