@@ -24,7 +24,7 @@ from bokeh.plotting import figure  # noqa: E402
 from bokeh.transform import transform  # noqa: E402
 
 from . import pdecomp  # noqa: E402
-from . import registry, render, series as ser, sounding_plot as sp, thermo  # noqa: E402
+from . import figui, registry, render, series as ser, sounding_plot as sp, thermo  # noqa: E402
 from . import track as trk, volume3d  # noqa: E402
 from .run import FileBusy, MissingAtTime  # noqa: E402
 from .fields import CMAPS, palette  # noqa: E402
@@ -253,7 +253,7 @@ class Viewer:
         self.error = error
         self.doc = pn.state.curdoc
         self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
-                      for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser")}
+                      for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser", "fig")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
@@ -274,6 +274,7 @@ class Viewer:
         self._build_series()
         self._build_panels()
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
+        self.figed = figui.FigureEditor(self)
         self._wire()
         self.request_map()
 
@@ -343,8 +344,8 @@ class Viewer:
         self.time_html = _html()
 
         self.workspace = pn.widgets.RadioButtonGroup(
-            options=["Map", "3D"], value="Map", button_type="primary",
-            button_style="outline", width=120, height=32, margin=(4, 2))
+            options=["Map", "3D", "Figure"], value="Map", button_type="primary",
+            button_style="outline", width=190, height=32, margin=(4, 2))
         modes = ["Sounding", "Area sounding", "Cross-section", "3D region"]
         if trk.available(run):
             modes.append("Track")
@@ -836,7 +837,8 @@ class Viewer:
             name="Load", button_type="primary", button_style="outline", height=32,
             margin=(5, 4, 8, 4),
             description="Read a track from the path (CSV or whitespace columns with "
-                        "x_km, y_km and time_s / time_hms / time_index)")
+                        "x_km, y_km or loc_x, loc_y and time_s / time_hms / time_index / "
+                        "time in minutes)")
         self.trk_find = pn.widgets.Button(
             name="Find strongest", button_type="primary", button_style="outline", height=32,
             margin=(5, 4, 8, 4),
@@ -1265,10 +1267,7 @@ class Viewer:
 
     def _top_bar(self):
         """Run, time and workspace pills floating across the top of the window."""
-        # the Map | 3D switch appears once a 3D region has been picked (nothing to show
-        # in 3D before that)
-        self.ws_group = _group(self.workspace)
-        self.ws_group.visible = self.box is not None
+        self.ws_group = _group(self.workspace)  # Map | 3D | Figure
         return pn.Column(
             _bar(self.ws_group,
                  _group(self.t_prev, self.t_play, self.t_next, self.t_speed, self.tslider,
@@ -1355,7 +1354,10 @@ class Viewer:
         err = _html(f'<div class="cv-status" style="color:#f87171;padding:4px 8px">'
                     f'{self.error}</div>') if self.error else None
         objs = [o for o in (err,) if o is not None]
-        return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.rp_modal,
+        self.fig_ws = pn.Column(self.figed.panel, sizing_mode="stretch_width", visible=False,
+                                margin=0, styles=dict(below, position="relative"))
+        return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,
+                         self.rp_modal,
                          margin=0, styles={"position": "fixed", "top": "0", "left": "0",
                                            "width": "100vw", "height": "100vh"})
 
@@ -1618,11 +1620,14 @@ class Viewer:
             self.tabs.active = tab
 
     def _on_workspace(self, ev):
-        is3d = ev.new == "3D"
-        self.v3_ws.visible, self.map_ws.visible = is3d, not is3d
-        self.mode_group.visible = not is3d
+        is3d, isfig = ev.new == "3D", ev.new == "Figure"
+        self.v3_ws.visible, self.fig_ws.visible = is3d, isfig
+        self.map_ws.visible = not (is3d or isfig)
+        self.mode_group.visible = ev.new == "Map"
         if is3d and self.box is None:
             self._update_region_html()
+        if isfig:
+            self.figed.request(delay=False)
 
     def _on_pick_region(self, ev):
         self.workspace.value = "Map"
@@ -1767,8 +1772,6 @@ class Viewer:
         y0, y1 = sorted((max(Y0, min(y0, y1)), min(Y1, max(y0, y1))))
         self.box = (x0, x1, y0, y1)
         self.box_src.data = dict(left=[x0], right=[x1], bottom=[y0], top=[y1])
-        if hasattr(self, "ws_group"):
-            self.ws_group.visible = True
         self._update_region_html()
 
     def _on_resized(self, attr, old, new):
@@ -1800,7 +1803,6 @@ class Viewer:
         self._draw_xs()
         self.box_src.data = dict(left=[], right=[], bottom=[], top=[])
         self.workspace.value = "Map"
-        self.ws_group.visible = False
         self._update_region_html()
         self.request_soundings()
 

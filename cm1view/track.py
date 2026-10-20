@@ -183,8 +183,9 @@ def place(run, t, x, y, opts):
 
 
 def load(run, path):
-    """Fixes {t: fix} from a CSV / whitespace table with x_km, y_km (grid-relative)
-    or x_ground_km, y_ground_km, and time_s, time_hms or time_index.  Lines starting
+    """Fixes {t: fix} from a CSV / whitespace table with x_km, y_km or loc_x, loc_y
+    (grid-relative) or x_ground_km, y_ground_km, and time_s, time_hms, time_index or
+    time (minutes; seconds if the values are too large for minutes).  Lines starting
     with '#' are comments.  Times are matched to the nearest output time; a column
     named value or like uh_* / zeta_* / w_* becomes the fix value."""
     import pandas as pd
@@ -205,15 +206,21 @@ def load(run, path):
         tsec = np.array([hms(v) for v in df["time_hms"]])
     elif "time_index" in df:
         tsec = times[np.clip(df["time_index"].astype(int).to_numpy(), 0, len(times) - 1)]
+    elif "time" in df:  # e.g. storm_tracks/*.csv: model minutes
+        tv = df["time"].astype(float).to_numpy()
+        tsec = tv * 60.0 if np.nanmax(tv) <= times[-1] / 60.0 + 1.0 else tv
     else:
-        raise ValueError("needs a time_s, time_hms or time_index column")
+        raise ValueError("needs a time_s, time_hms, time_index or time (min) column")
     if {"x_km", "y_km"} <= set(df.columns):
         x, y = df["x_km"].astype(float).to_numpy(), df["y_km"].astype(float).to_numpy()
+    elif {"loc_x", "loc_y"} <= set(df.columns):
+        x, y = df["loc_x"].astype(float).to_numpy(), df["loc_y"].astype(float).to_numpy()
     elif {"x_ground_km", "y_ground_km"} <= set(df.columns):
         x = df["x_ground_km"].astype(float).to_numpy() - run.umove * tsec / 1000.0
         y = df["y_ground_km"].astype(float).to_numpy() - run.vmove * tsec / 1000.0
     else:
-        raise ValueError("needs x_km, y_km (grid) or x_ground_km, y_ground_km columns")
+        raise ValueError("needs x_km, y_km or loc_x, loc_y (grid), or x_ground_km, "
+                         "y_ground_km columns")
     vcol = next((c for c in df.columns if c == "value"
                  or c.split("_")[0] in ("uh", "zeta", "w") and c not in
                  ("w_max_2_5km", "zeta_max_2_5km")), None)
