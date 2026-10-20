@@ -1,7 +1,6 @@
 """Panel application: map + sounding / cross-section / 3D panels."""
 
 import base64
-import html as html_lib
 import io
 import os
 import sys
@@ -15,17 +14,18 @@ if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
 
 import numpy as np  # noqa: E402
 import panel as pn  # noqa: E402
-from bokeh.events import RangesUpdate, SelectionGeometry, Tap  # noqa: E402
+from bokeh.events import PanStart, RangesUpdate, SelectionGeometry, Tap  # noqa: E402
 from bokeh.models import (  # noqa: E402
-    BoxSelectTool, BoxZoomTool, ColorBar, ColumnDataSource, CustomJS, HoverTool,
+    BoxSelectTool, BoxZoomTool, ColorBar, ColumnDataSource, CustomJS, HoverTool, Label,
     LinearColorMapper,
-    FixedTicker, LinearAxis, PanTool, Range1d, ResetTool, SaveTool, WheelZoomTool,
+    FixedTicker, LinearAxis, PanTool, Range1d, ResetTool, SaveTool, Span, WheelZoomTool,
 )
 from bokeh.plotting import figure  # noqa: E402
 from bokeh.transform import transform  # noqa: E402
 
 from . import registry, render, sounding_plot as sp, thermo, track as trk, volume3d  # noqa: E402
 from .fields import CMAPS, palette  # noqa: E402
+from .zoomview import ZoomImage  # noqa: E402
 from .theme import (  # noqa: E402
     ACCENT, BG, CSS, GRID, MUTED, PANEL, POINT_COLORS, POINT_LABELS, TEXT,
 )
@@ -64,52 +64,11 @@ def style_fig(fig):
     fig.min_border_left = 50
 
 
-def _png(fig, dpi=200):
+def _svg(fig):
+    """Matplotlib figure as an SVG data URI (sharp at any zoom, smaller than PNG)."""
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=dpi, facecolor=fig.get_facecolor())
-    return buf.getvalue()
-
-
-# click a sounding image -> full-window viewer: wheel zoom about the cursor, drag to
-# pan, double-click to refit, Esc or the close button to leave (inline so it works
-# from inside Panel's shadow DOM)
-_ZOOM_JS = """(function(src){
-var o=document.createElement('div');
-o.style.cssText='position:fixed;inset:0;z-index:99999;background:rgba(5,8,14,.94);overflow:hidden;cursor:grab';
-var i=document.createElement('img');i.src=src;i.draggable=false;
-i.style.cssText='position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;user-select:none';
-var h=document.createElement('div');
-h.textContent='scroll: zoom \u00b7 drag: pan \u00b7 double-click: fit \u00b7 Esc: close';
-h.style.cssText='position:absolute;left:16px;bottom:12px;color:#94a3b8;font:12px system-ui,sans-serif';
-var x=document.createElement('div');x.textContent='\u2715';x.title='Close (Esc)';
-x.style.cssText='position:absolute;right:18px;top:10px;color:#e2e8f0;font:24px system-ui,sans-serif;cursor:pointer';
-o.append(i,h,x);document.body.append(o);
-var s=1,tx=0,ty=0,d=null;
-function ap(){i.style.transform='translate('+tx+'px,'+ty+'px) scale('+s+')';}
-function fit(){var W=innerWidth,H=innerHeight,w=i.naturalWidth,g=i.naturalHeight;
-s=Math.min(W/w,H/g)*0.96;tx=(W-w*s)/2;ty=(H-g*s)/2;ap();}
-i.onload=fit;if(i.complete)fit();
-o.addEventListener('wheel',function(e){e.preventDefault();
-var n=Math.min(Math.max(s*Math.exp(-e.deltaY*0.0015),0.1),12);
-tx=e.clientX-(e.clientX-tx)*n/s;ty=e.clientY-(e.clientY-ty)*n/s;s=n;ap();},{passive:false});
-o.onmousedown=function(e){d=[e.clientX-tx,e.clientY-ty];o.style.cursor='grabbing';e.preventDefault();};
-o.onmousemove=function(e){if(d){tx=e.clientX-d[0];ty=e.clientY-d[1];ap();}};
-o.onmouseup=o.onmouseleave=function(){d=null;o.style.cursor='grab';};
-o.ondblclick=fit;
-function k(e){if(e.key==='Escape'){e.stopPropagation();c();}}
-function c(){o.remove();document.removeEventListener('keydown',k,true);}
-document.addEventListener('keydown',k,true);o.tabIndex=-1;o.style.outline='none';o.focus();
-x.onmousedown=function(e){e.stopPropagation();};x.onclick=c;
-})(this.src)"""
-_ZOOM_ATTR = html_lib.escape(_ZOOM_JS.replace("\n", ""), quote=True)
-
-
-def _img(png):
-    """PNG bytes as an <img> that scales with the panel width; click to zoom."""
-    b64 = base64.b64encode(png).decode()
-    return (f'<img src="data:image/png;base64,{b64}" title="Click to zoom" '
-            f'onclick="{_ZOOM_ATTR}" style="width:100%;height:auto;display:block;'
-            f'cursor:zoom-in">')
+    fig.savefig(buf, format="svg", facecolor=fig.get_facecolor())
+    return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 # Map ranges: equal km per pixel in x and y at every plot size.  The pan/zoom limits
@@ -280,14 +239,16 @@ class Viewer:
         self.error = error
         self.doc = pn.state.curdoc
         self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
-                      for k in ("map", "snd", "xs", "3d", "trk")}
+                      for k in ("map", "snd", "xs", "3d", "trk", "sl")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
+        # where may carry a box size, (x, y, width, height) km, for area means;
         # tpin = None follows the time slider, otherwise a pinned time index
         self.points, self.results, self.xs_pts, self.box = [], [], [], None
         self.fixes, self.trk_spec = {}, None  # meso track: {t: fix}, settings used
         self._hold = False
+        self._drag_shift = False  # Shift held when the last map drag started
         dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
         self.extent = (run.xh[0] - dxk / 2, run.xh[-1] + dxk / 2,
                        run.yh[0] - dyk / 2, run.yh[-1] + dyk / 2)
@@ -369,7 +330,7 @@ class Viewer:
         self.workspace = pn.widgets.RadioButtonGroup(
             options=["Map", "3D"], value="Map", button_type="primary",
             button_style="outline", width=120, height=32, margin=(4, 2))
-        modes = ["Sounding", "Cross-section", "3D region"]
+        modes = ["Sounding", "Area sounding", "Cross-section", "3D region"]
         if trk.available(run):
             modes.append("Track")
         self.mode = ModeToggles(modes, height=32, margin=(4, 1))
@@ -496,6 +457,12 @@ class Viewer:
                                            margin=(4, 2),
                                            description="Clear map markers (soundings, "
                                                        "section, 3D region)")
+        self.full = False  # analysis panel expanded over the whole window
+        self.full_btn = pn.widgets.Button(name="", icon="arrows-maximize", button_type="light",
+                                          button_style="outline", height=32, margin=(4, 2),
+                                          description="Expand the analysis panel to the full "
+                                                      "window (sounding graphics become "
+                                                      "zoomable)")
         self.panel_btn = pn.widgets.Button(name="", icon="layout-sidebar-right-collapse",
                                            button_type="light", button_style="outline",
                                            width=40, height=32, margin=(4, 2),
@@ -638,6 +605,9 @@ class Viewer:
                     fill_alpha=0, line_color="#fbbf24", line_width=2.5)
         self.trk_hover = HoverTool(renderers=[trk_pts],
                                    tooltips=[("meso", "@hms"), ("value", "@value{0.000}")])
+        self.pbox_src = ColumnDataSource(dict(x=[], y=[], w=[], h=[], color=[]))
+        fig.rect("x", "y", "w", "h", source=self.pbox_src, fill_color="color",
+                 fill_alpha=0.08, line_color="color", line_width=2, line_dash="dashed")
         self.pt_src = ColumnDataSource(dict(x=[], y=[], color=[], label=[]))
         fig.scatter("x", "y", source=self.pt_src, size=13, fill_color="color",
                     line_color=BG, line_width=2)
@@ -661,13 +631,14 @@ class Viewer:
         fig.on_event(Tap, self._on_tap)
         fig.on_event(RangesUpdate, self._on_ranges)
         fig.on_event(SelectionGeometry, self._on_select)
+        fig.on_event(PanStart, self._on_pan_start)
         self.fig = fig
         self.map_title = _html()
 
     def _build_xsec(self):
         # static view: no pan/zoom, so the plot can't be dragged off the sampled data
         fig = figure(sizing_mode="stretch_width", height=430, tools="save",
-                     toolbar_location="above", x_axis_label="Distance along section (km)",
+                     toolbar_location="above", x_axis_label="Distance from A toward B (km)",
                      y_axis_label="Height (km AGL)", x_range=Range1d(0, 1),
                      y_range=Range1d(0, 15))
         style_fig(fig)
@@ -688,6 +659,15 @@ class Viewer:
                                    line_color="#e5e7eb", line_width=1.1)
         self.xs_vhead = fig.scatter("x1", "y1", source=self.xs_vec, marker="triangle",
                                     angle="angle", size=5, color="#e5e7eb")
+        # A and B, as on the map, at the two ends of the distance axis
+        lab = dict(y=0, x_units="data", y_units="data", y_offset=5, text_color=ACCENT,
+                   text_font_size="14px", text_font_style="bold", text_baseline="bottom",
+                   background_fill_color=BG, background_fill_alpha=0.75, padding=3,
+                   border_radius=3, visible=False)
+        self.xs_lab = (Label(x=0, text="A", x_offset=5, text_align="left", **lab),
+                       Label(x=1, text="B", x_offset=-5, text_align="right", **lab))
+        for a in self.xs_lab:
+            fig.add_layout(a)
         self.xs_cbar = ColorBar(color_mapper=self.xs_mapper, width=12, padding=6,
                                 background_fill_color=BG, major_label_text_color=MUTED,
                                 major_tick_line_color=None, bar_line_color=None)
@@ -737,20 +717,27 @@ class Viewer:
     # ================================================================ panels
     def _build_track(self):
         run = self.run
-        self.trk_metric = pn.widgets.Select(name="Track on", options=trk.METRICS, value="uh",
-                                            width=200)
+        metrics = trk.metrics(run)
+        self.trk_metric = pn.widgets.Select(name="Track on", options=metrics,
+                                            value=next(iter(metrics.values())), width=200)
         self.trk_z = pn.widgets.FloatInput(name="Height (km)", value=1.0, step=0.25,
                                            start=0.0, end=float(run.z[-1]), width=90,
-                                           visible=False)
+                                           visible=self.trk_metric.value != "uh")
         self.trk_radius = pn.widgets.FloatInput(
             name="Search radius (km)", value=5.0, step=0.5, start=0.5, width=120,
             description="How far from the expected position to look at the next time")
         self.trk_smooth = pn.widgets.FloatInput(
-            name="Smoothing (km)", value=1.0, step=0.25, start=0.0, width=110,
-            description="Box-average the field before picking the maximum, so the fix "
-                        "follows the meso rather than single-grid-point noise")
+            name="Smoothing (km)", value=1.0, step=0.125, start=0.0, width=110,
+            description="Smooth the field before picking the maximum, so the fix follows "
+                        "the storm rather than single-grid-point noise (Gaussian: σ; "
+                        "box: width)")
+        self.trk_kernel = pn.widgets.Select(
+            name="Smoothing filter", options={"Gaussian": "gauss", "Box": "box"},
+            value="gauss", width=110)
+        self.trk_whole = pn.widgets.Checkbox(  # storm_tracking.ipynb: no search radius
+            name="Search whole domain each time", value=False, margin=(5, 10, 14, 10))
         self.trk_stop = pn.widgets.FloatInput(
-            name="Stop below", value=trk.METRIC_STOP["uh"], width=100,
+            name="Stop below", value=trk.METRIC_STOP[self.trk_metric.value], width=100,
             description="Tracking ends when the maximum in the search disc falls below "
                         "this (meso lost)")
         self.trk_dir = pn.widgets.Select(
@@ -776,6 +763,11 @@ class Viewer:
             margin=(5, 4, 8, 4),
             description="Read a track from the path (CSV or whitespace columns with "
                         "x_km, y_km and time_s / time_hms / time_index)")
+        self.trk_find = pn.widgets.Button(
+            name="Find strongest", button_type="primary", button_style="outline", height=32,
+            margin=(5, 4, 8, 4),
+            description="Start the track from the domain-wide maximum of the (smoothed) "
+                        "field at the shown time, then follow it forward and backward")
         self.trk_stop_btn = pn.widgets.Button(name="Stop", button_type="danger",
                                               button_style="outline", height=32,
                                               margin=(5, 4, 8, 10), disabled=True)
@@ -814,22 +806,28 @@ class Viewer:
     def _build_panels(self):
         F, run = self.F, self.run
         g3 = F.groups(ndim=3)
-        self.skew_png = _html(sizing_mode="stretch_width", visible=False)
-        self.prof_png = _html(sizing_mode="stretch_width", visible=False)
-        self.params = _html(sizing_mode="stretch_width")
+        self.skew_png = self._zoom_image("skewt_hodograph.svg",
+                                         styles={"flex": "1 1 640px", "min-width": "0"})
+        self.prof_png = self._zoom_image("profiles.svg")
+        self.params = _html(styles={"flex": "1 1 380px", "min-width": "0"})
         self.snd_head = _html(
             '<div class="cv-empty">Click anywhere on the map to drop a sounding. '
             '<kbd>Shift</kbd>-click to add up to four for comparison.</div>',
             sizing_mode="stretch_width")
         self.snd_msg = _html(sizing_mode="stretch_width")
         self.snd_tabs = pn.Tabs(sizing_mode="stretch_width", dynamic=False, visible=False)
+        self._snd_tab_names = []
         self.prof_row = pn.Row(
             _html('<div class="cv-hint" style="margin:8px 0 0 4px">Profile panels below '
                   'go up to</div>'), self.prof_top,
             _html('<div class="cv-hint" style="margin:8px 0 0 0">km AGL</div>'),
             visible=False, margin=(4, 0, 0, 0))
-        self.snd_col = pn.Column(self.snd_head, self.snd_tabs, self.skew_png, self.params,
-                                 self.prof_row, self.prof_png, sizing_mode="stretch_width")
+        # skew-T and table side by side when there is room (expanded view)
+        self.snd_col = pn.Column(
+            self.snd_head, self.snd_tabs,
+            pn.FlexBox(self.skew_png, self.params, flex_wrap="wrap", gap="4px 16px",
+                       align_items="flex-start", sizing_mode="stretch_width"),
+            self.prof_row, self.prof_png, sizing_mode="stretch_width")
 
         # ---- 3D
         iso_defaults = [("dbz", 30.0, "#7dd3fc", 0.22, True),
@@ -917,6 +915,7 @@ class Viewer:
         self.plot3d = pn.pane.Plotly(None, sizing_mode="stretch_both", min_height=400,
                                      config={"displaylogo": False, "responsive": True},
                                      visible=False)
+        self._build_streamline_card()
 
         # ---- analysis panel (right of the map)
         snd_set = pn.FlexBox(self.parcel, self.wunits, self.storm, self.storm_u,
@@ -947,8 +946,9 @@ class Viewer:
                        sizing_mode="stretch_width"), d.panel,
             self.xs_status, pn.pane.Bokeh(self.xs_fig, sizing_mode="stretch_width"),
             sizing_mode="stretch_width")
-        trk_set = pn.FlexBox(self.trk_metric, self.trk_z, self.trk_radius, self.trk_smooth,
-                             self.trk_stop, self.trk_dir, self.trk_snap, self.trk_near,
+        trk_set = pn.FlexBox(self.trk_metric, self.trk_z, self.trk_smooth, self.trk_kernel,
+                             self.trk_radius, self.trk_stop, self.trk_dir, self.trk_snap,
+                             self.trk_near, self.trk_whole,
                              flex_wrap="wrap", align_items="flex-end", gap="0 4px",
                              sizing_mode="stretch_width",
                              styles={"border-top": f"1px solid {GRID}"})
@@ -957,7 +957,8 @@ class Viewer:
                                    sizing_mode="stretch_both")),
             ("Cross-section", pn.Column(xs, scroll=True, sizing_mode="stretch_both")),
             ("Track", pn.Column(
-                pn.FlexBox(self.trk_how, self.trk_stop_btn, self.trk_del, self.trk_clear,
+                pn.FlexBox(self.trk_how, self.trk_find, self.trk_stop_btn, self.trk_del,
+                           self.trk_clear,
                            _settings_toggle(trk_set), self.trk_advance, flex_wrap="wrap",
                            align_items="center", gap="0 4px", sizing_mode="stretch_width"),
                 trk_set,
@@ -970,10 +971,65 @@ class Viewer:
             sizing_mode="stretch_both", dynamic=False,
             styles={"flex": "1 1 48%", "min-width": "0"})
 
+    def _build_streamline_card(self):
+        """Floating card for the streamline clicked in the 3D scene: a field and the
+        height along it, against distance from the seed."""
+        F = self.F
+        along = {}
+        if all(n in F for n in ("xvort", "yvort", "zvort")):
+            along["Streamwise vorticity (streamline frame)"] = "_ws"
+        along["Speed (streamline frame)"] = "_speed"
+        self.sl_field = pn.widgets.Select(
+            groups={"Along the streamline": along, **F.groups(ndim=3)},
+            value="winterp" if "winterp" in F else next(iter(along.values())), width=250,
+            height=32, margin=(4, 4))
+        self.sl_clear = pn.widgets.Button(name="", icon="x", button_type="light",
+                                          button_style="outline", width=34, height=32,
+                                          margin=(4, 4), description="Clear the selection")
+        self.sl_info = _html(sizing_mode="stretch_width")
+        fig = figure(sizing_mode="stretch_width", height=210, tools="pan,wheel_zoom,"
+                     "box_zoom,reset,save", x_axis_label="Distance from seed (km)",
+                     y_axis_label="")
+        style_fig(fig)
+        fig.toolbar.autohide = True
+        fig.min_border_right = 10
+        self.sl_src = ColumnDataSource(dict(s=[], v=[], z=[]))
+        fig.extra_y_ranges = {"z": Range1d(0, 1)}
+        zax = LinearAxis(y_range_name="z", axis_label="height (km)", axis_line_color=GRID,
+                         major_tick_line_color=GRID, minor_tick_line_color=None,
+                         major_label_text_color=MUTED, axis_label_text_color=MUTED,
+                         axis_label_text_font_style="normal")
+        fig.add_layout(zax, "right")
+        fig.line("s", "z", source=self.sl_src, y_range_name="z", line_color=MUTED,
+                 line_width=1.5, line_dash="dashed")
+        r = fig.line("s", "v", source=self.sl_src, line_color=volume3d.SELECTED, line_width=2)
+        fig.add_layout(Span(location=0, dimension="height", line_color=MUTED,
+                            line_dash="dotted", line_width=1))
+        fig.add_tools(HoverTool(renderers=[r], mode="vline",
+                                tooltips=[("s", "@s{0.00} km"), ("value", "@v{0.000}"),
+                                          ("z", "@z{0.00} km")]))
+        self.sl_fig = fig
+        self.sl_card = pn.Column(
+            pn.Row(self.sl_info, self.sl_field, self.sl_clear, margin=0,
+                   sizing_mode="stretch_width"),
+            pn.pane.Bokeh(fig, sizing_mode="stretch_width"),
+            visible=False, margin=0,
+            styles={"position": "absolute", "right": "12px", "bottom": "12px",
+                    "width": "min(600px, 46vw)", "z-index": "25", "padding": "6px 8px",
+                    "background": "rgba(17,23,35,0.94)", "border": f"1px solid {GRID}",
+                    "border-radius": "10px", "box-shadow": "0 6px 20px rgba(0,0,0,.45)"})
+        self._s3 = None      # last 3D scene: t, streamlines, frame offset
+        self._sl_seed = None  # seed of the selected streamline (kept across re-renders)
+        self._sl_line = None
+
     def _top_bar(self):
         """Run, time and workspace pills floating across the top of the window."""
+        # the Map | 3D switch appears once a 3D region has been picked (nothing to show
+        # in 3D before that)
+        self.ws_group = _group(self.workspace)
+        self.ws_group.visible = self.box is not None
         return pn.Column(
-            _bar(_group(self.workspace),
+            _bar(self.ws_group,
                  _group(self.t_prev, self.t_play, self.t_next, self.t_speed, self.tslider,
                         self.time_html),
                  self.mode_group, _group(self.run_btn)),
@@ -998,7 +1054,8 @@ class Viewer:
                                                  "box-shadow": "0 6px 20px rgba(0,0,0,.45)"})
         bar = _bar(_group(self.fill_var, self.fill_mode, self.fill_lvl),
                    _group(style, *ovb, vec))
-        self.mode_group = _group(*self.mode.btns.values(), self.clear_pts, self.panel_btn)
+        self.mode_group = _group(*self.mode.btns.values(), self.clear_pts, self.panel_btn,
+                                 self.full_btn)
         return pn.Column(bar, d.panel, styles=OVERLAY, margin=0)
 
     def _3d_toolbar(self):
@@ -1037,7 +1094,7 @@ class Viewer:
                  "pointer-events": "none", "background": "rgba(11,15,23,0.75)",
                  "border-radius": "8px", "padding": "0 8px"}
         caption = pn.Column(self.map_title, self.hint, self.status, styles=floor, margin=0)
-        map_area = pn.Column(
+        self.map_area = map_area = pn.Column(
             self.map_bar, pn.pane.Bokeh(self.fig, sizing_mode="stretch_both"), caption,
             sizing_mode="stretch_both",
             styles={"position": "relative", "flex": "1 1 55%", "min-width": "0"})
@@ -1050,6 +1107,7 @@ class Viewer:
             self.v3_bar, self.plot3d,
             pn.Column(self.v3_status, styles=dict(floor, left="12px", bottom="12px"),
                       margin=0),
+            self.sl_card,
             sizing_mode="stretch_width", visible=False, margin=0,
             styles=dict(below, position="relative"))
         err = _html(f'<div class="cv-status" style="color:#f87171;padding:4px 8px">'
@@ -1110,7 +1168,9 @@ class Viewer:
         self.v3_pick.on_click(self._on_pick_region)
         self.workspace.param.watch(self._on_workspace, "value")
         self.panel_btn.on_click(lambda e: self._show_panel(not self.tabs.visible))
-        r3 = lambda *e: self.request_3d() if self.plot3d.visible else None  # noqa: E731
+        self.full_btn.on_click(lambda e: self._set_full(not self.full))
+        # once a scene is shown or being rendered, 3D settings re-render it
+        r3 = lambda *e: self.request_3d() if self.gen["3d"] else None  # noqa: E731
         w3 = [self.v3_ground, self.v3_res, self.sv_on, self.sv_frame, self.sv_ref,
               self.sv_color, self.st_on, self.st_dir, self.st_frame, self.st_color]
         for o in self.isos:
@@ -1124,7 +1184,13 @@ class Viewer:
             o["on"].param.watch(lambda e: self._update_3d_labels(), "value")
         self.v3_cam.param.watch(self._on_camera, "value")
         self.v3_drag.param.watch(self._on_drag, "value")
+        self.plot3d.param.watch(self._on_3d_click, "click_data")
+        self.sl_field.param.watch(lambda e: self._sample_line(), "value")
+        self.sl_clear.on_click(lambda e: self._select_line(None))
         self.trk_metric.param.watch(self._on_trk_metric, "value")
+        self.trk_whole.param.watch(self._on_trk_whole, "value")
+        self.trk_find.on_click(lambda e: (self._show_panel(True, 2),
+                                          self.request_track(None, None)))
         self.trk_stop_btn.on_click(lambda e: self._cancel_track())
         self.trk_clear.on_click(self._on_clear_track)
         self.trk_how.param.watch(self._on_trk_how, "value")
@@ -1134,6 +1200,7 @@ class Viewer:
         self.trk_path.param.watch(self._on_trk_path, "value")
         self.storm_follow.param.watch(lambda e: self._draw_points(), "value")
         self._on_trk_path(None)
+        self._trk_preset(self.trk_metric.value)
         self._update_track_view()
         self._update_3d_labels()
         self._update_region_html()
@@ -1221,6 +1288,8 @@ class Viewer:
             None: "Pick a click mode (Sounding, Cross-section, 3D region) to query the map",
             "Sounding": "Click: sounding at a point · <kbd>Shift</kbd>-click: add a point "
                         "(up to 4)",
+            "Area sounding": "Drag a box: sounding averaged over it · <kbd>Shift</kbd>-drag: "
+                             "add a box (up to 4)",
             "Cross-section": "Click two points (A, then B) to draw a vertical section",
             "3D region": "Drag a box to choose the 3D region; it renders in the 3D view",
             "Track": "Auto-track: click the meso to follow it through time; click near the "
@@ -1228,12 +1297,39 @@ class Viewer:
                      "the fix at the shown time",
         }
         self.hint.object = f'<div class="cv-hint">{hints[mode]}</div>'
-        self.fig.toolbar.active_drag = self.bsel if mode == "3D region" else self.pan
-        tabs = {"Sounding": 0, "Cross-section": 1, "Track": 2}
+        self.fig.toolbar.active_drag = self.bsel if mode in ("3D region", "Area sounding") \
+            else self.pan
+        tabs = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2}
         if not init and mode in tabs:
             self._show_panel(True, tabs[mode])
 
+    def _zoom_image(self, filename, **kw):
+        z = ZoomImage(filename=filename, interactive=self.full, sizing_mode="stretch_width",
+                      visible=kw.pop("visible", False), **kw)
+        z.param.watch(lambda e: self._set_full(True), "clicks")  # click: expand
+        return z
+
+    def _zoom_images(self):
+        return [self.skew_png, self.prof_png] + [
+            z for tab in self.snd_tabs for z in tab if isinstance(z, ZoomImage)]
+
+    def _set_full(self, on):
+        """Analysis panel over the whole window (map hidden); the sounding graphics
+        become zoomable.  The button turns into 'Map' to come back."""
+        self.full = on
+        self.map_area.visible = not on
+        if on:
+            self.tabs.visible = True
+        self.tabs.styles = dict(self.tabs.styles, flex="1 1 100%" if on else "1 1 48%")
+        self.full_btn.param.update(name="Map" if on else "",
+                                   icon="arrows-minimize" if on else "arrows-maximize")
+        self.panel_btn.disabled = on
+        for z in self._zoom_images():
+            z.interactive = on
+
     def _show_panel(self, show, tab=None):
+        if not show and self.full:
+            self._set_full(False)
         self.tabs.visible = show
         self.panel_btn.icon = ("layout-sidebar-right-collapse" if show
                                else "layout-sidebar-right-expand")
@@ -1326,21 +1422,7 @@ class Viewer:
         mode = self.mode.value
         if mode == "Sounding":
             shift = bool((getattr(ev, "modifiers", None) or {}).get("shift"))
-            new = ("pt", (x, y), None)
-            meso = trk.position(self.fixes, self.t)
-            if self.storm_follow.value:
-                if meso is None:
-                    self._set_status('<span style="color:#fbbf24">No tracked meso at this '
-                                     'time; the sounding stays at a fixed point</span>')
-                else:
-                    new = ("trk", (x - meso[0], y - meso[1]), None)
-            if shift and self.points:
-                self.points = (self.points + [new])[-4:]
-            else:
-                self.points = [new]
-            self._draw_points()
-            self._show_panel(True, 0)
-            self.request_soundings()
+            self._add_sounding(x, y, shift)
         elif mode == "Track":
             self._show_panel(True, 2)
             self.request_track(x, y)
@@ -1351,11 +1433,43 @@ class Viewer:
                 self._show_panel(True, 1)
                 self.request_xsec()
 
+    def _add_sounding(self, x, y, add, size=()):
+        """A sounding at (x, y) km (a box mean when size = (width, height) km): replaces
+        the shown ones, or is added to them (up to 4) when `add`."""
+        new = ("pt", (x, y, *size), None)
+        meso = trk.position(self.fixes, self.t)
+        if self.storm_follow.value:
+            if meso is None:
+                self._set_status('<span style="color:#fbbf24">No tracked meso at this '
+                                 'time; the sounding stays at a fixed point</span>')
+            else:
+                new = ("trk", (x - meso[0], y - meso[1], *size), None)
+        if add and self.points:
+            self.points = (self.points + [new])[-4:]
+        else:
+            self.points = [new]
+        self._draw_points()
+        self._show_panel(True, 0)
+        self.request_soundings()
+
+    def _on_pan_start(self, ev):
+        self._drag_shift = bool((getattr(ev, "modifiers", None) or {}).get("shift"))
+
     def _on_select(self, ev):
-        if self.mode.value != "3D region" or not getattr(ev, "final", True):
+        if not getattr(ev, "final", True):
             return
         g = ev.geometry
         if g.get("type") != "rect":
+            return
+        if self.mode.value == "Area sounding":
+            X0, X1, Y0, Y1 = self.extent
+            x0, x1 = sorted((max(X0, min(g["x0"], g["x1"])), min(X1, max(g["x0"], g["x1"]))))
+            y0, y1 = sorted((max(Y0, min(g["y0"], g["y1"])), min(Y1, max(g["y0"], g["y1"]))))
+            if x1 - x0 > 0 and y1 - y0 > 0:
+                self._add_sounding((x0 + x1) / 2, (y0 + y1) / 2, self._drag_shift,
+                                   (x1 - x0, y1 - y0))
+            return
+        if self.mode.value != "3D region":
             return
         self._set_box((g["x0"], g["x1"], g["y0"], g["y1"]))
         self.workspace.value = "3D"
@@ -1372,6 +1486,8 @@ class Viewer:
         y0, y1 = sorted((max(Y0, min(y0, y1)), min(Y1, max(y0, y1))))
         self.box = (x0, x1, y0, y1)
         self.box_src.data = dict(left=[x0], right=[x1], bottom=[y0], top=[y1])
+        if hasattr(self, "ws_group"):
+            self.ws_group.visible = True
         self._update_region_html()
 
     def _on_resized(self, attr, old, new):
@@ -1402,6 +1518,8 @@ class Viewer:
         self._draw_points()
         self._draw_xs()
         self.box_src.data = dict(left=[], right=[], bottom=[], top=[])
+        self.workspace.value = "Map"
+        self.ws_group.visible = False
         self._update_region_html()
         self.request_soundings()
 
@@ -1429,7 +1547,7 @@ class Viewer:
         """Map position (km) of a sounding at time index t (None: domain mean, or no
         tracked meso at t)."""
         if kind == "pt":
-            return where
+            return where[:2]
         if kind == "trk":
             meso = trk.position(self.fixes, t)
             return None if meso is None else (meso[0] + where[0], meso[1] + where[1])
@@ -1447,6 +1565,12 @@ class Viewer:
         self.pt_src.data = dict(x=[xy[0] for _, xy in pts], y=[xy[1] for _, xy in pts],
                                 color=[POINT_COLORS[n] for n, _ in pts],
                                 label=[POINT_LABELS[n] for n, _ in pts])
+        boxes = [(n, xy, self.points[n][1][2:]) for n, xy in pts
+                 if len(self.points[n][1] or ()) == 4]
+        self.pbox_src.data = dict(
+            x=[xy[0] for _, xy, _ in boxes], y=[xy[1] for _, xy, _ in boxes],
+            w=[wh[0] for _, _, wh in boxes], h=[wh[1] for _, _, wh in boxes],
+            color=[POINT_COLORS[n] for n, _, _ in boxes])
 
     def _draw_xs(self):
         pts = self.xs_pts
@@ -1653,8 +1777,12 @@ class Viewer:
                         continue
                     x, y = xy
                     i, j = run.ij(x, y)
-                    i0, i1 = max(0, i - h), min(run.ni, i + h + 1)
-                    j0, j1 = max(0, j - h), min(run.nj, j + h + 1)
+                    hi = hj = h
+                    if len(where) == 4:  # area sounding: mean over the dragged box
+                        hi = int(round(where[2] * 500.0 / run.dx))
+                        hj = int(round(where[3] * 500.0 / run.dy))
+                    i0, i1 = max(0, i - hi), min(run.ni, i + hi + 1)
+                    j0, j1 = max(0, j - hj), min(run.nj, j + hj + 1)
                     c = {}
                     for v in SOUNDING_VARS:
                         vol = run.cached(v, tt)
@@ -1666,12 +1794,14 @@ class Viewer:
                         c[v] = a.mean(axis=(1, 2), dtype=np.float64)
                         if g != self.gen["snd"]:
                             return
+                    box = (f" box {where[2]:.3g}×{where[3]:.3g} km at" if len(where) == 4
+                           else "")
                     if kind == "trk":
-                        dx_, dy_ = where
+                        dx_, dy_ = where[:2]
                         rel = "meso" if dx_ == 0 and dy_ == 0 else f"meso {dx_:+.1f}, {dy_:+.1f}"
-                        label = f"{POINT_LABELS[n]} {rel} km{when}"
+                        label = f"{POINT_LABELS[n]}{box} {rel} km{when}"
                     else:
-                        label = f"{POINT_LABELS[n]} ({x:.1f}, {y:.1f}) km{when}"
+                        label = f"{POINT_LABELS[n]}{box} ({x:.1f}, {y:.1f}) km{when}"
                 else:
                     c = run.mean_profiles(SOUNDING_VARS, tt, progress=prog_for(tt, "domain means"))
                     if g != self.gen["snd"]:
@@ -1689,19 +1819,20 @@ class Viewer:
             base = self._base_result(spec) if spec["base"] else None
             st = spec["style"]
             short = [(lab.split(" ")[0] + (" mean" if "mean" in lab else "")
+                      + (" box" if " box " in lab else "")
                       + (" meso" if "meso" in lab else "")
                       + (f' {lab.split("@ ")[1]}' if "@ " in lab else ""), c, r)
                      for lab, c, r in items]  # table column headers
             html = sp.params_html(short, base, spec["units"])
             if st == "tabs" and len(items) > 1:
-                pngs = [(lab, _png(sp.skewt_hodo_figure([it], base, spec["parcel"],
+                pngs = [(lab, _svg(sp.skewt_hodo_figure([it], base, spec["parcel"],
                                                         spec["units"])),
-                         _png(sp.profiles_figure([it], base, spec["zmax"], spec["units"])))
+                         _svg(sp.profiles_figure([it], base, spec["zmax"], spec["units"])))
                         for it in items for lab in [it[0]]]
             else:
-                pngs = [(None, _png(sp.skewt_hodo_figure(items, base, spec["parcel"],
+                pngs = [(None, _svg(sp.skewt_hodo_figure(items, base, spec["parcel"],
                                                          spec["units"], style=st)),
-                         _png(sp.profiles_figure(items, base, spec["zmax"], spec["units"],
+                         _svg(sp.profiles_figure(items, base, spec["zmax"], spec["units"],
                                                  style=st)))]
             res = (pngs, html, items)
         except Exception as e:  # noqa: BLE001
@@ -1722,20 +1853,28 @@ class Viewer:
         self.results = items
         run = self.run
         avg = "single column" if spec["avg"] == 0 else f'{spec["avg"]:g} km box mean'
+        if all(k == "mean" or len(w) == 4 for k, w, _ in spec["points"]):
+            avg = "area mean"  # the column-average setting applies to point soundings
         pts = " ".join(f'<span style="color:{c};margin-right:14px">{lab}</span>'
                        for lab, c, r in items)
         self.snd_head.object = (f'<div class="cv-maptitle">t = {run.time_label(spec["t"])} · '
                                 f'{avg} · {pts}</div>')
         if pngs[0][0] is None:
-            self.skew_png.object, self.prof_png.object = _img(pngs[0][1]), _img(pngs[0][2])
+            self.skew_png.src, self.prof_png.src = pngs[0][1], pngs[0][2]
             self.skew_png.visible = self.prof_png.visible = True
             self.snd_tabs.visible = False
         else:
             active = self.snd_tabs.active
-            self.snd_tabs[:] = [(lab.replace(" km", ""), pn.Column(
-                _html(_img(a), sizing_mode="stretch_width"),
-                _html(_img(b), sizing_mode="stretch_width"), sizing_mode="stretch_width"))
-                for lab, a, b in pngs]
+            names = [lab.replace(" km", "") for lab, _, _ in pngs]
+            if self._snd_tab_names == names:  # same soundings: keep each tab's zoom
+                for tab, (_, a, b) in zip(self.snd_tabs, pngs):
+                    tab[0].src, tab[1].src = a, b
+            else:
+                self.snd_tabs[:] = [(lab.replace(" km", ""), pn.Column(
+                    self._zoom_image("skewt_hodograph.svg", visible=True, src=a),
+                    self._zoom_image("profiles.svg", visible=True, src=b),
+                    sizing_mode="stretch_width")) for lab, a, b in pngs]
+                self._snd_tab_names = names
             self.snd_tabs.active = min(active, len(pngs) - 1)
             self.skew_png.visible = self.prof_png.visible = False
             self.snd_tabs.visible = True
@@ -1749,30 +1888,41 @@ class Viewer:
     def _trk_opts(self):
         return dict(metric=self.trk_metric.value, zkm=float(self.trk_z.value or 0.0),
                     radius=float(self.trk_radius.value or 5.0),
-                    smooth=float(self.trk_smooth.value or 0.0),
+                    smooth=float(self.trk_smooth.value or 0.0), kernel=self.trk_kernel.value,
                     stop=float(self.trk_stop.value or 0.0), snap=self.trk_snap.value,
-                    nearest=self.trk_near.value)
+                    nearest=self.trk_near.value, whole=self.trk_whole.value)
+
+    def _trk_preset(self, metric):
+        """Default settings per tracked field.  Updraft: w at 1 km with a Gaussian of
+        sigma = 3 grid points, as in storm_tracking.ipynb."""
+        dxk = self.run.dx / 1000.0
+        z, smooth, kernel = {"w": (1.0, 3 * dxk, "gauss"), "zeta": (1.0, 1.0, "box"),
+                             "uh": (self.trk_z.value, 1.0, "box")}[metric]
+        self.trk_z.param.update(value=z, visible=metric != "uh")
+        self.trk_smooth.value, self.trk_kernel.value = round(smooth, 3), kernel
+        self.trk_stop.value = trk.METRIC_STOP[metric]
 
     def _on_trk_metric(self, ev):
-        self.trk_z.visible = ev.new != "uh"
-        self.trk_stop.value = trk.METRIC_STOP[ev.new]
-        if ev.new == "w":
-            self.trk_z.value = 5.0
-        elif ev.new == "zeta":
-            self.trk_z.value = 1.0
+        self._trk_preset(ev.new)
+
+    def _on_trk_whole(self, ev):
+        self.trk_radius.disabled = self.trk_near.disabled = ev.new
 
     def request_track(self, x, y):
         """Track from a click at the shown time.  A click near the existing track
         (same settings) corrects it from that time on, keeping the other side;
         anywhere else starts a new track."""
         opts, t0, run = self._trk_opts(), self.t, self.run
-        if self.trk_how.value == "manual":
+        if self.trk_how.value == "manual" and x is not None:
             self._place_fix(x, y, opts)
             return
         direction, existing = self.trk_dir.value, None
         same = self.trk_spec is not None and all(
-            self.trk_spec.get(k) == opts[k] for k in ("metric", "zkm", "smooth", "nearest"))
-        if self.fixes and same:
+            self.trk_spec.get(k) == opts[k]
+            for k in ("metric", "zkm", "smooth", "kernel", "nearest", "whole"))
+        if x is None:  # Find strongest: a new track from the domain-wide maximum
+            direction = "both"
+        elif self.fixes and same:
             ts = sorted(self.fixes)
             near = min(ts, key=lambda tt: abs(tt - t0))
             fx = self.fixes[near]
@@ -1898,8 +2048,9 @@ class Viewer:
         run, ts = self.run, sorted(self.fixes)
         if not ts:
             return ('<div class="cv-empty">Pick <b>Track</b> in the click modes and click '
-                    'on a mesocyclone (try 2–5 km UH or ζ as the map fill). It is followed '
-                    'through time from there; the path is drawn on the map.</div>')
+                    'on the storm, or press <b>Find strongest</b> to start from the '
+                    'domain-wide maximum. It is followed through time from there; the path '
+                    'is drawn on the map.</div>')
         mv = ""
         if len(ts) > 1:  # mean ground-relative motion, first to last fix
             f0, f1, dt = self.fixes[ts[0]], self.fixes[ts[-1]], run.times[ts[-1]] - run.times[ts[0]]
@@ -2078,6 +2229,9 @@ class Viewer:
         self.xs_vec.data = res.get("vec", dict(EMPTY_VEC))
         self.xs_fig.x_range.update(start=0.0, end=float(s[-1]))
         self.xs_fig.y_range.update(start=0.0, end=float(zq[-1]))
+        self.xs_lab[1].x = float(s[-1])
+        for a in self.xs_lab:
+            a.visible = True
         self.xs_cbar_label.axis_label = d.title
         (xa, ya), (xb, yb) = spec["A"], spec["B"]
         cont = f' · contours: {F[spec["cont"]].label}' if spec["cont"] else ""
@@ -2182,7 +2336,9 @@ class Viewer:
                                         camera=self.v3_cam.value, dragmode=self.v3_drag.value,
                                         revision=f"cam{self._cam_rev}")
             nf = sum(len(m["faces"]) for m in meshes)
-            res = (fig, notes, nf, stride)
+            s3 = dict(t=t, stream=stream, off=self._frame_offset(ss["frame"], spec["storm"]),
+                      frame=ss["frame"])
+            res = (fig, notes, nf, stride, s3)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             res = e
@@ -2224,13 +2380,134 @@ class Viewer:
         if isinstance(res, Exception):
             self.v3_status.object = f'<div class="cv-status" style="color:#f87171">{res}</div>'
             return
-        fig, notes, nf, stride = res
+        fig, notes, nf, stride, s3 = res
+        self._s3 = s3
+        # keep the selected streamline (same seed) across re-renders, e.g. in time
+        line = None
+        if self._sl_seed is not None and s3["stream"] is not None:
+            st = s3["stream"]
+            seeds = st["segs"][:, 2]
+            d = np.hypot(st["x"][seeds] - self._sl_seed[0], st["y"][seeds] - self._sl_seed[1])
+            if d.size and d.min() < 1e-3:
+                line = int(np.argmin(d))
         self.plot3d.object = fig
+        self._select_line(line, push=False)
         self.plot3d.visible = True
         extra = (" · " + " · ".join(notes)) if notes else ""
         self.v3_status.object = (f'<div class="cv-status">{nf:,} triangles · '
                                  f'{"full" if stride == 1 else f"1/{stride}"} resolution'
                                  f'{extra}</div>')
+
+    # ---------------------------------------------------------- streamline pick
+    def _trace(self, meta):
+        fig = self.plot3d.object
+        for n, tr in enumerate(fig.data if fig is not None else ()):
+            if tr.meta == meta:
+                return n, tr
+        return None, None
+
+    def _on_3d_click(self, ev):
+        pts = (ev.new or {}).get("points") or []
+        idx, _ = self._trace("stream")
+        if not pts or idx is None or self._s3 is None or self._s3["stream"] is None:
+            return
+        p = pts[0]
+        if p.get("curveNumber") != idx or p.get("pointNumber") is None:
+            return
+        segs = self._s3["stream"]["segs"]
+        k = int(p["pointNumber"])
+        line = int(np.searchsorted(segs[:, 0], k, side="right")) - 1
+        if 0 <= line < len(segs) and k < segs[line, 1]:
+            self._select_line(line)
+
+    def _select_line(self, line, push=True):
+        """Highlight streamline `line` (None: clear) and plot fields along it."""
+        _, hl = self._trace("selected")
+        _, seed = self._trace("seed")
+        st = self._s3["stream"] if self._s3 else None
+        if line is None or st is None or hl is None:
+            self._sl_seed, self._sl_line = None, None
+            self.sl_card.visible = False
+            if hl is not None and hl.x is not None and len(hl.x):
+                hl.update(x=[], y=[], z=[])
+                seed.update(x=[], y=[], z=[])
+                if push:
+                    self.plot3d.param.trigger("object")
+            return
+        a, b, sd = (int(v) for v in st["segs"][line])
+        hl.update(x=st["x"][a:b], y=st["y"][a:b], z=st["z"][a:b])
+        seed.update(x=[st["x"][sd]], y=[st["y"][sd]], z=[st["z"][sd]])
+        self._sl_seed = (float(st["x"][sd]), float(st["y"][sd]))
+        self._sl_line = line
+        if push:  # only the changed (highlight) traces are sent to the browser
+            self.plot3d.param.trigger("object")
+        self.sl_card.visible = True
+        self._sample_line()
+
+    def _sample_line(self):
+        if self._s3 is None or self._s3["stream"] is None or self._sl_line is None:
+            return
+        self.gen["sl"] += 1
+        g = self.gen["sl"]
+        a, b, sd = (int(v) for v in self._s3["stream"]["segs"][self._sl_line])
+        self.sl_info.object = ('<div class="cv-status"><span class="busy">● Sampling…'
+                               '</span></div>')
+        self.pools["sl"].submit(self._sl_job, g, dict(self._s3), self.sl_field.value,
+                                a, b, sd)
+
+    def _sl_job(self, g, s3, name, a, b, sd):
+        run, F, t, st = self.run, self.F, s3["t"], s3["stream"]
+        try:
+            x, y, z = (np.asarray(st[k][a:b], np.float64) for k in ("x", "y", "z"))
+            ds = np.sqrt(np.diff(x) ** 2 + np.diff(y) ** 2 + np.diff(z) ** 2)
+            s = np.concatenate(([0.0], np.cumsum(ds)))
+            s -= s[sd - a]
+
+            def samp(vol):
+                return volume3d.sample_points(run, vol, x, y, z)
+
+            if name in ("_ws", "_speed"):
+                wind = ["uinterp", "vinterp", "winterp"]
+                vort = ["xvort", "yvort", "zvort"] if name == "_ws" else []
+                run.load_volumes(wind + vort, t)
+                cu, cv = s3["off"]
+                u = samp(run.volume("uinterp", t)) - cu
+                v = samp(run.volume("vinterp", t)) - cv
+                w = samp(run.volume("winterp", t))
+                spd = np.sqrt(u * u + v * v + w * w)
+                if name == "_speed":
+                    val, label = spd, "speed (m/s)"
+                else:
+                    ox, oy, oz = (samp(run.volume(n, t)) for n in vort)
+                    val = (ox * u + oy * v + oz * w) / np.maximum(spd, 1e-6)
+                    label = "streamwise vorticity (1/s)"
+            else:
+                val, label = F.at_points(name, t, samp), F[name].title
+            res = dict(s=s, v=np.asarray(val, np.float64), z=z, label=label, x0=x[sd - a],
+                       y0=y[sd - a], z0=z[sd - a], length=float(s[-1] - s[0]))
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            res = e
+        if g == self.gen["sl"]:
+            self._schedule(partial(self._apply_sl, g, res))
+
+    def _apply_sl(self, g, res):
+        if g != self.gen["sl"]:
+            return
+        if isinstance(res, Exception):
+            self.sl_info.object = f'<div class="cv-status" style="color:#f87171">{res}</div>'
+            return
+        self.sl_src.data = dict(s=res["s"], v=res["v"], z=res["z"])
+        z0, z1 = float(np.nanmin(res["z"])), float(np.nanmax(res["z"]))
+        pad = 0.05 * max(z1 - z0, 0.1)
+        self.sl_fig.extra_y_ranges["z"].update(start=max(0.0, z0 - pad), end=z1 + pad)
+        self.sl_fig.yaxis[0].axis_label = res["label"]
+        frame = FRAME_SHORT[self._s3["frame"]] if self._s3 else ""
+        self.sl_info.object = (
+            f'<div class="cv-status" style="line-height:1.35"><b style="color:'
+            f'{volume3d.SELECTED}">Streamline</b> ({frame}) · seed ({res["x0"]:.1f}, '
+            f'{res["y0"]:.1f}) km, {res["z0"] * 1000:.0f} m<br>{res["length"]:.1f} km long · '
+            f'z {z0:.2f}–{z1:.2f} km</div>')
 
 
 def create_app(reg, maxpix=900):

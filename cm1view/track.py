@@ -5,10 +5,10 @@ import os
 import time as _time
 
 import numpy as np
-from scipy.ndimage import uniform_filter
+from scipy.ndimage import gaussian_filter, uniform_filter
 
-METRICS = {"2–5 km updraft helicity": "uh", "Vertical vorticity at height": "zeta",
-           "Vertical velocity at height": "w"}
+METRICS = {"Updraft: w at height": "w", "2–5 km updraft helicity": "uh",
+           "Vertical vorticity at height": "zeta"}
 METRIC_LABEL = {"uh": "2–5 km UH", "zeta": "ζ", "w": "w"}
 METRIC_UNITS = {"uh": "m²/s²", "zeta": "1/s", "w": "m/s"}
 # default "lost" threshold: tracking stops when the metric falls below this
@@ -17,7 +17,23 @@ UH_LAYER = (2.0, 5.0)  # km AGL
 
 
 def available(run):
-    return run.has("winterp") and run.has("zvort")
+    return run.has("winterp")
+
+
+def metrics(run):
+    """The METRICS this run has the fields for."""
+    ok = {"w": run.has("winterp"), "uh": run.has("winterp") and run.has("zvort"),
+          "zeta": run.has("zvort")}
+    return {k: v for k, v in METRICS.items() if ok[v]}
+
+
+def _smooth(a, smooth, dxk, kernel):
+    """Box average of width `smooth` km, or Gaussian with sigma = `smooth` km."""
+    if kernel == "gauss":
+        sig = smooth / dxk
+        return gaussian_filter(a, sig, mode="nearest") if sig > 0.3 else a
+    ns = max(1, int(round(smooth / dxk)) | 1)
+    return uniform_filter(a, size=ns, mode="nearest") if ns > 1 else a
 
 
 def metric_field(run, t, metric, zkm=1.0, cancelled=None):
@@ -43,38 +59,49 @@ def metric_field(run, t, metric, zkm=1.0, cancelled=None):
     return uh, {"w_max_2_5km": wmax, "zeta_max_2_5km": zmax}
 
 
-def locate(run, field, extras, x, y, radius, smooth, snap=True, nearest=True):
+def locate(run, field, extras, x, y, radius, smooth, snap=True, nearest=True,
+           kernel="box", whole=False):
     """Fix near (x, y) km: the maximum of the (smoothed) field within `radius` km.
     nearest: weight the field by a Gaussian of the distance from (x, y) (sigma =
     radius / 2) first, so a nearby core wins over a slightly stronger one farther
     away (keeps the track from hopping between neighbouring cores).
+    whole: take the maximum over the whole domain instead (x, y and radius unused).
+    kernel: 'box' (width `smooth` km) or 'gauss' (sigma `smooth` km).
     Returns dict(x, y, value, **extras) with values = raw maxima within `smooth` km
     of the fix (or None if the search disc is off the domain)."""
     dxk = run.dx / 1000.0
-    i, j = run.ij(x, y)
-    r = int(np.ceil(radius / dxk))
-    i0, i1 = max(0, i - r), min(run.ni, i + r + 1)
-    j0, j1 = max(0, j - r), min(run.nj, j + r + 1)
+    if whole:
+        i0, i1, j0, j1 = 0, run.ni, 0, run.nj
+    else:
+        i, j = run.ij(x, y)
+        r = int(np.ceil(radius / dxk))
+        i0, i1 = max(0, i - r), min(run.ni, i + r + 1)
+        j0, j1 = max(0, j - r), min(run.nj, j + r + 1)
     if i0 >= i1 or j0 >= j1:
         return None
-    sub = np.nan_to_num(field[j0:j1, i0:i1], nan=-np.inf, neginf=-np.inf)
-    ns = max(1, int(round(smooth / dxk)) | 1)
-    sm = uniform_filter(sub, size=ns, mode="nearest") if ns > 1 else sub
-    jj, ii = np.mgrid[j0:j1, i0:i1]
-    d2 = (run.xh[ii] - x) ** 2 + (run.yh[jj] - y) ** 2
-    disc = d2 <= radius ** 2
-    if snap:
+    sub = field[j0:j1, i0:i1]
+    ok = np.isfinite(sub)
+    if not ok.any():
+        return None
+    sm = _smooth(np.where(ok, sub, np.min(sub[ok])), smooth, dxk, kernel)
+    sm = np.where(ok, sm, -np.inf)
+    if whole:
+        jm, im = np.unravel_index(int(np.argmax(sm)), sm.shape)
+        jf, if_ = j0 + jm, i0 + im
+    elif snap:
+        jj, ii = np.mgrid[j0:j1, i0:i1]
+        d2 = (run.xh[ii] - x) ** 2 + (run.yh[jj] - y) ** 2
         if nearest:
             wt = np.exp(-0.5 * d2 / (0.5 * radius) ** 2)
             sm = np.where(sm > 0, sm * wt, sm)
-        sm = np.where(disc, sm, -np.inf)
+        sm = np.where(d2 <= radius ** 2, sm, -np.inf)
         jm, im = np.unravel_index(int(np.argmax(sm)), sm.shape)
         jf, if_ = j0 + jm, i0 + im
     else:
         jf, if_ = j, i
-    h = max(1, ns // 2)
+    h = max(1, int(round(smooth / dxk)) // 2)
     win = (slice(max(0, jf - h), jf + h + 1), slice(max(0, if_ - h), if_ + h + 1))
-    out = dict(x=float(run.xh[if_]), y=float(run.yh[jf]), value=float(np.max(field[win])))
+    out = dict(x=float(run.xh[if_]), y=float(run.yh[jf]), value=float(np.nanmax(field[win])))
     for k, a in extras.items():
         out[k] = float(np.max(a[win]))
     return out
@@ -82,20 +109,22 @@ def locate(run, field, extras, x, y, radius, smooth, snap=True, nearest=True):
 
 def track(run, t0, x0, y0, opts, direction="both", existing=None, on_fix=None,
           cancelled=None, progress=None):
-    """Follow the feature at (x0, y0) from time t0.  opts: metric, zkm, radius,
-    smooth, stop, snap, nearest.  `existing` fixes ({t: fix}) on the side not being tracked
-    are kept.  on_fix(fixes) is called after every new fix.  Returns {t: fix}."""
+    """Follow the feature at (x0, y0) from time t0 (x0 None: start from the domain-wide
+    maximum).  opts: metric, zkm, radius, smooth, kernel, stop, snap, nearest, whole.
+    `existing` fixes ({t: fix}) on the side not being tracked are kept.  on_fix(fixes)
+    is called after every new fix.  Returns {t: fix}."""
     fixes = dict(existing or {})
     nt = len(run.times)
 
-    def get(t, x, y, snap=True):
+    def get(t, x, y, snap=True, whole=False):
         f, ex = metric_field(run, t, opts["metric"], opts["zkm"], cancelled)
         if f is None:
             return None
         return locate(run, f, ex, x, y, opts["radius"], opts["smooth"], snap,
-                      opts.get("nearest", True))
+                      opts.get("nearest", True), opts.get("kernel", "box"),
+                      whole or opts.get("whole", False))
 
-    first = get(t0, x0, y0, opts.get("snap", True))
+    first = get(t0, x0, y0, opts.get("snap", True), whole=x0 is None)
     if first is None:
         return fixes
     if direction == "forward":
@@ -144,7 +173,7 @@ def place(run, t, x, y, opts):
     opts['snap'], and carrying the tracked value there either way."""
     f, ex = metric_field(run, t, opts["metric"], opts["zkm"])
     fx = locate(run, f, ex, x, y, opts["radius"], opts["smooth"], opts.get("snap", False),
-                opts.get("nearest", True))
+                opts.get("nearest", True), opts.get("kernel", "box"))
     if fx is None:
         return None
     if not opts.get("snap", False):
@@ -263,8 +292,12 @@ def to_text(run, fixes, opts, fmt="csv"):
         f"tracked field: {METRIC_LABEL[m]}"
         + ("" if m == "uh" else f" at {opts['zkm']:g} km AGL") + f" ({METRIC_UNITS[m]})"
         + f"  -> column '{vname}'",
-        f"search radius {opts['radius']:g} km, smoothing {opts['smooth']:g} km, "
-        f"stop below {opts['stop']:g}, prefer nearest core: {opts.get('nearest', True)}",
+        ("search: whole domain at every time" if opts.get("whole") else
+         f"search radius {opts['radius']:g} km, prefer nearest core: "
+         f"{opts.get('nearest', True)}")
+        + f", smoothing {opts['smooth']:g} km "
+        + ("(Gaussian sigma)" if opts.get("kernel") == "gauss" else "(box width)")
+        + f", stop below {opts['stop']:g}",
         f"grid translation (umove, vmove) = ({run.umove:g}, {run.vmove:g}) m/s",
         "x_km, y_km: position on the (translating) model grid; "
         "x/y_ground_km: ground-relative = grid + (umove, vmove) * time_s",

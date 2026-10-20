@@ -60,10 +60,12 @@ def mpl_cmap(name, reverse=False):
 # --------------------------------------------------------------- catalog
 class FieldDef:
     def __init__(self, name, label, units, group, ndim=3, scale=1.0, cmap="viridis",
-                 vrange=None, diverging=False, deps=(), func=None):
+                 vrange=None, diverging=False, deps=(), func=None, pointwise=True):
         self.name, self.label, self.units, self.group = name, label, units, group
         self.ndim, self.scale, self.cmap, self.vrange = ndim, scale, cmap, vrange
         self.diverging, self.deps, self.func = diverging, tuple(deps), func
+        # pointwise: func works on any samples of its inputs (no spatial derivatives)
+        self.pointwise = pointwise
 
     @property
     def derived(self):
@@ -211,7 +213,7 @@ def _make_fields(avail):
 
     D.append(FieldDef("hdiv", "Horizontal divergence", "10⁻³ s⁻¹", "Kinematics",
                       cmap="PuOr_r", vrange=(-10, 10), diverging=True,
-                      deps=("uinterp", "vinterp"), func=hdiv))
+                      deps=("uinterp", "vinterp"), func=hdiv, pointwise=False))
     D.append(FieldDef("hvort", "Horizontal vorticity magnitude", "1/s", "Kinematics",
                       cmap="magma", vrange=(0, 0.1), deps=("xvort", "yvort"),
                       func=lambda f, c: np.hypot(f("xvort"), f("yvort"))))
@@ -317,6 +319,17 @@ class Fields:
                               dtype=np.float32)
         vol = self.run.volume(name, t)
         return vol if d.scale == 1.0 else vol * np.float32(d.scale)
+
+    def at_points(self, name, t, sample):
+        """Field values at arbitrary points: sample(vol) -> values.  Pointwise derived
+        fields are computed from sampled inputs, so no derived volume is built."""
+        d = self.defs[name]
+        if d.derived and d.pointwise:
+            self.run.load_volumes(d.deps, t)
+            return np.asarray(d.func(lambda n: sample(self.run.volume(n, t)), self.ctx))
+        if d.derived:
+            return np.asarray(sample(self.volume(name, t)))
+        return np.asarray(sample(self.run.volume(name, t))) * d.scale
 
     def auto_range(self, name, a):
         d = self.defs[name]

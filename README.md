@@ -29,8 +29,8 @@ axis; zoom in to get full resolution).
 
 ## Using it
 
-The top bar holds time controls, used by every view, and a **Map | 3D** switch. Both
-workspaces use full width.
+The top bar holds time controls, used by every view. The **Map | 3D** switch appears
+once a 3D region has been picked. Both workspaces use full width.
 
 **Map workspace.** The toolbar above the map always shows the fill field and its
 level (height km AGL, model level, or column max/min). Each pill opens its controls in a
@@ -41,11 +41,15 @@ drawer under the toolbar. Click the pill again to close it.
 
 Zooming re-renders at full resolution for the area in view. The analysis panel
 (Sounding / Cross-section / Track) opens when a click mode is chosen or a result
-arrives. The panel button in the top bar hides or shows it. Less-used options in the
-Sounding and Track tabs sit behind **⚙ Settings**.
+arrives. The panel button in the top bar hides or shows it. The expand button next to
+it (⤢) gives the panel the whole window; **Map** brings the map back. Less-used options
+in the Sounding and Track tabs sit behind **⚙ Settings**.
 
-**Zooming soundings.** Click the skew-T/hodograph or the profile panels to open them
-full-window: scroll to zoom, drag to pan, double-click to refit, Esc or ✕ to close. The
+**Zooming soundings.** Click the skew-T/hodograph or the profile panels to expand the
+panel. All sounding controls stay available. In the expanded view the graphics (SVG,
+sharp at any zoom) are zoomable: drag a box to zoom into it, Shift-drag or right-drag to
+pan, Ctrl/⌘-scroll or pinch to zoom, double-click or ⟲ to reset, ⤓ to save the image.
+The zoom is kept while the sounding updates (e.g. stepping in time). The
 **Profile panels … km AGL** selector just above the profile panels sets their height
 range. It does not change the skew-T.
 
@@ -55,9 +59,11 @@ range. It does not change the skew-T.
   layer, STP/SCP, critical angle, and profiles of storm-relative wind, shear,
   streamwise/crosswise vorticity, cumulative SRH and θ/θe. The base state is shown
   dashed for reference. *Column average* gives box-mean soundings.
-- *Cross-section*: click A then B.
+- *Area sounding*: drag a box to get the sounding averaged over it; Shift-drag adds a
+  box (up to 4, mixed freely with point soundings). The box is drawn on the map.
+- *Cross-section*: click A then B. A and B are marked at the ends of the distance axis.
 - *3D region*: drag a box. The app switches to the 3D workspace and renders it.
-- *Track*: click a mesocyclone to follow it through time (see below).
+- *Track*: click a storm to follow it through time (see below).
 
 **Comparing times.** *📌 Pin this time* freezes sounding 1 at the current time. Sounding 1
 keeps following the time slider, so moving the slider overlays the two times (up to 4
@@ -68,12 +74,19 @@ inflow) as time changes, and pinning it compares the same storm-relative spot at
 times. *Storm motion → Tracked meso motion* uses the track's motion at each sounding's
 time for SRH, storm-relative winds and the hodograph.
 
-**Meso tracking** (Track click mode and tab). Clicking snaps to the maximum of the tracked
-field within the search radius (after box smoothing). The track then steps through the
-output times: at each step it extrapolates the last motion and takes the maximum within
-the radius. With *Prefer nearest core* (default) the field is first weighted by a Gaussian of distance from the expected position (σ = radius/2). That keeps the track from hopping to a neighbouring, slightly stronger core. It stops when the maximum drops below *Stop below*. The tracked field is
-instantaneous 2–5 km updraft helicity (Σ w ζ Δz, from `winterp` and `zvort`), or ζ or w
-at a chosen height. This costs a few seconds per time (one chunk per level).
+**Storm tracking** (Track click mode and tab). The default follows the method of
+`phd_scripts/storm_tracking.ipynb`: the maximum of w at 1 km after a Gaussian smoothing
+of σ = 3 grid points. Clicking snaps to the maximum of the smoothed field within the
+search radius; *Find strongest* starts from the domain-wide maximum instead. The track
+then steps through the output times: at each step it extrapolates the last motion and
+takes the maximum within the radius. With *Prefer nearest core* (default) the field is
+first weighted by a Gaussian of distance from the expected position (σ = radius/2). That
+keeps the track from hopping to a neighbouring, slightly stronger updraft. *Search whole
+domain each time* reproduces the notebook exactly (it can jump between storms). It stops
+when the maximum drops below *Stop below*. Other tracked fields (⚙ Settings): ζ at a
+height, or instantaneous 2–5 km updraft helicity (Σ w ζ Δz, from `winterp` and `zvort`);
+choosing one loads its default height, smoothing (Gaussian or box) and stop value. This
+costs about a second per time for w or ζ, a few seconds for UH.
 - Clicking near an existing track at another time corrects it from that time on (or
   backward, if before the start), keeping the rest. Clicking far away starts a new track.
 - *Place by hand* (Track tab): each click sets the fix at the shown time to exactly where
@@ -98,6 +111,12 @@ resolution, reflectivity floor).
 - Streamlines are instantaneous, traced forward, backward or both ways through (u, v, w) from an n × n seed
   grid at a chosen height. They can be ground-, grid- or storm-relative and coloured by
   height or w. Storm-relative uses the storm motion selected in the sounding panel.
+- Click a streamline to select it (it turns yellow, its seed marked). A card plots a
+  field along it against distance from the seed (negative = upstream), with height on
+  the right axis. The field can be any 3D field, the speed, or the streamwise vorticity in
+  the streamline's frame. The selection follows the same seed when the scene re-renders
+  (e.g. in time). Isosurfaces in front of a line can catch the click: lower their
+  opacity or switch them off.
 - Once a scene is shown, changing a 3D control re-renders it.
 
 **Switching runs.** Click the run name in the header. You can type a directory, pick
@@ -132,6 +151,8 @@ cm1view/sounding_plot.py  skew-T / hodograph / profiles / parameter table
 cm1view/render.py         map + cross-section computations (contours, vectors, sampling)
 cm1view/track.py          meso tracking + CSV/text export
 cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
+cm1view/zoomview.py       zoomable image component (sounding graphics)
 cm1view/registry.py       open runs shared by sessions, run discovery
 cm1view/app.py            Panel UI
+tests/                    headless smoke tests (smokeN.py) + browser screenshots (ui6.py)
 ```

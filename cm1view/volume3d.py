@@ -8,6 +8,7 @@ from .fields import _NWS_REF
 from .theme import BG, GRID, MUTED, TEXT
 
 MAX_FACES = 700_000
+SELECTED = "#fde047"  # highlighted streamline
 
 
 def box_indices(run, box):
@@ -79,7 +80,8 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     U, V, W are full (nk, nj, ni) volumes in m/s.  Seeds form an n_seed x n_seed grid
     inside `box` at height seed_z (km).  Integration is RK2 with a fixed arc-length
     step, so lines are evenly sampled whatever the speed.
-    Returns x, y, z (km), w (m/s) as NaN-separated arrays, or None."""
+    Returns x, y, z (km), w (m/s) as NaN-separated arrays, plus `segs`: per line
+    (first, end, seed) indices into those arrays, or None."""
     x0, x1, y0, y1 = box
     dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
     ds = max(0.6 * dxk, length / 500.0)  # km per step
@@ -107,7 +109,7 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
                          np.linspace(y0 + my, y1 - my, n_seed))
     seeds = np.stack([gx.ravel(), gy.ravel(), np.full(gx.size, max(seed_z, zlo))], axis=1)
 
-    lines = []
+    lines, seed_col = [], 0
     for sign in {"forward": (1,), "backward": (-1,), "both": (-1, 1)}[direction]:
         p = seeds.copy()
         alive = np.ones(len(p), bool)
@@ -129,19 +131,24 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
         tr = np.stack(track, axis=1)  # (nseed, nt, 3); NaN once a line stops
         if sign < 0:
             tr = tr[:, ::-1]
+            seed_col = tr.shape[1] - 1  # the seed ends the backward half
         lines.append(tr)
     if direction == "both":  # join backward and forward halves at the seed
         lines = [np.concatenate([lines[0], lines[1][:, 1:]], axis=1)]
     tr = lines[0]
 
-    xs, ys, zs = [], [], []
+    xs, ys, zs, segs, n0 = [], [], [], [], 0
     for line in tr:
-        line = line[np.isfinite(line[:, 0])]
+        ok = np.isfinite(line[:, 0])
+        seed = int(ok[:seed_col].sum())
+        line = line[ok]
         if len(line) < 4:
             continue
         xs.append(np.append(line[:, 0], np.nan))
         ys.append(np.append(line[:, 1], np.nan))
         zs.append(np.append(line[:, 2], np.nan))
+        segs.append((n0, n0 + len(line), n0 + seed))
+        n0 += len(line) + 1
     if not xs:
         return None
     x, y, z = np.concatenate(xs), np.concatenate(ys), np.concatenate(zs)
@@ -150,7 +157,15 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     w = np.full_like(x, np.nan)
     w[ok] = vel(pts)[:, 2]
     return dict(x=x.astype(np.float32), y=y.astype(np.float32), z=z.astype(np.float32),
-                w=w.astype(np.float32), n=len(xs))
+                w=w.astype(np.float32), n=len(xs), segs=np.array(segs, dtype=np.int64))
+
+
+def sample_points(run, vol, x, y, z):
+    """Trilinear values of a (nk, nj, ni) volume at points (km)."""
+    fi = (np.asarray(x) - run.xh[0]) / (run.dx / 1000.0)
+    fj = (np.asarray(y) - run.yh[0]) / (run.dy / 1000.0)
+    fk = np.interp(z, run.z, np.arange(run.nk, dtype=np.float64))
+    return map_coordinates(vol, np.stack([fk, fj, fi]), order=1, mode="nearest")
 
 
 def _ref_colorscale():
@@ -214,7 +229,18 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
                                     thickness=12, len=0.5, x=1.0, y=0.5,
                                     tickfont=dict(color=MUTED, size=10),
                                     outlinewidth=0)),
-            name=stream["name"], hoverinfo="skip", showlegend=True))
+            customdata=np.nan_to_num(stream["w"]), meta="stream",
+            hovertemplate="z %{z:.2f} km · w %{customdata:.1f} m/s"
+                          "<extra>click: select</extra>",
+            name=stream["name"], showlegend=True))
+        # the selected streamline and its seed, filled in by the app on a click
+        fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", meta="selected",
+                                   line=dict(color=SELECTED, width=11), hoverinfo="skip",
+                                   name="Selected streamline", showlegend=False))
+        fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="markers", meta="seed",
+                                   marker=dict(color=SELECTED, size=6, symbol="diamond",
+                                               line=dict(color=BG, width=1)),
+                                   hoverinfo="skip", name="Seed", showlegend=False))
     x0, x1, y0, y1 = box
     lx, ly = abs(x1 - x0), abs(y1 - y0)
     ax = dict(backgroundcolor=BG, gridcolor=GRID, zerolinecolor=GRID, color=MUTED,
