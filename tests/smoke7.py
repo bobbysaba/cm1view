@@ -81,6 +81,7 @@ def main():
     wait(lambda: v.pd_btn.visible, 120)
     print("status:", txt(v.status.object))
     print("button:", v.pd_btn.visible, v.pd_btn.name)
+    v.pd_write.value = False  # real output files: never write (smoke8/11 test writing on copies)
     t0 = time.time()
     v._on_pd_compute(None)
     wait(lambda: "computed in" in (v.status.object or "") or "failed" in (v.status.object or "")
