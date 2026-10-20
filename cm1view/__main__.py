@@ -18,11 +18,19 @@ def main(argv=None):
                     help="parallel reader processes (default: CPUs in this job, max 8)")
     ap.add_argument("--maxpix", type=int, default=900,
                     help="max map pixels sent per axis (zoom in for full resolution)")
+    ap.add_argument("--pdecomp-script", default=None,
+                    help="pressure-decomposition script run for times whose files lack "
+                         "p_b/p_l/p_nl (default: phd_scripts/pdecomp_new_fixed.py, or "
+                         "$CM1VIEW_PDECOMP)")
     ap.add_argument("--address", default="127.0.0.1",
                     help="bind address (127.0.0.1 is right for JupyterHub and SSH tunnels)")
     args = ap.parse_args(argv)
 
+    from . import pdecomp
     from .registry import Registry
+
+    if args.pdecomp_script:
+        pdecomp.SCRIPT = os.path.abspath(os.path.expanduser(args.pdecomp_script))
     from .app import create_app
     import panel as pn
 

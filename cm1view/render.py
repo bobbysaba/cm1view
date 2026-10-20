@@ -128,7 +128,7 @@ def compute_map(F, spec):
 
     f = spec["fill"]
     if f["var"]:
-        a = F.plane(f["var"], t, f["mode"], f["level"])
+        a = F.plane(f["var"], t, f["mode"], f["level"], storm=spec.get("fstorm"))
         lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
         if hi <= lo:
             hi = lo + 1e-6
@@ -147,7 +147,7 @@ def compute_map(F, spec):
         if not o["on"] or not o["var"]:
             out["ov"].append(None)
             continue
-        a = F.plane(o["var"], t, o["mode"], o["level"])
+        a = F.plane(o["var"], t, o["mode"], o["level"], storm=spec.get("fstorm"))
         lo, hi = F.auto_range(o["var"], a)
         levels = parse_levels(o["levels"], lo, hi)
         x, y, ac = _crop(run, a, win)

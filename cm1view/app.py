@@ -23,7 +23,9 @@ from bokeh.models import (  # noqa: E402
 from bokeh.plotting import figure  # noqa: E402
 from bokeh.transform import transform  # noqa: E402
 
+from . import pdecomp  # noqa: E402
 from . import registry, render, sounding_plot as sp, thermo, track as trk, volume3d  # noqa: E402
+from .run import MissingAtTime  # noqa: E402
 from .fields import CMAPS, palette  # noqa: E402
 from .zoomview import ZoomImage  # noqa: E402
 from .theme import (  # noqa: E402
@@ -239,7 +241,7 @@ class Viewer:
         self.error = error
         self.doc = pn.state.curdoc
         self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
-                      for k in ("map", "snd", "xs", "3d", "trk", "sl")}
+                      for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
@@ -448,6 +450,14 @@ class Viewer:
                                           margin=(5, 10, 14, 10))
 
         self.status = _html()
+        # pressure decomposition for the shown time (map caption / cross-section tab)
+        pdb = dict(button_type="warning", button_style="outline", height=30, visible=False,
+                   description="Run phd_scripts/pdecomp_new_fixed.py on this output time "
+                               "(separate process, ~30 GB, about 1.5 min); the result is "
+                               "kept in memory, not written to the file")
+        self.pd_btn = pn.widgets.Button(margin=(4, 0, 6, 0),
+                                        styles={"pointer-events": "auto"}, **pdb)
+        self.xs_pd_btn = pn.widgets.Button(margin=(4, 4), **pdb)
         self.cache_html = _html()
         self.clear_btn = pn.widgets.Button(name="Clear cache", button_type="default",
                                            button_style="outline", width=100, height=28,
@@ -944,7 +954,8 @@ class Viewer:
             pn.FlexBox(self.xs_fill, self.xs_ztop, xs_style, xs_cont, xs_vec,
                        flex_wrap="wrap", align_items="flex-end", gap="0 4px",
                        sizing_mode="stretch_width"), d.panel,
-            self.xs_status, pn.pane.Bokeh(self.xs_fig, sizing_mode="stretch_width"),
+            self.xs_status, self.xs_pd_btn,
+            pn.pane.Bokeh(self.xs_fig, sizing_mode="stretch_width"),
             sizing_mode="stretch_width")
         trk_set = pn.FlexBox(self.trk_metric, self.trk_z, self.trk_smooth, self.trk_kernel,
                              self.trk_radius, self.trk_stop, self.trk_dir, self.trk_snap,
@@ -1093,7 +1104,8 @@ class Viewer:
         floor = {"position": "absolute", "left": "70px", "bottom": "56px", "z-index": "20",
                  "pointer-events": "none", "background": "rgba(11,15,23,0.75)",
                  "border-radius": "8px", "padding": "0 8px"}
-        caption = pn.Column(self.map_title, self.hint, self.status, styles=floor, margin=0)
+        caption = pn.Column(self.map_title, self.hint, self.status, self.pd_btn, styles=floor,
+                            margin=0)
         self.map_area = map_area = pn.Column(
             self.map_bar, pn.pane.Bokeh(self.fig, sizing_mode="stretch_both"), caption,
             sizing_mode="stretch_both",
@@ -1205,6 +1217,8 @@ class Viewer:
         self._update_3d_labels()
         self._update_region_html()
         self.clear_btn.on_click(self._on_clear_cache)
+        self.pd_btn.on_click(self._on_pd_compute)
+        self.xs_pd_btn.on_click(self._on_pd_compute)
         self.clear_pts.on_click(self._on_clear_points)
         self._on_mode(None, init=True)
         self._show_panel(False)  # the map gets the full width until a panel is needed
@@ -1580,6 +1594,31 @@ class Viewer:
             if len(pts) == 2 else dict(x=[], y=[])
 
     # ================================================================ map job
+    def _field_storm(self, t):
+        """Storm motion for the storm-relative fields (streamwise / crosswise vorticity)
+        at time t: the tracked storm's motion where the track has a fix, otherwise the
+        domain motion (umove, vmove).  Returns ((u, v), short note, long note)."""
+        run = self.run
+        if self.fixes:
+            m = trk.motion(run, self.fixes).get(t)
+            if m is not None and np.all(np.isfinite(m)):
+                return (tuple(m), "rel. to tracked motion",
+                        f"relative to the tracked storm motion ({m[0]:.1f}, {m[1]:.1f}) m/s")
+        why = " (no track fix at this time)" if self.fixes else ""
+        return ((run.umove, run.vmove), "rel. to umove/vmove",
+                f"relative to the domain motion (umove, vmove) = ({run.umove:g}, "
+                f"{run.vmove:g}) m/s{why}")
+
+    def _storm_note(self, names, t):
+        """'' or the storm-motion note when any of `names` is storm-relative."""
+        if any(n and n in self.F and self.F[n].storm for n in names):
+            return self._field_storm(t)
+        return None
+
+    def _storm_fields_shown(self):
+        names = [self.fill_var.value] + [o["var"].value for o in self.ovs if o["on"].value]
+        return any(self.F[n].storm for n in names if n in self.F)
+
     def _storm_motion(self):
         """Storm motion for storm-relative map vectors (ground-relative m/s)."""
         if self.storm.value == "custom":
@@ -1595,6 +1634,7 @@ class Viewer:
         fm, fl = lv(self.fill_mode, self.fill_lvl)
         return dict(
             t=self.t, view=self.view, maxpix=self.maxpix, storm=self._storm_motion(),
+            fstorm=self._field_storm(self.t)[0],
             fill=dict(var=self.fill_var.value, mode=fm, level=fl, style=self.fill_style.value,
                       cmap=self.fill_cmap.value, rev=self.fill_rev.value,
                       auto=self.fill_auto.value, vmin=self.fill_min.value or 0.0,
@@ -1621,6 +1661,8 @@ class Viewer:
             return
         try:
             res = render.compute_map(self.F, spec)
+        except MissingAtTime as e:  # e.g. post-processed fields at other times only
+            res = e
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             res = e
@@ -1630,9 +1672,17 @@ class Viewer:
     def _apply_map(self, res, spec, g):
         if g != self.gen["map"]:
             return
+        names = [spec["fill"]["var"]] + [o["var"] for o in spec["ov"] if o["on"]]
+        self._pd_button(self.pd_btn, names, spec["t"])
         if isinstance(res, Exception):
-            self._set_status(f'<span style="color:#f87171">Map error: {res}</span>')
+            if isinstance(res, MissingAtTime) and res.name in pdecomp.NAMES:
+                self._set_status(f'<span style="color:#fbbf24">{res}.</span>')
+            else:
+                self._set_status(f'<span style="color:#f87171">Map error: {res}</span>')
             return
+        old = self.status.object or ""
+        if "Map error" in old or "is not in the output" in old:
+            self._set_status("")
         F, run = self.F, self.run
         fill, fs = res.get("fill"), spec["fill"]
         if fill:
@@ -1647,7 +1697,8 @@ class Viewer:
                 self.poly_src.data = fill["poly"]
                 self.img_r.visible, self.poly_r.visible = False, True
                 self.poly_r.glyph.fill_alpha = fs["alpha"]
-            self.cbar_label.axis_label = F[fs["var"]].title
+            note = self._storm_note([fs["var"]], spec["t"])
+            self.cbar_label.axis_label = F[fs["var"]].title + (f" · {note[1]}" if note else "")
         for o, ores, (ps, ns, pr, nr) in zip(spec["ov"], res["ov"], self.ov_r):
             if ores is None:
                 ps.data, ns.data = dict(EMPTY_LINES), dict(EMPTY_LINES)
@@ -1679,6 +1730,14 @@ class Viewer:
                 parts.append(f'<span style="color:{o["color"]}">— {F[o["var"]].label}'
                              f'{lvl_txt(o["mode"], o["level"], o["var"])}</span>')
         self._update_map_labels(spec, lvl_txt)
+        note = self._storm_note([fs["var"]] + [o["var"] for o in spec["ov"] if o["on"]],
+                                spec["t"])
+        if note:
+            parts.append(f'<span>storm-relative vorticity {note[2]}</span>')
+        if any(pdecomp.is_pdecomp(F, n) for n in names):
+            kind, desc = pdecomp.source(run, spec["t"])
+            col = "#fbbf24" if kind == "file-old" else "inherit"
+            parts.append(f'<span style="color:{col}">pressure decomposition {desc}</span>')
         stride = res["win"][4]
         parts.append(f'<span>{"full res" if stride == 1 else f"1/{stride} res (zoom for full)"}'
                      f'</span>')
@@ -2085,6 +2144,8 @@ class Viewer:
         if not ts:
             self.trk_status.object = self._track_summary()
         self._update_track_now()
+        if self._storm_fields_shown():  # their storm motion comes from the track
+            self.request_map()
 
     def _update_track_now(self):
         f = self.fixes.get(self.t)
@@ -2146,7 +2207,9 @@ class Viewer:
                     vmin=self.xs_min.value or 0.0, vmax=self.xs_max.value or 0.0,
                     ccolor=self.xs_ccolor.value, cwidth=float(self.xs_cwidth.value),
                     negdash=self.xs_negdash.value, density=int(self.xs_vdensity.value),
-                    ref=float(self.xs_vref.value or 20.0), vcolor=self.xs_vcolor.value)
+                    ref=float(self.xs_vref.value or 20.0), vcolor=self.xs_vcolor.value,
+                    fstorm=self._field_storm(self.t)[0],
+                    fnote=self._storm_note([self.xs_fill.value, self.xs_cont.value], self.t))
         self.xs_status.object = '<div class="cv-status"><span class="busy">● Computing ' \
                                 'cross-section…</span></div>'
         self.pools["xs"].submit(self._xs_job, spec, g)
@@ -2174,14 +2237,16 @@ class Viewer:
                 return
             s, fi, fj, (ex, ey) = render.section_coords(run, spec["A"], spec["B"])
             zq = np.linspace(0.0, spec["ztop"], max(120, int(spec["ztop"] / 0.04)))
-            fill = render.sample_section(run, F.volume(spec["fill"], t), fi, fj, zq)
+            fill = render.sample_section(run, F.volume(spec["fill"], t, spec["fstorm"]),
+                                         fi, fj, zq)
             lo, hi = F.auto_range(spec["fill"], fill) if spec["auto"] else \
                 (spec["vmin"], spec["vmax"])
             if hi <= lo:
                 hi = lo + 1e-6
             out = dict(s=s, zq=zq, fill=fill, lo=lo, hi=hi)
             if spec["cont"]:
-                c = render.sample_section(run, F.volume(spec["cont"], t), fi, fj, zq)
+                c = render.sample_section(run, F.volume(spec["cont"], t, spec["fstorm"]),
+                                          fi, fj, zq)
                 clo, chi = F.auto_range(spec["cont"], c)
                 lv = render.parse_levels(spec["levels"], clo, chi)
                 out["pos"] = render.contour_lines(s, zq, c, lv[lv >= 0])
@@ -2209,6 +2274,7 @@ class Viewer:
     def _apply_xs(self, res, spec, g):
         if g != self.gen["xs"]:
             return
+        self._pd_button(self.xs_pd_btn, [spec["fill"], spec["cont"]], spec["t"])
         if isinstance(res, Exception):
             self.xs_status.object = f'<div class="cv-status" style="color:#f87171">{res}</div>'
             return
@@ -2232,13 +2298,18 @@ class Viewer:
         self.xs_lab[1].x = float(s[-1])
         for a in self.xs_lab:
             a.visible = True
-        self.xs_cbar_label.axis_label = d.title
+        self.xs_cbar_label.axis_label = d.title + (
+            f' · {spec["fnote"][1]}' if spec["fnote"] and d.storm else "")
         (xa, ya), (xb, yb) = spec["A"], spec["B"]
         cont = f' · contours: {F[spec["cont"]].label}' if spec["cont"] else ""
         self.xs_status.object = (
             f'<div class="cv-maptitle">t = {self.run.time_label(spec["t"])} · '
             f'<b>{d.label}</b>{cont} · A ({xa:.1f}, {ya:.1f}) → B ({xb:.1f}, {yb:.1f}) km, '
-            f'{s[-1]:.1f} km long</div>')
+            f'{s[-1]:.1f} km long'
+            + (f' · storm-relative vorticity {spec["fnote"][2]}' if spec["fnote"] else "")
+            + (f' · pressure decomposition {pdecomp.source(self.run, spec["t"])[1]}'
+               if any(pdecomp.is_pdecomp(F, n) for n in (spec["fill"], spec["cont"])) else "")
+            + '</div>')
 
     # ================================================================ 3D
     def request_3d(self):
@@ -2252,7 +2323,7 @@ class Viewer:
                     isos=[dict(var=d["var"].value, val=float(d["val"].value or 0.0),
                                color=d["color"].value, op=float(d["op"].value))
                           for d in self.isos if d["on"].value],
-                    storm=self._storm_motion(),
+                    storm=self._storm_motion(), fstorm=self._field_storm(self.t),
                     vec=dict(on=self.sv_on.value, level=float(self.sv_lvl.value),
                              frame=self.sv_frame.value, density=int(self.sv_density.value),
                              ref=float(self.sv_ref.value or 20.0), color=self.sv_color.value),
@@ -2289,9 +2360,12 @@ class Viewer:
             meshes, notes = [], []
             for iso in spec["isos"]:
                 d = F[iso["var"]]
-                m = volume3d.isosurface(run, F.volume(iso["var"], t), spec["box"], iso["val"],
-                                        stride, spec["smooth"], spec["ztop"])
+                m = volume3d.isosurface(run, F.volume(iso["var"], t, spec["fstorm"][0]),
+                                        spec["box"], iso["val"], stride, spec["smooth"],
+                                        spec["ztop"])
                 name = f'{d.label} = {iso["val"]:g} {d.units}'
+                if d.storm:
+                    name += f' ({spec["fstorm"][1]})'
                 if m is None:
                     notes.append(f"{name}: no surface in region")
                     continue
@@ -2398,6 +2472,65 @@ class Viewer:
                                  f'{"full" if stride == 1 else f"1/{stride}"} resolution'
                                  f'{extra}</div>')
 
+    # ---------------------------------------------------------- pressure decomposition
+    def _pd_button(self, btn, names, t):
+        """Offer the decomposition for time t when a shown field needs it: missing at t,
+        or only in the file from the earlier (pre-fix) script."""
+        run, label = self.run, None
+        if any(pdecomp.is_pdecomp(self.F, n) for n in names) and pdecomp.can_compute(run):
+            kind, _ = pdecomp.source(run, t)
+            if kind is None:
+                label = f"Compute pressure decomposition for {run.time_label(t)} (~1.5 min)"
+            elif kind == "file-old":
+                label = f"Recompute {run.time_label(t)} with pdecomp_new_fixed.py (~1.5 min)"
+        busy = pdecomp.running(run, t) is not None
+        if busy:
+            label = f"Computing pressure decomposition for {run.time_label(t)}…"
+        btn.param.update(visible=label is not None, name=label or "", disabled=busy)
+
+    def _on_pd_compute(self, ev):
+        t = self.t
+        if pdecomp.running(self.run, t) is not None:
+            return
+        for b in (self.pd_btn, self.xs_pd_btn):
+            if b.visible:
+                b.param.update(disabled=True, name=f"Computing pressure decomposition for "
+                                                   f"{self.run.time_label(t)}…")
+        self.pools["pd"].submit(self._pd_job, t)
+
+    def _pd_job(self, t):
+        run = self.run
+
+        def prog(el, _msg):
+            self._status_async(f'<span class="busy">● Pressure decomposition for '
+                               f'{run.time_label(t)}: {el:.0f} s (typically '
+                               f'~{pdecomp.EXPECT_S:.0f} s on one CPU)…</span>')
+        try:
+            res = pdecomp.compute(run, t, prog)
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            res = e
+        self._schedule(partial(self._apply_pd, t, res))
+
+    def _apply_pd(self, t, res):
+        if isinstance(res, Exception):
+            self._set_status(f'<span style="color:#f87171">{res}</span>')
+        else:
+            self._set_status(f'Pressure decomposition for {self.run.time_label(t)} computed '
+                             f'in {res[0]:.0f} s (pdecomp_new_fixed.py; kept in memory, not '
+                             f'written to the file)')
+            self.F.forget(t, pdecomp.NAMES)
+        self._pd_button(self.pd_btn, [self.fill_var.value] +
+                        [o["var"].value for o in self.ovs if o["on"].value], self.t)
+        self._pd_button(self.xs_pd_btn, [self.xs_fill.value, self.xs_cont.value], self.t)
+        if isinstance(res, Exception) or t != self.t:
+            return
+        self.request_map()
+        if len(self.xs_pts) == 2:
+            self.request_xsec()
+        if self.gen["3d"] and self.workspace.value == "3D":
+            self.request_3d()
+
     # ---------------------------------------------------------- streamline pick
     def _trace(self, meta):
         fig = self.plot3d.object
@@ -2482,7 +2615,9 @@ class Viewer:
                     val = (ox * u + oy * v + oz * w) / np.maximum(spd, 1e-6)
                     label = "streamwise vorticity (1/s)"
             else:
-                val, label = F.at_points(name, t, samp), F[name].title
+                fst = self._field_storm(t)
+                val = F.at_points(name, t, samp, storm=fst[0])
+                label = F[name].title + (f" · {fst[1]}" if F[name].storm else "")
             res = dict(s=s, v=np.asarray(val, np.float64), z=z, label=label, x0=x[sd - a],
                        y0=y[sd - a], z0=z[sd - a], length=float(s[-1] - s[0]))
         except Exception as e:  # noqa: BLE001

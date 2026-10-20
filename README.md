@@ -136,8 +136,25 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
   winds, hodographs and storm motions.
 - Parcel calculations are pseudoadiabatic with a virtual-temperature correction.
   They were checked against MetPy: CAPE agrees within about 3%.
-- Derived fields: θ′, p′, buoyancy (θρ′ including hydrometeor loading), θe, T, Td, RH,
-  wind speed, horizontal divergence, horizontal vorticity, cloud/precip condensate.
+- Derived fields: θ′, p′, buoyancy (θρ′ including hydrometeor loading), θρ and θρ′
+  (as `funcs.theta_rho`), θe, T, Td, RH, wind speed, horizontal divergence, horizontal
+  vorticity, streamwise and crosswise horizontal vorticity, cloud/precip condensate.
+- Streamwise / crosswise vorticity are relative to the tracked storm motion at that time
+  when a track has a fix there, otherwise to the domain motion (umove, vmove). The map
+  title, colorbar, section title, 3D legend and streamline card say which was used.
+  Crosswise is positive to the left of the storm-relative wind.
+- **Pressure decomposition** (field group of that name): p_b, p_l, p_nl, the matching
+  accelerations acc_b (B − ∂p_b/∂z/ρ), acc_l, acc_nl, plus p_l + p_nl, acc_l + acc_nl
+  and the total. Where post-processing wrote them into the output files they are read
+  from there (any file subset; the map title says which script version wrote them, and
+  warns for files written before `pdecomp_new_fixed.py`). Elsewhere, a *Compute pressure
+  decomposition* button runs `phd_scripts/pdecomp_new_fixed.py` itself (unchanged,
+  `write=False`) on that time in a separate process: about 80 s and ~30 GB peak on one
+  CPU. If the job lacks the memory, the 3D cache is emptied first; if still short, it
+  says so. Results stay in memory for the last 2 computed times and are never written
+  to the files. For older-script files the button offers *Recompute*, which then takes
+  precedence. Use `--pdecomp-script` or `$CM1VIEW_PDECOMP` for another script with the
+  same functions.
   Add more in `cm1view/fields.py` (`_make_fields`).
 - Plotly is vendored in `_vendor/` because the `npl` env does not include it.
 
@@ -152,6 +169,7 @@ cm1view/render.py         map + cross-section computations (contours, vectors, s
 cm1view/track.py          meso tracking + CSV/text export
 cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
 cm1view/zoomview.py       zoomable image component (sounding graphics)
+cm1view/pdecomp.py        pressure decomposition: file fields, on-demand runs of the user's script
 cm1view/registry.py       open runs shared by sessions, run discovery
 cm1view/app.py            Panel UI
 tests/                    headless smoke tests (smokeN.py) + browser screenshots (ui6.py)

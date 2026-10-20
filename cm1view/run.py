@@ -77,12 +77,35 @@ def parse_namelist(path):
     return out
 
 
-class VarInfo:
-    __slots__ = ("name", "long_name", "units", "ndim", "stag")
+class MissingAtTime(LookupError):
+    """A variable that exists in some output files but not at this time."""
 
-    def __init__(self, name, long_name, units, ndim, stag):
+    def __init__(self, name, t, msg):
+        super().__init__(msg)
+        self.name, self.t = name, t
+
+
+def _var_info(name, v):
+    """VarInfo of a netCDF variable, or None if it is not a (time, ...) 2D/3D field."""
+    dims = v.dimensions
+    if not dims or dims[0] != "time" or len(dims) not in (3, 4):
+        return None
+    stag = next((STAG_DIMS[x] for x in dims if x in STAG_DIMS), None)
+    ch = v.chunking()
+    zchunk = int(ch[1]) if len(dims) == 4 and ch != "contiguous" else 1
+    return VarInfo(name, getattr(v, "long_name", name), getattr(v, "units", ""),
+                   len(dims) - 1, stag, zchunk, dict(v.__dict__))
+
+
+class VarInfo:
+    __slots__ = ("name", "long_name", "units", "ndim", "stag", "zchunk", "attrs")
+
+    def __init__(self, name, long_name, units, ndim, stag, zchunk=1, attrs=None):
         self.name, self.long_name, self.units = name, long_name, units
         self.ndim, self.stag = ndim, stag
+        # levels per chunk: > 1 (e.g. post-processed fields) makes single-level reads
+        # cost several levels, so those are read (and cached) as whole volumes
+        self.zchunk, self.attrs = zchunk, attrs or {}
 
     def __repr__(self):
         return f"VarInfo({self.name}, {self.ndim}D, stag={self.stag})"
@@ -103,17 +126,9 @@ class CM1Run:
             self.attrs = {k: d.getncattr(k) for k in d.ncattrs()}
             self.vars = {}
             for name, v in d.variables.items():
-                dims = v.dimensions
-                if not dims or dims[0] != "time" or len(dims) not in (3, 4):
-                    continue
-                stag = next((STAG_DIMS[x] for x in dims if x in STAG_DIMS), None)
-                self.vars[name] = VarInfo(
-                    name,
-                    getattr(v, "long_name", name),
-                    getattr(v, "units", ""),
-                    len(dims) - 1,
-                    stag,
-                )
+                info = _var_info(name, v)
+                if info is not None:
+                    self.vars[name] = info
 
         self.ni, self.nj, self.nk = len(self.xh), len(self.yh), len(self.z)
         self.dx = float(np.mean(np.diff(self.xh))) * 1000.0  # m
@@ -123,7 +138,23 @@ class CM1Run:
         # CM1 writes winds relative to the (possibly translating) grid.
         self.umove = float(self.nml.get("umove", 0.0)) if moving else 0.0
         self.vmove = float(self.nml.get("vmove", 0.0)) if moving else 0.0
-        self.times = self._read_times()
+        self.times, names = self._scan()
+        # fields written into only some files (e.g. by post-processing): which times
+        self.var_times = {}
+        for n in sorted(set().union(*names) - set(self.vars)):
+            ts = [t for t, ns in enumerate(names) if n in ns]
+            with netCDF4.Dataset(self.files[ts[-1]]) as d:
+                info = _var_info(n, d[n])
+            if info is not None:
+                self.vars[n] = info
+                self.var_times[n] = frozenset(ts)
+        for n in self.vars:
+            ts = frozenset(t for t, ns in enumerate(names) if n in ns)
+            if len(ts) < len(self.files) and n not in self.var_times:
+                self.var_times[n] = ts
+        # fields computed here (not in the files), consulted before the files:
+        # (name, t) -> float32 (nk, nj, ni); never evicted by the cache
+        self.extra = OrderedDict()
 
         self.cache_bytes = int(cache_gb * 1024**3)
         self._cache = OrderedDict()  # (name, tindex) -> float32 (nk, nj, ni)
@@ -142,31 +173,35 @@ class CM1Run:
         parts = self.path.rstrip("/").split("/")
         return "/".join(parts[-3:])
 
-    def _read_times(self):
-        """Simulation time (s) of every file, cached on disk by file stat."""
+    def _scan(self):
+        """Simulation time (s) and field names of every file, cached on disk by file
+        stat (one quick metadata pass over the files the first time)."""
         sig = hashlib.sha1(
             json.dumps(
                 [(f, os.path.getsize(f), int(os.path.getmtime(f))) for f in self.files]
             ).encode()
         ).hexdigest()[:16]
         cdir = os.path.join(os.path.expanduser("~"), ".cache", "cm1view")
-        cfile = os.path.join(cdir, f"times-{sig}.json")
+        cfile = os.path.join(cdir, f"scan-{sig}.json")
         try:
             with open(cfile) as f:
-                return np.array(json.load(f), dtype=np.float64)
-        except (OSError, ValueError):
+                c = json.load(f)
+            return np.array(c["times"], dtype=np.float64), [set(n) for n in c["vars"]]
+        except (OSError, ValueError, KeyError):
             pass
-        times = []
+        times, names = [], []
         for f in self.files:
             with netCDF4.Dataset(f) as d:
                 times.append(float(d["time"][0]))
+                names.append(sorted(n for n, v in d.variables.items()
+                                    if v.dimensions[:1] == ("time",) and v.ndim in (3, 4)))
         try:
             os.makedirs(cdir, exist_ok=True)
             with open(cfile, "w") as f:
-                json.dump(times, f)
+                json.dump(dict(times=times, vars=names), f)
         except OSError:
             pass
-        return np.array(times, dtype=np.float64)
+        return np.array(times, dtype=np.float64), [set(n) for n in names]
 
     def time_label(self, t):
         s = int(round(self.times[t]))
@@ -174,6 +209,19 @@ class CM1Run:
 
     def has(self, name):
         return name in self.vars
+
+    def in_file(self, name, t):
+        ts = self.var_times.get(name)
+        return name in self.vars and (ts is None or t in ts)
+
+    def _check(self, name, t):
+        if (name, t) in self.extra or self.in_file(name, t):
+            return
+        ts = sorted(self.var_times.get(name, ()))
+        where = (f"; the files have it at {self.time_label(ts[0])}–{self.time_label(ts[-1])} "
+                 f"({len(ts)} times)") if ts else ""
+        raise MissingAtTime(name, t, f"{name} is not in the output at "
+                                     f"{self.time_label(t)}{where}")
 
     # ------------------------------------------------------------------ io
     def _ds(self, t):
@@ -191,6 +239,9 @@ class CM1Run:
 
     def cached(self, name, t):
         with self._cache_lock:
+            vol = self.extra.get((name, t))
+            if vol is not None:
+                return vol
             vol = self._cache.get((name, t))
             if vol is not None:
                 self._cache.move_to_end((name, t))
@@ -203,6 +254,9 @@ class CM1Run:
             vol = self.cached(name, t)
             if vol is not None:
                 return vol[k]
+        self._check(name, t)
+        if info.ndim == 3 and info.zchunk > 4:  # a level costs several: read the volume
+            return self.volume(name, t)[k]
         with IO_LOCK:
             v = self._ds(t)[name]
             if info.ndim == 2:
@@ -289,6 +343,7 @@ class CM1Run:
     def volume(self, name, t):
         vol = self.cached(name, t)
         if vol is None:
+            self._check(name, t)
             vol = self._read_volume_local(name, t)
             self._insert(name, t, vol)
         return vol
@@ -297,6 +352,8 @@ class CM1Run:
         """Ensure several full 3D fields are cached; reads in parallel when
         more than one CPU is available.  Returns False if cancelled."""
         missing = [n for n in dict.fromkeys(names) if self.cached(n, t) is None]
+        for n in missing:
+            self._check(n, t)
         total, done = len(missing), 0
         if progress:
             progress(done, total, missing[0] if missing else "")
@@ -387,6 +444,16 @@ class CM1Run:
     def clear_cache(self):
         with self._cache_lock:
             self._cache.clear()
+
+    def trim_cache(self, nbytes):
+        """Evict least-recently-used cached volumes until `nbytes` are freed (or the
+        cache is empty).  Returns the bytes freed."""
+        freed = 0
+        with self._cache_lock:
+            while self._cache and freed < nbytes:
+                _, old = self._cache.popitem(last=False)
+                freed += old.nbytes
+        return freed
 
     def ij(self, x, y):
         """Nearest scalar-grid indices for a position in km."""

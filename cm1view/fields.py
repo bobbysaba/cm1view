@@ -60,12 +60,15 @@ def mpl_cmap(name, reverse=False):
 # --------------------------------------------------------------- catalog
 class FieldDef:
     def __init__(self, name, label, units, group, ndim=3, scale=1.0, cmap="viridis",
-                 vrange=None, diverging=False, deps=(), func=None, pointwise=True):
+                 vrange=None, diverging=False, deps=(), func=None, pointwise=True,
+                 storm=False):
         self.name, self.label, self.units, self.group = name, label, units, group
         self.ndim, self.scale, self.cmap, self.vrange = ndim, scale, cmap, vrange
         self.diverging, self.deps, self.func = diverging, tuple(deps), func
         # pointwise: func works on any samples of its inputs (no spatial derivatives)
         self.pointwise = pointwise
+        # storm: depends on the storm motion, c["storm"] = ground-relative (u, v) m/s
+        self.storm = storm
 
     @property
     def derived(self):
@@ -117,7 +120,17 @@ _NATIVE = {
     "sus2": ("Max w at 5 km (translated)", "m/s", 1, "turbo", (0, 60), False),
     "shs": ("Max updraft helicity", "m²/s²", 1, "magma", (0, 500), False),
     "shs2": ("Max updraft helicity (translated)", "m²/s²", 1, "magma", (0, 500), False),
+    # pressure decomposition (phd_scripts/pdecomp_new_fixed.py)
+    "p_b": ("p′ buoyant (p_b)", "Pa", 1, "PuOr_r", None, True),
+    "p_l": ("p′ linear dynamic (p_l)", "Pa", 1, "PuOr_r", None, True),
+    "p_nl": ("p′ nonlinear dynamic (p_nl, residual)", "Pa", 1, "PuOr_r", None, True),
+    "acc_b": ("Buoyant acceleration (B − ∂p_b/∂z / ρ)", "m/s²", 1, "RdBu_r", None, True),
+    "acc_l": ("Linear dynamic VPPGA (−∂p_l/∂z / ρ)", "m/s²", 1, "RdBu_r", None, True),
+    "acc_nl": ("Nonlinear dynamic VPPGA (−∂p_nl/∂z / ρ)", "m/s²", 1, "RdBu_r", None,
+               True),
 }
+
+PDECOMP = ("p_b", "p_l", "p_nl", "acc_b", "acc_l", "acc_nl")
 
 
 def _group(name, ndim):
@@ -125,6 +138,8 @@ def _group(name, ndim):
         return "Swaths & 2D"
     if name in ("dbz", "cref"):
         return "Radar"
+    if name in PDECOMP:
+        return "Pressure decomposition"
     if "b_" in name:
         return "Budgets"
     if name in ("th0", "prs0", "pi0", "qv0", "u0", "v0", "rho0"):
@@ -193,6 +208,17 @@ def _make_fields(avail):
     D.append(FieldDef("buoy", "Buoyancy (θρ′, with loading)", "m/s²", "Thermodynamics",
                       cmap="RdBu_r", vrange=(-0.3, 0.3), diverging=True,
                       deps=("th", "qv", "th0", "qv0", *hyd), func=buoy))
+    # density potential temperature, as funcs.theta_rho in phd_scripts
+    def thrho(f, c):
+        load = sum(f(n) for n in hyd) if hyd else 0.0
+        return f("th") * (1.0 + f("qv") / EPS) / (1.0 + f("qv") + load)
+
+    D.append(FieldDef("thrho", "θρ", "K", "Thermodynamics", cmap="cmo.thermal",
+                      deps=("th", "qv", *hyd), func=thrho))
+    D.append(FieldDef("thrhopert", "θρ′", "K", "Thermodynamics", cmap="RdBu_r",
+                      vrange=(-6, 6), diverging=True, deps=("th", "qv", "th0", "qv0", *hyd),
+                      func=lambda f, c: thrho(f, c) - f("th0") * (1.0 + f("qv0") / EPS)
+                      / (1.0 + f("qv0"))))
     D.append(FieldDef("thetae", "θe", "K", "Thermodynamics", cmap="Spectral_r",
                       deps=("th", "prs", "qv"), func=_thetae))
     D.append(FieldDef("tempc", "Temperature", "°C", "Thermodynamics", cmap="cmo.thermal",
@@ -217,6 +243,40 @@ def _make_fields(avail):
     D.append(FieldDef("hvort", "Horizontal vorticity magnitude", "1/s", "Kinematics",
                       cmap="magma", vrange=(0, 0.1), deps=("xvort", "yvort"),
                       func=lambda f, c: np.hypot(f("xvort"), f("yvort"))))
+
+    # horizontal vorticity along / across the storm-relative horizontal wind; c["storm"]
+    # is the storm motion (ground-relative), the grid winds are relative to (umove, vmove)
+    def sr_unit(f, c):
+        us = f("uinterp") + (c["umove"] - c["storm"][0])
+        vs = f("vinterp") + (c["vmove"] - c["storm"][1])
+        sp = np.maximum(np.hypot(us, vs), 1e-6)
+        return us / sp, vs / sp
+
+    def wstream(f, c):
+        sx, sy = sr_unit(f, c)
+        return f("xvort") * sx + f("yvort") * sy
+
+    def wcross(f, c):  # positive: vorticity to the left of the storm-relative wind
+        sx, sy = sr_unit(f, c)
+        return -f("xvort") * sy + f("yvort") * sx
+
+    vdeps = ("xvort", "yvort", "uinterp", "vinterp")
+    D.append(FieldDef("wstream", "Streamwise vorticity", "1/s", "Kinematics", cmap="RdBu_r",
+                      vrange=(-0.05, 0.05), diverging=True, deps=vdeps, func=wstream,
+                      storm=True))
+    D.append(FieldDef("wcross", "Crosswise vorticity", "1/s", "Kinematics", cmap="RdBu_r",
+                      vrange=(-0.05, 0.05), diverging=True, deps=vdeps, func=wcross,
+                      storm=True))
+    D.append(FieldDef("p_dyn", "p′ dynamic (p_l + p_nl)", "Pa", "Pressure decomposition",
+                      cmap="PuOr_r", diverging=True, deps=("p_l", "p_nl"),
+                      func=lambda f, c: f("p_l") + f("p_nl")))
+    D.append(FieldDef("acc_dyn", "Dynamic VPPGA (linear + nonlinear)", "m/s²",
+                      "Pressure decomposition", cmap="RdBu_r", diverging=True,
+                      deps=("acc_l", "acc_nl"), func=lambda f, c: f("acc_l") + f("acc_nl")))
+    D.append(FieldDef("acc_tot", "Total acceleration (b + l + nl)", "m/s²",
+                      "Pressure decomposition", cmap="RdBu_r", diverging=True,
+                      deps=("acc_b", "acc_l", "acc_nl"),
+                      func=lambda f, c: f("acc_b") + f("acc_l") + f("acc_nl")))
     if hyd:
         cl = [n for n in ("qc", "qi") if n in avail]
         pr = [n for n in ("qr", "qs", "qg", "qhl") if n in avail]
@@ -231,12 +291,14 @@ def _make_fields(avail):
     return [d for d in D if all(x in avail for x in d.deps)]
 
 
-GROUP_ORDER = ["Radar", "Kinematics", "Thermodynamics", "Microphysics", "Swaths & 2D",
-               "Turbulence", "Budgets", "Base state"]
+GROUP_ORDER = ["Radar", "Kinematics", "Thermodynamics", "Pressure decomposition",
+               "Microphysics", "Swaths & 2D", "Turbulence", "Budgets", "Base state"]
 
 
 class Fields:
     def __init__(self, run):
+        from . import pdecomp
+        pdecomp.register(run)  # decomposition fields, computable where no file has them
         self.run = run
         self.ctx = dict(dx=run.dx, dy=run.dy, umove=run.umove, vmove=run.vmove)
         self.defs = OrderedDict()
@@ -278,20 +340,30 @@ class Fields:
         return list(d.deps) if d.derived else [name]
 
     # ---- data access
-    def plane(self, name, t, mode="height", value=1.0):
+    def _ctx(self, d, storm):
+        """Context for a derived field; storm defaults to the domain motion."""
+        if not d.storm:
+            return self.ctx
+        return dict(self.ctx, storm=tuple(storm) if storm is not None
+                    else (self.ctx["umove"], self.ctx["vmove"]))
+
+    def plane(self, name, t, mode="height", value=1.0, storm=None):
         """2D (nj, ni) array of a field.
-        mode: 'height' (km AGL), 'level' (model level index), 'colmax', 'colmin'."""
+        mode: 'height' (km AGL), 'level' (model level index), 'colmax', 'colmin'.
+        storm: ground-relative storm motion (m/s) for storm-relative fields."""
         d = self.defs[name]
         if d.ndim == 2:
             mode, value = "2d", 0
-        key = (name, t, mode, round(float(value), 4))
+        ctx = self._ctx(d, storm)
+        key = (name, t, mode, round(float(value), 4),
+               tuple(round(float(x), 3) for x in ctx["storm"]) if d.storm else None)
         with self._lock:
             a = self._planes.get(key)
             if a is not None:
                 self._planes.move_to_end(key)
                 return a
         if mode in ("colmax", "colmin"):
-            vol = self.volume(name, t)
+            vol = self.volume(name, t, storm)
             a = vol.max(axis=0) if mode == "colmax" else vol.min(axis=0)
         else:
             run = self.run
@@ -303,32 +375,43 @@ class Fields:
                     return run.read_level(n, t)
                 return run.read_height(n, t, float(value))
 
-            a = d.func(fetch, self.ctx) if d.derived else fetch(name) * d.scale
-        a = np.asarray(a, dtype=np.float32)
+            a = d.func(fetch, ctx) if d.derived else fetch(name) * d.scale
+        # a copy: a slice of a cached volume would keep the whole volume alive
+        a = np.array(a, dtype=np.float32)
         with self._lock:
             self._planes[key] = a
             while len(self._planes) > 40:
                 self._planes.popitem(last=False)
         return a
 
-    def volume(self, name, t):
+    def forget(self, t, names):
+        """Drop cached planes at time t of `names` and the fields derived from them
+        (after those were recomputed)."""
+        names = set(names)
+        dep = {n for n, d in self.defs.items() if n in names or names & set(d.deps)}
+        with self._lock:
+            for k in [k for k in self._planes if k[1] == t and k[0] in dep]:
+                del self._planes[k]
+
+    def volume(self, name, t, storm=None):
         d = self.defs[name]
         if d.derived:
             self.run.load_volumes(d.deps, t)
-            return np.asarray(d.func(lambda n: self.run.volume(n, t), self.ctx),
+            return np.asarray(d.func(lambda n: self.run.volume(n, t), self._ctx(d, storm)),
                               dtype=np.float32)
         vol = self.run.volume(name, t)
         return vol if d.scale == 1.0 else vol * np.float32(d.scale)
 
-    def at_points(self, name, t, sample):
+    def at_points(self, name, t, sample, storm=None):
         """Field values at arbitrary points: sample(vol) -> values.  Pointwise derived
         fields are computed from sampled inputs, so no derived volume is built."""
         d = self.defs[name]
         if d.derived and d.pointwise:
             self.run.load_volumes(d.deps, t)
-            return np.asarray(d.func(lambda n: sample(self.run.volume(n, t)), self.ctx))
+            return np.asarray(d.func(lambda n: sample(self.run.volume(n, t)),
+                                     self._ctx(d, storm)))
         if d.derived:
-            return np.asarray(sample(self.volume(name, t)))
+            return np.asarray(sample(self.volume(name, t, storm)))
         return np.asarray(sample(self.run.volume(name, t))) * d.scale
 
     def auto_range(self, name, a):
