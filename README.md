@@ -54,6 +54,12 @@ stay intact (zoomed skew-Ts fill their panel; barbs and labels follow the zoom).
 widens the view, double-click or ⟲ returns to the full view, ⤓ saves the image (SVG).
 The zoom is kept while the sounding updates (e.g. stepping in time); switching m/s ↔ kt
 or the profile top resets the affected panels.
+In the expanded view, hovering reads values off the graphics in a strip under each
+image. On the skew-T it shows the pressure and the temperature under the pointer, and
+each sounding's height, T, Td, parcel T, RH, θ, θe, qv and wind at that pressure. On the
+hodograph it shows the level nearest the pointer (height, wind). On the profile panels
+it shows every quantity at the pointer's height. A dashed line or dot marks the
+position read.
 
 **Plot style** (🎨 in the Sounding tab): colours of temperature, dewpoint, parcel and
 base state; widths of the T/Td, parcel, hodograph and profile lines; skew-T top and
@@ -126,7 +132,8 @@ resolution, reflectivity floor).
   height or w. Storm-relative uses the storm motion selected in the sounding panel.
 - Click a streamline to select it (it turns yellow, its seed marked). A card plots a
   field along it against distance from the seed (negative = upstream), with height on
-  the right axis. The field can be any 3D field, the speed, or the streamwise vorticity in
+  the right axis. Its axes fit the field. Scroll to zoom, drag to pan, and use the
+  toolbar for box zoom or reset; ⤢ enlarges the card. The field can be any 3D field, the speed, or the streamwise vorticity in
   the streamline's frame. The selection follows the same seed when the scene re-renders
   (e.g. in time). Isosurfaces in front of a line can catch the click: lower their
   opacity or switch them off.
@@ -138,7 +145,12 @@ level, for the *Time–height* view), over the whole domain, the map view, the 3
 a disc around the tracked storm (with an offset, e.g. the inflow), as min / max / mean /
 percentile. Results are cached in `~/.cache/cm1view/series` per run and recipe, and
 saved as .nc (everything), .csv / .txt or .pkl. Series in other units than the first
-get their own y axis on the right. Click a plot to go to that time.
+get their own y axis on the right. Click a plot to go to that time. **⚙ Plot** sets
+the time and y limits (heights in the time–height view) and the time–height
+colormap and colour range. For layer series it can also reduce over a sub-layer
+(e.g. max w over 0–2 km out of a 0–10 km layer) for min / max / mean. All of these
+come from the computed result without recomputing. *Auto limits* clears them. The
+3D region box is offered as a region once one has been drawn.
 
 **Figure workspace** (Map | 3D | **Figure**). Publication figures, previewed at their
 final size. Start from the map view, the cross-section, the Series tab, the soundings,

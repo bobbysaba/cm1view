@@ -478,3 +478,92 @@ def params_html(items, base=None, units="m/s"):
         f'<table class="ptab"><thead><tr><th></th>{head}<th></th></tr></thead>'
         f'<tbody>{"".join(b)}</tbody></table>' for b in tables)
     return f'<div class="ptabs">{html}</div>'
+
+
+# ------------------------------------------------------------ hover readout
+# What the browser needs to read values off a drawn figure under the pointer: for each
+# panel its frame (image fractions, y down), the affine map from image fractions to
+# data coordinates (y in log p on the skew-T) and, per sounding, the profile arrays.
+# The browser interpolates them at the pointer's height (or takes the nearest point of
+# the hodograph), so hovering needs no round trip.
+def _r(a, n=3):
+    a = np.asarray(a, float)
+    return [None if not np.isfinite(x) else round(float(x), n) for x in a]
+
+
+def _frame(fig, ax):
+    W, H = fig.bbox.width, fig.bbox.height
+    b = ax.bbox
+    return [b.x0 / W, 1.0 - b.y1 / H, b.x1 / W, 1.0 - b.y0 / H]
+
+
+def _affine(fig, ax, ylog=False):
+    """[[a, b, c], [d, e, f]]: data x = a fx + b fy + c, data y (log10 p if ylog) =
+    d fx + e fy + f, from image fractions fx, fy (y down)."""
+    W, H = fig.bbox.width, fig.bbox.height
+    b = ax.bbox
+    disp = np.array([(b.x0, b.y0), (b.x1, b.y0), (b.x0, b.y1)])
+    dat = ax.transData.inverted().transform(disp)
+    if ylog:
+        dat[:, 1] = np.log10(dat[:, 1])
+    A = np.column_stack([disp[:, 0] / W, 1.0 - disp[:, 1] / H, np.ones(3)])
+    return [list(map(float, np.linalg.solve(A, dat[:, k]))) for k in (0, 1)]
+
+
+def _soundings(items, base):
+    out = [(label, color, r) for label, color, r in items]
+    if base is not None:
+        out.append(("Base state", MUTED, base))
+    return out
+
+
+def probe_skewt(fig, items, base=None, parcel="ml", units="m/s"):
+    """Hover data of a skew-T / hodograph figure (see above)."""
+    wf = _wfac(units)
+    skew, hodo = fig.cv_axes["skew"], fig.cv_axes["hodo"]
+    snd, hsnd = [], []
+    for label, color, r in _soundings(items, base):
+        pr = r["prof"]
+        z = pr["z"] / 1000.0
+        cols = [["z", "km AGL", 2, _r(z)], ["T", "°C", 1, _r(pr["T"] - 273.15, 2)],
+                ["Td", "°C", 1, _r(pr["Td"] - 273.15, 2)]]
+        if parcel in r:
+            cols.append(["parcel", "°C", 1, _r(r[parcel]["T"] - 273.15, 2)])
+        cols += [["RH", "%", 0, _r(pr["rh"], 1)], ["θ", "K", 1, _r(pr["th"], 2)],
+                 ["θe", "K", 1, _r(pr["the"], 2)], ["qv", "g/kg", 1, _r(pr["qv"] * 1e3, 2)]]
+        snd.append(dict(label=label, color=color, y=_r(np.log10(pr["p"] / 100.0), 5),
+                        cols=cols, wind=[_r(pr["u"] * wf, 2), _r(pr["v"] * wf, 2)]))
+        s = z <= _st(None)["hodo_top"] + 1.0
+        d = hodo.transData.transform(np.column_stack([pr["u"][s] * wf, pr["v"][s] * wf]))
+        W, H = fig.bbox.width, fig.bbox.height
+        hsnd.append(dict(label=label, color=color, fx=_r(d[:, 0] / W, 4),
+                         fy=_r(1.0 - d[:, 1] / H, 4), z=_r(z[s]),
+                         wind=[_r(pr["u"][s] * wf, 2), _r(pr["v"][s] * wf, 2)]))
+    return dict(units=units, panels=[
+        dict(kind="y", name="skew", frame=_frame(fig, skew), aff=_affine(fig, skew, True),
+             ylabel="p", yunit="hPa", ylog=True, xlabel="T", xunit="°C", snd=snd),
+        dict(kind="xy", name="hodo", frame=_frame(fig, hodo), aff=_affine(fig, hodo),
+             xlabel="u", ylabel="v", snd=hsnd)])
+
+
+def probe_profiles(fig, items, base=None, units="m/s"):
+    """Hover data of a profiles figure: one panel spanning the five (they share z)."""
+    wf = _wfac(units)
+    axs = [fig.cv_axes[f"prof{i}"] for i in range(len(PROFILE_PANELS))]
+    fr = [_frame(fig, a) for a in axs]
+    snd = []
+    for label, color, r in _soundings(items, base):
+        pf, pr = r["profiles"], r["prof"]
+        zm, z = pf["zm"] / 1000.0, pf["z"] / 1000.0
+        snd.append(dict(label=label, color=color, ys=dict(m=_r(zm, 4), z=_r(z, 4)), cols=[
+            ["SR wind", units, 1, "m", _r(pf["sr_speed"] * wf, 2)],
+            ["shear", "10⁻³ s⁻¹", 1, "m", _r(pf["shear"] * 1e3, 2)],
+            ["ωs", "10⁻³ s⁻¹", 1, "m", _r(pf["ws"] * 1e3, 2)],
+            ["ωc", "10⁻³ s⁻¹", 1, "m", _r(pf["wc"] * 1e3, 2)],
+            ["SRH", "m²/s²", 0, "z", _r(pf["cum_srh"], 1)],
+            ["θ", "K", 1, "z", _r(pr["th"], 2)], ["θe", "K", 1, "z", _r(pr["the"], 2)]]))
+    frame = [min(f[0] for f in fr), min(f[1] for f in fr), max(f[2] for f in fr),
+             max(f[3] for f in fr)]
+    return dict(units=units, panels=[
+        dict(kind="z", name="prof", frame=frame, frames=fr, aff=_affine(fig, axs[0]),
+             ylabel="z", yunit="km AGL", snd=snd)])

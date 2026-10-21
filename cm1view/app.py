@@ -5,6 +5,7 @@ import io
 import os
 import sys
 import traceback
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -174,8 +175,14 @@ PILL = {"background": "rgba(17,23,35,0.9)", "border": f"1px solid {GRID}",
         "border-radius": "20px", "padding": "0 6px", "backdrop-filter": "blur(6px)",
         "box-shadow": "0 4px 14px rgba(0,0,0,0.35)", "pointer-events": "auto",
         "align-items": "center"}
-OVERLAY = {"position": "absolute", "top": "8px", "left": "8px", "width": "calc(100% - 16px)",
-           "z-index": "30", "pointer-events": "none"}
+# toolbars sit in the page flow above what they control (a bar that wraps onto a
+# second row pushes the map down instead of covering it); their drawers float below
+BAR = {"position": "relative", "z-index": "30", "pointer-events": "none",
+       "padding": "8px 8px 0 8px", "flex": "0 0 auto"}
+DRAWER = {"position": "absolute", "top": "100%", "left": "8px", "width": "calc(100% - 16px)",
+          "pointer-events": "auto", "background": "rgba(17,23,35,0.95)",
+          "box-shadow": "0 6px 20px rgba(0,0,0,.45)"}
+FILL = {"flex": "1 1 0", "min-height": "0"}  # the rest of a column's height
 
 
 # controls inside the floating pills: no borders of their own (the pill is the frame),
@@ -906,10 +913,8 @@ class Viewer:
                                             start=0.0, end=ztop, width=90, visible=False)
         self.ser_z1 = pn.widgets.FloatInput(name="Top (km)", value=10.0, step=0.5,
                                             start=0.0, end=ztop, width=90, visible=False)
-        self.ser_region = pn.widgets.Select(
-            name="Region", options={"Whole domain": "domain", "Current map view": "view",
-                                    "3D region box": "box3d", "Around tracked storm": "track"},
-            value="domain", width=180)
+        self.ser_region = pn.widgets.Select(name="Region", options=self._ser_regions(),
+                                            value="domain", width=180)
         self.ser_radius = pn.widgets.FloatInput(name="Radius (km)", value=5.0, step=0.5,
                                                 start=0.25, width=90, visible=False)
         self.ser_offx = pn.widgets.FloatInput(
@@ -947,6 +952,38 @@ class Viewer:
         self.ser_remove = pn.widgets.Button(name="Remove", button_type="light",
                                             button_style="outline", height=32,
                                             margin=(18, 4, 4, 4), disabled=True)
+
+        # plot settings: limits, a sub-layer of layer series and the time–height colours,
+        # all applied to the computed result (no recompute)
+        num = dict(value=None, placeholder="auto", width=90)
+        self.ser_t0 = pn.widgets.FloatInput(name="Time from (min)", **num)
+        self.ser_t1 = pn.widgets.FloatInput(name="to", **num)
+        self.ser_y0 = pn.widgets.FloatInput(name="y from", **num)
+        self.ser_y1 = pn.widgets.FloatInput(name="to", **num)
+        self.ser_s0 = pn.widgets.FloatInput(
+            name="Sub-layer from (km)", **dict(num, width=150),
+            description="Layer series: reduce over these heights only, from the values "
+                        "kept at every level (min, max and mean; a percentile needs a "
+                        "recompute)")
+        self.ser_s1 = pn.widgets.FloatInput(name="to", **num)
+        self.ser_cmap = pn.widgets.Select(name="Colormap", options=["auto"] + CMAPS,
+                                          value="auto", width=140)
+        self.ser_crev = pn.widgets.Checkbox(name="Reverse", value=False,
+                                            margin=(5, 10, 14, 10))
+        self.ser_c0 = pn.widgets.FloatInput(name="Colours from", **num)
+        self.ser_c1 = pn.widgets.FloatInput(name="to", **num)
+        self.ser_auto = pn.widgets.Button(name="Auto limits", button_type="light",
+                                          button_style="outline", height=32,
+                                          margin=(18, 4, 4, 10))
+        self.ser_lims = (self.ser_t0, self.ser_t1, self.ser_y0, self.ser_y1, self.ser_s0,
+                         self.ser_s1, self.ser_c0, self.ser_c1)
+        self.ser_set = pn.FlexBox(*self.ser_lims[:6], self.ser_cmap, self.ser_crev,
+                                  self.ser_c0, self.ser_c1, self.ser_auto, flex_wrap="wrap",
+                                  align_items="flex-end", gap="0 4px",
+                                  sizing_mode="stretch_width",
+                                  styles={"border-top": f"1px solid {GRID}"})
+        self.ser_set_btn = _settings_toggle(self.ser_set)
+        self.ser_set_btn.param.update(name="⚙ Plot", margin=(18, 4, 4, 4))
 
         fig = figure(sizing_mode="stretch_width", height=300, tools="pan,wheel_zoom,reset,save",
                      x_axis_label="time (min)", y_axis_label="")
@@ -1022,6 +1059,21 @@ class Viewer:
         self.ser_stop.on_click(lambda e: self._cancel_series())
         self.ser_pick.param.watch(lambda e: self._ser_select(), "value")
         self.ser_view.param.watch(lambda e: self._ser_draw(), "value")
+        for w in self.ser_lims + (self.ser_cmap, self.ser_crev):
+            w.param.watch(lambda e: self._ser_draw(), "value")
+
+        def auto(e):
+            self._ser_hold = True
+            try:
+                for w in self.ser_lims:
+                    w.value = None
+                self.ser_cmap.value, self.ser_crev.value = "auto", False
+            finally:
+                self._ser_hold = False
+            self._ser_draw()
+        self.ser_auto.on_click(auto)
+        self.ser_view.param.watch(lambda e: self._ser_set_vis(), "value")
+        self._ser_set_vis()
         self.ser_remove.on_click(self._on_ser_remove)
         self.ser_fmt.param.watch(self._on_ser_fmt, "value")
         self.ser_path.param.watch(
@@ -1213,9 +1265,10 @@ class Viewer:
                            self.ser_stop, flex_wrap="wrap", align_items="flex-end",
                            gap="0 4px", sizing_mode="stretch_width"),
                 self.ser_status,
-                pn.FlexBox(self.ser_pick, self.ser_view, self.ser_remove, flex_wrap="wrap",
-                           align_items="flex-end", gap="0 4px", sizing_mode="stretch_width"),
-                self.ser_plot,
+                pn.FlexBox(self.ser_pick, self.ser_view, self.ser_remove, self.ser_set_btn,
+                           flex_wrap="wrap", align_items="flex-end", gap="0 4px",
+                           sizing_mode="stretch_width"),
+                self.ser_set, self.ser_plot,
                 pn.FlexBox(self.ser_path, self.ser_fmt, self.ser_save, self.ser_dl,
                            self.ser_load, flex_wrap="wrap", align_items="flex-end",
                            gap="0 4px", sizing_mode="stretch_width"),
@@ -1239,11 +1292,16 @@ class Viewer:
                                           button_style="outline", width=34, height=32,
                                           margin=(4, 4), description="Clear the selection")
         self.sl_info = _html(sizing_mode="stretch_width")
+        self.sl_big = pn.widgets.Toggle(name="", icon="arrows-maximize", button_type="light",
+                                        button_style="outline", width=34, height=32,
+                                        margin=(4, 4))
+        # fixed ranges fitted to the field (an automatic range would also take in the
+        # height line and flatten the field); reset comes back to the fit
         fig = figure(sizing_mode="stretch_width", height=210, tools="pan,wheel_zoom,"
                      "box_zoom,reset,save", x_axis_label="Distance from seed (km)",
-                     y_axis_label="")
+                     y_axis_label="", x_range=Range1d(0, 1), y_range=Range1d(0, 1),
+                     active_scroll="wheel_zoom")
         style_fig(fig)
-        fig.toolbar.autohide = True
         fig.min_border_right = 10
         self.sl_src = ColumnDataSource(dict(s=[], v=[], z=[]))
         fig.extra_y_ranges = {"z": Range1d(0, 1)}
@@ -1262,7 +1320,7 @@ class Viewer:
                                           ("z", "@z{0.00} km")]))
         self.sl_fig = fig
         self.sl_card = pn.Column(
-            pn.Row(self.sl_info, self.sl_field, self.sl_clear, margin=0,
+            pn.Row(self.sl_info, self.sl_field, self.sl_big, self.sl_clear, margin=0,
                    sizing_mode="stretch_width"),
             pn.pane.Bokeh(fig, sizing_mode="stretch_width"),
             visible=False, margin=0,
@@ -1270,6 +1328,14 @@ class Viewer:
                     "width": "min(600px, 46vw)", "z-index": "25", "padding": "6px 8px",
                     "background": "rgba(17,23,35,0.94)", "border": f"1px solid {GRID}",
                     "border-radius": "10px", "box-shadow": "0 6px 20px rgba(0,0,0,.45)"})
+
+        def big(e):
+            fig.height = 440 if e.new else 210
+            self.sl_card.styles = dict(self.sl_card.styles,
+                                       width="min(1200px, 92vw)" if e.new else
+                                       "min(600px, 46vw)")
+            self.sl_big.icon = "arrows-minimize" if e.new else "arrows-maximize"
+        self.sl_big.param.watch(big, "value")
         self._s3 = None      # last 3D scene: t, streamlines, frame offset
         self._sl_seed = None  # seed of the selected streamline (kept across re-renders)
         self._sl_line = None
@@ -1282,7 +1348,7 @@ class Viewer:
                  _group(self.t_prev, self.t_play, self.t_next, self.t_speed, self.tslider,
                         self.time_html),
                  self.mode_group, _group(self.run_btn)),
-            styles=dict(OVERLAY, **{"z-index": "40"}), margin=0)
+            styles=dict(BAR, **{"z-index": "40"}), margin=0, sizing_mode="stretch_width")
 
     def _map_toolbar(self):
         d = self.map_drawer = Drawer()
@@ -1299,14 +1365,12 @@ class Viewer:
                                        self.vec_color))
         for b, _ in d.items.values():
             b.param.update(height=32, margin=(4, 2), button_type="light")
-        d.panel.styles = dict(d.panel.styles, **{"pointer-events": "auto",
-                                                 "background": "rgba(17,23,35,0.95)",
-                                                 "box-shadow": "0 6px 20px rgba(0,0,0,.45)"})
+        d.panel.styles = dict(d.panel.styles, **DRAWER)
         bar = _bar(_group(self.fill_var, self.fill_mode, self.fill_lvl),
                    _group(style, *ovb, vec))
         self.mode_group = _group(*self.mode.btns.values(), self.clear_pts, self.panel_btn,
                                  self.full_btn)
-        return pn.Column(bar, d.panel, styles=OVERLAY, margin=0)
+        return pn.Column(bar, d.panel, styles=BAR, margin=0, sizing_mode="stretch_width")
 
     def _3d_toolbar(self):
         d = self.v3_drawer = Drawer()
@@ -1332,12 +1396,10 @@ class Viewer:
             b.param.update(height=32, margin=(4, 2), button_type="light")
         for b in (self.v3_pick, self.v3_view, self.v3_render):
             b.param.update(height=32, margin=(4, 2))
-        d.panel.styles = dict(d.panel.styles, **{"pointer-events": "auto",
-                                                 "background": "rgba(17,23,35,0.95)",
-                                                 "box-shadow": "0 6px 20px rgba(0,0,0,.45)"})
+        d.panel.styles = dict(d.panel.styles, **DRAWER)
         bar = _bar(_group(iso, sv, st, scene),
                    _group(self.v3_region, self.v3_pick, self.v3_view, self.v3_render))
-        return pn.Column(bar, d.panel, styles=OVERLAY, margin=0)
+        return pn.Column(bar, d.panel, styles=BAR, margin=0, sizing_mode="stretch_width")
 
     def main(self):
         floor = {"position": "absolute", "left": "70px", "bottom": "56px", "z-index": "20",
@@ -1346,30 +1408,31 @@ class Viewer:
         caption = pn.Column(self.map_title, self.hint, self.status, self.pd_row, styles=floor,
                             margin=0)
         self.map_area = map_area = pn.Column(
-            self.map_bar, pn.pane.Bokeh(self.fig, sizing_mode="stretch_both"), caption,
-            sizing_mode="stretch_both",
+            self.map_bar, pn.pane.Bokeh(self.fig, sizing_mode="stretch_both", styles=FILL),
+            caption, sizing_mode="stretch_both",
             styles={"position": "relative", "flex": "1 1 55%", "min-width": "0"})
         self.tabs.margin = (0, 8, 0, 4)
-        below = {"margin-top": "52px", "height": "calc(100vh - 52px)"}
         self.map_ws = pn.Row(map_area, self.tabs, sizing_mode="stretch_width", margin=0,
-                             styles=below)
+                             styles=FILL)
         self.plot3d.margin = 0
+        self.plot3d.styles = FILL
         self.v3_ws = pn.Column(
             self.v3_bar, self.plot3d,
             pn.Column(self.v3_status, styles=dict(floor, left="12px", bottom="12px"),
                       margin=0),
             self.sl_card,
             sizing_mode="stretch_width", visible=False, margin=0,
-            styles=dict(below, position="relative"))
+            styles=dict(FILL, position="relative"))
         err = _html(f'<div class="cv-status" style="color:#f87171;padding:4px 8px">'
                     f'{self.error}</div>') if self.error else None
         objs = [o for o in (err,) if o is not None]
         self.fig_ws = pn.Column(self.figed.panel, sizing_mode="stretch_width", visible=False,
-                                margin=0, styles=dict(below, position="relative"))
+                                margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,
                          self.rp_modal,
                          margin=0, styles={"position": "fixed", "top": "0", "left": "0",
-                                           "width": "100vw", "height": "100vh"})
+                                           "width": "100vw", "height": "100vh",
+                                           "display": "flex", "flex-direction": "column"})
 
     # ================================================================ wiring
     def _wire(self):
@@ -1651,7 +1714,22 @@ class Viewer:
         self.workspace.value = "Map"
         self.mode.set("3D region")
 
+    def _ser_regions(self):
+        """Series regions on offer: the 3D region box only once one is drawn."""
+        opts = {"Whole domain": "domain", "Current map view": "view"}
+        if self.box is not None:
+            opts["3D region box"] = "box3d"
+        opts["Around tracked storm"] = "track"
+        return opts
+
     def _update_region_html(self):
+        if hasattr(self, "ser_region"):
+            opts = self._ser_regions()
+            if self.ser_region.options != opts:
+                if self.ser_region.value not in opts.values():
+                    self.ser_region.param.update(options=opts, value="domain")
+                else:
+                    self.ser_region.options = opts
         if self.box is None:
             txt = "Region: current map view"
             box = self.view
@@ -2221,7 +2299,8 @@ class Viewer:
 
     def _draw_figs(self, items, base, spec):
         """[(tab label or None, skew-T/hodograph figure, its SVG, profiles figure, its
-        SVG)]: one entry, or one per sounding in the Tabs comparison style."""
+        SVG, their hover data)]: one entry, or one per sounding in the Tabs comparison
+        style."""
         st, look, lim = spec["style"], spec["look"], spec["lim"]
         groups = [(it[0], [it]) for it in items] if st == "tabs" and len(items) > 1 \
             else [(None, items)]
@@ -2232,7 +2311,14 @@ class Viewer:
             fp = sp.profiles_figure(its, base, spec["zmax"], spec["units"],
                                     style="lines" if lab else st, look=look,
                                     limits=dict(z=lim.get("prof_z"), x=lim.get("prof_x")))
-            out.append((lab, fs, _svg(fs), fp, _svg(fp)))
+            a, b = _svg(fs), _svg(fp)
+            try:
+                probes = (sp.probe_skewt(fs, its, base, spec["parcel"], spec["units"]),
+                          sp.probe_profiles(fp, its, base, spec["units"]))
+            except Exception:  # noqa: BLE001  (a readout is not worth losing the figure)
+                traceback.print_exc()
+                probes = ({}, {})
+            out.append((lab, fs, a, fp, b, probes))
         return out
 
     def _show_figs(self, draws):
@@ -2240,8 +2326,9 @@ class Viewer:
         dragged box can be turned into axes limits."""
         self._figs = {}
         if draws[0][0] is None:
-            _, fs, a, fp, b = draws[0]
-            self.skew_png.src, self.prof_png.src = a, b
+            _, fs, a, fp, b, (pa, pb) = draws[0]
+            self.skew_png.param.update(src=a, probe=pa)
+            self.prof_png.param.update(src=b, probe=pb)
             self._figs = {self.skew_png: fs, self.prof_png: fp}
             self.skew_png.visible = self.prof_png.visible = True
             self.snd_tabs.visible = False
@@ -2254,8 +2341,9 @@ class Viewer:
                     self._zoom_image("profiles.svg", visible=True),
                     sizing_mode="stretch_width")) for name in names]
                 self._snd_tab_names = names
-            for tab, (_, fs, a, fp, b) in zip(self.snd_tabs, draws):
-                tab[0].src, tab[1].src = a, b
+            for tab, (_, fs, a, fp, b, (pa, pb)) in zip(self.snd_tabs, draws):
+                tab[0].param.update(src=a, probe=pa)
+                tab[1].param.update(src=b, probe=pb)
                 self._figs[tab[0]], self._figs[tab[1]] = fs, fp
             self.snd_tabs.active = min(active, len(draws) - 1)
             self.skew_png.visible = self.prof_png.visible = False
@@ -2822,9 +2910,68 @@ class Viewer:
             return
         self._ser_draw()
 
+    _ser_hold = False
+
+    @staticmethod
+    def _num(w):
+        v = w.value
+        return None if v is None or not np.isfinite(v) else float(v)
+
+    def _ser_values(self, s, ts):
+        """Values of series s at times ts and a label suffix: the series itself, or for
+        a layer series with a sub-layer set, its reduction over those heights."""
+        ds = s["ds"]
+        a, b = self._num(self.ser_s0), self._num(self.ser_s1)
+        how = s["recipe"].get("reduce")
+        if "profile" not in ds or (a is None and b is None) or how not in ("min", "max",
+                                                                           "mean"):
+            return ds["value"].values[ts], "", False
+        z = np.asarray(ds["z"].values, dtype=float)
+        sel = (z >= (a if a is not None else -np.inf)) & (z <= (b if b is not None else np.inf))
+        if not sel.any():
+            return np.full(len(ts), np.nan), " (no levels in the sub-layer)", True
+        P = ds["profile"].values[ts][:, sel]
+        f = {"min": np.nanmin, "max": np.nanmax, "mean": np.nanmean}[how]
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            v = f(P, axis=1) if P.size else np.full(len(ts), np.nan)
+        return v, f" · {z[sel][0]:.2f}–{z[sel][-1]:.2f} km", True
+
+    def _ser_set_vis(self):
+        th = self.ser_view.value == "th"
+        for w in (self.ser_cmap, self.ser_crev, self.ser_c0, self.ser_c1):
+            w.visible = th
+        self.ser_y0.name = "Height from (km)" if th else "y from"
+        prof = any("profile" in v["ds"] for v in self.series.values())
+        self.ser_s0.visible = self.ser_s1.visible = prof and not th
+
+    def _ser_range(self, fig, which, lo, hi, data):
+        """Fixed limits lo / hi (None: from the data) on a figure axis, or automatic
+        ranges when neither is set."""
+        from bokeh.models import DataRange1d
+        cur = getattr(fig, which)
+        if lo is None and hi is None:
+            if not isinstance(cur, DataRange1d):
+                setattr(fig, which, DataRange1d())
+            return getattr(fig, which)
+        d = np.asarray(data, dtype=float)
+        d = d[np.isfinite(d)]
+        dlo, dhi = (float(d.min()), float(d.max())) if d.size else (0.0, 1.0)
+        lo, hi = (dlo if lo is None else lo), (dhi if hi is None else hi)
+        if hi <= lo:
+            hi = lo + (abs(lo) * 0.1 or 1.0)
+        if isinstance(cur, Range1d):
+            cur.update(start=lo, end=hi, reset_start=lo, reset_end=hi)
+        else:
+            setattr(fig, which, Range1d(lo, hi, reset_start=lo, reset_end=hi))
+        return getattr(fig, which)
+
     def _ser_draw(self):
         from bokeh.models import DataRange1d, Legend, LegendItem, LinearAxis
 
+        if self._ser_hold:
+            return
+        self._ser_set_vis()
         run, fig = self.run, self.ser_fig
         fig.renderers = [r for r in fig.renderers if r not in self._ser_glyphs]
         self._ser_glyphs = []
@@ -2839,28 +2986,31 @@ class Viewer:
         fig.extra_y_ranges = {name: DataRange1d() for name in ranges.values()
                               if name != "default"}
         by_range = {name: [] for name in ranges.values()}
-        items = []
+        items, all_t, left_v = [], [], []
         for key, s in self.series.items():
             ds = s["ds"]
             ok = ds["computed"].values == 1
             ts = np.flatnonzero(ok)
-            v = ds["value"].values[ts]
-            where = [("" if not np.isfinite(x) else
+            v, suffix, sub = self._ser_values(s, ts)
+            where = [("" if sub or not np.isfinite(x) else
                       f"({x:.1f}, {y:.1f}) km" + (f", {z:.2f} km AGL" if np.isfinite(z) else ""))
                      for x, y, z in zip(ds["x_km"].values[ts], ds["y_km"].values[ts],
                                         ds["z_km"].values[ts])]
             src = ColumnDataSource(dict(tmin=run.times[ts] / 60.0, value=v,
                                         hms=[run.time_label(t) for t in ts],
-                                        name=[s["label"]] * len(ts), where=where))
+                                        name=[s["label"] + suffix] * len(ts), where=where))
+            all_t += list(run.times[ts] / 60.0)
             act = key == self.ser_pick.value
             rng = ranges[ds["value"].attrs.get("units", "")]
+            if rng == "default":
+                left_v += list(v)
             ln = fig.line("tmin", "value", source=src, line_color=s["color"],
                           line_width=2.5 if act else 1.6, y_range_name=rng)
             pt = fig.scatter("tmin", "value", source=src, size=5 if act else 3,
                              color=s["color"], y_range_name=rng)
             self._ser_glyphs += [ln, pt]
             by_range[rng] += [ln, pt]
-            items.append(LegendItem(label=s["label"], renderers=[ln, pt]))
+            items.append(LegendItem(label=s["label"] + suffix, renderers=[ln, pt]))
         if not fig.legend:
             # below the plot: a click on an entry (hide / show) is not a click on a time
             fig.add_layout(Legend(click_policy="hide", background_fill_color=BG,
@@ -2868,7 +3018,11 @@ class Viewer:
                                   border_line_color=None, spacing=0, padding=4), "below")
         fig.legend[0].items = items
         fig.legend[0].visible = bool(items)
-        fig.y_range.renderers = by_range.get("default", []) or "auto"
+        self._ser_range(fig, "x_range", self._num(self.ser_t0), self._num(self.ser_t1), all_t)
+        yr = self._ser_range(fig, "y_range", self._num(self.ser_y0), self._num(self.ser_y1),
+                             left_v)
+        if isinstance(yr, DataRange1d):
+            yr.renderers = by_range.get("default", []) or "auto"
         for u, name in ranges.items():
             if name == "default":
                 continue
@@ -2911,12 +3065,24 @@ class Viewer:
         # diverging colours only when the values have both signs (max w: one sign)
         if d is not None and d.diverging and lo < -0.05 * hi and hi > -0.05 * lo:
             m = float(np.percentile(np.abs(fin), 99)) if fin.size else 1.0
-            lo, hi, pal = -(m or 1.0), (m or 1.0), palette("RdBu_r")
+            lo, hi, cmap = -(m or 1.0), (m or 1.0), "RdBu_r"
         else:
             lo, hi = (np.percentile(fin, [1, 99]) if fin.size else (0.0, 1.0))
             lo, hi = float(lo), float(hi if hi > lo else lo + 1.0)
-            pal = palette("viridis")
+            cmap = "viridis"
+        if self.ser_cmap.value != "auto":
+            cmap = self.ser_cmap.value
+        pal = palette(cmap, reverse=self.ser_crev.value)
+        c0, c1 = self._num(self.ser_c0), self._num(self.ser_c1)
+        lo, hi = (lo if c0 is None else c0), (hi if c1 is None else c1)
+        if hi <= lo:
+            hi = lo + (abs(lo) * 0.1 or 1.0)
         self.ser_th_map.update(low=lo, high=hi, palette=pal)
+        thf = self.ser_thfig
+        self._ser_range(thf, "x_range", self._num(self.ser_t0), self._num(self.ser_t1),
+                        L + R)
+        self._ser_range(thf, "y_range", self._num(self.ser_y0), self._num(self.ser_y1),
+                        B + T)
         self.ser_thfig.title.text = s["label"]
         self.ser_thfig.title.text_color = MUTED
 
@@ -3450,6 +3616,15 @@ class Viewer:
         z0, z1 = float(np.nanmin(res["z"])), float(np.nanmax(res["z"]))
         pad = 0.05 * max(z1 - z0, 0.1)
         self.sl_fig.extra_y_ranges["z"].update(start=max(0.0, z0 - pad), end=z1 + pad)
+
+        def fit(rng, a):
+            a = np.asarray(a, dtype=float)
+            a = a[np.isfinite(a)]
+            lo, hi = (float(a.min()), float(a.max())) if a.size else (0.0, 1.0)
+            d = 0.05 * (hi - lo) if hi > lo else (abs(lo) * 0.1 or 1.0)
+            rng.update(start=lo - d, end=hi + d, reset_start=lo - d, reset_end=hi + d)
+        fit(self.sl_fig.x_range, res["s"])
+        fit(self.sl_fig.y_range, res["v"])
         self.sl_fig.yaxis[0].axis_label = res["label"]
         frame = FRAME_SHORT[self._s3["frame"]] if self._s3 else ""
         self.sl_info.object = (

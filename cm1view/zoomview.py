@@ -7,7 +7,10 @@ limits of that box, so axes, labels and line widths stay intact.  After a zoom, 
 pans instead (`pan`: start point and offset, image fractions; the image follows the
 pointer until the redraw arrives); Shift-drag does the other mode, the ✥/⬚ button
 switches.  The − button (`zoom_out`) widens the view, double-click or ⟲ (`resets`) goes
-back to the full view (and to box mode).
+back to the full view (and to box mode).  Hovering the expanded view reads the
+profiles off the figure (`probe`, from sounding_plot.probe_*): the values of every
+sounding at the pointer's height in a strip below the image, the nearest level on the
+hodograph.
 
 ParamTable: the parameter table.  Clicking the units cell of a level row (LCL, LFC,
 ...) switches that row between metres and hPa; the choice (`alt_rows`) survives
@@ -29,6 +32,7 @@ class ZoomImage(JSComponent):
     zoom_out = param.Integer(default=0)
     resets = param.Integer(default=0)
     done = param.Integer(default=0, doc="bumped by the app when it has answered a zoom")
+    probe = param.Dict(default={}, doc="hover data of the figure (sounding_plot.probe_*)")
 
     _esm = r"""
 export function render({ model, el }) {
@@ -45,7 +49,10 @@ export function render({ model, el }) {
     const b = document.createElement('button'); b.textContent = txt; b.title = title;
     b.onpointerdown = (e) => e.stopPropagation();
     b.onclick = (e) => { e.stopPropagation(); fn(); }; bar.append(b); return b; };
-  box.append(img, band, bar, hint); el.append(box);
+  const guide = document.createElement('div'); guide.className = 'guide';
+  const dot = document.createElement('div'); dot.className = 'dot';
+  const ro = document.createElement('div'); ro.className = 'readout';
+  box.append(img, band, guide, dot, bar, hint); el.append(box, ro);
 
   const busy = () => box.classList.add('busy');
   const modeBtn = btn('', '', () => setPan(!panMode));
@@ -82,6 +89,7 @@ export function render({ model, el }) {
   box.addEventListener('pointerdown', (e) => {
     if (!model.interactive || e.button !== 0) return;
     const [x, y] = pos(e); drag = { x, y, pan: panMode !== e.shiftKey };
+    guide.style.display = dot.style.display = 'none';
     box.setPointerCapture(e.pointerId); e.preventDefault();
   });
   box.addEventListener('pointermove', (e) => {
@@ -116,6 +124,96 @@ export function render({ model, el }) {
   // nothing to redraw: the app answers with the same image, so drop the busy look
   model.on("done", () => { box.classList.remove("busy"); unshift(); });
 
+
+  // ---- hover readout
+  const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;'})[c]);
+  function interp(xs, ys, x) {
+    for (let i = 0; i + 1 < xs.length; i++) {
+      const a = xs[i], b = xs[i + 1];
+      if (a === null || b === null || ys[i] === null || ys[i + 1] === null) continue;
+      if ((x - a) * (x - b) <= 0) {
+        const f = b === a ? 0 : (x - a) / (b - a);
+        return ys[i] + f * (ys[i + 1] - ys[i]);
+      }
+    }
+    return null;
+  }
+  const fmt = (v, d) => v === null || !isFinite(v) ? '–' : v.toFixed(d);
+  const aff = (m, fx, fy) => m[0] * fx + m[1] * fy + m[2];
+  const wind = (u, v, units) => {
+    if (u === null || v === null) return '–';
+    const d = ((270 - Math.atan2(v, u) * 180 / Math.PI) % 360 + 360) % 360;
+    return `${d.toFixed(0).padStart(3, '0')}°/${Math.hypot(u, v).toFixed(0)} ${units}`;
+  };
+  const kv = (k, v, u) => `<span class="k">${esc(k)}</span> ${v}${u ? ' ' + esc(u) : ''}`;
+  const name = (s) => `<span class="nm" style="color:${s.color}">${esc(s.label)}</span>`;
+  function idle() {
+    const pr = model.probe;
+    ro.innerHTML = pr && pr.panels && pr.panels.length
+      ? '<span class="k">Hover over the profiles to read their values</span>' : '';
+    guide.style.display = dot.style.display = 'none';
+  }
+  function hline(fr, fy) {
+    const W = box.clientWidth, H = box.clientHeight;
+    Object.assign(guide.style, { display: 'block', left: fr[0] * W + 'px', width: (fr[2] - fr[0]) * W + 'px',
+                                 top: fy * H + 'px' });
+  }
+  function readout(e) {
+    const pr = model.probe;
+    if (!model.interactive || drag || !pr || !pr.panels) return;
+    const [x, y] = pos(e), W = box.clientWidth, H = box.clientHeight;
+    const fx = x / W, fy = y / H;
+    const P = pr.panels.find((p) => fx >= p.frame[0] && fx <= p.frame[2] &&
+                                    fy >= p.frame[1] && fy <= p.frame[3]);
+    if (!P) { idle(); return; }
+    const U = pr.units, lines = [];
+    dot.style.display = 'none'; guide.style.display = 'none';
+    if (P.kind === 'y') {          // skew-T: everything at the pointer's pressure
+      const lp = aff(P.aff[1], fx, fy), T = aff(P.aff[0], fx, fy);
+      lines.push(kv('p', fmt(Math.pow(10, lp), 0), 'hPa') + ' · ' + kv('pointer T', fmt(T, 1), '°C'));
+      for (const s of P.snd) {
+        const parts = s.cols.map(([k, u, d, a]) => kv(k, fmt(interp(s.y, a, lp), d), u));
+        parts.push(kv('wind', wind(interp(s.y, s.wind[0], lp), interp(s.y, s.wind[1], lp), U)));
+        lines.push(name(s) + ' ' + parts.join(' · '));
+      }
+      hline(P.frame, fy);
+    } else if (P.kind === 'z') {   // profiles: every panel at the pointer's height
+      const z = aff(P.aff[1], fx, fy);
+      lines.push(kv('z', fmt(z, 2), 'km AGL'));
+      for (const s of P.snd)
+        lines.push(name(s) + ' ' + s.cols.map(([k, u, d, yk, a]) =>
+          kv(k, fmt(interp(s.ys[yk], a, z), d), u)).join(' · '));
+      const g = P.frames.map((f) => `<div style="left:${f[0] * W}px;width:${(f[2] - f[0]) * W}px"></div>`);
+      Object.assign(guide.style, { display: 'block', left: '0px', width: W + 'px', top: fy * H + 'px' });
+      guide.innerHTML = g.join(''); guide.classList.add('multi');
+    } else {                       // hodograph: the level nearest the pointer
+      const u = aff(P.aff[0], fx, fy), v = aff(P.aff[1], fx, fy);
+      lines.push(kv('pointer', wind(u, v, U)) + ' · ' + kv('u', fmt(u, 1)) + ' ' + kv('v', fmt(v, 1), U));
+      let best = null;
+      for (const s of P.snd)
+        for (let i = 0; i < s.fx.length; i++) {
+          if (s.fx[i] === null) continue;
+          const d = Math.hypot((s.fx[i] - fx) * W, (s.fy[i] - fy) * H);
+          if (!best || d < best.d) best = { d, s, i };
+        }
+      if (best && best.d < 40) {
+        const { s, i } = best;
+        lines.push(name(s) + ' ' + [kv('z', fmt(s.z[i], 2), 'km AGL'),
+          kv('wind', wind(s.wind[0][i], s.wind[1][i], U)), kv('u', fmt(s.wind[0][i], 1)),
+          kv('v', fmt(s.wind[1][i], 1), U)].join(' · '));
+        Object.assign(dot.style, { display: 'block', left: s.fx[i] * W + 'px', top: s.fy[i] * H + 'px',
+                                   borderColor: s.color });
+      }
+    }
+    if (P.kind !== 'z') { guide.innerHTML = ''; guide.classList.remove('multi'); }
+    ro.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
+  }
+  box.addEventListener('pointermove', readout);
+  box.addEventListener('pointerleave', idle);
+  model.on('probe', idle);
+  model.on('interactive', () => { ro.classList.toggle('live', model.interactive); idle(); });
+  ro.classList.toggle('live', model.interactive); idle();
+
   model.on('src', setSrc);
   model.on('interactive', setMode);
   setSrc(); setMode(); setPan(false);
@@ -143,6 +241,19 @@ export function render({ model, el }) {
             font: 11px system-ui, sans-serif; color: #94a3b8; border-radius: 4px;
             background: rgba(11, 15, 23, .8); pointer-events: none; }
 .zv.live:hover .hint { display: block; }
+.zv .guide { position: absolute; display: none; height: 0; pointer-events: none;
+             border-top: 1px dashed rgba(165, 243, 252, .8); }
+.zv .guide.multi { border-top: none; }
+.zv .guide.multi div { position: absolute; top: 0; height: 0;
+                       border-top: 1px dashed rgba(165, 243, 252, .8); }
+.zv .dot { position: absolute; display: none; width: 10px; height: 10px; margin: -6px 0 0 -6px;
+           border: 2px solid #a5f3fc; border-radius: 50%; pointer-events: none; }
+.readout { display: none; padding: 4px 8px; margin-top: 2px; min-height: 36px;
+           font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d7dde8;
+           background: rgba(17, 23, 35, .9); border: 1px solid #253045; border-radius: 6px; }
+.readout.live { display: block; }
+.readout .k { color: #94a3b8; }
+.readout .nm { font-weight: 600; margin-right: 4px; }
 """]
 
 
