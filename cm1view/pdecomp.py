@@ -22,14 +22,10 @@ from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutTimeout
 
 import numpy as np
 
+from . import config
 from .run import IO_LOCK, VarInfo
 
 NAMES = ("p_b", "p_l", "p_nl", "acc_b", "acc_l", "acc_nl")
-_PHD = "/glade/work/rasaba/phd_scripts"
-# the multi-CPU version (same math) when it is there, else the original fixed script
-SCRIPT = os.environ.get("CM1VIEW_PDECOMP") or next(
-    (p for p in (f"{_PHD}/pdecomp_new_fixed_mp.py", f"{_PHD}/pdecomp_new_fixed.py")
-     if os.path.isfile(p)), f"{_PHD}/pdecomp_new_fixed.py")
 NEEDS = ("th", "qv", "pi", "rho", "prs")
 NEED_GB = 34.0     # free memory wanted before starting (serial reads: peak ~30 GB)
 NEED_GB_PAR = 44.0  # inputs read in parallel up front: peak ~40 GB, ~45 s with 4 CPUs
@@ -42,11 +38,13 @@ _one = threading.Lock()  # one decomposition at a time per server (~40 GB each)
 
 
 def script():
-    return SCRIPT if os.path.isfile(SCRIPT) else None
+    """The decomposition script (the pdecomp_script setting), or None."""
+    p = config.pdecomp_script()
+    return p if p and os.path.isfile(p) else None
 
 
 def script_name():
-    return os.path.basename(SCRIPT)
+    return os.path.basename(config.pdecomp_script()) or "(no script set)"
 
 
 def can_compute(run):
@@ -243,8 +241,12 @@ def _worker(script_path, run_path, file0, file_t, pre0, pre_t, nthreads, outdir,
     return paths, log.getvalue(), wrote, werr
 
 
+def writes_allowed():
+    return bool(config.get("allow_writes_to_output"))
+
+
 def writable(run, t):
-    return os.access(run.files[t], os.W_OK)
+    return writes_allowed() and os.access(run.files[t], os.W_OK)
 
 
 def compute(run, t, progress=None, write=False):
@@ -284,7 +286,8 @@ def _compute(run, t, progress, write):
 
     sp = script()
     if sp is None:
-        raise RuntimeError(f"pressure decomposition script not found: {SCRIPT}")
+        raise RuntimeError("pressure decomposition script not found: "
+                           f"{config.pdecomp_script() or '(pdecomp_script is not set)'}")
     if write and not writable(run, t):
         raise RuntimeError(f"no write permission for {run.files[t]}")
     ncpu = len(os.sched_getaffinity(0))

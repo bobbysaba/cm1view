@@ -28,7 +28,14 @@ import numpy as np
 
 REDUCE_LABEL = {"min": "min", "max": "max", "mean": "mean", "pct": "percentile"}
 FORMATS = {".nc": "netCDF", ".csv": "CSV", ".txt": "text", ".pkl": "pickle"}
-CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "cm1view", "series")
+CACHE_DIR = None  # None: <cache_dir setting>/series (tests point this elsewhere)
+
+
+def cache_dir():
+    if CACHE_DIR:
+        return CACHE_DIR
+    from . import config
+    return config.cache_dir("series")
 
 
 # ------------------------------------------------------------------ recipe
@@ -335,7 +342,7 @@ def empty(run, recipe, label="", units=""):
 
 def _cache_path(run, recipe):
     key = hashlib.sha1(json.dumps([run.path, recipe], sort_keys=True).encode())
-    return os.path.join(CACHE_DIR, key.hexdigest()[:20] + ".nc")
+    return os.path.join(cache_dir(), key.hexdigest()[:20] + ".nc")
 
 
 def cached(run, recipe, label="", units="", centers=None):
@@ -383,7 +390,7 @@ def invalidate_moved(ds, recipe, centers):
 def store(run, recipe, ds):
     """Write the dataset to the cache (best effort)."""
     try:
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        os.makedirs(cache_dir(), exist_ok=True)
         path = _cache_path(run, recipe)
         tmp = path + f".{os.getpid()}.tmp"
         ds.to_netcdf(tmp)

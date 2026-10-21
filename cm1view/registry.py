@@ -5,6 +5,7 @@ import json
 import os
 import threading
 
+from . import config
 from .fields import Fields
 from .run import CM1Run, VolumeCache
 
@@ -12,12 +13,11 @@ _RECENT = os.path.join(os.path.expanduser("~"), ".cache", "cm1view", "recent.jso
 
 
 def is_run(path):
-    return bool(path) and os.path.isdir(path) and bool(
-        glob.glob(os.path.join(path, "cm1out_[0-9]*.nc")))
+    return bool(path) and os.path.isdir(path) and count_files(path) > 0
 
 
 def count_files(path):
-    return len(glob.glob(os.path.join(path, "cm1out_[0-9]*.nc")))
+    return len(glob.glob(os.path.join(path, config.get("output_glob"))))
 
 
 def sibling_runs(path, limit=60):
@@ -80,13 +80,15 @@ class Registry:
     empty each other's cache."""
 
     def __init__(self, default, cache_gb, workers):
-        self.default = os.path.abspath(default)
+        self.default = os.path.abspath(default) if default else None
         self.cache_gb, self.workers = cache_gb, workers
         self.cache = VolumeCache(cache_gb)
         self._runs = {}
         self._lock = threading.Lock()
 
     def get(self, path=None):
+        if not (path or self.default):
+            raise FileNotFoundError("no run given")
         path = os.path.abspath(path or self.default)
         with self._lock:
             if path not in self._runs:

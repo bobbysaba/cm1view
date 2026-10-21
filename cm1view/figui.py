@@ -15,7 +15,7 @@ import numpy as np
 import panel as pn
 from matplotlib.colors import to_hex
 
-from . import figdraw, figure as fg, registry, render, series as ser, track as trk
+from . import config, figdraw, figure as fg, registry, render, series as ser, track as trk
 from .fields import CMAPS, Fields
 from .run import CM1Run
 from .theme import GRID
@@ -433,10 +433,10 @@ class FigureEditor:
         self.lg_loc = pn.widgets.Select(name="Legend", options=LOCS, width=130)
         self.lg_panel = pn.widgets.IntInput(name="in panel", start=1, end=64, width=80)
         # export
-        parts = run.path.rstrip("/").split("/")[-2:]
+        self._fig_dir = config.figures_dir(run.path)  # followed while the box is in it
         self.path = pn.widgets.TextInput(
             name="Save as (path on the server, no extension)",
-            value=os.path.join(os.getcwd(), "_".join(parts) + "_figure"),
+            value=os.path.join(self._fig_dir, "figure"),
             sizing_mode="stretch_width", min_width=280)
         self.fmt = pn.widgets.Select(name="Format", options={
             "PNG": "png", "PDF (vector + raster fields)": "pdf", "SVG": "svg", "EPS": "eps",
@@ -911,6 +911,7 @@ class FigureEditor:
             self._run_info(r)
         self.runs_box.objects = [r["panel"] for r in self.run_rows]
         self._refresh_run_names()
+        self._sync_save_path()
         have = {r["path"] for r in self.run_rows}
         opts = {}
         for p in registry.sibling_runs(self.run.path) + registry.recent_runs():
@@ -1917,13 +1918,58 @@ class FigureEditor:
     # ------------------------------------------------------------ export
     def _set_dl_name(self):
         self.dl.filename = f"{os.path.basename(self.path.value) or 'figure'}.{self.fmt.value}"
+        for b in (self.save_img, self.save_all):
+            b.disabled = not self.path.value.strip()
+
+    def _sync_save_path(self):
+        """One run: <figures_dir>/<parent>_<run>/.  Several runs have no folder of their
+        own: the last folder used for one, else the user must choose."""
+        multi = len(self.run_rows) > 1
+        if multi == getattr(self, "_multi", False):
+            return
+        self._multi = multi
+        cur = config.expand(self.path.value.strip())
+        name = os.path.basename(cur) or "figure"
+        if multi and (not cur or os.path.dirname(cur) == self._fig_dir):
+            last = config.state("last_multi_run_dir")
+            self.path.value = os.path.join(last, name) if last else ""
+        elif not multi and (not cur or os.path.dirname(cur) == config.expand(
+                config.state("last_multi_run_dir"))):
+            self.path.value = os.path.join(self._fig_dir, name)
+        self.path.placeholder = ("Several runs: choose a folder and name, e.g. "
+                                 "~/figures/tor_vs_ntor/refl" if multi else "")
+        if multi and not self.path.value:
+            self._msg("This figure shows several runs: choose a folder for it in "
+                      "“Save as”.", True)
+
+    def config_changed(self):
+        new = config.figures_dir(self.run.path)
+        cur = config.expand(self.path.value.strip())
+        if cur and os.path.dirname(cur) == self._fig_dir:
+            self.path.value = os.path.join(new, os.path.basename(cur))
+        self._fig_dir = new
 
     def _save(self, bundle):
         spec = self.collect()
-        self._msg('<span class="busy">● Saving…</span>')
-        self.v.pools["fig"].submit(self._save_job, spec, bundle)
+        base = config.expand(self.path.value.strip())
+        if not base:
+            self._msg("Choose where to save the figure (“Save as”).", True)
+            return
+        fmt = spec["export"]["format"]
+        if bundle:
+            paths = list(fg.bundle_paths(spec, base).values())
+        else:
+            base = os.path.splitext(base)[0] if base.lower().endswith("." + fmt) else base
+            paths = [f"{base}.{fmt}"]
 
-    def _save_job(self, spec, bundle):
+        def go():
+            if len(spec.get("runs") or []) > 1:
+                config.set_state("last_multi_run_dir", os.path.dirname(base))
+            self._msg('<span class="busy">● Saving…</span>')
+            self.v.pools["fig"].submit(self._save_job, spec, bundle, base)
+        self.v.confirm.ask(paths, go)
+
+    def _save_job(self, spec, bundle, base=None):
         if spec["kind"] in ("th", "line"):
             self.panel_data(spec)  # (starts computing what is missing)
             if self.series_pending():
@@ -1933,13 +1979,14 @@ class FigureEditor:
                 return
         try:
             data = self.panel_data(spec)
-            base = self.path.value
+            base = base or config.expand(self.path.value.strip())
+            fmt = spec["export"]["format"]
+            if not bundle and base.lower().endswith("." + fmt):
+                base = os.path.splitext(base)[0]
             if bundle:
                 out = fg.save_bundle(spec, data, base, self.run)
                 html = "Saved " + ", ".join(f"<code>{p}</code>" for p in out.values())
             else:
-                base = os.path.splitext(base)[0] if base.lower().endswith(
-                    "." + spec["export"]["format"]) else base
                 p = fg.save_image(spec, data, f"{base}.{spec['export']['format']}")
                 html = f"Saved <code>{p}</code>"
             self.v._schedule(partial(self._msg, html))

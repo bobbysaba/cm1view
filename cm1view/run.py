@@ -185,9 +185,11 @@ class VarInfo:
 class CM1Run:
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         self.path = os.path.abspath(path)
-        self.files = sorted(glob.glob(os.path.join(self.path, "cm1out_[0-9]*.nc")))
+        from . import config
+        pat = config.get("output_glob")
+        self.files = sorted(glob.glob(os.path.join(self.path, pat)))
         if not self.files:
-            raise FileNotFoundError(f"no cm1out_NNNNNN.nc files found in {self.path}")
+            raise FileNotFoundError(f"no {pat} files found in {self.path}")
 
         with IO_LOCK, netCDF4.Dataset(self.files[0]) as d:
             self.xh = np.asarray(d["xh"][:], dtype=np.float64)  # km

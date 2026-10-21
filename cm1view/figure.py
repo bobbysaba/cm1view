@@ -16,7 +16,6 @@ the spec as a Python dict), the plotted arrays (.npz) and the spec (.json), so t
 figure can be redrawn or restyled later without the viewer.
 """
 
-import glob
 import json
 import os
 import pprint
@@ -24,7 +23,7 @@ import time as _time
 
 import numpy as np
 
-from . import figdraw, render, series as ser, thermo, track as trk
+from . import config, figdraw, render, series as ser, thermo, track as trk
 from .run import FileBusy, MissingAtTime
 
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame",  # -> data
@@ -83,21 +82,10 @@ def run_entry(run, track=None):
 
 
 def find_track(path):
-    """A storm track file for the run in `path`: storm_tracks/<parent>_<name>.csv or
-    storm_tracks/<name>.csv in the run's folder or a folder above it (the layout of
-    the user's phd folder), or None."""
-    path = os.path.abspath(path).rstrip("/")
-    name, parent = os.path.basename(path), os.path.basename(os.path.dirname(path))
-    d = path
-    for _ in range(4):
-        tdir = os.path.join(d, "storm_tracks")
-        for cand in (f"{parent}_{name}", name):
-            hits = glob.glob(os.path.join(tdir, cand + ".csv")) + \
-                glob.glob(os.path.join(tdir, cand + ".txt"))
-            if hits:
-                return hits[0]
-        d = os.path.dirname(d)
-    return None
+    """A storm track file for the run in `path` (the track_dirs / track_patterns
+    settings: by default storm_tracks/<parent>_<name>.csv or <name>.csv in the run's
+    folder or a folder above it), or None."""
+    return config.find_track(path)
 
 
 def default_spec(run, F, t=0):
@@ -663,24 +651,33 @@ def save_image(spec, data, path, dpi=None):
     return path
 
 
-def save_bundle(spec, data, base, run=None, note=""):
-    """Image + script + data + spec next to each other: <base>.<fmt>, <base>.py,
-    <base>_data.npz, <base>_spec.json.  Returns the paths."""
+def bundle_paths(spec, base):
+    """{image, script, data, spec} for a bundle saved as `base`: the image and script
+    side by side, the arrays and spec in _src/ next to them."""
     base = _abs(base)
     root, ext = os.path.splitext(base)
     if ext.lower() in (".png", ".pdf", ".svg", ".eps", ".tif", ".tiff", ".jpg"):
         base = root
     fmt = spec.get("export", {}).get("format", "png")
-    os.makedirs(os.path.dirname(base), exist_ok=True)
-    img = save_image(spec, data, f"{base}.{fmt}")
-    npz = f"{base}_data.npz"
-    np.savez_compressed(npz, **flatten(data))
-    with open(f"{base}_spec.json", "w") as f:
+    src, name = os.path.join(os.path.dirname(base), "_src"), os.path.basename(base)
+    return dict(image=f"{base}.{fmt}", script=f"{base}.py",
+                data=os.path.join(src, f"{name}_data.npz"),
+                spec=os.path.join(src, f"{name}_spec.json"))
+
+
+def save_bundle(spec, data, base, run=None, note=""):
+    """Image + script side by side, data + spec in _src/ (see bundle_paths).
+    Returns the paths."""
+    out = bundle_paths(spec, base)
+    os.makedirs(os.path.dirname(out["data"]), exist_ok=True)
+    out["image"] = save_image(spec, data, out["image"])
+    np.savez_compressed(out["data"], **flatten(data))
+    with open(out["spec"], "w") as f:
         json.dump(spec, f, indent=1, default=float)
-    with open(f"{base}.py", "w") as f:
-        f.write(script(spec, os.path.basename(npz), f"{os.path.basename(base)}.{fmt}", run,
-                       note))
-    return dict(image=img, script=f"{base}.py", data=npz, spec=f"{base}_spec.json")
+    with open(out["script"], "w") as f:
+        f.write(script(spec, "_src/" + os.path.basename(out["data"]),
+                       os.path.basename(out["image"]), run, note))
+    return out
 
 
 def script(spec, npz_name, out_name, run=None, note=""):
@@ -723,7 +720,7 @@ def script(spec, npz_name, out_name, run=None, note=""):
         'if __name__ == "__main__":',
         "    import os",
         "    here = os.path.dirname(os.path.abspath(__file__))",
-        f"    data = load_data(os.path.join(here, {npz_name!r}))",
+        f"    data = load_data(os.path.join(here, *{npz_name!r}.split('/')))",
         "    fig = draw(SPEC, data)",
         f"    out = os.path.join(here, {out_name!r})",
         "    ex = SPEC.get('export', {})",

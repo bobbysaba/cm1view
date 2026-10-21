@@ -24,14 +24,17 @@ from bokeh.models import (  # noqa: E402
 from bokeh.plotting import figure  # noqa: E402
 from bokeh.transform import transform  # noqa: E402
 
-from . import pdecomp  # noqa: E402
-from . import figui, registry, render, series as ser, sounding_plot as sp, thermo  # noqa: E402
+from . import config, pdecomp  # noqa: E402
+from . import figui, render, series as ser, sounding_plot as sp, thermo  # noqa: E402
 from . import track as trk, volume3d  # noqa: E402
 from .run import FileBusy, MissingAtTime  # noqa: E402
 from .fields import CMAPS, palette  # noqa: E402
+from .picker import RunPicker  # noqa: E402
+from .settings import ConfirmOverwrite, Settings  # noqa: E402
 from .zoomview import ParamTable, ZoomImage  # noqa: E402
 from .theme import (  # noqa: E402
-    ACCENT, BG, CSS, GRID, MUTED, PANEL, POINT_COLORS, POINT_LABELS, TEXT,
+    ACCENT, BG, CSS, GRID, MUTED, PANEL, POINT_COLORS,
+    POINT_LABELS, TEXT,
 )
 
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
@@ -73,17 +76,6 @@ def _svg(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="svg", facecolor=fig.get_facecolor())
     return "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
-
-
-# run picker dialog in the dark theme (Panel's dialog box is white by default)
-RP_DARK = f"""
-.dialog-content {{ background-color: {PANEL} !important; color: {TEXT};
-  border: 1px solid {GRID}; border-radius: 12px; padding: 14px 16px 20px 16px;
-  box-shadow: 0 18px 50px rgba(0,0,0,.55); }}
-.dialog-overlay {{ background-color: rgba(5, 8, 14, 0.78) !important; }}
-.pnx-dialog-close {{ color: {MUTED} !important; }}
-.pnx-dialog-close:hover {{ color: {TEXT} !important; }}
-"""
 
 
 # Map ranges: equal km per pixel in x and y at every plot size.  The pan/zoom limits
@@ -284,6 +276,9 @@ class Viewer:
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
         self.figed = figui.FigureEditor(self)
         self._wire()
+        # save folders from the settings (followed while the boxes still point there)
+        self._auto_dirs = {k: config.exports_dir(run.path, k) for k in ("tracks", "series")}
+        self._pd_allowed = pdecomp.writes_allowed()
         self.request_map()
 
     # ================================================================ widgets
@@ -513,11 +508,12 @@ class Viewer:
         self.status = _html()
         # pressure decomposition for the shown time (map caption / cross-section tab)
         pdb = dict(button_type="warning", button_style="outline", height=30,
-                   description=f"Run phd_scripts/{pdecomp.script_name()} on this output time "
+                   description=f"Run {pdecomp.script_name()} on this output time "
                                "in a separate process (~45 s and ~40 GB with 4 CPUs, "
                                "~80 s and ~30 GB on one)")
         self.pd_write = pn.widgets.Checkbox(
-            name="Write into the output file", value=True, margin=(10, 4, 0, 10),
+            name="Write into the output file", value=pdecomp.writes_allowed(),
+            disabled=not pdecomp.writes_allowed(), margin=(10, 4, 0, 10),
             styles={"pointer-events": "auto"})  # with the script's own write_data
         self.pd_btn = pn.widgets.Button(margin=(4, 0, 6, 0),
                                         styles={"pointer-events": "auto"}, **pdb)
@@ -549,80 +545,24 @@ class Viewer:
         self.run_btn = pn.widgets.Button(name=run.name, button_type="light",
                                          button_style="outline", height=32,
                                          icon="folder-open", margin=(4, 2))
-        self.rp_path = pn.widgets.TextInput(name="Run directory (contains cm1out_NNNNNN.nc)",
-                                            value=run.path, width=620)
-        self.rp_msg = _html()
-        self.rp_list = pn.widgets.Select(name="Runs here", options={}, width=330, size=11)
-        # folder browser: '..' and the subfolders of the typed path (● = has output)
-        self.rp_dirs = pn.widgets.Select(name="Folders", options={}, width=280, size=11)
-        recent = [p for p in registry.recent_runs() if p != run.path]
-        self.rp_recent = pn.widgets.Select(
-            name="Recent", options={"—": ""} | {p: p for p in recent}, value="", width=620)
-        self.rp_open = pn.widgets.Button(name="Open run", button_type="primary", width=120)
-        # navigation happens in the browser: the new session opens the run from ?run=
-        self.rp_open.js_on_click(args=dict(inp=self.rp_path), code="""
-            const p = (inp.value_input || inp.value || '').trim();
-            if (!p) return;
-            const q = new URLSearchParams(window.location.search);
-            q.set('run', p); q.delete('t');
-            window.location.search = q.toString();
-        """)
-        self.rp_modal = pn.Modal(
-            _html('<div class="cv-maptitle" style="font-size:16px"><b>Open a CM1 run</b>'
-                  '</div><div class="cv-hint">Type or paste a run directory, or pick one '
-                  'below. Opening a run reloads the page; open runs share one 3D cache '
-                  '(least recently used fields are freed first).</div>'),
-            self.rp_path, self.rp_msg, pn.Row(self.rp_list, self.rp_dirs, margin=0),
-            self.rp_recent, pn.Row(self.rp_open),
+        self.picker = RunPicker(run.path, extra=(
             _html(f'<div class="cv-h" style="margin-top:14px">This run</div>'
                   f'<div class="cv-run"><b>{run.path}</b><br>{run.ni}×{run.nj}×{run.nk} · '
                   f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
                   f'({run.umove:g}, {run.vmove:g}) m/s</div>'),
-            pn.Row(self.cache_html, self.clear_btn), width=680, margin=10,
-            stylesheets=[RP_DARK])
-
-        self._rp_busy = False
-
-        def pick(ev):
-            if ev.new and not self._rp_busy:
-                self.rp_path.param.update(value=ev.new, value_input=ev.new)
-
-        def check(ev):
-            p = os.path.abspath(os.path.expanduser((ev.new or "").strip()))
-            n = registry.count_files(p) if os.path.isdir(p) else 0
-            if n:
-                self.rp_msg.object = (f'<div class="cv-status" style="color:#4ade80">'
-                                      f'✓ {n} output files</div>')
-            elif os.path.isdir(p):
-                self.rp_msg.object = ('<div class="cv-status">No cm1out files directly '
-                                      'here — pick a run below.</div>')
-            else:
-                self.rp_msg.object = ('<div class="cv-status" style="color:#f87171">'
-                                      'Not a directory</div>')
-            self.rp_open.disabled = n == 0
-            base = p if os.path.isdir(p) else os.path.dirname(p)
-            if os.path.isdir(base):
-                runs = registry.sibling_runs(base)
-                self._rp_busy = True
-                try:
-                    self.rp_list.options = {"/".join(r.split("/")[-3:]): r for r in runs}
-                    self.rp_list.value = p if p in runs else None
-                    self.rp_dirs.options = registry.subfolders(base)
-                    self.rp_dirs.value = None
-                finally:
-                    self._rp_busy = False
-
-        def browse(ev):  # into a folder: it becomes the path, the lists follow it
-            if ev.new and not self._rp_busy:
-                self.rp_path.param.update(value=ev.new, value_input=ev.new)
-
-        self.rp_list.param.watch(pick, "value")
-        self.rp_recent.param.watch(pick, "value")
-        self.rp_dirs.param.watch(browse, "value")
-        self.rp_path.param.watch(check, "value_input")
-        self.rp_path.param.watch(check, "value")
-        self.rp_path.param.trigger("value")
-        self.run_btn.on_click(lambda e: self.rp_modal.show())
+            pn.Row(self.cache_html, self.clear_btn)))
+        p = self.picker
+        self.rp_path, self.rp_list, self.rp_dirs, self.rp_modal = p.path, p.list, p.dirs, p.modal
+        self.run_btn.on_click(lambda e: p.show())
+        self.gear_btn = pn.widgets.Button(
+            name="", icon="settings", button_type="light", button_style="outline", width=40,
+            height=32, margin=(4, 2), description="Settings: where runs live, where figures "
+                                                  "and saved data go, ...")
+        self.settings = Settings(run.path)
+        self.confirm = ConfirmOverwrite()
+        self.gear_btn.on_click(lambda e: self.settings.show())
+        self._on_config = lambda: self._schedule(self._config_changed)
+        config.on_change(self._on_config)
 
     # ================================================================ map
     def _build_map(self):
@@ -867,11 +807,9 @@ class Viewer:
         self.trk_clear = pn.widgets.Button(name="Clear track", button_type="light",
                                            button_style="outline", height=32,
                                            margin=(5, 4, 8, 4))
-        parts = run.path.rstrip("/").split("/")[-2:]
         self.trk_path = pn.widgets.TextInput(
             name="Save to (on the server; .csv = comma separated, .txt = aligned columns)",
-            value=os.path.join(os.getcwd(), "_".join(parts) + "_meso_track.csv"),
-            sizing_mode="stretch_width", min_width=300)
+            value=self._trk_default(), sizing_mode="stretch_width", min_width=300)
         self.trk_save = pn.widgets.Button(name="Save", button_type="primary", height=32,
                                           margin=(5, 4, 8, 10), disabled=True)
         self.trk_dl = pn.widgets.FileDownload(
@@ -1020,10 +958,9 @@ class Viewer:
         self.ser_thfig = th
         self.ser_plot = pn.pane.Bokeh(fig, sizing_mode="stretch_width")  # or the th view
 
-        parts = run.path.rstrip("/").split("/")[-2:]
-        self._ser_prefix = os.path.join(os.getcwd(), "_".join(parts))
         self.ser_path = pn.widgets.TextInput(
-            name="Save to / load from (on the server)", value=self._ser_prefix + "_series.nc",
+            name="Save to / load from (on the server)",
+            value=os.path.join(config.exports_dir(run.path, "series"), "series.nc"),
             sizing_mode="stretch_width", min_width=300)
         self.ser_fmt = pn.widgets.Select(
             name="Format", options={"netCDF (.nc)": ".nc", "CSV (.csv)": ".csv",
@@ -1348,7 +1285,7 @@ class Viewer:
             _bar(self.ws_group,
                  _group(self.t_prev, self.t_play, self.t_next, self.t_speed, self.tslider,
                         self.time_html),
-                 self.mode_group, _group(self.run_btn)),
+                 self.mode_group, _group(self.run_btn, self.gear_btn)),
             styles=dict(BAR, **{"z-index": "40"}), margin=0, sizing_mode="stretch_width")
 
     def _map_toolbar(self):
@@ -1430,7 +1367,7 @@ class Viewer:
         self.fig_ws = pn.Column(self.figed.panel, sizing_mode="stretch_width", visible=False,
                                 margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,
-                         self.rp_modal,
+                         self.rp_modal, self.settings.modal, self.confirm.modal,
                          margin=0, styles={"position": "fixed", "top": "0", "left": "0",
                                            "width": "100vw", "height": "100vh",
                                            "display": "flex", "flex-direction": "column"})
@@ -1566,10 +1503,28 @@ class Viewer:
             self._play_cb.stop()
         for p in self.pools.values():
             p.shutdown(wait=False, cancel_futures=True)
+        config.off(self._on_config)
         self._figs, self.results, self._snd_last, self._s3 = {}, [], None, None
         self._closed = True
 
     _closed = False
+
+    def _config_changed(self):
+        """Settings were saved (in this page or another): save boxes still showing the
+        old default move to the new folders; the write option follows the setting."""
+        for w, kind in ((self.trk_path, "tracks"), (self.ser_path, "series")):
+            new = config.exports_dir(self.run.path, kind)
+            if os.path.dirname(config.expand(w.value)) == self._auto_dirs[kind]:
+                w.value = os.path.join(new, os.path.basename(w.value))
+            self._auto_dirs[kind] = new
+        self.figed.config_changed()
+        allowed = pdecomp.writes_allowed()
+        if allowed != self._pd_allowed:
+            self.pd_write.value = self._pd_allowed = allowed
+        self.pd_write.disabled = not allowed
+        self._pd_button(self.pd_btn, [self.fill_var.value] +
+                        [o["var"].value for o in self.ovs if o["on"].value], self.t)
+        self._pd_button(self.xs_pd_btn, [self.xs_fill.value, self.xs_cont.value], self.t)
 
     def _schedule(self, fn):
         if self._closed:  # session gone: late results are dropped
@@ -2770,10 +2725,17 @@ class Viewer:
         text = trk.to_text(self.run, self.fixes, self.trk_spec or self._trk_opts(), fmt)
         return io.BytesIO(text.encode())
 
+    def _trk_default(self):
+        return os.path.join(config.exports_dir(self.run.path, "tracks"), "meso_track.csv")
+
     def _on_save_track(self, ev):
+        path = config.expand(self.trk_path.value.strip())
+        if path:
+            self.confirm.ask([path], partial(self._save_track, path))
+
+    def _save_track(self, path):
         try:
-            path = trk.save(self.run, self.fixes, self.trk_spec or self._trk_opts(),
-                            self.trk_path.value)
+            path = trk.save(self.run, self.fixes, self.trk_spec or self._trk_opts(), path)
         except OSError as e:
             self.trk_status.object = (f'<div class="cv-status" style="color:#f87171">Could '
                                       f'not save: {e}</div>')
@@ -2828,8 +2790,8 @@ class Viewer:
             self._ser_select()
         else:
             self.ser_pick.value = key
-        self.ser_path.value = (f"{self._ser_prefix}_{ser.short_name(recipe)}"
-                               f"{self.ser_fmt.value}")
+        self.ser_path.value = os.path.join(config.exports_dir(self.run.path, "series"),
+                                           ser.short_name(recipe) + self.ser_fmt.value)
 
     def _on_ser_compute(self, ev):
         recipe, why = self._ser_recipe()
@@ -3124,9 +3086,14 @@ class Viewer:
         s = self.series.get(self.ser_pick.value)
         if s is None:
             return
-        path = self.ser_path.value
+        path = config.expand(self.ser_path.value.strip())
+        if not path:
+            return
         if os.path.splitext(path)[1].lower() not in ser.FORMATS:
             path += self.ser_fmt.value
+        self.confirm.ask([path], partial(self._save_series, s, path))
+
+    def _save_series(self, s, path):
         try:
             path = ser.save(s["ds"], path)
         except (OSError, ValueError) as e:
@@ -3474,7 +3441,7 @@ class Viewer:
             label = f"Computing pressure decomposition for {run.time_label(t)}…"
         btn.param.update(name=label or "", disabled=busy)
         (self.pd_row if btn is self.pd_btn else btn).visible = label is not None
-        self.pd_write.disabled = busy
+        self.pd_write.disabled = busy or not pdecomp.writes_allowed()
 
     def _on_pd_compute(self, ev):
         t = self.t
@@ -3645,21 +3612,35 @@ class Viewer:
             f'z {z0:.2f}–{z1:.2f} km</div>')
 
 
-def create_app(reg, maxpix=900):
+def create_app(reg, maxpix=None):
     pn.extension("plotly", "modal", "tabulator", notifications=False, raw_css=[CSS])
+    maxpix = maxpix or config.get("maxpix")
     want, error = None, ""
     try:  # ?run=/path/to/run picks the run directory
         want = pn.state.session_args.get("run", [b""])[0].decode().strip() or None
     except (AttributeError, TypeError, ValueError):
         pass
+    run = fields = None
     try:
-        run, fields = reg.get(os.path.expanduser(want) if want else None)
+        if want or reg.default:
+            run, fields = reg.get(config.expand(want) if want else None)
     except Exception as e:  # noqa: BLE001
         print(f"cm1view: could not open {want}: {e}", flush=True)
-        error = f"Could not open {want}: {e}. Showing the default run instead."
-        run, fields = reg.get()
-    v = Viewer(run, fields, maxpix=maxpix, error=error, reg=reg)
-    pn.state.on_session_destroyed(lambda ctx: v.close())
+        error = f"Could not open {want}: {e}."
+        if want and reg.default:
+            error += " Showing the default run instead."
+            run, fields = reg.get()
+    if run is None:
+        body, settings = _landing(error)
+    else:
+        v = Viewer(run, fields, maxpix=maxpix, error=error, reg=reg)
+        pn.state.on_session_destroyed(lambda ctx: v.close())
+        body, settings = v.main(), v.settings
+    # first run (or settings that no longer work): open the settings window
+    if config.needs_setup():
+        pn.state.onload(lambda: settings.show(required=True))
+    elif config.problems():
+        pn.state.onload(lambda: settings.show(flagged=config.problems()))
     # the template only supplies the dark theme: header and margins are hidden so the
     # visualisations fill the window and the controls float over them
     chrome = ("#header{display:none !important} #main{padding:0 !important;"
@@ -3667,4 +3648,31 @@ def create_app(reg, maxpix=900):
               " #container{height:100vh}")
     return pn.template.FastListTemplate(
         title="CM1 View", theme="dark", accent=ACCENT, header_background=BG,
-        main=[v.main()], theme_toggle=False, main_layout=None, raw_css=[CSS, chrome])
+        main=[body], theme_toggle=False, main_layout=None, raw_css=[CSS, chrome])
+
+
+def _landing(error=""):
+    """The page without a run: pick one (and set up cm1view on the first visit)."""
+    picker = RunPicker()
+
+    def saved():  # browse from the (new) runs folder
+        root = next(iter(config.get("runs_root")), "")
+        if root:
+            picker.path.value = config.expand(root)
+        picker.rescan()
+    settings = Settings(on_saved=saved)
+    gear = pn.widgets.Button(name="Settings", icon="settings", button_type="light",
+                             button_style="outline", height=32)
+    gear.on_click(lambda e: settings.show())
+    if not config.needs_setup():
+        picker.rescan()
+    err = (f'<div class="cv-status" style="color:#f87171">{error}</div>' if error else "")
+    head = _html('<div class="cv-maptitle" style="font-size:20px"><b>CM1 View</b></div>'
+                 '<div class="cv-hint">Open a run: pick one found in your folders, browse, '
+                 'or paste its path.</div>' + err)
+    card = pn.Column(pn.Row(head, pn.Spacer(), gear, sizing_mode="stretch_width"),
+                     picker.body, width=680, margin=(40, 20), align="center",
+                     styles={"background": PANEL, "border": f"1px solid {GRID}",
+                             "border-radius": "12px", "padding": "14px 16px 20px 16px"})
+    return pn.Column(card, settings.modal, sizing_mode="stretch_both",
+                     styles={"overflow-y": "auto"}), settings

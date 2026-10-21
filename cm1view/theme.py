@@ -10,6 +10,16 @@ ACCENT = "#22d3ee"
 POINT_COLORS = ["#38bdf8", "#f472b6", "#a3e635", "#fbbf24"]
 POINT_LABELS = ["1", "2", "3", "4"]
 
+# dialogs in the dark theme (Panel's dialog box is white by default)
+DIALOG_DARK = f"""
+.dialog-content {{ background-color: {PANEL} !important; color: {TEXT};
+  border: 1px solid {GRID}; border-radius: 12px; padding: 14px 16px 20px 16px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.55); }}
+.dialog-overlay {{ background-color: rgba(5, 8, 14, 0.78) !important; }}
+.pnx-dialog-close {{ color: {MUTED} !important; }}
+.pnx-dialog-close:hover {{ color: {TEXT} !important; }}
+"""
+
 CSS = f"""
 :root {{
   --cv-bg: {BG}; --cv-panel: {PANEL}; --cv-raised: {RAISED}; --cv-grid: {GRID};

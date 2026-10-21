@@ -94,7 +94,7 @@ def main():
     assert same
 
     # reload the spec
-    ed.spec_path.value = os.path.join(tmp, "fig_fields_spec.json")
+    ed.spec_path.value = os.path.join(tmp, "_src", "fig_fields_spec.json")
     ed.start_def.clicks += 1
     ed._load_spec()
     s2 = ed.collect()

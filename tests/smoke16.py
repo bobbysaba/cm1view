@@ -173,7 +173,7 @@ def main():
         bundle("plan_stream")
 
     # ---- reload the time-height spec
-    ed.spec_path.value = os.path.join(tmp, "th_spec.json")
+    ed.spec_path.value = os.path.join(tmp, "_src", "th_spec.json")
     ed._load_spec()
     s = ed.collect()
     print("reloaded:", ed.msg.object[:80], s["kind"], len(s["series"]), rendered())

@@ -14,6 +14,10 @@ read in parallel.
 /glade/work/rasaba/cm1view/cm1view.sh /path/to/cm1/run --port 5006
 ```
 
+The run is optional: without one, the viewer opens the `default_run` setting or a page
+listing the runs in your folders. If port 5006 is taken (another user on the node), the
+next free port is used and printed.
+
 The launcher activates the `npl` conda env if needed and prints two URLs:
 
 - **JupyterHub** (no setup): `https://jupyterhub.hpc.ucar.edu/stable/user/$USER/proxy/5006/cm1view`
@@ -25,7 +29,38 @@ Add `?t=30` to the URL to open at time index 30.
 
 Options: `--cache-gb` (memory for cached 3D fields; default about 40% of the job's
 memory), `--workers` (parallel reader processes), `--maxpix` (map pixels sent per
-axis; zoom in to get full resolution).
+axis; zoom in to get full resolution), `--config` (another settings file).
+
+## Settings
+
+The first time cm1view opens in a browser, it asks where your CM1 runs live; the
+other settings are pre-filled (from your recent runs, `$SCRATCH`, and a
+`pdecomp_new_fixed*.py` in your home or `/glade/work/$USER` folders) and can be
+changed then or later with the ⚙ button in the top bar (or the *Config file* tab, which
+edits the file itself). They are saved in `~/.config/cm1view/config.toml`
+(`$CM1VIEW_CONFIG` or `--config` for another file).
+
+| Setting | Default | What it does |
+|---|---|---|
+| `runs_root` | (required) | folders searched for runs; the run picker starts there |
+| `default_run` | none | run opened when no run is given |
+| `figures_dir` | `~/cm1view/figures` | figures go to `<this>/<parent>_<run>/` |
+| `exports_dir` | `~/cm1view/exports` | saved series / tracks go to `<this>/<parent>_<run>/series`, `/tracks` |
+| `cache_dir` | `~/.cache/cm1view` | throwaway files (computed series) |
+| `pdecomp_script` | none | pressure-decomposition script; empty hides the feature |
+| `track_dirs` | `storm_tracks` | where storm track files are found (a plain name: that folder in the run folder or up to 4 above it) |
+| `track_patterns` | `{parent}_{name}.csv`, `{name}.csv`, … | track file names tried in each folder |
+| `output_glob` | `cm1out_[0-9]*.nc` | which files are CM1 output |
+| `allow_writes_to_output` | off | lets the pressure decomposition write into output files |
+| `cache_gb`, `workers` | auto | from the job's memory and CPUs (restart to apply) |
+| `port`, `maxpix` | 5006, 900 | server port (restart to apply), map pixels per axis |
+
+Each setting can also come from an environment variable `CM1VIEW_<NAME>` (lists
+separated by `:`) or a command-line flag, which win over the file; the settings window
+says when one does. Path settings apply to the next save; save boxes that still point
+at the old default folder follow a change. Saving over an existing file asks first.
+A figure from several runs has no run folder of its own: choose its folder in *Save as*
+(the last one chosen is offered next time).
 
 ## Using it
 
@@ -143,7 +178,7 @@ resolution, reflectivity floor).
 any native or derived field, at a height or over a layer (a layer also keeps every
 level, for the *Time–height* view), over the whole domain, the map view, the 3D box or
 a disc around the tracked storm (with an offset, e.g. the inflow), as min / max / mean /
-percentile. Results are cached in `~/.cache/cm1view/series` per run and recipe, and
+percentile. Results are cached in `<cache_dir>/series` per run and recipe, and
 saved as .nc (everything), .csv / .txt or .pkl. Series in other units than the first
 get their own y axis on the right. Click a plot to go to that time. **⚙ Plot** sets
 the time and y limits (heights in the time–height view) and the time–height
@@ -167,11 +202,14 @@ or a default grid; *Panels show*:
   soundings (runs, times, storm-relative spots) per panel.
 
 **Runs** lists the runs panels can come from (e.g. tornadic vs non-tornadic), each with
-its storm track (the Track tab, or `storm_tracks/<run>.csv`, found automatically).
+its storm track (the Track tab, or `storm_tracks/<run>.csv`, found automatically; see
+`track_dirs` / `track_patterns`).
 **Annotate** adds a contour key (nested circles, as `funcs.circlelegend`) and text,
 markers, arrows, lines, boxes and circles. **Export** saves the image, and optionally a
 stand-alone script with the plotted arrays and spec: the script redraws the identical
-image without the viewer.
+image without the viewer. The image and script sit side by side, the arrays and spec in
+`_src/` next to them; the script finds them relative to itself, so the folder can be
+moved or copied.
 
 **Switching runs.** Click the run name in the header. You can type a directory, pick
 one of the runs next to the current one (*Runs here*), browse with *Folders* (↑ .. goes
@@ -204,19 +242,22 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
   and the total. Where post-processing wrote them into the output files they are read
   from there (any file subset; the map title says which script version wrote them, and
   warns for files written before `pdecomp_new_fixed.py`). Elsewhere, a *Compute pressure
-  decomposition* button runs `phd_scripts/pdecomp_new_fixed_mp.py` (the multi-CPU
-  version of `pdecomp_new_fixed.py`: same math, identical output; falls back to the
-  original if it is missing) on that time in a separate process, with its inputs read in
+  decomposition* button runs the `pdecomp_script` setting (e.g.
+  `phd_scripts/pdecomp_new_fixed_mp.py`, the multi-CPU version of
+  `pdecomp_new_fixed.py`: same math, identical output) on that time in a separate
+  process, with its inputs read in
   parallel first: ~25–35 s with 4 CPUs (~80 s on one). If the job lacks the memory, the 3D cache is emptied first;
   if still short, it says so.
-  *Write into the output file* (on by default) then writes the result with the script's
+  *Write into the output file* (offered when `allow_writes_to_output` is on) writes the
+  result with the script's
   own `write_data` (float64, `pdecomp_version` attribute; about +40 s and +9 GB per
   file for a 1280×1280×115 grid), replacing values from older scripts. While it writes,
   the viewer releases that one file and reports it as busy. If the job is killed during
   a write, the file can be left damaged, as with the script itself. Unticked, the
   result is kept in memory only. The last 2 computed times stay in memory either way.
   For older-script files the button offers *Recompute … and overwrite*. Use
-  `--pdecomp-script` or `$CM1VIEW_PDECOMP` for another script with the same functions.
+  `--pdecomp-script` or `$CM1VIEW_PDECOMP_SCRIPT` for another script with the same
+  functions.
   Add more in `cm1view/fields.py` (`_make_fields`).
 - Plotly is vendored in `_vendor/` because the `npl` env does not include it.
 
@@ -237,6 +278,10 @@ cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported s
 cm1view/figui.py          Figure workspace UI
 cm1view/pdecomp.py        pressure decomposition: file fields, on-demand runs of the user's script
 cm1view/registry.py       open runs shared by sessions, run discovery
+cm1view/config.py         settings: config file, precedence, save folders, run search
+cm1view/settings.py       settings window (first run and ⚙) and the overwrite prompt
+cm1view/picker.py         run picker (header dialog and the page without a run)
 cm1view/app.py            Panel UI
-tests/                    headless smoke tests (smokeN.py) + browser screenshots (ui6.py)
+tests/                    headless smoke tests (smokeN.py) + browser screenshots (uiN.py);
+                          `source tests/env.sh` first (a throwaway settings file)
 ```

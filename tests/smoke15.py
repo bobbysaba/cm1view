@@ -117,7 +117,7 @@ def main():
     assert [p["run"] for p in s["panels"]] == [0, 1, 1]
 
     # reload the saved grid spec
-    ed.spec_path.value = os.path.join(tmp, "tor_ntor_spec.json")
+    ed.spec_path.value = os.path.join(tmp, "_src", "tor_ntor_spec.json")
     ed._load_spec()
     s2 = ed.collect()
     print("reloaded:", ed.msg.object[:90], s2["vary"], [r["label"] for r in s2["runs"]],
@@ -142,7 +142,7 @@ def main():
     assert "no data" not in ed.status.object
 
     # remove a run from a two-run list
-    ed.spec_path.value = os.path.join(tmp, "tor_ntor_spec.json")
+    ed.spec_path.value = os.path.join(tmp, "_src", "tor_ntor_spec.json")
     ed._load_spec()
     ed._remove_run(ed.run_rows[1])
     s4 = ed.collect()
