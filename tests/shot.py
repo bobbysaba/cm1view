@@ -1,9 +1,6 @@
 """Minimal WebDriver BiDi client for headless Firefox: open URL, run JS, screenshot."""
 import base64, json, subprocess, sys, time, os
-# websocket-client: point CM1VIEW_PYLIB at a directory that has it (pip install --target)
-sys.path.insert(0, os.environ.get("CM1VIEW_PYLIB", os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "pylib")))
-import websocket
+import websocket  # websocket-client, in environment.yml
 
 class FF:
     def __init__(self, w=1600, h=950, port=9333, prof=None):

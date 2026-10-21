@@ -3,36 +3,31 @@
 import base64
 import io
 import os
-import sys
 import traceback
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-_VENDOR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_vendor")
-if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
-    sys.path.append(_VENDOR)
-
-import numpy as np  # noqa: E402
-import panel as pn  # noqa: E402
-from bokeh.events import PanStart, RangesUpdate, SelectionGeometry, Tap  # noqa: E402
-from bokeh.models import (  # noqa: E402
+import numpy as np
+import panel as pn
+from bokeh.events import PanStart, RangesUpdate, SelectionGeometry, Tap
+from bokeh.models import (
     BoxSelectTool, BoxZoomTool, ColorBar, ColumnDataSource, CustomJS, HoverTool, Label,
     LinearColorMapper,
     FixedTicker, LinearAxis, PanTool, Range1d, ResetTool, SaveTool, Span, WheelZoomTool,
 )
-from bokeh.plotting import figure  # noqa: E402
-from bokeh.transform import transform  # noqa: E402
+from bokeh.plotting import figure
+from bokeh.transform import transform
 
-from . import config, pdecomp  # noqa: E402
-from . import figui, render, series as ser, sounding_plot as sp, thermo  # noqa: E402
-from . import track as trk, volume3d  # noqa: E402
-from .run import FileBusy, MissingAtTime  # noqa: E402
-from .fields import CMAPS, palette  # noqa: E402
-from .picker import RunPicker  # noqa: E402
-from .settings import ConfirmOverwrite, Settings  # noqa: E402
-from .zoomview import ParamTable, ZoomImage  # noqa: E402
-from .theme import (  # noqa: E402
+from . import config, pdecomp
+from . import figui, render, series as ser, sounding_plot as sp, thermo
+from . import track as trk, volume3d
+from .run import FileBusy, MissingAtTime
+from .fields import CMAPS, palette
+from .picker import RunPicker
+from .settings import ConfirmOverwrite, Settings
+from .zoomview import ParamTable, ZoomImage
+from .theme import (
     ACCENT, BG, CSS, GRID, MUTED, PANEL, POINT_COLORS,
     POINT_LABELS, TEXT,
 )

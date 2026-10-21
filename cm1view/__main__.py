@@ -75,17 +75,22 @@ def main(argv=None):
               f"({config.config_path()})", flush=True)
 
     port = _free_port(config.get("port"), args.address)
-    host, user = socket.gethostname().split(".")[0], os.environ.get("USER", "you")
-    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX")
+    host, user = socket.getfqdn(), os.environ.get("USER", "you")
     print("\nOpen the viewer:", flush=True)
+    print(f"  This machine:  http://localhost:{port}/cm1view")
+    prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX")
     if prefix:
-        print(f"  JupyterHub:  https://jupyterhub.hpc.ucar.edu{prefix}proxy/{port}/cm1view")
-    else:
-        print(f"  JupyterHub:  https://jupyterhub.hpc.ucar.edu/stable/user/{user}/proxy/"
-              f"{port}/cm1view   (if this job was started from JupyterHub)")
-    print(f"  SSH tunnel:  ssh -N -L {port}:localhost:{port} -J {user}@casper.ucar.edu "
-          f"{user}@{host}")
-    print(f"               then open http://localhost:{port}/cm1view\n", flush=True)
+        hub = (os.environ.get("JUPYTERHUB_PUBLIC_URL")
+               or os.environ.get("JUPYTERHUB_PUBLIC_HUB_URL", "").removesuffix("hub/"))
+        hub = hub.rstrip("/") if hub else "https://<your JupyterHub>"
+        print(f"  JupyterHub:    {hub}{prefix}proxy/{port}/cm1view")
+    in_job = os.environ.get("PBS_JOBID") or os.environ.get("SLURM_JOB_ID")
+    if in_job or os.environ.get("SSH_CONNECTION"):
+        login = config.get("login_host") or config.submit_host() or "<login-host>"
+        hop = f"-J {user}@{login} {user}@{host}" if in_job else f"{user}@{host}"
+        print(f"  SSH tunnel:    ssh -N -L {port}:localhost:{port} {hop}")
+        print(f"                 then open http://localhost:{port}/cm1view")
+    print(flush=True)
     print("Switch runs from the viewer header, or add ?run=/path/to/run to the URL.\n",
           flush=True)
 

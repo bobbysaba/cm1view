@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cm1view"
+version = "0.1.0"
+description = "Interactive web viewer for CM1 netCDF output"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Bobby Saba", email = "bobbysabawx@gmail.com" }]
+# Dependencies come from environment.yml (conda-forge); pip installs only the package.
+dependencies = []
+
+[project.scripts]
+cm1view = "cm1view.__main__:main"
+
+[tool.setuptools]
+packages = ["cm1view"]
+

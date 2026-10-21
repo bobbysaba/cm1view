@@ -71,6 +71,10 @@ KEYS = [
     Key("maxpix", "server", 900, "Map pixels",
         "Max map pixels sent per axis (zoom in for full resolution). Applies to "
         "pages opened after saving.", kind="int", advanced=True),
+    Key("login_host", "server", "", "SSH login host",
+        "Only for the SSH tunnel command printed at launch (the machine you ssh "
+        "into, e.g. login.cluster.edu). Empty: a placeholder is printed.",
+        advanced=True),
 ]
 BY_NAME = {k.name: k for k in KEYS}
 LEGACY_ENV = {"pdecomp_script": "CM1VIEW_PDECOMP"}
@@ -471,13 +475,24 @@ def suggestions(run_path=None):
         found = _find_pdecomp()
         if found:
             out["pdecomp_script"] = found
+        out["login_host"] = out["login_host"] or submit_host()
     return out
+
+
+def submit_host():
+    """The login node this batch job was submitted from (PBS / Slurm), else ""."""
+    import socket
+    h = os.environ.get("PBS_O_HOST") or os.environ.get("SLURM_SUBMIT_HOST") or ""
+    if h and "." not in h:
+        domain = socket.getfqdn().partition(".")[2]
+        h = f"{h}.{domain}" if domain else h
+    return h
 
 
 def _find_pdecomp():
     """A pressure-decomposition script in the user's own folders, if there is one."""
-    user = os.environ.get("USER", "")
-    bases = [os.path.expanduser("~"), f"/glade/work/{user}"]
+    bases = [os.path.expanduser("~")] + [os.environ[v] for v in ("WORK", "SCRATCH")
+                                          if os.environ.get(v)]
     for name in ("pdecomp_new_fixed_mp.py", "pdecomp_new_fixed.py"):
         for b in bases:
             for d in (b, *(os.path.join(b, e) for e in _subdirs(b))):

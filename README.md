@@ -4,26 +4,48 @@ Interactive viewer for CM1 netCDF output (`output_format = 2`, one time per file
 plan-view map with layered fields, click-for-sounding analysis, vertical
 cross-sections and 3D isosurfaces, in one dark-mode web app.
 
-## Launch
+## Install
 
-From a Casper job (JupyterHub terminal or `qsub -I`), ask for at least
-4 CPUs and 32 GB of memory. More CPUs mean faster first loads, because fields are
-read in parallel.
+cm1view needs its own Python environment, made from `environment.yml` (conda-forge,
+pinned to the tested versions). With [Miniforge](https://github.com/conda-forge/miniforge)
+(or any conda / mamba):
 
 ```bash
-/glade/work/rasaba/cm1view/cm1view.sh /path/to/cm1/run --port 5006
+git clone git@github.com:bobbysaba/cm1view.git
+cd cm1view
+conda env create -f environment.yml      # once; about 2.7 GB
+conda activate cm1view
+```
+
+This installs cm1view itself in editable mode, so `git pull` updates it. After a pull
+that changes `environment.yml`: `conda env update -f environment.yml --prune`.
+On a cluster, put Miniforge in a work or project folder rather than home, which
+usually has a small quota.
+
+## Launch
+
+On a cluster, run it inside a batch job (interactive or a JupyterHub terminal) with
+at least 4 CPUs and 32 GB of memory. More CPUs mean faster first loads, because
+fields are read in parallel.
+
+```bash
+conda activate cm1view
+cm1view /path/to/cm1/run --port 5006     # or ./cm1view.sh, same options
 ```
 
 The run is optional: without one, the viewer opens the `default_run` setting or a page
 listing the runs in your folders. If port 5006 is taken (another user on the node), the
 next free port is used and printed.
 
-The launcher activates the `npl` conda env if needed and prints two URLs:
+It prints the URLs to open:
 
-- **JupyterHub** (no setup): `https://jupyterhub.hpc.ucar.edu/stable/user/$USER/proxy/5006/cm1view`
-  This only works when the viewer runs inside your JupyterHub job.
-- **SSH tunnel**: `ssh -N -L 5006:localhost:5006 -J $USER@casper.ucar.edu $USER@<node>`,
-  then open `http://localhost:5006/cm1view`.
+- **This machine**: `http://localhost:5006/cm1view` (a laptop or workstation).
+- **JupyterHub**, when started from a JupyterHub terminal (needs `jupyter-server-proxy`
+  on the hub): `<hub>/user/$USER/proxy/5006/cm1view`.
+- **SSH tunnel**, when it runs on a remote machine:
+  `ssh -N -L 5006:localhost:5006 -J $USER@<login-host> $USER@<node>`, then open
+  `http://localhost:5006/cm1view`. The login host is taken from the batch job
+  (PBS / Slurm) or the `login_host` setting.
 
 Add `?t=30` to the URL to open at time index 30.
 
@@ -35,7 +57,7 @@ axis; zoom in to get full resolution), `--config` (another settings file).
 
 The first time cm1view opens in a browser, it asks where your CM1 runs live; the
 other settings are pre-filled (from your recent runs, `$SCRATCH`, and a
-`pdecomp_new_fixed*.py` in your home or `/glade/work/$USER` folders) and can be
+`pdecomp_new_fixed*.py` in your home, `$WORK` or `$SCRATCH` folders) and can be
 changed then or later with the ⚙ button in the top bar (or the *Config file* tab, which
 edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 (`$CM1VIEW_CONFIG` or `--config` for another file).
@@ -54,6 +76,7 @@ edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 | `allow_writes_to_output` | off | lets the pressure decomposition write into output files |
 | `cache_gb`, `workers` | auto | from the job's memory and CPUs (restart to apply) |
 | `port`, `maxpix` | 5006, 900 | server port (restart to apply), map pixels per axis |
+| `login_host` | from the batch job | login node shown in the printed SSH tunnel command |
 
 Each setting can also come from an environment variable `CM1VIEW_<NAME>` (lists
 separated by `:`) or a command-line flag, which win over the file; the settings window
@@ -259,7 +282,6 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
   `--pdecomp-script` or `$CM1VIEW_PDECOMP_SCRIPT` for another script with the same
   functions.
   Add more in `cm1view/fields.py` (`_make_fields`).
-- Plotly is vendored in `_vendor/` because the `npl` env does not include it.
 
 ## Layout
 
@@ -283,5 +305,6 @@ cm1view/settings.py       settings window (first run and ⚙) and the overwrite 
 cm1view/picker.py         run picker (header dialog and the page without a run)
 cm1view/app.py            Panel UI
 tests/                    headless smoke tests (smokeN.py) + browser screenshots (uiN.py);
-                          `source tests/env.sh` first (a throwaway settings file)
+                          `conda activate cm1view; source tests/env.sh` first
+                          (a throwaway settings file)
 ```
