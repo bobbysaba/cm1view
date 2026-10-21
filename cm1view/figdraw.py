@@ -1,7 +1,7 @@
 """Draw a figure from a spec (a dict) and the plotted arrays: plan views, vertical
 cross-sections, time-height plots, time series or soundings on a grid of panels.
 
-Needs only numpy and matplotlib (pyart, if installed, for its colormaps).  cm1view
+Needs only numpy and matplotlib (cmweather or pyart, if installed, for their colormaps).  cm1view
 copies this file into every exported figure script, so the script redraws exactly
 what the viewer showed; edit SPEC in the script (or this code) to change the figure.
 
@@ -52,7 +52,7 @@ KT = 1.943844
 
 def colormap(name, reverse=False, white_first=False):
     """A matplotlib colormap by name ('reflectivity' = NWS steps; pyart maps such as
-    HomeyerRainbow / ChaseSpectral when pyart is installed).  white_first: starts from
+    HomeyerRainbow / ChaseSpectral when cmweather or pyart is installed).  white_first: starts from
     white (as for updraft speed)."""
     if name == "reflectivity":
         cm = ListedColormap(["#ffffff00"] + NWS_REF, name="reflectivity")
@@ -60,7 +60,10 @@ def colormap(name, reverse=False, white_first=False):
         try:
             cm = matplotlib.colormaps[name]
         except KeyError:
-            import pyart  # noqa: F401  (registers its colormaps)
+            try:  # either registers HomeyerRainbow, ChaseSpectral, ...
+                import cmweather  # noqa: F401
+            except ImportError:
+                import pyart  # noqa: F401
             cm = matplotlib.colormaps[name]
     if reverse:
         cm = cm.reversed()

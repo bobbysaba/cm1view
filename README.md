@@ -19,8 +19,8 @@ conda activate cm1view
 
 This installs cm1view itself in editable mode, so `git pull` updates it. After a pull
 that changes `environment.yml`: `conda env update -f environment.yml --prune`.
-On a cluster, put Miniforge in a work or project folder rather than home, which
-usually has a small quota.
+Miniforge plus the environment take about 4 GB; on a cluster whose home quota is
+small, install it in a work or project folder instead.
 
 ## Launch
 

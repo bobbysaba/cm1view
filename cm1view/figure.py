@@ -64,7 +64,8 @@ def layer_defaults(kind, F, field=None, z=1.0):
 
 
 def _refl_cmap():
-    """HomeyerRainbow when pyart is available, else NWS reflectivity steps."""
+    """HomeyerRainbow when cmweather (or pyart) is available, else NWS reflectivity
+    steps."""
     try:
         figdraw.colormap("HomeyerRainbow")
         return "HomeyerRainbow"
@@ -691,8 +692,8 @@ def script(spec, npz_name, out_name, run=None, note=""):
           if len(spec.get("runs") or []) > 1 else
           [f"run: {run.path}" if run is not None else ""]),
         note,
-        "Redraw:  python this_script.py   (needs numpy and matplotlib; pyart for its",
-        "colormaps).  Change SPEC below to restyle (colours, ranges, labels, size, ...);",
+        "Redraw:  python this_script.py   (needs numpy and matplotlib; cmweather or pyart",
+        "for their colormaps).  Change SPEC below to restyle (colours, ranges, labels, size, ...);",
         f"the plotted arrays are in {npz_name}.",
         '"""',
     ]
