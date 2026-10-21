@@ -25,6 +25,7 @@ dependencies:
   - cmocean=3.0.3          # cmo.* colormaps
   - arm_pyart=2.1.0        # HomeyerRainbow / ChaseSpectral colormaps in figures
   - websocket-client       # browser screenshots in tests/ (shot.py)
+  - pytest=8.4.1           # tests/
   - pip
   - pip:
       - -e .

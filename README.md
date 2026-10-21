@@ -47,6 +47,9 @@ It prints the URLs to open:
   `http://localhost:5006/cm1view`. The login host is taken from the batch job
   (PBS / Slurm) or the `login_host` setting.
 
+No CM1 output at hand? `cm1view --demo` writes two small synthetic runs (a supercell
+and a weak-mesocyclone twin, with storm tracks) to the cache folder and opens them.
+
 Add `?t=30` to the URL to open at time index 30.
 
 Options: `--cache-gb` (memory for cached 3D fields; default about 40% of the job's
@@ -304,7 +307,21 @@ cm1view/config.py         settings: config file, precedence, save folders, run s
 cm1view/settings.py       settings window (first run and ⚙) and the overwrite prompt
 cm1view/picker.py         run picker (header dialog and the page without a run)
 cm1view/app.py            Panel UI
-tests/                    headless smoke tests (smokeN.py) + browser screenshots (uiN.py);
-                          `conda activate cm1view; source tests/env.sh` first
-                          (a throwaway settings file)
+cm1view/demo.py           synthetic CM1 runs for cm1view --demo and the tests
+tests/                    pytest suite (test_*.py, on demo data); older smoke tests
+                          (smokeN.py, real runs) and browser screenshots (uiN.py)
 ```
+
+## Tests
+
+```bash
+conda activate cm1view
+pytest                       # fast suite on synthetic demo runs (seconds)
+pytest tests/test_tracking.py -k manual    # one file / matching tests
+pytest -m real               # checks that need the real runs (slow)
+```
+
+The demo runs are written once to `$CM1VIEW_TEST_DATA` (default
+`<tmp>/cm1view-demo-$USER`) and rewritten only when `cm1view/demo.py` changes. Tests use
+a throwaway settings file and write only into temporary folders. The older
+`tests/smokeN.py` scripts read the real runs and need `source tests/env.sh`.

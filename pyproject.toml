@@ -18,3 +18,15 @@ cm1view = "cm1view.__main__:main"
 [tool.setuptools]
 packages = ["cm1view"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not real and not browser'"
+markers = [
+    "real: needs the real CM1 runs on /glade (slow; pytest -m real)",
+    "browser: drives headless Firefox for screenshots (pytest -m browser)",
+]
+filterwarnings = [  # third-party noise only
+    'ignore:numpy.ndarray size changed:RuntimeWarning',
+    "ignore:'\\w+' deprecated - use:DeprecationWarning",
+    'ignore:The (LATITUDE|LONGITUDE)_FORMATTER:DeprecationWarning',
+]

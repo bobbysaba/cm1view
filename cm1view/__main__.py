@@ -28,6 +28,8 @@ def main(argv=None):
     ap.add_argument("--pdecomp-script", default=None,
                     help="pressure-decomposition script run for times whose files lack "
                          "p_b/p_l/p_nl (default: the pdecomp_script setting)")
+    ap.add_argument("--demo", action="store_true",
+                    help="open synthetic demo runs (written once to the cache folder)")
     ap.add_argument("--address", default="127.0.0.1",
                     help="bind address (127.0.0.1 is right for JupyterHub and SSH tunnels)")
     args = ap.parse_args(argv)
@@ -41,6 +43,12 @@ def main(argv=None):
         val = getattr(args, name)
         if val is not None:
             config.override(name, val, flag)
+    if args.demo:
+        from . import demo
+        root = os.path.join(config.expand(config.get("cache_dir")), "demo")
+        print(f"cm1view: demo runs in {root}", flush=True)
+        args.run = demo.make(root)
+        config.override("runs_root", [os.path.join(root, "demo")], "--demo")
     if config.read_error():
         print(f"cm1view: could not read the settings ({config.read_error()}); "
               "using defaults until they are saved again", flush=True)

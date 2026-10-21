@@ -323,7 +323,10 @@ def problems():
 
 
 def needs_setup():
-    """The first-run window is required: no config file yet, or no usable runs_root."""
+    """The first-run window is required: no config file yet, or no usable runs_root.
+    Not when runs_root comes from the command line (cm1view --demo)."""
+    if "runs_root" in _state["cli"]:
+        return bool(check("runs_root", get("runs_root")))
     return not exists() or bool(read_error()) or bool(check("runs_root", get("runs_root")))
 
 
