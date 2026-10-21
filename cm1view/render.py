@@ -112,6 +112,35 @@ def vectors(x, y, u, v, n_across, ref_speed=20.0):
     return dict(x0=x0, y0=y0, x1=x1, y1=y1, angle=ang), spacing
 
 
+def streamlines(x, y, u, v, density=1.2):
+    """2D streamlines (matplotlib's streamplot) as polylines + one arrowhead per line:
+    ({'xs', 'ys'}, {'x', 'y', 'angle'}).  x, y evenly spaced."""
+    from matplotlib.figure import Figure
+
+    out, heads = dict(xs=[], ys=[]), dict(x=[], y=[], angle=[])
+    if x.size < 3 or y.size < 3 or not np.isfinite(u).any():
+        return out, heads
+    ax = Figure().add_subplot()
+    # (float32 grid coordinates are not equally spaced to streamplot's tolerance)
+    x, y = np.linspace(x[0], x[-1], x.size), np.linspace(y[0], y[-1], y.size)
+    sp = ax.streamplot(x, y, np.ma.masked_invalid(u), np.ma.masked_invalid(v),
+                       density=density)
+    for sg in sp.lines.get_segments():  # one polyline per streamline
+        a = np.asarray(sg)
+        keep = np.concatenate(([True], np.any(np.diff(a, axis=0) != 0, axis=1)))
+        a = a[keep]  # (repeated points)
+        if len(a) < 3:
+            continue
+        out["xs"].append(a[:, 0])
+        out["ys"].append(a[:, 1])
+        m = len(a) // 2
+        d = a[m + 1] - a[m - 1]
+        heads["x"].append(a[m, 0])
+        heads["y"].append(a[m, 1])
+        heads["angle"].append(float(np.arctan2(d[1], d[0]) - np.pi / 2))
+    return out, heads
+
+
 # ------------------------------------------------------------ map
 def fill_palette(spec):
     if spec["style"] == "contourf":
@@ -166,7 +195,10 @@ def compute_map(F, spec):
             u, v = u + run.umove - cu, v + run.vmove - cv
         x, y, uc = _crop(run, u, win)
         _, _, vc = _crop(run, v, win)
-        out["vec"], _ = vectors(x, y, uc, vc, vsp["density"], vsp["ref"])
+        if vsp.get("style") == "streamlines":
+            out["stream"] = streamlines(x, y, uc, vc, vsp["density"] / 20.0)
+        else:
+            out["vec"], _ = vectors(x, y, uc, vc, vsp["density"], vsp["ref"])
     return out
 
 

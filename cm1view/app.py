@@ -408,6 +408,8 @@ class Viewer:
         self.vec_frame = pn.widgets.Select(
             name="Frame", options=FRAMES,
             value="grid" if (run.umove or run.vmove) else "ground", width=150)
+        self.vec_style = pn.widgets.Select(name="Draw as", options={
+            "Arrows": "arrows", "Streamlines": "streamlines"}, value="arrows", width=120)
         self.vec_density = pn.widgets.IntSlider(name="Arrows across view", start=8, end=50,
                                                 value=24, width=170)
         self.vec_ref = pn.widgets.FloatInput(name="Ref. speed (m/s)", value=20.0, width=110)
@@ -657,6 +659,12 @@ class Viewer:
                                    line_color="#e5e7eb", line_width=1.2)
         self.vec_head = fig.scatter("x1", "y1", source=self.vec_src, marker="triangle",
                                     angle="angle", size=6, color="#e5e7eb")
+        self.sl2_src = ColumnDataSource(dict(EMPTY_LINES))
+        self.sl2_line = fig.multi_line("xs", "ys", source=self.sl2_src, line_color="#e5e7eb",
+                                       line_width=1.1)
+        self.sl2_head_src = ColumnDataSource(dict(x=[], y=[], angle=[]))
+        self.sl2_head = fig.scatter("x", "y", source=self.sl2_head_src, marker="triangle",
+                                    angle="angle", size=7, color="#e5e7eb")
 
         self.box_src = ColumnDataSource(dict(left=[], right=[], bottom=[], top=[]))
         fig.quad(left="left", right="right", bottom="bottom", top="top", source=self.box_src,
@@ -1286,8 +1294,9 @@ class Viewer:
             ovb.append(_pill(o["on"], d.add(f"ov{n}", f"Contours {'AB'[n]}", o["var"],
                                             o["mode"], o["level"], o["levels"], o["color"],
                                             o["width"], o["negdash"])))
-        vec = _pill(self.vec_on, d.add("vec", "Winds", self.vec_lvl, self.vec_frame,
-                                       self.vec_density, self.vec_ref, self.vec_color))
+        vec = _pill(self.vec_on, d.add("vec", "Winds", self.vec_style, self.vec_lvl,
+                                       self.vec_frame, self.vec_density, self.vec_ref,
+                                       self.vec_color))
         for b, _ in d.items.values():
             b.param.update(height=32, margin=(4, 2), button_type="light")
         d.panel.styles = dict(d.panel.styles, **{"pointer-events": "auto",
@@ -1374,8 +1383,16 @@ class Viewer:
         self.mode.watch(self._on_mode)
         self.fill_var.param.watch(self._on_fill_var, "value")
         for w in (self.fill_mode, self.fill_style, self.fill_cmap, self.fill_rev,
-                  self.fill_nlev, self.vec_on, self.vec_frame, self.vec_color, self.vec_ref):
+                  self.fill_nlev, self.vec_on, self.vec_frame, self.vec_color, self.vec_ref,
+                  self.vec_style):
             w.param.watch(rm, "value")
+
+        def vec_vis(*e):
+            st = self.vec_style.value == "streamlines"
+            self.vec_density.name = "Streamline density" if st else "Arrows across view"
+            self.vec_ref.visible = not st
+
+        self.vec_style.param.watch(vec_vis, "value")
         for w in (self.fill_lvl, self.fill_alpha, self.vec_lvl, self.vec_density):
             w.param.watch(rm, "value_throttled")
         self.fill_auto.param.watch(self._on_fill_auto, "value")
@@ -1915,6 +1932,7 @@ class Viewer:
                      color=o["color"].value, width=o["width"].value,
                      negdash=o["negdash"].value) for o in self.ovs],
             vec=dict(on=self.vec_on.value, level=self.vec_lvl.value, frame=self.vec_frame.value,
+                     style=self.vec_style.value,
                      density=self.vec_density.value, ref=self.vec_ref.value or 20.0,
                      color=self.vec_color.value),
         )
@@ -1989,6 +2007,14 @@ class Viewer:
             self.vec_head.glyph.fill_color = self.vec_head.glyph.line_color = spec["vec"]["color"]
         else:
             self.vec_src.data = dict(EMPTY_VEC)
+        if res.get("stream") is not None:
+            self.sl2_src.data, self.sl2_head_src.data = res["stream"]
+            col = spec["vec"]["color"]
+            self.sl2_line.glyph.line_color = col
+            self.sl2_head.glyph.fill_color = self.sl2_head.glyph.line_color = col
+        else:
+            self.sl2_src.data = dict(EMPTY_LINES)
+            self.sl2_head_src.data = dict(x=[], y=[], angle=[])
 
         def lvl_txt(mode, level, name):
             if F[name].ndim == 2:
@@ -2797,12 +2823,23 @@ class Viewer:
         self._ser_draw()
 
     def _ser_draw(self):
-        from bokeh.models import Legend, LegendItem
+        from bokeh.models import DataRange1d, Legend, LegendItem, LinearAxis
 
         run, fig = self.run, self.ser_fig
         fig.renderers = [r for r in fig.renderers if r not in self._ser_glyphs]
         self._ser_glyphs = []
-        items, units = [], set()
+        # series in other units than the first get their own y axis on the right
+        for ax in getattr(self, "_ser_axes", []):
+            if ax in fig.right:
+                fig.right.remove(ax)
+        self._ser_axes = []
+        order = list(dict.fromkeys(s["ds"]["value"].attrs.get("units", "")
+                                   for s in self.series.values()))
+        ranges = {u: "default" if n == 0 else f"u{n}" for n, u in enumerate(order)}
+        fig.extra_y_ranges = {name: DataRange1d() for name in ranges.values()
+                              if name != "default"}
+        by_range = {name: [] for name in ranges.values()}
+        items = []
         for key, s in self.series.items():
             ds = s["ds"]
             ok = ds["computed"].values == 1
@@ -2816,13 +2853,14 @@ class Viewer:
                                         hms=[run.time_label(t) for t in ts],
                                         name=[s["label"]] * len(ts), where=where))
             act = key == self.ser_pick.value
+            rng = ranges[ds["value"].attrs.get("units", "")]
             ln = fig.line("tmin", "value", source=src, line_color=s["color"],
-                          line_width=2.5 if act else 1.6)
+                          line_width=2.5 if act else 1.6, y_range_name=rng)
             pt = fig.scatter("tmin", "value", source=src, size=5 if act else 3,
-                             color=s["color"])
+                             color=s["color"], y_range_name=rng)
             self._ser_glyphs += [ln, pt]
+            by_range[rng] += [ln, pt]
             items.append(LegendItem(label=s["label"], renderers=[ln, pt]))
-            units.add(ds["value"].attrs.get("units", ""))
         if not fig.legend:
             # below the plot: a click on an entry (hide / show) is not a click on a time
             fig.add_layout(Legend(click_policy="hide", background_fill_color=BG,
@@ -2830,8 +2868,18 @@ class Viewer:
                                   border_line_color=None, spacing=0, padding=4), "below")
         fig.legend[0].items = items
         fig.legend[0].visible = bool(items)
-        u = next(iter(units)) if len(units) == 1 else ""
-        fig.yaxis.axis_label = u
+        fig.y_range.renderers = by_range.get("default", []) or "auto"
+        for u, name in ranges.items():
+            if name == "default":
+                continue
+            fig.extra_y_ranges[name].renderers = by_range[name]
+            ax = LinearAxis(y_range_name=name, axis_label=u or "(no units)")
+            for k in ("axis_label_text_color", "major_label_text_color", "axis_line_color",
+                      "major_tick_line_color", "minor_tick_line_color"):
+                setattr(ax, k, getattr(fig.yaxis[0], k))
+            fig.add_layout(ax, "right")
+            self._ser_axes.append(ax)
+        fig.yaxis[0].axis_label = order[0] if order else ""
         s = self.series.get(self.ser_pick.value)
         th = (s is not None and "profile" in s["ds"] and self.ser_view.value == "th")
         if th:

@@ -36,8 +36,9 @@ once a 3D region has been picked. Both workspaces use full width.
 level (height km AGL, model level, or column max/min). Each pill opens its controls in a
 drawer under the toolbar. Click the pill again to close it.
 - *Style*: pixels or filled contours, colormap, range, opacity.
-- *Contours A / B*, *Wind vectors*: the checkbox turns the layer on or off. The pill
-  shows what is drawn.
+- *Contours A / B*, *Winds*: the checkbox turns the layer on or off. The pill
+  shows what is drawn. Winds are drawn as arrows or as streamlines (*Draw as*; the
+  density slider sets how close the streamlines are), ground-, grid- or storm-relative.
 
 Zooming re-renders at full resolution for the area in view. The analysis panel
 (Sounding / Cross-section / Track) opens when a click mode is chosen or a result
@@ -131,6 +132,35 @@ resolution, reflectivity floor).
   opacity or switch them off.
 - Once a scene is shown, changing a 3D control re-renders it.
 
+**Series tab** (analysis panel). One field reduced over a region at every output time:
+any native or derived field, at a height or over a layer (a layer also keeps every
+level, for the *Time–height* view), over the whole domain, the map view, the 3D box or
+a disc around the tracked storm (with an offset, e.g. the inflow), as min / max / mean /
+percentile. Results are cached in `~/.cache/cm1view/series` per run and recipe, and
+saved as .nc (everything), .csv / .txt or .pkl. Series in other units than the first
+get their own y axis on the right. Click a plot to go to that time.
+
+**Figure workspace** (Map | 3D | **Figure**). Publication figures, previewed at their
+final size. Start from the map view, the cross-section, the Series tab, the soundings,
+or a default grid; *Panels show*:
+- *Plan views* / *Vertical cross-sections*: layers (fill, contours, shading, vectors or
+  streamlines, storm track, section line), panels in time, in field, as a runs × times
+  grid or each with its own run and time; centred on each run's tracked storm, a fixed
+  box or the whole domain.
+- *Time–height (series)*: a row per series and a column per run (as in
+  `pub_figs.ipynb`), one colorbar per row; a series can be plotted as its d/dz or d/dt.
+- *Time series*: series with the same panel number share a panel; series in other units
+  get their own y axis; one series from several runs is coloured by run.
+- *Soundings*: skew-T log-p with adiabats, parcel, barbs and a hodograph inset; several
+  soundings (runs, times, storm-relative spots) per panel.
+
+**Runs** lists the runs panels can come from (e.g. tornadic vs non-tornadic), each with
+its storm track (the Track tab, or `storm_tracks/<run>.csv`, found automatically).
+**Annotate** adds a contour key (nested circles, as `funcs.circlelegend`) and text,
+markers, arrows, lines, boxes and circles. **Export** saves the image, and optionally a
+stand-alone script with the plotted arrays and spec: the script redraws the identical
+image without the viewer.
+
 **Switching runs.** Click the run name in the header. You can type a directory, pick
 one of the runs next to the current one (*Runs here*), browse with *Folders* (↑ .. goes
 up, a click opens a folder; ● marks folders with CM1 output), or pick a recent run. This reloads the page
@@ -189,6 +219,10 @@ cm1view/render.py         map + cross-section computations (contours, vectors, s
 cm1view/track.py          meso tracking + CSV/text export
 cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
 cm1view/zoomview.py       zoomable image component (sounding graphics)
+cm1view/series.py         time series of reduced fields (Series tab): compute, cache, files
+cm1view/figure.py         figure spec, panel data, export (image, script, data, spec)
+cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported scripts)
+cm1view/figui.py          Figure workspace UI
 cm1view/pdecomp.py        pressure decomposition: file fields, on-demand runs of the user's script
 cm1view/registry.py       open runs shared by sessions, run discovery
 cm1view/app.py            Panel UI

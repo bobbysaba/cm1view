@@ -129,6 +129,23 @@ class LayerCard:
             w["scale"] = _f("Scale (larger = shorter)", lay.get("scale", 250.0), 160, step=25)
             w["width"] = _f("Arrow width", lay.get("width", 0.002), 100, step=0.0005)
             w["key"] = _f("Key arrow (m/s, 0 = none)", lay.get("key", 0.0), 170, step=5)
+            w["style"] = pn.widgets.Select(name="Draw as", options={
+                "Arrows": "arrows", "Streamlines": "streamlines"},
+                value=lay.get("style", "arrows"), width=120)
+            w["density"] = _f("Density", float(lay.get("density", 1.5)), 80, step=0.25,
+                              start=0.25)
+            w["slw"] = _f("Line width", float(lay.get("slw", 0.8)), 90, step=0.1)
+            w["arrowsize"] = _f("Arrow size", float(lay.get("arrowsize", 1.0)), 90, step=0.25)
+
+            def vis(*e):
+                st = w["style"].value == "streamlines"
+                for k in ("density", "slw", "arrowsize"):
+                    w[k].visible = st
+                for k in ("spacing", "zspacing", "scale", "width", "key"):
+                    w[k].visible = not st
+
+            w["style"].param.watch(vis, "value")
+            vis()
         if t in ("contour", "shade", "vectors", "track", "line"):
             w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(lay.get("color", "k")),
                                                 width=70)
@@ -210,6 +227,14 @@ class FigureEditor:
         self._hold = False  # widgets being set from a spec: no re-render per widget
         self._req = 0
         self.cards = []
+        self.ser_cards, self.snd_cards, self.ann_rows = [], [], []
+        # series of time-height / time-series figures: (run path, recipe, track) ->
+        # dataset (filled in place while it is computed); state "running" / "done"
+        self._ser_mem, self._ser_state, self._ser_prog = {}, {}, {}
+        self.snd_cache = OrderedDict()  # sounding (run, time, where, track) -> analysis
+        from concurrent.futures import ThreadPoolExecutor
+        viewer.pools["figser"] = ThreadPoolExecutor(1, thread_name_prefix="cm1view-figser")
+        viewer.gen["figser"] = 0
         self._build()
         self.set_spec(self._default())
 
@@ -222,12 +247,22 @@ class FigureEditor:
                                            button_style="outline", height=32)
         self.start_xs = pn.widgets.Button(name="From cross-section", button_type="primary",
                                           button_style="outline", height=32)
+        self.start_ser = pn.widgets.Button(
+            name="From Series tab", button_type="primary", button_style="outline", height=32,
+            description="Time–height panels (layer series) or time series of the series "
+                        "computed in the Series tab, for every run of the figure")
+        self.start_snd = pn.widgets.Button(
+            name="Soundings", button_type="primary", button_style="outline", height=32,
+            description="Skew-T panels of the Sounding tab's soundings (or the storm's "
+                        "inflow at the shown time)")
         self.start_def = pn.widgets.Button(name="Default grid",
                                            button_type="light", button_style="outline",
                                            height=32)
         # layout
         self.kind = pn.widgets.Select(name="Panels show", options={
-            "Plan views": "plan", "Vertical cross-sections": "xsec"}, width=190)
+            "Plan views": "plan", "Vertical cross-sections": "xsec",
+            "Time–height (series)": "th", "Time series": "line", "Soundings": "sounding"},
+            width=190)
         self.vary = pn.widgets.Select(name="Panels differ in", options=VARY, width=200)
         self.run_sel = pn.widgets.Select(name="Run", options={}, width=170)
         self.runs_as = pn.widgets.Select(name="Runs are", options={
@@ -287,6 +322,79 @@ class FigureEditor:
                                               button_type="light", button_style="outline",
                                               margin=(4, 2))
                          for k in TYPE_LABEL}
+        self.plan_layers = pn.Column(_row(*self.add_btns.values()), self.layer_box,
+                                     sizing_mode="stretch_width", margin=0)
+        # series (time-height and time-series panels)
+        self.ser_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.ser_from = pn.widgets.Select(name="A series of the Series tab", options={},
+                                          sizing_mode="stretch_width", min_width=260)
+        self.ser_add = pn.widgets.Button(name="+ Add", button_type="primary",
+                                         button_style="outline", height=32)
+        self.ser_new = pn.widgets.Button(name="+ New series", button_type="light",
+                                         button_style="outline", height=32)
+        self.series_col = pn.Column(
+            pn.pane.HTML('<div class="cv-hint">Each series is computed for every run of the '
+                         'figure (<b>Runs</b> tab; regions around the storm use each run’s '
+                         'track) and cached, like the Series tab. Time–height panels: a row '
+                         'per series and a column per run (<b>Layout</b>: Runs are rows / '
+                         'columns). Time series: series with the same <b>Panel</b> number '
+                         'share a panel; other units get their own axis.</div>',
+                         margin=(6, 4, 2, 4)),
+            _row(self.ser_from, self.ser_add, self.ser_new), self.ser_box,
+            sizing_mode="stretch_width", margin=0)
+        # soundings
+        sk = self.sk = dict(
+            pmax=_f("Bottom (hPa)", 1000.0, 100, step=25), pmin=_f("Top (hPa)", 100.0, 90,
+                                                                    step=25),
+            tmin=_f("T left (°C)", -40.0, 90, step=5), tmax=_f("T right (°C)", 50.0, 90, step=5),
+            skew=_f("Skew", 35.0, 70, step=5),
+            parcel=pn.widgets.Select(name="Parcel", options={
+                "Mixed layer": "ml", "Surface": "sb", "Most unstable": "mu", "None": "none"},
+                width=130),
+            params=_chk("CAPE / CIN in legend", True), legend=_chk("Legend (one sounding)", False),
+            guides=_chk("Adiabats", True), barbs=_chk("Wind barbs", True),
+            hodo=_chk("Hodograph", True), hodo_max=_f("Hodograph ± (m/s)", 40.0, 130, step=5),
+            hodo_top=_f("Hodograph top (km)", 9.0, 130, step=1))
+        self.snd_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.snd_tab = pn.widgets.Button(name="+ The Sounding tab's soundings", height=32,
+                                         button_type="primary", button_style="outline")
+        self.snd_new = pn.widgets.Button(name="+ Sounding", button_type="light",
+                                         button_style="outline", height=32)
+        self.snd_col = pn.Column(
+            pn.pane.HTML('<div class="cv-hint">Soundings with the same <b>Panel</b> number '
+                         'share a skew-T (colour = sounding). Storm soundings follow each '
+                         'run’s track.</div>', margin=(6, 4, 2, 4)),
+            _row(*sk.values()), _row(self.snd_tab, self.snd_new), self.snd_box,
+            sizing_mode="stretch_width", margin=0)
+        # time axes of time-height / time-series panels
+        self.ts_tmin = pn.widgets.TextInput(name="From (min; blank: data)", width=150)
+        self.ts_tmax = pn.widgets.TextInput(name="To (min; blank: data)", width=150)
+        self.ts_zmin = _f("Bottom (km)", 0.0, 90, step=0.5)
+        self.ts_zmax = _f("Top (km)", 10.0, 90, step=0.5)
+        self.ts_legend = _chk("Legend", True)
+        self.ts_legloc = pn.widgets.Select(name="Legend at", options=["best"] + LOCS, width=130)
+        self.ts_zero = _chk("Zero line", False)
+        self.ts_col = pn.Column(
+            pn.pane.HTML('<div class="cv-hint">Time axis (minutes counted from <b>Text & '
+                         'axes</b> → Minutes counted from) and heights of time–height '
+                         'panels:</div>', margin=(6, 4, 0, 4)),
+            _row(self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax),
+            _row(self.ts_legend, self.ts_legloc, self.ts_zero),
+            sizing_mode="stretch_width", margin=0)
+        # annotations and contour key
+        self.ck_on = _chk("Contour key (circles)", False)
+        self.ck_layer = pn.widgets.Select(name="Of layer", options={"First contours": -1},
+                                          width=150)
+        self.ck_label = pn.widgets.TextInput(name="Name in the middle", value="w", width=130)
+        self.ck_x = _f("x (figure 0–1)", 0.01, 110, step=0.01)
+        self.ck_y = _f("y (figure 0–1)", 0.01, 110, step=0.01)
+        self.ck_size = _f("Size", 0.1, 70, step=0.01)
+        self.ck_fs = _f("Font (pt)", 10.0, 80, step=1)
+        self.ck_frame = _chk("Frame", True)
+        self.ann_kind = pn.widgets.Select(name="Add", options=ANN_KINDS, width=150)
+        self.ann_add = pn.widgets.Button(name="+ Add", button_type="primary",
+                                         button_style="outline", height=32)
+        self.ann_box = pn.Column(sizing_mode="stretch_width", margin=0)
         # text & axes
         self.font = pn.widgets.Select(name="Font", options=FONTS, width=160)
         self.fsize = _f("Size (pt)", 10.0, 80, step=0.5, start=4)
@@ -359,6 +467,11 @@ class FigureEditor:
         self.status = pn.pane.HTML(sizing_mode="stretch_width")
         self.image = pn.pane.HTML(sizing_mode="stretch_width", margin=(4, 8))
 
+        self.region_px = pn.Column(
+            _row(self.dom, self.half, self.box_btn), self.box_html, _row(self.coords),
+            pn.pane.HTML('<div class="cv-hint">Cross-sections:</div>', margin=(8, 4, 0, 4)),
+            _row(self.xs_mode, self.xs_angle, self.xs_half, self.xs_offx, self.xs_offy,
+                 self.xs_top, self.xs_ab), self.xs_html, sizing_mode="stretch_width", margin=0)
         tabs = pn.Tabs(
             ("Layout", pn.Column(
                 _row(self.kind, self.vary, self.run_sel, self.runs_as),
@@ -373,12 +486,8 @@ class FigureEditor:
                              '</div>', margin=(6, 4, 2, 4)),
                 self.runs_box, self.add_sel, _row(self.add_path, self.add_btn),
                 self.runs_msg)),
-            ("Region", pn.Column(
-                _row(self.dom, self.half, self.box_btn), self.box_html, _row(self.coords),
-                pn.pane.HTML('<div class="cv-hint">Cross-sections:</div>', margin=(8, 4, 0, 4)),
-                _row(self.xs_mode, self.xs_angle, self.xs_half, self.xs_offx, self.xs_offy,
-                     self.xs_top, self.xs_ab), self.xs_html)),
-            ("Layers", pn.Column(_row(*self.add_btns.values()), self.layer_box)),
+            ("Region", pn.Column(self.region_px, self.ts_col)),
+            ("Layers", pn.Column(self.plan_layers, self.series_col, self.snd_col)),
             ("Text & axes", pn.Column(
                 _row(self.font, self.fsize, self.xlabel, self.ylabel),
                 _row(self.ticklabels, self.ticks, self.minor, self.equal),
@@ -389,6 +498,17 @@ class FigureEditor:
                 _row(self.cb_mode, self.cb_orient, self.cb_label, self.cb_shrink,
                      self.cb_ticks),
                 _row(self.lg_loc, self.lg_panel))),
+            ("Annotate", pn.Column(
+                pn.pane.HTML('<div class="cv-hint">A key of nested circles for a contour '
+                             'layer (as in your circlelegend), placed in figure fractions '
+                             'from the lower left:</div>', margin=(6, 4, 0, 4)),
+                _row(self.ck_on, self.ck_layer, self.ck_label, self.ck_x, self.ck_y,
+                     self.ck_size, self.ck_fs, self.ck_frame),
+                pn.pane.HTML('<div class="cv-hint">Text, markers, arrows, lines and shapes, '
+                             'in one panel (number) or all (0), in axis units (km; minutes '
+                             'and km or values for series) or panel fractions:</div>',
+                             margin=(10, 4, 0, 4)),
+                _row(self.ann_kind, self.ann_add), self.ann_box)),
             ("Export", pn.Column(
                 self.path, _row(self.fmt, self.dpi, self.tight, self.bg),
                 _row(self.save_img, self.save_all, self.dl),
@@ -396,7 +516,8 @@ class FigureEditor:
             dynamic=False, sizing_mode="stretch_width")
         self.editor = pn.Column(
             pn.pane.HTML('<div class="cv-hint">Start from</div>', margin=(6, 4, 0, 4)),
-            _row(self.start_map, self.start_xs, self.start_def), tabs,
+            _row(self.start_map, self.start_xs, self.start_ser, self.start_snd,
+                 self.start_def), tabs,
             scroll=True, sizing_mode="stretch_height", width=560,
             styles={"border-left": f"1px solid {GRID}", "padding": "0 8px"})
         self.preview = pn.Column(
@@ -434,6 +555,20 @@ class FigureEditor:
         self.start_map.on_click(lambda e: self.from_map())
         self.start_xs.on_click(lambda e: self.from_xsec())
         self.start_def.on_click(lambda e: self.set_spec(self._default()))
+        self.start_ser.on_click(lambda e: self.from_series())
+        for w in (self.width, self.height):
+            w.param.watch(lambda e: self._size_by_hand(), "value")
+        self.start_snd.on_click(lambda e: self.from_soundings())
+        self.ser_add.on_click(lambda e: self._add_series_from_tab())
+        self.ser_new.on_click(lambda e: self._add_series())
+        self.snd_tab.on_click(lambda e: self._add_tab_soundings())
+        self.snd_new.on_click(lambda e: self._add_sounding())
+        self.ann_add.on_click(lambda e: self._add_annotation())
+        for w in (*self.sk.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
+                  self.ts_legend, self.ts_legloc, self.ts_zero, self.ck_on, self.ck_layer,
+                  self.ck_label, self.ck_x, self.ck_y, self.ck_size, self.ck_fs,
+                  self.ck_frame):
+            w.param.watch(rq, "value")
         self.update.on_click(lambda e: self.request(force=True, delay=False))
         self.save_img.on_click(lambda e: self._save(False))
         self.save_all.on_click(lambda e: self._save(True))
@@ -503,9 +638,36 @@ class FigureEditor:
             self.fmt.value, self.dpi.value = e.get("format", "png"), int(e.get("dpi", 250))
             self.tight.value = e.get("tight", True)
             self.bg.value = s.get("background", "white")
+            ts = s.get("ts", {})
+            self.ts_tmin.value = "" if ts.get("tmin") in (None, "") else f"{float(ts['tmin']):g}"
+            self.ts_tmax.value = "" if ts.get("tmax") in (None, "") else f"{float(ts['tmax']):g}"
+            self.ts_zmin.value = float(ts.get("zmin") or 0.0)
+            self.ts_zmax.value = float(ts.get("zmax") or 10.0)
+            self.ts_legend.value, self.ts_zero.value = ts.get("legend", True), \
+                ts.get("zero_line", False)
+            self.ts_legloc.value = ts.get("legend_loc", "best")
+            sk = s.get("skewt", {})
+            for k, wdg in self.sk.items():
+                if k in sk:
+                    wdg.value = sk[k] if not isinstance(wdg, pn.widgets.FloatInput) \
+                        else float(sk[k])
+            ck = s.get("contour_key", {})
+            self.ck_on.value, self.ck_label.value = ck.get("on", False), ck.get("label", "w")
+            self.ck_x.value, self.ck_y.value = float(ck.get("x", 0.01)), float(ck.get("y", 0.01))
+            self.ck_size.value, self.ck_fs.value = float(ck.get("size", 0.1)), \
+                float(ck.get("fs", 10.0))
+            self.ck_frame.value = ck.get("frame", True)
             self._build_cards(s["layers"])
+            self.ck_layer.value = int(ck.get("layer", -1)) \
+                if int(ck.get("layer", -1)) in self.ck_layer.options.values() else -1
             self._build_pf(s.get("panel_fills", []))
             self._build_pc(s.get("panels", []))
+            self.ser_cards = [self._ser_card(e) for e in s.get("series", [])]
+            self.snd_cards = [self._snd_card(e) for e in s.get("soundings", [])]
+            self.ann_rows = [self._ann_row(a) for a in s.get("annotations", [])]
+            self._show_series()
+            self._show_soundings()
+            self._show_anns()
         finally:
             self._hold = False
         self._show_region()
@@ -558,6 +720,28 @@ class FigureEditor:
                            panel=max(0, int(self.lg_panel.value or 1) - 1))
         s["export"] = dict(format=self.fmt.value, dpi=int(self.dpi.value or 250),
                            tight=self.tight.value)
+
+        def minutes(w):
+            try:
+                return float(w.value) if str(w.value).strip() else None
+            except ValueError:
+                return None
+
+        s["series"] = [c.collect() for c in self.ser_cards]
+        s["soundings"] = [c.collect() for c in self.snd_cards]
+        s["annotations"] = [r.collect() for r in self.ann_rows]
+        s["ts"] = dict(s.get("ts", {}), tmin=minutes(self.ts_tmin), tmax=minutes(self.ts_tmax),
+                       zmin=float(self.ts_zmin.value or 0.0),
+                       zmax=float(self.ts_zmax.value or 10.0), legend=self.ts_legend.value,
+                       legend_loc=self.ts_legloc.value, zero_line=self.ts_zero.value)
+        s["skewt"] = dict(s.get("skewt", {}), **{
+            k: (float(w.value or 0.0) if isinstance(w, pn.widgets.FloatInput) else w.value)
+            for k, w in self.sk.items()})
+        s["contour_key"] = dict(s.get("contour_key", {}), on=self.ck_on.value,
+                                layer=int(self.ck_layer.value), label=self.ck_label.value,
+                                x=float(self.ck_x.value or 0.0), y=float(self.ck_y.value or 0.0),
+                                size=float(self.ck_size.value or 0.1),
+                                fs=float(self.ck_fs.value or 10.0), frame=self.ck_frame.value)
         self.spec = s
         return s
 
@@ -576,6 +760,16 @@ class FigureEditor:
     def _show_cards(self):
         self.layer_box.objects = [c.panel for c in self.cards] or [pn.pane.HTML(
             '<div class="cv-empty">No layers: add one above.</div>')]
+        opts = {"First contours": -1} | {
+            f"{j + 1}. {self.F[c.w['field'].value].label}": j
+            for j, c in enumerate(self.cards) if c.type == "contour"}
+        v = self.ck_layer.value
+        hold, self._hold = self._hold, True
+        try:
+            self.ck_layer.options = opts
+            self.ck_layer.value = v if v in opts.values() else -1
+        finally:
+            self._hold = hold
 
     def _add_layer(self, kind, ev=None):
         F = self.F
@@ -740,6 +934,14 @@ class FigureEditor:
                 v = r["run"].value
                 r["run"].options = names
                 r["run"].value = v if v in names.values() else 0
+            for c in self.snd_cards:
+                v = c.w["run"].value
+                c.w["run"].options = names
+                c.w["run"].value = v if v in names.values() else 0
+            for c in self.ser_cards:
+                v = [k for k in c.w["runs"].value if k in names.values()]
+                c.w["runs"].options = names
+                c.w["runs"].value = v
         finally:
             self._hold = hold
         self.run_sel.visible = len(names) > 1 and self.vary.value in ("time", "field")
@@ -922,6 +1124,10 @@ class FigureEditor:
         and one column (row) per chosen time."""
         if self._hold:
             return
+        if self.kind.value == "th":
+            self._th_grid()
+            self._on_layout()
+            return
         if self.vary.value == "grid":
             nr, nt = len(self.run_rows), max(1, len(self.times.value))
             if nt == 1 and self.cols.value * self.rows.value > 1:
@@ -937,27 +1143,65 @@ class FigureEditor:
         self._on_layout()
 
     def _show_vary(self):
-        vary = self.vary.value
-        one = vary in ("field", "custom")
+        vary, kind = self.vary.value, self.kind.value
+        maps = kind in ("plan", "xsec")
+        one = vary in ("field", "custom") or not maps
+        self.vary.visible = maps
         self.times.visible = self.tstep.visible = self.tfill.visible = not one
-        self.time1.visible = vary == "field"
-        self.runs_as.visible = vary == "grid"
-        self.run_sel.visible = len(self.run_rows) > 1 and vary in ("time", "field")
+        self.time1.visible = vary == "field" and maps
+        self.runs_as.visible = (vary == "grid" and maps) or kind == "th"
+        self.run_sel.visible = len(self.run_rows) > 1 and vary in ("time", "field") and maps
+        self.pf_box.visible = self.pc_box.visible = maps
+        self.plan_layers.visible = self.region_px.visible = maps
+        self.series_col.visible = self.ts_col.visible = kind in ("th", "line")
+        self.snd_col.visible = kind == "sounding"
+        self.equal.visible = kind == "plan"
 
     def _on_kind(self, render_=True):
-        xsec = self.kind.value == "xsec"
-        self.equal.visible = not xsec
+        kind = self.kind.value
         if render_ and not self._hold:
             self._hold = True
             try:
-                if xsec:
+                if kind == "xsec":
                     self.xlabel.value = ("distance from storm (km)"
                                          if self.xs_mode.value == "storm" else "distance (km)")
                     self.ylabel.value = "height (km)"
-                else:
+                elif kind == "plan":
                     self.xlabel.value, self.ylabel.value = "x (km)", "y (km)"
+                elif kind in ("th", "line"):
+                    self.xlabel.value = "time (min)"
+                    self.ylabel.value = "height (km)" if kind == "th" else ""
+                    self.tl_on.value = False
+                    if kind == "th":
+                        self.runs_as.value = "cols"
+                        self.cb_mode.value, self.cb_orient.value = "row", "vertical"
+                    else:
+                        self.cb_mode.value = "none"
+                else:
+                    self.xlabel.value, self.ylabel.value = "temperature (°C)", "pressure (hPa)"
+                    self.cb_mode.value = "none"
             finally:
                 self._hold = False
+            if kind in ("th", "line") and not self.ser_cards:
+                ss = getattr(self.v, "series", {}) or {}
+                keys = [k for k in ss if ("profile" in ss[k]["ds"]) == (kind == "th")]
+                for k in keys[:3]:
+                    self.ser_cards.append(self._ser_card(self._tab_series(k)))
+                if not self.ser_cards:
+                    self.ser_cards.append(self._ser_card(fg.series_defaults(
+                        self.F, self._new_recipe())))
+            if kind == "sounding" and not self.snd_cards:
+                self.snd_cards = [self._snd_card(e) for e in self.tab_soundings()]
+                if not self.snd_cards:
+                    self._add_sounding()
+            self._show_series()
+            self._show_soundings()
+            self._auto_size = True
+            if kind == "th":
+                self._th_grid()
+            else:
+                self._fit_grid(reset=True)
+            self._fit_size()
             self.request()
         self._show_vary()
 
@@ -1008,6 +1252,24 @@ class FigureEditor:
 
     def _auto_titles(self):
         s = self.collect()
+        if s["kind"] == "th":
+            ts = []
+            for i in range(fg.npanels(s)):
+                ref = figdraw.series_ref(s, i)
+                ts.append(f"{s['runs'][ref[0]]['label']} – {s['series'][ref[1]]['label']}"
+                          if ref else "")
+            self.rl_on.value = False
+            self.titles.value = "\n".join(ts)
+            return
+        if s["kind"] in ("line", "sounding"):
+            ents = s["series" if s["kind"] == "line" else "soundings"]
+            ts = []
+            for i in range(fg.npanels(s)):
+                labs = [e.get("label", "") for e in ents if int(e.get("panel", 0)) == i]
+                ts.append(" / ".join(dict.fromkeys(x for x in labs if x)) if s["kind"] == "line"
+                          else "")
+            self.titles.value = "\n".join(ts)
+            return
         if s["vary"] == "field":
             ts = [self.F[pf["field"]].label for pf in s["panel_fills"]]
         elif s["vary"] in ("grid", "custom"):
@@ -1125,6 +1387,391 @@ class FigureEditor:
         s["colorbar"] = dict(s["colorbar"], mode="each", orientation="vertical", shrink=0.9)
         self.set_spec(s)
 
+    # ------------------------------------------------------------ series cards
+    def _ser_card(self, e):
+        c = SeriesCard(self, e)
+        c.up.on_click(lambda ev: self._move_ser(c, -1))
+        c.down.on_click(lambda ev: self._move_ser(c, 1))
+        c.rm.on_click(lambda ev: self._remove_ser(c))
+        return c
+
+    def _show_series(self):
+        for c in self.ser_cards:
+            c.show(self.kind.value)
+        self.ser_box.objects = [c.panel for c in self.ser_cards] or [pn.pane.HTML(
+            '<div class="cv-empty">No series: add one of the Series tab above, or a new '
+            'one.</div>')]
+        ss = getattr(self.v, "series", {}) or {}
+        self.ser_from.options = {"": ""} | {v["label"]: k for k, v in ss.items()}
+
+    def _series_changed(self):
+        self._show_series()
+        if self.kind.value == "th":
+            self._th_grid()
+        self._fit_grid()
+        self.request()
+
+    def _move_ser(self, c, d):
+        i = self.ser_cards.index(c)
+        j = min(max(i + d, 0), len(self.ser_cards) - 1)
+        self.ser_cards[i], self.ser_cards[j] = self.ser_cards[j], self.ser_cards[i]
+        self._series_changed()
+
+    def _remove_ser(self, c):
+        self.ser_cards.remove(c)
+        self._series_changed()
+
+    def _tab_series(self, key):
+        """A spec["series"] entry of a series of the Series tab."""
+        s = self.v.series[key]
+        r = dict(s["recipe"])
+        e = fg.series_defaults(self.F, r, len(self.ser_cards))
+        e["panel"] = 0
+        return e
+
+    def _add_series_from_tab(self):
+        key = self.ser_from.value
+        if not key or key not in getattr(self.v, "series", {}):
+            return
+        self.ser_cards.append(self._ser_card(self._tab_series(key)))
+        self._series_changed()
+
+    def _new_recipe(self):
+        """A recipe for a new series: max w in 0–10 km near the storm (whole domain
+        without a track), as for updraft time-height plots."""
+        f = "winterp" if "winterp" in self.F else next(iter(self.F.defs))
+        track = bool(self.v.fixes) or any(r.get("track") for r in self._runs_collect())
+        return ser.normalize(dict(field=f, vmode="layer", z0=0.0, z1=10.0,
+                                  region="track" if track else "domain", radius=5.0,
+                                  offset=(0.0, 0.0), reduce="max"))
+
+    def _add_series(self):
+        e = fg.series_defaults(self.F, self._new_recipe(), len(self.ser_cards))
+        if self.kind.value == "line":
+            e["panel"] = len({c.collect()["panel"] for c in self.ser_cards})
+        self.ser_cards.append(self._ser_card(e))
+        self._series_changed()
+
+    def _fit_grid(self, reset=False):
+        """Time-series / sounding figures: enough grid cells for the highest panel
+        number of the cards and no empty rows (reset: a column of up to 3, else 2
+        columns)."""
+        kind = self.kind.value
+        if kind not in ("line", "sounding"):
+            return
+        cards = self.ser_cards if kind == "line" else self.snd_cards
+        n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
+        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
+        if reset:
+            r, c = (n, 1) if n <= 3 else ((n + 1) // 2, 2)
+        else:
+            c = min(c, n)
+            r = -(-n // c)
+        if (r, c) != (self.rows.value, self.cols.value):
+            hold, self._hold = self._hold, True
+            try:
+                self.rows.value, self.cols.value = r, c
+            finally:
+                self._hold = hold
+            self._fit_size()
+
+    _auto_size = False  # the figure size follows the grid until it is set by hand
+
+    def _fit_size(self):
+        """Time-height / time-series / sounding figures: a size for the grid."""
+        kind, r, c = self.kind.value, int(self.rows.value or 1), int(self.cols.value or 1)
+        if not self._auto_size or kind in ("plan", "xsec"):
+            return
+        if kind == "th":
+            w, h = 4.5 * c + 1.0, 2.8 * r + 0.6
+        elif kind == "sounding":
+            w, h = 5.0 * c + 0.5, 5.0 * r
+        else:
+            w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
+        hold, self._hold = self._hold, True
+        try:
+            self.width.value, self.height.value = round(min(16.0, w), 2), round(min(16.0, h), 2)
+        finally:
+            self._hold = hold
+
+    def _size_by_hand(self):
+        if not self._hold:
+            self._auto_size = False
+
+    def _th_grid(self):
+        """Time-height grid: a row (column) per series and a column (row) per run."""
+        ne, nr = max(1, len(self.ser_cards)), max(1, len(self.run_rows))
+        r, c = (ne, nr) if self.runs_as.value == "cols" else (nr, ne)
+        if (self.rows.value, self.cols.value) != (r, c):
+            hold, self._hold = self._hold, True
+            try:
+                self.rows.value, self.cols.value = r, c
+            finally:
+                self._hold = hold
+            self._fit_size()
+
+    # ------------------------------------------------------------ sounding cards
+    def _snd_card(self, e):
+        c = SoundingCard(self, e)
+        c.rm.on_click(lambda ev: self._remove_snd(c))
+        return c
+
+    def _show_soundings(self):
+        self.snd_box.objects = [c.panel for c in self.snd_cards] or [pn.pane.HTML(
+            '<div class="cv-empty">No soundings: add the Sounding tab\'s, or a new one.'
+            '</div>')]
+
+    def _remove_snd(self, c):
+        self.snd_cards.remove(c)
+        self._show_soundings()
+        self.request()
+
+    def _own_index(self):
+        paths = [r["path"] for r in self.run_rows]
+        return paths.index(self.run.path) if self.run.path in paths else 0
+
+    def tab_soundings(self):
+        """spec["soundings"] entries of the Sounding tab's soundings (this run)."""
+        out = []
+        for n, (kind, where, tp) in enumerate(self.v.points):
+            t = self.v.t if tp is None else tp
+            if kind == "mean":
+                wh = dict(kind="mean", x=0.0, y=0.0, avg=0.0)
+            else:
+                avg = (0.5 * (where[2] + where[3]) if len(where) == 4
+                       else float(self.v.avg.value or 0.0) if hasattr(self.v, "avg") else 0.0)
+                wh = dict(kind=kind, x=float(where[0]), y=float(where[1]), avg=float(avg))
+            out.append(fg.sounding_defaults(self._own_index(), float(self.run.times[t]), wh,
+                                            n + len(self.snd_cards)))
+        return out
+
+    def _add_tab_soundings(self):
+        new = self.tab_soundings()
+        if not new:
+            self._msg("The Sounding tab has no soundings: click the map in Sounding mode "
+                      "first, or add one here.", True)
+            return
+        self.snd_cards += [self._snd_card(e) for e in new]
+        self._show_soundings()
+        self.request()
+
+    def _add_sounding(self):
+        e = fg.sounding_defaults(self._own_index(), float(self.run.times[self.v.t]),
+                                 dict(kind="trk", x=0.0, y=0.0, avg=0.0), len(self.snd_cards))
+        e["panel"] = len(self.snd_cards)
+        self.snd_cards.append(self._snd_card(e))
+        self._show_soundings()
+        self._fit_grid()
+        self.request()
+
+    # ------------------------------------------------------------ annotations
+    def _ann_row(self, a):
+        r = AnnotationRow(self, a)
+        r.rm.on_click(lambda ev: self._remove_ann(r))
+        return r
+
+    def _show_anns(self):
+        self.ann_box.objects = [r.panel for r in self.ann_rows]
+
+    def _add_annotation(self):
+        kind = self.ann_kind.value
+        x, y = (0.5, 0.5) if kind in ("text", "marker") and self.kind.value == "sounding" \
+            else (0.0, 0.0)
+        a = dict(kind=kind, panel=-1, coords="axes" if self.kind.value == "sounding" else "data",
+                 x=x, y=y, x2=x + 2.0, y2=y + 2.0, r=2.0, text="A" if kind == "text" else "",
+                 color="#000000", size=10.0 if kind != "marker" else 8.0, lw=1.5,
+                 ls="--" if kind in ("vline", "hline") else "-")
+        self.ann_rows.append(self._ann_row(a))
+        self._show_anns()
+        self.request()
+
+    def _remove_ann(self, r):
+        self.ann_rows.remove(r)
+        self._show_anns()
+        self.request()
+
+    # ------------------------------------------------------------ series data
+    def _series_get(self, spec, k, e):
+        """(run, dataset) of series e of spec for run k, or why not (a string).  Starts
+        computing the missing times in the background (the preview updates as they come
+        in)."""
+        runs, ent = spec["runs"], spec["series"][e]
+        try:
+            run, F = self.open_run(runs[k]["path"])
+        except Exception as ex:  # noqa: BLE001
+            return f"could not open {runs[k]['path']}: {ex}"
+        r = ent["recipe"]
+        if r["field"] not in F:
+            return f"this run has no {r['field']}"
+        fx = self.run_fixes(runs[k], run)
+        track = r["region"] == "track"
+        if track and not fx:
+            return "no storm track for this run (Runs tab)"
+        centers = ser.track_centers(fx, len(run.times)) if track else None
+        sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                for t, f in fx.items())) if track else ""
+        key = (run.path, json.dumps(r, sort_keys=True), sig)
+        ds = self._ser_mem.get(key)
+        if ds is None:
+            d = F[r["field"]]
+            ds = ser.cached(run, r, d.label, d.units, centers)
+            self._ser_mem[key] = ds
+        if key not in self._ser_state and int(ds["computed"].sum()) < len(run.times):
+            self._ser_state[key] = "running"
+            storm = ({t: fg.storm_motion(run, fx, t) for t in range(len(run.times))}
+                     if F[r["field"]].storm else None)
+            self.v.pools["figser"].submit(self._ser_compute, key, run, F, r, ds, centers, storm,
+                                          f"{runs[k].get('label') or ''}: {ent.get('label', '')}")
+        elif key not in self._ser_state:
+            self._ser_state[key] = "done"
+        return run, ds
+
+    def _ser_compute(self, key, run, F, recipe, ds, centers, storm, what):
+        g0, last = self.v.gen["figser"], [_time.time()]
+
+        def on_result(ds_, done, total):
+            self._ser_prog[key] = f"{what[:60]} {done}/{total}"
+            if _time.time() - last[0] > 10 and done < total:  # partial preview
+                last[0] = _time.time()
+                self.v._schedule(partial(self.request, False, False))
+
+        try:
+            ser.compute(run, F, recipe, ds, centers, storm, on_result=on_result,
+                        cancelled=lambda: self.v.gen["figser"] != g0)
+            self._ser_state[key] = "done"
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            self._ser_state[key] = f"error: {e}"
+        self._ser_prog.pop(key, None)
+        self.v._schedule(partial(self.request, False, False))
+
+    def series_pending(self):
+        return [v for k, v in self._ser_prog.items() if self._ser_state.get(k) == "running"] \
+            or [""] * sum(v == "running" for v in self._ser_state.values())
+
+    def _series_data(self, spec):
+        got = {}
+
+        def get(k, e):
+            if (k, e) not in got:
+                got[(k, e)] = self._series_get(spec, k, e)
+            return None if isinstance(got[(k, e)], str) else got[(k, e)]
+
+        data, multi = {}, len(spec["runs"]) > 1
+        busy = bool(self.series_pending())
+        for i in range(fg.npanels(spec)):
+            if spec["kind"] == "th":
+                ref = figdraw.series_ref(spec, i)
+                if ref is None:
+                    continue
+                r = get(*ref)
+                d = (dict(missing=got[ref]) if r is None else
+                     fg.th_panel(r[0], r[1], spec["series"][ref[1]], spec))
+                if multi:
+                    d["run_label"] = spec["runs"][ref[0]].get("label", "")
+            else:
+                d = fg.line_panel(spec, i, get)
+            if busy and d.get("missing") == "not computed yet":
+                d["missing"] = "computing…"
+            data[i] = d
+        return fg.share_time_range(spec, data)
+
+    def _sounding_data(self, spec, progress=None, cancelled=None):
+        runs, ents = spec["runs"], spec.get("soundings", [])
+        res, labels = {}, {}
+        multi = len(runs) > 1
+
+        def get(e):
+            if e in res:
+                return res[e]
+            ent = ents[e]
+            k = int(ent.get("run", 0))
+            if k >= len(runs):
+                res[e] = "no such run"
+                return res[e]
+            try:
+                run, _ = self.open_run(runs[k]["path"])
+                fx = self.run_fixes(runs[k], run)
+                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                        for t, f in fx.items())) \
+                    if ent["where"].get("kind") == "trk" else ""
+                key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig],
+                                 sort_keys=True)
+                r = self.snd_cache.get(key)
+                if r is None:
+                    if progress:
+                        progress(e, len(ents))
+                    r = fg.sounding_column(run, ent, fx)
+                    self.snd_cache[key] = r
+                    while len(self.snd_cache) > 40:
+                        self.snd_cache.popitem(last=False)
+                labels[e] = fg.sounding_label(ent, runs[k].get("label", ""), run, multi)
+            except (MissingAtTime, FileBusy) as ex:
+                r = str(ex)
+            except Exception as ex:  # noqa: BLE001
+                traceback.print_exc()
+                r = f"{type(ex).__name__}: {ex}"
+            res[e] = r
+            return r
+
+        data = {}
+        for i in range(fg.npanels(spec)):
+            if cancelled and cancelled():
+                return None
+            data[i] = fg.sounding_panel(spec, i, get, lambda e: labels.get(e, ""))
+        return data
+
+    # ------------------------------------------------------------ start from series / soundings
+    def from_series(self):
+        """Time-height panels of the Series tab's layer series (the active one first),
+        or time series when the active one is at one height; every run of the figure."""
+        ss = getattr(self.v, "series", {}) or {}
+        if not ss:
+            self._msg("Compute a series in the Series tab first (or add series in "
+                      "<b>Layers</b>).", True)
+            return
+        act = self.v.ser_pick.value if self.v.ser_pick.value in ss else next(iter(ss))
+        keys = [act] + [k for k in ss if k != act]
+        th = "profile" in ss[act]["ds"]
+        keys = [k for k in keys if ("profile" in ss[k]["ds"]) == th][:4 if th else 6]
+        s = self._keep_runs(fg.default_spec(self.run, self.F, self.v.t))
+        ents = [fg.series_defaults(self.F, dict(ss[k]["recipe"]), n) for n, k in enumerate(keys)]
+        nr = len(s["runs"])
+        s.update(kind="th" if th else "line", series=ents, runs_as="cols", vary="time",
+                 layers=[lay for lay in s["layers"] if lay["type"] != "vectors"])
+        s["axes"] = dict(s["axes"], xlabel="time (min)", ylabel="height (km)" if th else "",
+                         ticklabels="outer", equal=False)
+        s["time_label"] = dict(s["time_label"], on=False)
+        s["letters"] = dict(s["letters"], loc="upper left")
+        if th:
+            s.update(rows=len(ents), cols=nr, size=[5.0 * nr + 1.0, 3.0 * len(ents) + 0.5])
+            s["colorbar"] = dict(s["colorbar"], mode="row", orientation="vertical", shrink=1.0)
+            s["titles"] = [f"{s['runs'][c]['label']} – {e['label']}" for e in ents
+                           for c in range(nr)]
+            s["run_label"] = dict(s["run_label"], on=False)
+        else:
+            s.update(rows=1, cols=1, size=[7.0, 3.5])
+            s["colorbar"] = dict(s["colorbar"], mode="none")
+        self.set_spec(s)
+
+    def from_soundings(self):
+        """Skew-T panels: the Sounding tab's soundings in one panel (or the storm's
+        sounding at the shown time when there are none)."""
+        s = self._keep_runs(fg.default_spec(self.run, self.F, self.v.t))
+        own = s["runs"][s["run"]]
+        track = bool(self.run_fixes(own, self.run))
+        snd = self.tab_soundings() or [fg.sounding_defaults(
+            s["run"], float(self.run.times[self.v.t]),
+            dict(kind="trk" if track else "mean", x=0.0, y=0.0, avg=0.0))]
+        s.update(kind="sounding", soundings=snd, rows=1, cols=1, size=[5.5, 5.5],
+                 vary="time")
+        s["axes"] = dict(s["axes"], xlabel="temperature (°C)", ylabel="pressure (hPa)",
+                         ticklabels="all", equal=False)
+        s["colorbar"] = dict(s["colorbar"], mode="none")
+        s["letters"] = dict(s["letters"], on=False)
+        s["time_label"] = dict(s["time_label"], loc="lower left")
+        self.set_spec(s)
+
     # ------------------------------------------------------------ rendering
     def request(self, force=False, delay=True):
         """Re-render the preview (shortly: several quick changes give one render)."""
@@ -1153,6 +1800,10 @@ class FigureEditor:
 
     def panel_data(self, spec, progress=None, cancelled=None):
         """{panel: arrays} of the spec, from the cache where possible."""
+        if spec["kind"] in ("th", "line"):
+            return self._series_data(spec)
+        if spec["kind"] == "sounding":
+            return self._sounding_data(spec, progress, cancelled)
         ctx = {}  # run index -> (run, Fields, fixes, centres, track signature)
 
         def context(k):
@@ -1207,7 +1858,8 @@ class FigureEditor:
             return g != self.v.gen["fig"]
 
         def progress(i, n):
-            self.v._schedule(partial(self._status, f'<span class="busy">● Reading panel '
+            what = "sounding" if spec["kind"] == "sounding" else "panel"
+            self.v._schedule(partial(self._status, f'<span class="busy">● Reading {what} '
                                                    f'{i + 1}/{n}…</span>'))
 
         try:
@@ -1224,6 +1876,10 @@ class FigureEditor:
             note = (f"{len(data)} panel{'s' if len(data) != 1 else ''} · "
                     f"{spec['size'][0]:g} × {spec['size'][1]:g} in · preview at {dpi:.0f} dpi"
                     f" · {_time.time() - t0:.1f} s")
+            pend = self.series_pending() if spec["kind"] in ("th", "line") else []
+            if pend:
+                note += (' · <span class="busy">● computing series '
+                         + "; ".join(p for p in pend if p) + "</span>")
             if miss:
                 note += (f" · no data in panel{'s' if len(miss) > 1 else ''} "
                          + ", ".join(figdraw.panel_letter(i, "{a}") for i in miss))
@@ -1268,6 +1924,13 @@ class FigureEditor:
         self.v.pools["fig"].submit(self._save_job, spec, bundle)
 
     def _save_job(self, spec, bundle):
+        if spec["kind"] in ("th", "line"):
+            self.panel_data(spec)  # (starts computing what is missing)
+            if self.series_pending():
+                self.v._schedule(partial(self._msg, "The series are still being computed "
+                                                    "(see the preview's status line): save "
+                                                    "when they are done.", True))
+                return
         try:
             data = self.panel_data(spec)
             base = self.path.value
@@ -1328,3 +1991,322 @@ def _dark(color):
     except (ValueError, AttributeError):
         return "#000000"
     return "#000000" if 0.299 * r + 0.587 * g + 0.114 * b > 180 else color
+
+
+# ------------------------------------------------------------------ series / soundings
+SER_REGIONS = {"Around tracked storm": "track", "Whole domain": "domain",
+               "Fixed box (map view)": "box"}
+SER_REDUCE = {"Maximum": "max", "Minimum": "min", "Mean": "mean", "Percentile": "pct"}
+SER_OPS = {"Value": "", "d/dz (per m)": "ddz", "d/dt (per s)": "ddt"}
+MARKERS = {"none": "", "dots": "o", "squares": "s", "triangles": "^"}
+SND_WHERE = {"Storm (offset, km)": "trk", "Point (model x, y km)": "pt",
+             "Domain mean": "mean"}
+ANN_KINDS = {"Text": "text", "Marker": "marker", "Arrow": "arrow", "Line": "line",
+             "Vertical line": "vline", "Horizontal line": "hline", "Box": "box",
+             "Circle": "circle"}
+ANN_FIELDS = {  # widgets each kind uses (besides kind, panel, colour, remove)
+    "text": ("coords", "x", "y", "text", "size", "bold"),
+    "marker": ("coords", "x", "y", "marker", "size", "lw", "text", "bold"),
+    "arrow": ("coords", "x", "y", "x2", "y2", "text", "size", "lw", "bold"),
+    "line": ("coords", "x", "y", "x2", "y2", "lw", "ls"),
+    "vline": ("x", "lw", "ls", "text", "bold"),
+    "hline": ("y", "lw", "ls", "text", "bold"),
+    "box": ("coords", "x", "y", "x2", "y2", "lw", "ls"),
+    "circle": ("coords", "x", "y", "r", "lw", "ls"),
+}
+_BTN = dict(width=32, height=28, margin=(2, 1), button_type="default", button_style="outline")
+
+
+def _chk(name, value):
+    return pn.widgets.Checkbox(name=name, value=bool(value), margin=(5, 6, 12, 6))
+
+
+class SeriesCard:
+    """One series of a time-height / time-series figure: a Series-tab recipe (field,
+    level or layer, region, reduction), an optional derivative, and its look."""
+
+    def __init__(self, ed, ent):
+        self.ed, self.ent = ed, dict(ent)
+        F, r = ed.F, ent["recipe"]
+        self.box = r.get("box")
+        self.w = w = {}
+        self.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
+        self.down = pn.widgets.Button(name="↓", description="Later in the list", **_BTN)
+        self.rm = pn.widgets.Button(name="✕", description="Remove the series", **_BTN)
+        field = r["field"] if r["field"] in F else next(iter(F.defs))
+        w["field"] = pn.widgets.Select(name="Field", groups=F.groups(), value=field, width=210)
+        w["vmode"] = pn.widgets.Select(name="Vertical", options={
+            "Layer (every level)": "layer", "At a height": "height"},
+            value="height" if r["vmode"] == "height" else "layer", width=150)
+        w["z"] = _f("Height (km)", float(r.get("z", 1.0)), 90, step=0.25)
+        w["z0"] = _f("Bottom (km)", float(r.get("z0", 0.0)), 90, step=0.5)
+        w["z1"] = _f("Top (km)", float(r.get("z1", 10.0)), 80, step=0.5)
+        w["region"] = pn.widgets.Select(name="Region", options=SER_REGIONS, value=r["region"],
+                                        width=180)
+        w["radius"] = _f("Radius (km)", float(r.get("radius", 5.0)), 90, step=0.5)
+        off = r.get("offset", (0.0, 0.0))
+        w["offx"] = _f("Offset x (km)", float(off[0]), 100, step=1.0)
+        w["offy"] = _f("Offset y (km)", float(off[1]), 100, step=1.0)
+        w["reduce"] = pn.widgets.Select(name="Reduce", options=SER_REDUCE, value=r["reduce"],
+                                        width=120)
+        w["pct"] = _f("Percentile", float(r.get("pct", 99.0)), 90, step=0.5)
+        w["op"] = pn.widgets.Select(name="Plot", options=SER_OPS, value=ent.get("op", ""),
+                                    width=130)
+        w["label"] = pn.widgets.TextInput(name="Label (titles, legend)",
+                                          value=ent.get("label", ""), width=300)
+        # time-height look
+        w["cmap"] = pn.widgets.Select(name="Colormap", options=FIG_CMAPS, width=150,
+                                      value=ent["cmap"] if ent["cmap"] in FIG_CMAPS
+                                      else "viridis")
+        w["reverse"] = _chk("Reverse", ent.get("reverse", False))
+        w["white_first"] = _chk("White first", ent.get("white_first", False))
+        w["vmin"] = _f("Min", float(ent["vmin"]))
+        w["vmax"] = _f("Max", float(ent["vmax"]))
+        w["nlevels"] = pn.widgets.IntInput(name="Steps (0 = smooth)", start=0, end=60,
+                                           value=int(ent.get("nlevels") or 0), width=120)
+        w["extend"] = pn.widgets.Select(name="Colorbar ends", options=[
+            "neither", "max", "min", "both"], value=ent.get("extend", "neither"), width=110)
+        # time-series look
+        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color", "k")),
+                                            width=70)
+        w["lw"] = _f("Line width", float(ent.get("lw", 1.5)), 90, step=0.25)
+        w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS,
+                                        value=ent.get("marker", ""), width=100)
+        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
+                                         value=int(ent.get("panel", 0)) + 1)
+        w["axis"] = pn.widgets.Select(name="y axis", options={"By units": "auto",
+                                                              "Own axis (right)": "right"},
+                                      value=ent.get("axis", "auto"), width=140)
+        w["runs"] = pn.widgets.MultiChoice(name="Runs (blank: all)", options=ed._run_names(),
+                                           value=[int(k) for k in (ent.get("runs") or [])],
+                                           width=260)
+        w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)",
+                                           value=ent.get("ylabel", ""), width=180)
+        self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
+        self.info = pn.pane.HTML(margin=(0, 4))
+        recipe_keys = ("vmode", "z", "z0", "z1", "region", "radius", "offx", "offy", "reduce",
+                       "pct")
+        for k in recipe_keys:
+            w[k].param.watch(lambda e: self._changed(), "value")
+        for k, x in w.items():
+            if k not in recipe_keys and k not in ("field", "panel"):
+                x.param.watch(lambda e: ed.request(), "value")
+        w["panel"].param.watch(lambda e: ed._series_changed(), "value")
+        w["field"].param.watch(self._on_field, "value")
+        w["op"].param.watch(lambda e: self._set_title(), "value")
+        self.th_row = _row(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
+                           w["nlevels"], w["extend"])
+        self.line_row = _row(w["color"], w["lw"], w["marker"], w["panel"], w["axis"],
+                             w["ylabel"], w["runs"])
+        self.panel = pn.Column(
+            pn.Row(self.title, pn.Spacer(), self.up, self.down, self.rm, margin=0,
+                   sizing_mode="stretch_width"),
+            _row(w["field"], w["vmode"], w["z"], w["z0"], w["z1"]),
+            _row(w["region"], w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"]),
+            _row(w["op"], w["label"]), self.th_row, self.line_row, self.info,
+            styles=CARD, sizing_mode="stretch_width", margin=(2, 0))
+        self._set_title()
+        self.show(ed.kind.value)
+
+    def show(self, kind):
+        w, two = self.w, self.ed.F[self.w["field"].value].ndim == 2
+        lay = w["vmode"].value == "layer"
+        w["vmode"].visible = not two
+        w["z"].visible = not two and not lay
+        w["z0"].visible = w["z1"].visible = not two and lay
+        trkr = w["region"].value == "track"
+        w["radius"].visible = w["offx"].visible = w["offy"].visible = trkr
+        w["pct"].visible = w["reduce"].value == "pct"
+        self.th_row.visible = kind == "th"
+        self.line_row.visible = kind == "line"
+
+    def _set_title(self):
+        d = self.ed.F[self.w["field"].value]
+        op = {"ddz": " · d/dz", "ddt": " · d/dt"}.get(self.w["op"].value, "")
+        self.title.object = f"<b>Series</b> · {d.label}{op}"
+
+    def _changed(self):
+        if self.w["region"].value == "box" and self.box is None:
+            self.box = [float(v) for v in self.ed.v.view]
+        self.show(self.ed.kind.value)
+        self._auto_label()
+        self.ed.request()
+
+    def _auto_label(self):
+        """Keep an automatic label in step with the recipe (an edited one stays)."""
+        old = self.ent.get("_auto", self.ent.get("label", ""))
+        d = self.ed.F[self.w["field"].value]
+        new = ser.describe(self.recipe(), d.label)
+        if self.w["label"].value in ("", old):
+            hold, self.ed._hold = self.ed._hold, True
+            try:
+                self.w["label"].value = new
+            finally:
+                self.ed._hold = hold
+        self.ent["_auto"] = new
+
+    def _on_field(self, ev):
+        """New field: its colours and range."""
+        e = fg.series_defaults(self.ed.F, self.recipe())
+        self.ed._hold = True
+        try:
+            for k in ("vmin", "vmax", "extend", "white_first"):
+                self.w[k].value = e[k]
+            self.w["cmap"].value = e["cmap"] if e["cmap"] in FIG_CMAPS else "viridis"
+        finally:
+            self.ed._hold = False
+        self._set_title()
+        self._changed()
+
+    def recipe(self):
+        w, d = self.w, self.ed.F[self.w["field"].value]
+        r = dict(field=d.name, vmode="2d" if d.ndim == 2 else w["vmode"].value,
+                 z=w["z"].value or 0.0, z0=w["z0"].value or 0.0, z1=w["z1"].value or 0.0,
+                 region=w["region"].value, radius=w["radius"].value or 5.0,
+                 offset=(w["offx"].value or 0.0, w["offy"].value or 0.0),
+                 reduce=w["reduce"].value,
+                 pct=w["pct"].value if w["pct"].value is not None else 99.0,
+                 box=self.box or [float(v) for v in self.ed.v.view])
+        return ser.normalize(r)
+
+    def collect(self):
+        w, e = self.w, dict(self.ent)
+        e.pop("_auto", None)
+        e["recipe"] = self.recipe()
+        for k in ("op", "label", "cmap", "reverse", "white_first", "nlevels", "extend",
+                  "color", "marker", "axis", "ylabel"):
+            e[k] = w[k].value
+        e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
+        e["lw"] = float(w["lw"].value or 1.5)
+        e["panel"] = max(0, int(w["panel"].value or 1) - 1)
+        e["runs"] = sorted(int(k) for k in w["runs"].value) or None
+        e["base_units"] = self.ed.F[e["recipe"]["field"]].units
+        e["units"] = fg.op_units(e["base_units"], e["op"])
+        return e
+
+
+class SoundingCard:
+    """One sounding of a sounding figure: run, time, where, look and panel."""
+
+    def __init__(self, ed, ent):
+        self.ed, self.ent = ed, dict(ent)
+        self.w = w = {}
+        self.rm = pn.widgets.Button(name="✕", description="Remove the sounding", **_BTN)
+        names = ed._run_names()
+        k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
+        w["run"] = pn.widgets.Select(name="Run", options=names, value=k, width=170)
+        opts = ed._time_opts(k)
+        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
+                                      value=ed._nearest(opts, ent.get("time_s")))
+        wh = ent.get("where", {})
+        w["kind"] = pn.widgets.Select(name="Where", options=SND_WHERE,
+                                      value=wh.get("kind", "trk"), width=180)
+        w["x"] = _f("x (km)", float(wh.get("x", 0.0)), 80, step=1.0)
+        w["y"] = _f("y (km)", float(wh.get("y", 0.0)), 80, step=1.0)
+        w["avg"] = _f("Box width (km, 0: column)", float(wh.get("avg", 0.0)), 170, step=0.5,
+                      start=0.0)
+        w["label"] = pn.widgets.TextInput(name="Legend text (blank: automatic)",
+                                          value=ent.get("label", ""), width=220)
+        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color", "k")),
+                                            width=70)
+        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
+                                         value=int(ent.get("panel", 0)) + 1)
+        w["run"].param.watch(self._on_run, "value")
+        for k, x in w.items():
+            if k != "run":
+                x.param.watch(lambda e: self._changed(), "value")
+        w["panel"].param.watch(lambda e: ed._fit_grid(), "value")
+        self.title = pn.pane.HTML("<b>Sounding</b>", margin=(6, 4, 0, 4))
+        self.panel = pn.Column(
+            pn.Row(self.title, pn.Spacer(), self.rm, margin=0, sizing_mode="stretch_width"),
+            _row(w["run"], w["time"], w["kind"], w["x"], w["y"], w["avg"]),
+            _row(w["label"], w["color"], w["panel"]), styles=CARD,
+            sizing_mode="stretch_width", margin=(2, 0))
+        self._show()
+
+    def _show(self):
+        self.w["x"].visible = self.w["y"].visible = self.w["kind"].value != "mean"
+        self.w["avg"].visible = self.w["kind"].value != "mean"
+
+    def _changed(self):
+        self._show()
+        self.ed.request()
+
+    def _on_run(self, ev):
+        if self.ed._hold:
+            return
+        o = self.ed._time_opts(ev.new)
+        cur = self.w["time"].value
+        self.ed._hold = True
+        try:
+            self.w["time"].options = o
+            self.w["time"].value = self.ed._nearest(o, cur)
+        finally:
+            self.ed._hold = False
+        self.ed.request()
+
+    def collect(self):
+        w = self.w
+        return dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0),
+                    panel=max(0, int(w["panel"].value or 1) - 1), label=w["label"].value,
+                    color=w["color"].value,
+                    where=dict(kind=w["kind"].value, x=float(w["x"].value or 0.0),
+                               y=float(w["y"].value or 0.0),
+                               avg=float(w["avg"].value or 0.0)))
+
+
+class AnnotationRow:
+    """One annotation: text, marker, arrow, line, box or circle in one panel or all."""
+
+    def __init__(self, ed, a):
+        self.ed = ed
+        self.w = w = {}
+        w["kind"] = pn.widgets.Select(name="Kind", options=ANN_KINDS, value=a.get("kind", "text"),
+                                      width=130)
+        w["panel"] = pn.widgets.IntInput(name="Panel (0: all)", start=0, end=64, width=100,
+                                         value=int(a.get("panel", -1)) + 1)
+        w["coords"] = pn.widgets.Select(name="Position in", options={
+            "Axis units (km, min)": "data", "Panel fraction (0–1)": "axes"},
+            value=a.get("coords", "data"), width=170)
+        for k, lab in (("x", "x"), ("y", "y"), ("x2", "x to"), ("y2", "y to"),
+                       ("r", "Radius")):
+            w[k] = _f(lab, float(a.get(k, 0.0 if k != "r" else 1.0)), 80, step=0.5)
+        w["text"] = pn.widgets.TextInput(name="Text", value=a.get("text", ""), width=150)
+        w["size"] = _f("Size", float(a.get("size") or 10.0), 70, step=1)
+        w["lw"] = _f("Line width", float(a.get("lw", 1.5)), 90, step=0.25)
+        w["ls"] = pn.widgets.Select(name="Style", options={"solid": "-", "dashed": "--",
+                                                           "dotted": ":"},
+                                    value=a.get("ls", "-" if a.get("kind") not in
+                                                ("vline", "hline") else "--"), width=90)
+        w["marker"] = pn.widgets.Select(name="Marker", options={
+            "×": "x", "+": "+", "●": ".", "○": "o", "□": "s", "★": "*", "▲": "^"},
+            value=a.get("marker", "x"), width=80)
+        w["bold"] = _chk("Bold", a.get("bold", False))
+        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(a.get("color", "k")),
+                                            width=70)
+        self.rm = pn.widgets.Button(name="✕", description="Remove", **_BTN)
+        for k, x in w.items():
+            x.param.watch(lambda e: self._changed(), "value")
+        self.panel = pn.Column(
+            pn.Row(_row(*w.values()), self.rm, margin=0, sizing_mode="stretch_width"),
+            styles=CARD, sizing_mode="stretch_width", margin=(2, 0))
+        self._show()
+
+    def _show(self):
+        use = ANN_FIELDS[self.w["kind"].value]
+        for k, x in self.w.items():
+            if k not in ("kind", "panel", "color"):
+                x.visible = k in use
+
+    def _changed(self):
+        self._show()
+        self.ed.request()
+
+    def collect(self):
+        w = self.w
+        a = dict(kind=w["kind"].value, panel=int(w["panel"].value or 0) - 1,
+                 color=w["color"].value)
+        for k in ANN_FIELDS[a["kind"]]:
+            v = w[k].value
+            a[k] = float(v or 0.0) if isinstance(w[k], pn.widgets.FloatInput) else v
+        return a
