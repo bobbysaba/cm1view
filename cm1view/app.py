@@ -351,9 +351,10 @@ class Viewer:
         self._play_cb = None
         self.time_html = _html()
 
+        # 3D is offered only once a 3D region exists (_sync_workspace)
         self.workspace = pn.widgets.RadioButtonGroup(
-            options=["Map", "3D", "Figure"], value="Map", button_type="primary",
-            button_style="outline", width=190, height=32, margin=(4, 2))
+            options=["Map", "Figure"], value="Map", button_type="primary",
+            button_style="outline", width=127, height=32, margin=(4, 2))
         modes = ["Sounding", "Area sounding", "Cross-section", "3D region"]
         if trk.available(run):
             modes.append("Track")
@@ -1722,7 +1723,17 @@ class Viewer:
         opts["Around tracked storm"] = "track"
         return opts
 
+    def _sync_workspace(self):
+        """Map | 3D | Figure, with 3D only while a 3D region box exists."""
+        opts = ["Map", "3D", "Figure"] if self.box is not None else ["Map", "Figure"]
+        if self.workspace.options == opts:
+            return
+        if self.workspace.value not in opts:
+            self.workspace.value = "Map"
+        self.workspace.param.update(options=opts, width=63 * len(opts) + 1)
+
     def _update_region_html(self):
+        self._sync_workspace()
         if hasattr(self, "ser_region"):
             opts = self._ser_regions()
             if self.ser_region.options != opts:
