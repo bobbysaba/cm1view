@@ -247,8 +247,9 @@ class ModeToggles:
 
 
 class Viewer:
-    def __init__(self, run, fields, maxpix=900, error=""):
+    def __init__(self, run, fields, maxpix=900, error="", reg=None):
         self.run, self.F = run, fields
+        self.reg = reg  # the shared runs (figures with panels from other runs)
         self.maxpix = maxpix
         self.error = error
         self.doc = pn.state.curdoc
@@ -3423,7 +3424,7 @@ def create_app(reg, maxpix=900):
         print(f"cm1view: could not open {want}: {e}", flush=True)
         error = f"Could not open {want}: {e}. Showing the default run instead."
         run, fields = reg.get()
-    v = Viewer(run, fields, maxpix=maxpix, error=error)
+    v = Viewer(run, fields, maxpix=maxpix, error=error, reg=reg)
     pn.state.on_session_destroyed(lambda ctx: v.close())
     # the template only supplies the dark theme: header and margins are hidden so the
     # visualisations fill the window and the controls float over them

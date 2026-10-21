@@ -12,6 +12,7 @@ data: {panel index: {name: array}} with, per panel,
   track_x, track_y, now_x, now_y   storm track (plan views)
   line          [xa, ya, xb, yb] cross-section line (plan views)
   time_s        model time (s)
+  run_label     name of the panel's run (figures with panels from several runs)
   missing       reason the panel has no data (a string), if any
 """
 
@@ -173,8 +174,8 @@ def _draw(spec, data, fs):
     tlab = spec.get("time_label", {})
     titles = spec.get("titles", [])
     cbar = spec.get("colorbar", {})
-    npan = min(rows * cols, len(spec["times"]) if spec.get("vary") == "time"
-               else max(1, len(spec.get("panel_fills", []))))
+    npan = npanels(spec)
+    rlab = spec.get("run_label", {})
     mappables, used, legend = [], [], {}
     for i, ax in enumerate(axs):
         if i >= npan or i not in data:
@@ -245,6 +246,8 @@ def _draw(spec, data, fs):
             _anchored(ax, panel_letter(i, labels.get("fmt", "{a}")), labels, fs * 1.2)
         if tlab.get("on", True) and "time_s" in d:
             _anchored(ax, time_text(d["time_s"], tlab), tlab, fs * 1.2)
+        if rlab.get("on", True) and d.get("run_label"):
+            _anchored(ax, str(d["run_label"]), rlab, fs * 1.2)
     _ticks(axs[:npan], used, ax_opts, rows, cols)
     if legend:
         lg = spec.get("legend", {})
@@ -257,6 +260,21 @@ def _draw(spec, data, fs):
     if spec.get("suptitle"):
         fig.suptitle(spec["suptitle"], weight="bold", fontsize=fs * 1.4)
     return fig
+
+
+def npanels(spec):
+    """Number of panel slots (grid cells; empty ones are hidden)."""
+    cells = int(spec["rows"]) * int(spec["cols"])
+    vary = spec.get("vary", "time")
+    if vary == "time":
+        n = len(spec.get("times_s", spec["times"]))
+    elif vary == "field":
+        n = max(1, len(spec.get("panel_fills", [])))
+    elif vary == "grid":
+        n = cells
+    else:
+        n = len(spec.get("panels", []))
+    return min(n, cells)
 
 
 def spec_layers(spec, i):

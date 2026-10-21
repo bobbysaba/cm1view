@@ -4,13 +4,17 @@ The spec (a JSON-able dict) says what each panel shows and how it looks; figdraw
 turns it plus the panel arrays into a matplotlib figure.  Panels vary in time (one
 field setup at several times) or in field (several fills at one time), as plan views
 at fixed heights or vertical cross-sections, over the whole domain, a fixed box, or a
-window centred on the tracked storm.
+window centred on the tracked storm.  Panels can come from different runs (e.g.
+tornadic vs non-tornadic): spec["runs"] lists the runs with a label and a storm track
+each, and panels refer to them by index, with times in model seconds so they match
+across runs.
 
 Exporting writes the image and, optionally, a stand-alone script (figdraw's code +
 the spec as a Python dict), the plotted arrays (.npz) and the spec (.json), so the
 figure can be redrawn or restyled later without the viewer.
 """
 
+import glob
 import json
 import os
 import pprint
@@ -18,7 +22,7 @@ import time as _time
 
 import numpy as np
 
-from . import figdraw, render
+from . import figdraw, render, track as trk
 from .run import FileBusy, MissingAtTime
 
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame")  # -> data
@@ -63,6 +67,33 @@ def _refl_cmap():
         return "reflectivity"
 
 
+def run_entry(run, track=None):
+    """A spec["runs"] entry for `run`: its path, a label (the folder name) and a storm
+    track ("viewer": the viewer's Track tab, a CSV / text file, or "": none; default:
+    a storm_tracks file found next to the run, else none)."""
+    if track is None:
+        track = find_track(run.path) or ""
+    return dict(path=run.path, label=os.path.basename(run.path.rstrip("/")), track=track)
+
+
+def find_track(path):
+    """A storm track file for the run in `path`: storm_tracks/<parent>_<name>.csv or
+    storm_tracks/<name>.csv in the run's folder or a folder above it (the layout of
+    the user's phd folder), or None."""
+    path = os.path.abspath(path).rstrip("/")
+    name, parent = os.path.basename(path), os.path.basename(os.path.dirname(path))
+    d = path
+    for _ in range(4):
+        tdir = os.path.join(d, "storm_tracks")
+        for cand in (f"{parent}_{name}", name):
+            hits = glob.glob(os.path.join(tdir, cand + ".csv")) + \
+                glob.glob(os.path.join(tdir, cand + ".txt"))
+            if hits:
+                return hits[0]
+        d = os.path.dirname(d)
+    return None
+
+
 def default_spec(run, F, t=0):
     """A 2 x 3 plan-view figure in time: reflectivity at 1 km with w contours at 3 km
     and near-surface winds, centred on the tracked storm."""
@@ -77,6 +108,8 @@ def default_spec(run, F, t=0):
     return dict(
         version=1, kind="plan", size=[8.0, 6.0], rows=2, cols=3, vary="time",
         times=times, time=t, panel_fills=[], layers=layers,
+        times_s=[float(run.times[k]) for k in times], time_s=float(run.times[t]),
+        runs=[run_entry(run, "viewer")], run=0, runs_as="rows", panels=[],
         domain=dict(mode="storm", half=12.5, box=None), coords="grid",
         xsec=dict(mode="storm", a=None, b=None, angle=0.0, half=10.0, offset=[0.0, 0.0],
                   ztop=6.0, dz=0.025),
@@ -85,6 +118,7 @@ def default_spec(run, F, t=0):
         letters=dict(on=True, fmt="{a}", loc="lower left", size=12, bold=True),
         time_label=dict(on=True, fmt="t = {min:g} min", loc="lower right", size=12,
                         bold=True, t0_min=0.0),
+        run_label=dict(on=True, loc="upper left", size=12, bold=True),
         titles=[], suptitle="",
         colorbar=dict(mode="shared", orientation="horizontal", label="", shrink=0.7,
                       fraction=0.05, pad=0.02, ticks=""),
@@ -96,14 +130,59 @@ def default_spec(run, F, t=0):
 
 
 def npanels(spec):
-    n = len(spec["times"]) if spec["vary"] == "time" else max(1, len(spec["panel_fills"]))
-    return min(n, int(spec["rows"]) * int(spec["cols"]))
+    return figdraw.npanels(spec)
 
 
-def panel_time(spec, i):
-    if spec["vary"] == "time":
-        return int(spec["times"][i])
-    return int(spec["time"])
+def panel_ref(spec, i):
+    """(run index, model time in s) of panel i, or None for an empty grid cell.
+    vary: "time" (one run, a time per panel), "field" (one run and time, a fill per
+    panel), "grid" (runs x times: rows are runs when runs_as == "rows", else columns)
+    or "custom" (spec["panels"]: a run and time per panel)."""
+    vary, nr = spec["vary"], len(spec.get("runs") or [None])
+    if vary == "time":
+        ts = spec["times_s"]
+        return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) else None
+    if vary == "field":
+        return int(spec.get("run", 0)), float(spec["time_s"])
+    if vary == "grid":
+        r, c = divmod(i, int(spec["cols"]))
+        k, j = (r, c) if spec.get("runs_as", "rows") == "rows" else (c, r)
+        ts = spec["times_s"]
+        return (k, float(ts[j])) if k < nr and j < len(ts) else None
+    pans = spec.get("panels", [])
+    if i < len(pans) and int(pans[i]["run"]) < nr:
+        return int(pans[i]["run"]), float(pans[i]["time_s"])
+    return None
+
+
+def tindex(run, time_s):
+    """Output index of `run` at model time time_s (s), or None if it has none there."""
+    k = int(np.argmin(np.abs(np.asarray(run.times) - time_s)))
+    return k if abs(run.times[k] - time_s) <= 1.0 else None
+
+
+def normalize(spec, run, track="viewer"):
+    """Fill in what an older spec (cm1view figures before multi-run panels) lacks:
+    times in seconds from the time indices of `run`, and `run` (with `track`) as the
+    only run."""
+    nt = len(run.times)
+    if "times_s" not in spec:
+        spec["times_s"] = [float(run.times[min(int(t), nt - 1)]) for t in spec["times"]]
+    if "time_s" not in spec:
+        spec["time_s"] = float(run.times[min(int(spec["time"]), nt - 1)])
+    if not spec.get("runs"):
+        spec["runs"] = [run_entry(run, track)]
+    return spec
+
+
+def storm_motion(run, fixes, t):
+    """Ground-relative storm motion (u, v) for storm-relative fields at time t: the
+    tracked motion where the track has a fix, else the domain motion (as the map)."""
+    if fixes:
+        m = trk.motion(run, fixes).get(t)
+        if m is not None and np.all(np.isfinite(m)):
+            return tuple(m)
+    return (run.umove, run.vmove)
 
 
 # ------------------------------------------------------------------ geometry
@@ -137,12 +216,13 @@ def plan_window(run, spec, center):
     return center[0] - h, center[0] + h, center[1] - h, center[1] + h
 
 
-def data_key(spec, i, center):
+def data_key(spec, i, center, path=""):
     """Everything panel i's arrays depend on (style changes leave it unchanged)."""
     layers = figdraw.spec_layers(spec, i)
     lk = [{k: lay.get(k) for k in DATA_KEYS if k in lay} | {"on": lay.get("on", True)}
           for lay in layers]
-    return json.dumps(dict(kind=spec["kind"], t=panel_time(spec, i), dom=spec["domain"],
+    return json.dumps(dict(kind=spec["kind"], ref=panel_ref(spec, i), path=path,
+                           dom=spec["domain"],
                            coords=spec["coords"], xsec=spec["xsec"] if spec["kind"] == "xsec"
                            or any(lay["type"] == "line" for lay in layers) else None,
                            layers=lk, center=center), sort_keys=True, default=float)
@@ -153,8 +233,15 @@ def extract(run, F, spec, i, center, fixes=None, storm=None, progress=None):
     """Arrays of panel i (dict for figdraw).  center: tracked storm (x, y) km at the
     panel time or None; fixes: {t: fix} for the track layer; storm: ground-relative
     storm motion (u, v) at this time for storm-relative fields and vectors."""
-    t = panel_time(spec, i)
+    ts = panel_ref(spec, i)[1]
+    t = tindex(run, ts)
+    if t is None:
+        return dict(time_s=ts, missing=f"no output at {ts / 60:g} min in this run")
     out = dict(time_s=float(run.times[t]))
+    bad = [lay["field"] for lay in figdraw.spec_layers(spec, i)
+           if lay.get("on", True) and lay.get("field") and lay["field"] not in F]
+    if bad:
+        return dict(out, missing="this run has no " + ", ".join(bad))
     try:
         if spec["kind"] == "xsec":
             _extract_xsec(run, F, spec, i, t, center, storm, out, progress)
@@ -323,7 +410,9 @@ def script(spec, npz_name, out_name, run=None, note=""):
     head = [
         f'"""Figure made with cm1view on {_time.strftime("%Y-%m-%d %H:%M")}.',
         "",
-        f"run: {run.path}" if run is not None else "",
+        *(["runs:"] + [f"  {r['label']}: {r['path']}" for r in spec["runs"]]
+          if len(spec.get("runs") or []) > 1 else
+          [f"run: {run.path}" if run is not None else ""]),
         note,
         "Redraw:  python this_script.py   (needs numpy and matplotlib; pyart for its",
         "colormaps).  Change SPEC below to restyle (colours, ranges, labels, size, ...);",
@@ -385,6 +474,9 @@ def load_spec(path):
         spec = json.load(f)
     if spec.get("version") != 1:
         raise ValueError("not a cm1view figure spec (version 1)")
+    for r in spec.get("runs") or []:
+        if not os.path.isdir(r["path"]):
+            raise ValueError(f"run folder {r['path']} not found")
     return spec
 
 
