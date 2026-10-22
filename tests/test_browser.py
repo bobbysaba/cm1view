@@ -41,18 +41,26 @@ def serve(args, cfg_dir, extra_env=None):
     port = free_port()
     env = dict(os.environ, CM1VIEW_CONFIG=os.path.join(cfg_dir, "config.toml"),
                **(extra_env or {}))
-    p = subprocess.Popen([sys.executable, "-m", "cm1view", *args, "--port", str(port)],
-                         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    log = os.path.join(cfg_dir, "server.log")  # (its tail is in the error if it fails)
+    with open(log, "w") as out:
+        p = subprocess.Popen([sys.executable, "-m", "cm1view", *args, "--port", str(port)],
+                             env=env, stdout=out, stderr=subprocess.STDOUT)
     url = f"http://127.0.0.1:{port}/cm1view"
 
     def up():
-        try:
-            return urllib.request.urlopen(url, timeout=5).status == 200
+        if p.poll() is not None:  # (it stopped: no use waiting)
+            return "stopped"
+        try:  # a page for a run takes a few seconds to build; a slow machine longer
+            return urllib.request.urlopen(url, timeout=60).status == 200
         except OSError:
             return False
-    if not until(up, 120, 1.0):
+    state = until(up, 240, 1.0)
+    if state is not True:
         p.terminate()
-        raise RuntimeError("the server did not start")
+        with open(log) as f:
+            tail = "".join(f.readlines()[-40:])
+        raise RuntimeError(f"the server did not start ({'it stopped' if state else 'timed out'}"
+                           f"); its output ({log}):\n{tail}")
     return p, url
 
 
