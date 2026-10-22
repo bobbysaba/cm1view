@@ -52,5 +52,6 @@ cm1view is free software under the [GNU General Public License v3.0 or later](LI
 you may use, study, change and share it, and anything you distribute that is built on
 it must stay under the same license, with its source.
 
-The pressure-decomposition solver (`cm1view/pdecomp_solver.py`) is based on code by
-Dr. John Peters, passed along and developed by Andrew Muehr, and adapted by Bobby Saba.
+The pressure-decomposition solver (`cm1view/pdecomp_solver.py`) was written by Bobby
+Saba, rewritten and corrected from earlier code by Dr. John Peters passed along by
+Andrew Muehr.
