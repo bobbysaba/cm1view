@@ -85,4 +85,4 @@ against the definition, as for θρ.
 ## Releases
 
 Versions follow `MAJOR.MINOR.PATCH` in `pyproject.toml` and `cm1view/__init__.py`, with a
-matching git tag (`v0.2.0`).
+matching git tag (`v0.3.0`).

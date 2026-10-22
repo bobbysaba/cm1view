@@ -290,14 +290,6 @@ def draw(spec, data):
     return _draw2(spec, data)
 
 
-def draw_v1(spec, data):
-    """A version-1 spec drawn as before version 2 (kept to check upgrade() against)."""
-    if spec.get("kind") == "combo":
-        return _draw_combo(spec, data)
-    with matplotlib.rc_context(rc(spec)):
-        return _draw(spec, data, float(spec.get("font", {}).get("size", 10)))
-
-
 def _new_fig(spec):
     gap = spec.get("spacing", {})
     fig = Figure(figsize=tuple(float(v) for v in spec["size"]), layout="constrained",
@@ -564,73 +556,6 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
     _annotate(ax, key, spec.get("annotations", []), fs)
 
 
-def _draw_combo(spec, data):
-    """A figure of parts (spec["parts"]: figure specs of their own, e.g. plan views
-    beside soundings), side by side (arrange "row") or stacked ("col"), each as large
-    as its share says (part_shares); data of part k's panel i under k * 1000 + i.  The
-    panel letters run on from part to part.  spec["colorbar"]["mode"] "figure": one
-    colorbar for the whole figure (of the first fill), instead of the parts' own."""
-    parts = spec["parts"]
-    row = spec.get("arrange", "row") == "row"
-    W, H = (float(v) for v in spec["size"])
-    fig = Figure(figsize=(W, H), layout="constrained",
-                 facecolor=spec.get("background", "white"))
-    gap = spec.get("spacing", {})
-    fig.get_layout_engine().set(w_pad=float(gap.get("w_pad", 0.04)),
-                                h_pad=float(gap.get("h_pad", 0.04)),
-                                wspace=float(gap.get("wspace", 0.02)),
-                                hspace=float(gap.get("hspace", 0.02)))
-    cb = spec.get("colorbar") or {}
-    one_cb = cb.get("mode") == "figure"
-    host, bar = fig, None
-    if one_cb:  # a strip along one side for the colorbar, the parts in the rest
-        loc = cb.get("location") or "bottom"
-        side = loc in ("left", "right")
-        th = float(cb.get("strip", 1.0 if side else 0.7))  # (in: the bar and its labels)
-        size = (W if side else H) - th
-        rat = [max(size, 0.5), th] if loc in ("right", "bottom") else [th, max(size, 0.5)]
-        subs = fig.subfigures(1, 2, width_ratios=rat) if side else \
-            fig.subfigures(2, 1, height_ratios=rat)
-        host, bar = (subs[0], subs[1]) if loc in ("right", "bottom") else (subs[1], subs[0])
-        host.set_facecolor("none")
-        bar.set_facecolor("none")
-    ratios = part_shares(spec)
-    subs = np.atleast_1d(host.subfigures(1, len(parts), width_ratios=ratios) if row else
-                         host.subfigures(len(parts), 1, height_ratios=ratios)).ravel()
-    start, fig._cv_axes, mappables = 0, {}, []
-    for k, (part, sf) in enumerate(zip(parts, subs)):
-        pd = {int(i) % 1000: v for i, v in data.items() if int(i) // 1000 == k}
-        part = dict(part, letters=dict(part.get("letters", {}), start=start))
-        if one_cb:
-            part["colorbar"] = dict(part.get("colorbar", {}), mode="none")
-        sf.set_facecolor("none")
-        with matplotlib.rc_context(rc(part)):
-            _draw(part, pd, float(part.get("font", {}).get("size", 10)), fig=sf)
-        fig._cv_axes.update({k * 1000 + i: a for i, a in getattr(sf, "_cv_axes", {}).items()})
-        mappables += getattr(sf, "_cv_mappables", [])
-        err = getattr(sf, "_cv_code_error", None)
-        if err:
-            fig._cv_code_error = f"part {k + 1}, {err}"
-        start += npanels(part)
-    if one_cb and mappables:
-        m, lay = mappables[0][2]
-        s = min(max(float(cb.get("shrink", 0.7)), 0.05), 1.0)
-        third = [0.5 * (1.0 - s), s, 0.5 * (1.0 - s)]
-        gs = bar.add_gridspec(3, 1, height_ratios=third) if side else \
-            bar.add_gridspec(1, 3, width_ratios=third)
-        cax = bar.add_subplot(gs[1])
-        c = bar.colorbar(m, cax=cax, orientation="vertical" if side else "horizontal",
-                         extend=lay.get("extend", "neither"))
-        if loc in ("left", "top"):
-            (c.ax.yaxis if side else c.ax.xaxis).set_ticks_position(loc)
-            (c.ax.yaxis if side else c.ax.xaxis).set_label_position(loc)
-        with matplotlib.rc_context(rc(parts[0])):
-            _cbar_style(c, cb, lay, loc)
-    if spec.get("suptitle"):
-        fig.suptitle(spec["suptitle"], weight="bold", fontsize=font_size(spec, "suptitle"))
-    return fig
-
-
 def part_shares(spec):
     """Each part's share of a figure of parts (of its width side by side, of its height
     stacked): a part's own "share" (0-1), and the rest split among the others by
@@ -683,55 +608,6 @@ def font_size(spec, what):
         return float(v)
     return float(font.get("size", 10)) * {"tick": 0.9, "label": 1.0, "title": 1.1,
                                           "suptitle": 1.4, "legend": 0.85}[what]
-
-
-def _draw(spec, data, fs, fig=None):
-    """Draw the panels of a version-1 spec into fig (a new Figure, or a part of one: a
-    SubFigure)."""
-    rows, cols = int(spec["rows"]), int(spec["cols"])
-    if fig is None:
-        fig = _new_fig(spec)
-    axs = np.atleast_1d(fig.subplots(rows, cols, squeeze=False)).ravel()
-    ax_opts = spec.get("axes", {})
-    labels = spec.get("letters", {})
-    titles = spec.get("titles", [])
-    cbar = spec.get("colorbar", {})
-    npan = npanels(spec)
-    mappables, used, legend = [], [], {}
-    for i, ax in enumerate(axs):
-        if i >= npan or i not in data:
-            ax.set_visible(False)
-            continue
-        d = data[i]
-        used.append(ax)
-        ax, m = _panel(fig, ax, d, spec, spec_layers(spec, i), fs, legend)
-        axs[i] = used[-1] = ax
-        if m is not None:
-            mappables.append((i, ax, m))
-        _decorate(ax, d, spec, fs, titles[i] if i < len(titles) else "",
-                  i + int(labels.get("start", 0)), z_text(spec, i), i)
-    kind = spec["kind"]
-    cells = [(ax, i % cols, i // cols == rows - 1 or i + cols >= npan or axs[i + cols]
-              not in used, kind, ax_opts) for i, ax in enumerate(axs[:npan])]
-    _ticks(cells, used, ax_opts)
-    if legend:
-        lg = spec.get("legend", {})
-        where = used[min(int(lg.get("panel", 0)), len(used) - 1)] if used else None
-        if where is not None:
-            where.legend(list(legend.values()), list(legend.keys()),
-                         loc=lg.get("loc", "upper right"), fontsize=font_size(spec, "legend"),
-                         ncol=int(lg.get("ncol", 1) or 1),
-                         frameon=lg.get("frame", True), framealpha=0.85)
-    fig._cv_mappables = mappables  # (a figure of parts may draw one colorbar for all)
-    _colorbars(fig, cbar, mappables, used, lambda i: divmod(i, cols))
-    _contour_key(fig, spec, fs)
-    fig._cv_axes = {i: ax for i, ax in enumerate(axs) if ax in used}  # (panel -> axes)
-    if spec.get("suptitle"):
-        fig.suptitle(spec["suptitle"], weight="bold", fontsize=font_size(spec, "suptitle"))
-    code = spec.get("code") or {}
-    if code.get("on") and str(code.get("text") or "").strip():
-        run_code(fig, axs, data, spec, code["text"])
-    return fig
 
 
 def run_code(fig, axs, data, spec, text):
