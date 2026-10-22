@@ -36,21 +36,40 @@ cm1view/sounding_plot.py  skew-T / hodograph / profiles / parameter table
 cm1view/render.py         map + cross-section computations (contours, vectors, sampling)
 cm1view/track.py          meso tracking + CSV/text export
 cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
-cm1view/zoomview.py       zoomable image component (sounding graphics)
-cm1view/series.py         time series of reduced fields (Series tool): compute, cache, files
+cm1view/series.py         time series of reduced fields: compute, cache, files
 cm1view/figure.py         figure spec, panel data, export (image, script, data, spec)
 cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported scripts)
-cm1view/figui.py          Figure workspace UI
-cm1view/pdecomp.py        pressure decomposition: file fields, on-demand runs of the user's script
+cm1view/pdecomp.py        pressure decomposition: file fields, runs of the user's script
 cm1view/registry.py       open runs shared by sessions, run discovery
 cm1view/config.py         settings: config file, precedence, save folders, run search
+cm1view/demo.py           synthetic CM1 runs for cm1view --demo and the tests
+
+UI (Panel / Bokeh)
+cm1view/app.py            the Viewer: widgets, map, layout, wiring, events; the page
+cm1view/ui.py             shared UI pieces: constants, figure styling, drawers, tool rail
+cm1view/sndui.py          Viewer mixin: soundings, their graphics, style and zoom
+cm1view/trackui.py        Viewer mixin: storm tracking and the storm chip
+cm1view/seriesui.py       Viewer mixin: the Series panel and plots
+cm1view/xsecui.py         Viewer mixin: cross-sections
+cm1view/view3dui.py       Viewer mixin: 3D scene, pressure-decomposition button, streamlines
+cm1view/itemsui.py        Viewer mixin: the items tray
+cm1view/figui.py          the Figure workspace editor
+cm1view/figparts.py       its constants, widget helpers and cards
+cm1view/figruns.py        editor mixin: runs
+cm1view/figsources.py     editor mixin: new figures from the viewer, series / sounding lists
+cm1view/figexport.py      editor mixin: saving and reopening figures
+cm1view/zoomview.py       zoomable image component (sounding graphics)
 cm1view/settings.py       settings window (first run and ⚙) and the overwrite prompt
 cm1view/picker.py         run picker (header dialog and the page without a run)
-cm1view/app.py            Panel UI
-cm1view/demo.py           synthetic CM1 runs for cm1view --demo and the tests
+cm1view/theme.py          colours and CSS
+
 tests/                    pytest suite
 docs/                     these pages
 ```
+
+A mixin's methods run as the Viewer's (or the editor's) own: they use its widgets and
+state through `self`. New features go in the mixin they belong to, or a new one added to
+the class's bases.
 
 ## Adding a derived field
 
