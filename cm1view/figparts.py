@@ -47,6 +47,8 @@ VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
               "track": "Storm track", "line": "Section line"}
+REDUCE = {"One time (off)": "", "Maximum (swath)": "max", "Minimum": "min", "Mean": "mean",
+          "Sum": "sum", "Storm-following mean (composite)": "composite"}
 GRIDS = {"Say so (ask)": "ask", "Interpolate onto this layer's grid": "interp",
          "Refuse": "refuse"}
 EXTEND = {"Auto (where the data pass the range)": "auto", "None": "neither",
@@ -174,6 +176,18 @@ class LayerCard:
             w["mode"] = pn.widgets.Select(name="Level", options=LEVEL_MODES,
                                           value=lay.get("mode", "height"))
             w["z"] = _f("Height (km)", lay.get("z", 1.0), step=0.25)
+            r = lay.get("reduce") or {}
+            topts = getattr(ed, "_time_opts", lambda k: {})(int(lay.get("run") or 0)) or {}
+            w["reduce_op"] = pn.widgets.Select(name="Over a time window", options=REDUCE,
+                                               value=r.get("op", ""))
+            w["reduce_t0"] = pn.widgets.Select(
+                name="From", options={"the run's first output": ""} | topts,
+                value=_near(topts, r.get("t0")))
+            w["reduce_t1"] = pn.widgets.Select(
+                name="To", options={"the panel's time": ""} | topts,
+                value=_near(topts, r.get("t1")))
+            w["reduce_every"] = pn.widgets.IntInput(name="Every nth output",
+                                                    value=int(r.get("every") or 1), start=1)
         if t in ("fill", "contour", "shade", "vectors"):
             w["z_fixed"] = _chk("Own height (not the panel's)", lay.get("z_fixed", False))
         if t == "fill":
@@ -297,17 +311,19 @@ class LayerCard:
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
                           (w["cbar_label"], 3), (w["panels"], 3)),
                     _grid((w["minus_on"], 2), w["minus_run"], w["minus_time"],
-                          w["minus_grid"])]
+                          w["minus_grid"]), self._reduce_row()]
         if t == "contour":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], (w["levels"], 2),
                           w["color"],
                           w["lw"], w["neg_dashed"], w["clabel"], w["clabel_size"],
-                          w["clabel_fmt"], (w["legend"], 3), (w["panels"], 3))]
+                          w["clabel_fmt"], (w["legend"], 3), (w["panels"], 3)),
+                    self._reduce_row()]
         if t == "shade":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["threshold"],
                           w["above"],
                           w["color"], w["alpha"], w["outline_on"], w["outline"], w["lw"],
-                          (w["legend"], 3), (w["panels"], 3))]
+                          (w["legend"], 3), (w["panels"], 3)),
+                    self._reduce_row()]
         if t == "vectors":
             return [_grid(w["style"], w["frame"], w["color"], w["z"], w["z_fixed"], w["spacing"],
                           w["zspacing"], w["scale"], w["width"], w["key"], w["density"],
@@ -316,6 +332,10 @@ class LayerCard:
             return [_grid(w["run_color"], w["color"], w["lw"], w["ls"], w["marker"],
                           (w["legend"], 3), (w["panels"], 3))]
         return [_grid(w["color"], w["lw"], w["labels"], (w["legend"], 3), (w["panels"], 3))]
+
+    def _reduce_row(self):
+        w = self.w
+        return _grid((w["reduce_op"], 2), w["reduce_t0"], w["reduce_t1"], w["reduce_every"])
 
     def show(self, kind):
         """Only the settings that matter for this layer in `kind` panels (a section
@@ -329,6 +349,9 @@ class LayerCard:
             w["z"].visible = not xs and m in ("height", "level") and (
                 m == "level" or not by_z or w["z_fixed"].value)
             w["z"].name = "Model level (k)" if m == "level" else "Height (km)"
+            w["reduce_op"].visible = not xs  # (plan panels only)
+            for k in ("reduce_t0", "reduce_t1", "reduce_every"):
+                w[k].visible = not xs and bool(w["reduce_op"].value)
         if t == "vectors":
             st = w["style"].value == "streamlines"
             for k in ("density", "slw", "arrowsize"):
@@ -369,6 +392,9 @@ class LayerCard:
                 sub += {"height": " · the panel's height" if own else f" · {z:g} km",
                         "level": f" · k = {z:g}",
                         "colmax": " · column max", "colmin": " · column min"}.get(m, "")
+            if w["reduce_op"].value and self.ed.kind.value != "xsec":
+                sub += {"composite": " · storm-following mean"}.get(
+                    w["reduce_op"].value, f" · {w['reduce_op'].value} over a time window")
             if t == "fill" and w["minus_on"].value:
                 sub += " · difference"
         elif t == "vectors":
@@ -434,9 +460,17 @@ class LayerCard:
     def collect(self):
         w, lay = self.w, dict(self.lay)
         for k, x in w.items():
-            if k in ("outline_on",) or k.startswith("minus_"):
+            if k in ("outline_on",) or k.startswith(("minus_", "reduce_")):
                 continue
             lay[k] = x.value
+        if "reduce_op" in w:
+            lay.pop("reduce", None)
+            if w["reduce_op"].value:
+                t0, t1 = w["reduce_t0"].value, w["reduce_t1"].value
+                lay["reduce"] = dict(op=w["reduce_op"].value,
+                                     t0=None if t0 == "" else float(t0),
+                                     t1=None if t1 == "" else float(t1),
+                                     every=max(1, int(w["reduce_every"].value or 1)))
         if self.type == "fill":
             lay.pop("minus", None)
             if w["minus_on"].value:
@@ -455,6 +489,12 @@ class LayerCard:
             lay["outline"] = w["outline"].value if w["outline_on"].value else ""
         lay["panels"] = _panels_parse(w["panels"].value)
         return lay
+
+
+def _near(opts, ts):
+    """The value of opts nearest model time ts ("": None, or no times)."""
+    vals = [v for v in opts.values() if v != ""]
+    return "" if ts is None or not vals else min(vals, key=lambda v: abs(v - float(ts)))
 
 
 def _nice(a):

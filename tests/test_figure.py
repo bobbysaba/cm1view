@@ -278,7 +278,8 @@ def test_time_series_y_range(ed):
     assert fig.axes[0].get_ylim() == (0.0, 50.0)
 
 
-@pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists", "difference"])
+@pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists", "difference",
+                                   "swath"])
 def test_script_redraws_the_identical_image(ed, tmp_path, start):
     import os
     import subprocess
@@ -286,6 +287,8 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
     import matplotlib.image as mi
     if start == "difference":
         _difference(ed)
+    elif start == "swath":
+        _swath(ed)
     elif start == "series":
         ed.from_series()
         ed.panel_data(ed.collect())
@@ -1160,3 +1163,73 @@ def test_difference_of_different_grids():
     assert fg.minus_ref(v1, 0, dict(type="fill", minus=dict(time_s=30.0))) == (0, 30.0)
     v2, _ = fg.figdraw.upgrade(dict(v1, layers=[dict(v1["layers"][0], minus=dict(run=1))]))
     assert v2["panels"][0]["layers"][0]["minus"] == dict(run=1)
+
+
+def _swath(ed):
+    """The first fill as a swath: its maximum from the run's first output to each panel's
+    time."""
+    c = next(c for c in ed.cards if c.type == "fill")
+    c.w["reduce_op"].value = "max"
+    c.w["reduce_t0"].value = next(v for v in c.w["reduce_t0"].options.values() if v != "")
+    return c
+
+
+def test_time_window_layer(ed):
+    from cm1view import swath
+    c = _swath(ed)
+    lay = c.collect()
+    assert lay["reduce"] == dict(op="max", t0=lay["reduce"]["t0"], t1=None, every=1)
+    assert "max over a time window" in c.title.object
+    spec, data, fig = render(ed)
+    j = next(j for j, x in enumerate(spec["layers"]) if x.get("reduce"))
+    assert any("max" in a.get_ylabel() + a.get_xlabel() for a in fig.axes)
+    c.w["reduce_op"].value = ""
+    assert "reduce" not in c.collect()
+    _, plain, _ = render(ed)
+    for i, d in data.items():  # (the window ends at the panel's own output)
+        a, b = d[f"L{j}"], plain[i][f"L{j}"]
+        ok = np.isfinite(a) & np.isfinite(b)
+        assert ok.any() and np.all(a[ok] >= b[ok] - 1e-5)
+    assert any(f.endswith(".npz") for f in __import__("os").listdir(swath.cache_dir()))
+
+
+class _Run:
+    """A tiny run on a 1 km grid with three outputs a minute apart."""
+    def __init__(self, umove=0.0):
+        self.times, self.dx, self.dy, self.files = [0.0, 60.0, 120.0], 1000.0, 1000.0, []
+        self.umove, self.vmove, self.path = umove, 0.0, f"fake-{umove}"
+
+
+class _Fields:
+    def __init__(self, col):
+        self.col = col  # output t -> the column of the blob
+
+    def __getitem__(self, name):
+        from types import SimpleNamespace
+        return SimpleNamespace(storm=False)
+
+    def plane(self, name, t, mode, z, storm=None):
+        a = np.zeros((3, 8), dtype=np.float32)
+        a[:, self.col(t)] = 1.0
+        return a
+
+
+def test_swaths_follow_the_ground_and_composites_the_storm(tmp_path, monkeypatch):
+    from cm1view import swath
+    monkeypatch.setattr(swath, "CACHE_DIR", str(tmp_path))
+    lay = dict(field="w", mode="height", z=1.0, reduce=dict(op="max", t0=None, t1=None))
+    # the grid moves 1 km a minute: a blob fixed on the ground moves 1 column back
+    run = _Run(umove=1000.0 / 60.0)
+    a, n = swath.reduce(run, _Fields(lambda t: 5 - t), lay, 2)
+    assert n == 3 and np.array_equal(np.flatnonzero(a[0] > 0), [3])
+    a2, _ = swath.reduce(run, _Fields(lambda t: 0), lay, 2)  # (from the cache)
+    assert np.array_equal(a, a2, equal_nan=True)
+    assert swath.window(run, dict(lay["reduce"], every=2), 120.0) == [0, 2]
+    assert swath.window(run, dict(lay["reduce"], t0=60.0), 60.0) == [1]
+    # a storm moving 1 km a minute with its blob: the composite keeps it in one column
+    lay = dict(lay, reduce=dict(op="composite"))
+    centers = {t: (float(t), 0.0) for t in range(3)}
+    a, n = swath.reduce(_Run(), _Fields(lambda t: 2 + t), lay, 2, centers)
+    assert n == 3 and np.array_equal(np.flatnonzero(a[0] > 0), [4]) and a[0, 4] == 1.0
+    with pytest.raises(ValueError, match="track"):
+        swath.reduce(_Run(), _Fields(lambda t: 0), lay, 2, {})

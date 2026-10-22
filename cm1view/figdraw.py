@@ -1040,9 +1040,23 @@ def _colorbars(fig, cb, mappables, used, cell):
         _cbar_style(c, cb, lay, loc)
 
 
+def reduce_label(red, units=""):
+    """Colorbar text of a layer's time window ("reduce"), e.g. 'max over 60–90 min
+    (m²/s²)' or 'storm-following mean'."""
+    op = {"composite": "storm-following mean"}.get(red["op"], red["op"])
+    t0, t1 = red.get("t0"), red.get("t1")
+    when = "" if t0 is None and t1 is None else " over " + (
+        f"{(t0 or 0) / 60:g}–{t1 / 60:g} min" if t1 is not None else
+        f"{t0 / 60:g} min to the panel time")
+    every = f", every {int(red['every'])}" if int(red.get("every") or 1) > 1 else ""
+    return f"{op}{when}{every}" + (f" ({units})" if units else "")
+
+
 def _cbar_style(c, cb, lay, loc):
     """Label (the colorbar's own, else the layer's, else its units), ticks and fonts."""
     units = lay.get("units", "")
+    if lay.get("reduce"):  # (a time window)
+        units = reduce_label(lay["reduce"], units)
     if lay.get("minus"):  # (a difference)
         units = f"difference ({units})" if units else "difference"
     c.set_label(cb.get("label") or lay.get("cbar_label") or units,

@@ -1841,14 +1841,21 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             t = fg.tindex(run, ts)
             c = centers.get(t) if t is not None else None
             key = fg.data_key(s, i, c, run.path)
-            if any(lay["type"] == "track" for lay in figdraw.spec_layers(s, i)):
-                key += sig
+            if any(lay["type"] == "track" or (lay.get("reduce") or {}).get("op") ==
+                   "composite" for lay in figdraw.spec_layers(s, i)):
+                key += sig  # (a composite follows the whole track)
             d = self.cache.get(key)
             if d is None:
                 if progress:
                     progress(at, n)
                 storm = fg.storm_motion(run, fx, t) if t is not None else None
-                d = fg.extract(run, F, s, i, c, fx, storm)
+                rp = None
+                if progress and any(lay.get("reduce") for lay in figdraw.spec_layers(s, i)):
+                    def rp(done, total):  # (a time window: one output at a time)
+                        self.v._schedule(partial(self._status, (
+                            f'<span class="busy">● Time window of panel '
+                            f'{panel_name(spec, at)}: output {done + 1}/{total}…</span>')))
+                d = fg.extract(run, F, s, i, c, fx, storm, rp)
                 self.cache[key] = d
                 while len(self.cache) > 60:
                     self.cache.popitem(last=False)

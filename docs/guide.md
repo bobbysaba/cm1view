@@ -236,6 +236,13 @@ and *Download*. The editor has five tabs of folding sections:
   and switches to a red–blue colormap centred on 0. When the two grids differ the
   panel says so; pick *Interpolate onto this layer's grid* or *Refuse* under
   *If the grids differ*. A fixed Minus time stays put in animations.
+  A fill, contour or shading layer on a plan panel can cover a **time window**
+  (*Over a time window*): the maximum (a swath, e.g. of updraft helicity), minimum,
+  mean or sum over the outputs *From*–*To* (blank: the run's first output, the panel's
+  time; *Every nth output* thins them), placed where the ground is at the panel time
+  (the grid moves with umove, vmove); or a *storm-following mean* (composite) in the
+  box that moves with the tracked storm (needs a track). Results are kept in the cache
+  folder (Settings), so redrawing or restyling reads nothing again.
 - **Style**: fonts (family, math / units font, sizes of tick labels, axis labels,
   titles and legends), axes and ticks (labels, tick spacing and direction, minor ticks,
   grid lines, frame width, equal scale), panel labels (letters, times and run names,

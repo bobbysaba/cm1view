@@ -25,11 +25,12 @@ import time as _time
 
 import numpy as np
 
-from . import config, dist, figdraw, render, series as ser, thermo, track as trk
+from . import (config, dist, figdraw, render, series as ser, swath, thermo,
+               track as trk)
 from .run import FileBusy, MissingAtTime
 
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame",  # -> data
-             "style")
+             "style", "reduce")
 LINE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "k"]
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
 
@@ -450,7 +451,7 @@ def extract(run, F, spec, i, center, fixes=None, storm=None, progress=None):
         if spec["kind"] == "xsec":
             _extract_xsec(run, F, spec, i, t, center, storm, out, progress)
         else:
-            _extract_plan(run, F, spec, i, t, center, fixes, storm, out)
+            _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress)
     except (MissingAtTime, FileBusy) as e:
         out = dict(time_s=float(run.times[t]), missing=str(e))
     return out
@@ -462,7 +463,7 @@ def _origin(spec, center):
     return (0.0, 0.0)
 
 
-def _extract_plan(run, F, spec, i, t, center, fixes, storm, out):
+def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
     win = plan_window(run, spec, center)
     if win is None:
         out["missing"] = ("no track position at this time" if spec["domain"]["mode"] == "storm"
@@ -480,7 +481,14 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out):
     for j, lay in enumerate(figdraw.spec_layers(spec, i)):
         if not lay.get("on", True):
             continue
-        if lay["type"] in ("fill", "contour", "shade"):
+        if lay["type"] in ("fill", "contour", "shade") and lay.get("reduce"):
+            try:  # (a time window: a swath or a storm-following composite)
+                a, _ = reduce_layer(run, F, lay, t, fixes, progress)
+            except ValueError as e:
+                out["missing"] = f"time window: {e}"
+                return
+            out[f"L{j}"] = a[j0:j1, i0:i1]
+        elif lay["type"] in ("fill", "contour", "shade"):
             a = F.plane(lay["field"], t, lay.get("mode", "height"), float(lay["z"]),
                         storm=storm)
             out[f"L{j}"] = np.asarray(a[j0:j1, i0:i1], dtype=np.float32)
@@ -511,6 +519,15 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out):
             if ends is not None:
                 (xa, ya), (xb, yb) = ends
                 out["line"] = np.array([xa - ox, ya - oy, xb - ox, yb - oy])
+
+
+def reduce_layer(run, F, lay, t, fixes=None, progress=None):
+    """swath.reduce of plan layer `lay` (its "reduce") for a panel at output t, with
+    the storm centres and motions of the track `fixes`."""
+    centers = ser.track_centers(fixes, len(run.times)) if fixes else {}
+    storm = ({k: storm_motion(run, fixes, k) for k in range(len(run.times))}
+             if F[lay["field"]].storm else None)
+    return swath.reduce(run, F, lay, t, centers, storm, progress)
 
 
 def _frame(run, u, v, frame, storm):
