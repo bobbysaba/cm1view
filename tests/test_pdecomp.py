@@ -6,7 +6,6 @@ import os
 import shutil
 import stat
 import threading
-import time
 
 import netCDF4
 import numpy as np
@@ -101,26 +100,21 @@ def test_failed_write_keeps_the_result(copy_run):
     T, path = 1, run.files[1]
     with netCDF4.Dataset(path) as d:
         before = set(d.variables)
-    phases, res, err = [], {}, {}
-
-    def job():
-        try:
-            res[T] = pdecomp.compute(run, T, lambda s, ph: phases.append(ph), write=True)
-        except Exception as e:  # noqa: BLE001
-            err[T] = e
-
     mode = os.stat(path).st_mode
-    th = threading.Thread(target=job)
-    th.start()
-    while "computing" not in phases and th.is_alive():
-        time.sleep(0.2)
-    os.chmod(path, mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+    begin = run.begin_write
+
+    def read_only_then_begin(t):
+        # after the permission check, just before the worker opens the file to write
+        os.chmod(path, mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+        begin(t)
+
+    run.begin_write = read_only_then_begin
     try:
-        th.join()
+        res = pdecomp.compute(run, T, None, write=True)
     finally:
         os.chmod(path, mode)
-    assert T in res, err.get(T)
-    assert not res[T]["wrote"] and res[T]["write_error"]
+        del run.begin_write
+    assert not res["wrote"] and res["write_error"]
     assert all((n, T) in run.extra for n in pdecomp.NAMES) and not run._writing
     with netCDF4.Dataset(path) as d:
         assert set(d.variables) == before

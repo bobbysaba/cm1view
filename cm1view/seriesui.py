@@ -338,8 +338,8 @@ class SeriesPanel:
         if g != self.gen["ser"] and not force:
             return
         self.ser_status.object = msg
+        self._ser_draw()  # before Compute is enabled again: the plot is complete by then
         self.ser_go.disabled, self.ser_stop.disabled = False, True
-        self._ser_draw()
 
     def _cancel_series(self):
         self.gen["ser"] += 1

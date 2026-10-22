@@ -201,11 +201,12 @@ def test_animation_steps_every_panel(ed, tmp_path):
     from PIL import Image
     from cm1view import figure as fg
     ed.rows.value, ed.cols.value = 1, 2
+    ed.tm_rows[0].value, ed.tm_rows[1].value = 1, 2
     spec = ed.collect()
     ed.an_n.value, ed.an_step.value = 4, 2
     offsets = ed._anim_offsets(spec)
-    dt = ed.run.times[1] - ed.run.times[0]
-    assert offsets[:2] == [0.0, 2 * dt]
+    ts = ed.run.times  # not evenly spaced: offsets follow the first panel's outputs
+    assert offsets == [float(ts[i] - ts[1]) for i in (1, 3, 5, 7)]
     last = max(t for t in spec["times_s"] if t is not None)
     assert last + offsets[-1] <= ed.run.times[-1]
     s = fg.shift_times(spec, offsets[1])
