@@ -41,6 +41,7 @@ def serve(args, cfg_dir, extra_env=None):
     port = free_port()
     env = dict(os.environ, CM1VIEW_CONFIG=os.path.join(cfg_dir, "config.toml"),
                **(extra_env or {}))
+    os.makedirs(cfg_dir, exist_ok=True)
     log = os.path.join(cfg_dir, "server.log")  # (its tail is in the error if it fails)
     with open(log, "w") as out:
         p = subprocess.Popen([sys.executable, "-m", "cm1view", *args, "--port", str(port)],
@@ -114,8 +115,10 @@ def test_map_and_a_sounding(ff, server, shots):
     assert w > 300 and h > 300
     time.sleep(3)
     ff.shot(f"{shots}/a_map.png")
-    click_text(ff, "Sounding")
+    click_text(ff, "Sounding")  # (its panel opens beside the map, which narrows)
+    assert until(lambda: map_canvas(ff)[2] < w - 50, 30), "no sounding panel"
     time.sleep(1)
+    x, y, w, h = map_canvas(ff)
     click(ff, x + w * 0.70, y + h * 0.25)  # the environment, ahead of the storm
     assert until(lambda: rects(ff, ".zv"), 120), "no sounding graphics"
     time.sleep(2)
@@ -186,6 +189,7 @@ def test_figure_clicks_download_and_scanned_runs(ff, server, shots, scanned_run)
 def test_settings_window(ff, server, shots):
     ff.go(server)
     map_canvas(ff)
+    assert until(lambda: find(ff, "ti-settings", how="class"), 30), "no settings button"
     click_text(ff, "ti-settings", how="class")
     assert until(lambda: find(ff, "Config file"), 30), "no settings window"
     ff.shot(f"{shots}/e_settings.png")
