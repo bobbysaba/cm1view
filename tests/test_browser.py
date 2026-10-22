@@ -5,6 +5,7 @@ $CM1VIEW_SHOTS (default: a temporary folder) for a look by eye.
 
   pytest -m browser            (needs Firefox on PATH, or $FIREFOX)
 """
+import json
 import os
 import socket
 import subprocess
@@ -15,7 +16,7 @@ import urllib.request
 
 import pytest
 
-from shot import FF, click, click_text, find, firefox, rects, until
+from shot import _WALK, FF, click, click_text, find, firefox, rects, until
 
 pytestmark = [pytest.mark.browser,
               pytest.mark.skipif(not firefox(), reason="Firefox not found ($FIREFOX)")]
@@ -56,10 +57,21 @@ def serve(args, cfg_dir, extra_env=None):
 
 
 @pytest.fixture(scope="module")
-def server(demo_run, demo_root, tmp_path_factory):
+def scanned_run(demo_run, tmp_path_factory):
+    """A run only the runs_root scan finds (not next to the demo run, not recent)."""
+    d = tmp_path_factory.mktemp("scan-root") / "supercell_scanned"
+    d.mkdir()
+    for f in os.listdir(demo_run):
+        if f == "namelist.input" or f.endswith(".nc"):
+            os.symlink(os.path.join(demo_run, f), d / f)
+    return str(d)
+
+
+@pytest.fixture(scope="module")
+def server(demo_run, demo_root, scanned_run, tmp_path_factory):
     cfg = tmp_path_factory.mktemp("browser-cfg")
     with open(cfg / "config.toml", "w") as f:
-        f.write(f'[paths]\nruns_root = ["{demo_root}"]\n')
+        f.write(f'[paths]\nruns_root = ["{demo_root}", "{os.path.dirname(scanned_run)}"]\n')
     p, url = serve([demo_run], str(cfg))
     yield url
     p.terminate()
@@ -68,7 +80,16 @@ def server(demo_run, demo_root, tmp_path_factory):
 
 @pytest.fixture
 def ff(tmp_path):
-    b = FF(w=1280, h=850, port=free_port(), prof=str(tmp_path / "profile"))
+    prof, dl = tmp_path / "profile", tmp_path / "downloads"
+    prof.mkdir()
+    dl.mkdir()
+    with open(prof / "user.js", "w") as f:  # downloads land in tmp_path/downloads, unasked
+        f.write(f'user_pref("browser.download.dir", "{dl}");\n'
+                'user_pref("browser.download.folderList", 2);\n'
+                'user_pref("browser.download.useDownloadDir", true);\n'
+                'user_pref("browser.download.always_ask_before_handling_new_types", false);\n')
+    b = FF(w=1280, h=850, port=free_port(), prof=str(prof))
+    b.downloads = str(dl)
     yield b
     b.close()
 
@@ -104,6 +125,54 @@ def test_figure_workspace(ff, server, shots):
     assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
     time.sleep(8)
     ff.shot(f"{shots}/d_figure.png")
+
+
+def status_has(ff, text):
+    """Whether a status line of the page (.cv-status) shows `text`."""
+    return ff.js("(() => {" + _WALK + "let hit = false; walk(document, el => { if (el.classList "
+                 "&& el.classList.contains('cv-status') && el.textContent.includes("
+                 + json.dumps(text) + ")) hit = true; }); return hit; })()")
+
+
+def pick(ff, label):
+    """Choose the option showing `label` in whichever select offers it."""
+    return ff.js("(() => {" + _WALK + "let ok = false; walk(document, el => { if (ok || "
+                 "el.tagName !== 'SELECT') return; for (const o of el.options) if "
+                 "(o.textContent.trim() === " + json.dumps(label) + ") { el.value = o.value; "
+                 "el.dispatchEvent(new Event('change')); ok = true; } }); return ok; })()")
+
+
+def test_figure_clicks_download_and_scanned_runs(ff, server, shots, scanned_run):
+    ff.go(server)
+    map_canvas(ff)
+    click_text(ff, "Figure")
+    assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
+    # the runs_root scan (in the background) feeds the Run lists
+    name = os.path.basename(scanned_run)
+    offered = ("(() => {" + _WALK + "let n = 0; walk(document, el => { if (el.tagName === "
+               "'OPTGROUP' && el.label.startsWith('Other runs')) for (const o of el.children) "
+               "if (o.textContent.includes(" + json.dumps(name) + ")) n++; }); return n; })()")
+    assert until(lambda: ff.js(offered), 90), "the scanned run is not offered"
+    # a click on the preview places a marker where it lands in a panel
+    assert until(lambda: rects(ff, "img"), 60), "no preview"
+    time.sleep(5)  # (the first preview)
+    assert pick(ff, "Click to add a marker")
+    x, y, w, h = max(rects(ff, "img"), key=lambda r: r[2] * r[3])
+    for fx, fy in ((0.25, 0.3), (0.5, 0.3), (0.25, 0.7), (0.5, 0.6)):
+        click(ff, x + fx * w, y + fy * h)
+        if until(lambda: status_has(ff, "Added marker"), 10):
+            break
+    else:
+        raise AssertionError("no click landed in a panel")
+    ff.shot(f"{shots}/h_figure_click.png")
+    # the download is drawn in the background, then saved by the browser
+    click_text(ff, "Download")
+    png = until(lambda: [f for f in os.listdir(ff.downloads) if f.endswith(".png")], 120)
+    assert png, "no download"
+    time.sleep(1)
+    with open(os.path.join(ff.downloads, png[0]), "rb") as f:
+        assert f.read(8) == b"\x89PNG\r\n\x1a\n"
+    assert not status_has(ff, "Could not draw the download")
 
 
 def test_settings_window(ff, server, shots):

@@ -7,9 +7,12 @@ area, runs), Layers (what each panel draws), Style (fonts, axes, labels, colorba
 legend, spacing), Annotate and Export (with animated GIFs).  Saving sits above the preview.
 
 The FigureEditor is here; its runs (figruns), sources and lists (figsources), export
-(figexport) and animations (figanim) are mixins, and the constants, helpers and cards are in figparts."""
+(figexport), animations (figanim), figures of several parts (figcombo) and placing by
+clicking the preview (figclick) are mixins, and the constants, helpers and cards are in
+figparts."""
 
 import base64
+import html
 import io
 import json
 import os
@@ -19,26 +22,62 @@ import traceback
 from collections import OrderedDict
 from functools import partial
 
+import numpy as np
 import panel as pn
 
 from . import config, figdraw, figure as fg, series as ser
+from .picker import RunPicker
 from .theme import GRID
 from .figparts import (
     ANN_KINDS, CB_LOCS, CB_MODES, FIG_CMAPS, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS,
-    NONE, SIZE_PRESETS, TICKDIR, TYPE_LABEL, VARY, LayerCard, _auto, _chk, _f, _grid,
-    _hint, _num, _row, _section, _when,
+    NONE, SIZE_PRESETS, SND_LAYOUTS, STORM_MOTIONS, TICKDIR, TYPE_LABEL, VARY, LayerCard,
+    _auto, _chk, _f,
+    _grid, _hint, _num, _row, _section, _when,
 )
 # the editor's feature groups, one module each
 from .figanim import FigureAnimation
+from .figclick import ClickImage, FigureClick, place_map, watch_tight
+from .figcombo import FigureCombo, panel_name
 from .figexport import FigureExport
-from .figruns import FigureRuns
+from .figruns import AllFields, FigureRuns
 from .figsources import FigureSources
 
 
-class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
+def _tlabel(t_s):
+    """A time picker's label of model time t_s (s): h:mm:ss  (minutes)."""
+    s = int(round(float(t_s)))
+    return f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}  ({float(t_s) / 60:g} min)"
+
+
+def _heights(text):
+    """'1, 3, 6' -> [1.0, 3.0, 6.0] (km); also start:stop:step."""
+    return figdraw._levels_list(text)
+
+
+def _match(times, t_s):
+    """The time of `times` within a second of t_s, or None."""
+    return next((t for t in times if abs(t - float(t_s)) <= 1.0), None)
+
+
+def _nearest_t(times, t_s):
+    return min(times, key=lambda t: abs(t - float(t_s))) if times else float(t_s)
+
+
+def _place(times, t_s, snap):
+    """A chosen time in a picker of `times`: the nearest of them (snap), else the
+    matching one, else itself."""
+    if snap:
+        return _nearest_t(times, t_s)
+    m = _match(times, t_s)
+    return float(t_s) if m is None else m
+
+
+class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, FigureCombo,
+                   FigureClick):
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
+        self.fields = AllFields([self.F])  # the field lists: the fields of every run
         self.cache = OrderedDict()  # data key -> panel arrays
         self._opened = {}  # run path -> (CM1Run, Fields) when the viewer has no registry
         self._tracks = {}  # track file -> (mtime, run path, fixes)
@@ -48,7 +87,9 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self.cards = []
         self.ser_cards, self.snd_cards, self.ann_rows = [], [], []
         self.tm_rows, self.title_ws = [], []
-        # undo / redo: specs (JSON) before each change, and the ones undone
+        self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
+        # undo / redo: (figure JSON with all its parts, part in the widgets) before each
+        # change, and the ones undone
         self._hist, self._future, self._last, self._restoring = [], [], None, False
         self._png = None  # (width, height) px and dpi of the shown preview
         self._lims = {}  # panel -> (xlim, ylim) of the last preview, to place annotations
@@ -61,12 +102,11 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         viewer.gen["figser"] = 0
         self._build()
         self.set_spec(self._default())
+        self._scan_roots()
 
     # ------------------------------------------------------------ widgets
     def _build(self):
         run = self.run
-        self.topts = {f"{run.time_label(t)}  ({run.times[t] / 60:g} min)": t
-                      for t in range(len(run.times))}
         # new figure from ...
         nb = dict(button_type="light", button_style="outline", height=30, margin=(2, 3))
         self.start_map = pn.widgets.Button(
@@ -87,6 +127,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                                           "from the shown time", **nb)
         ib = dict(name="", button_type="light", button_style="outline", width=36, height=32,
                   margin=(4, 2))
+        self.start_hint = _hint("New figure from", margin=(6, 4, 0, 4))
         self.undo_btn = pn.widgets.Button(icon="arrow-back-up", description="Undo", **ib)
         self.redo_btn = pn.widgets.Button(icon="arrow-forward-up", description="Redo", **ib)
         # ---- Panels: grid and size
@@ -107,10 +148,17 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             button_style="outline", description="The height the panels need at this width "
                                                  "(with room for labels, titles and colorbars)")
         # ---- Panels: times, fields, run & time of each panel
-        self.time1 = pn.widgets.Select(name="Time (every panel)", options=self.topts)
+        self.time1 = pn.widgets.Select(name="Time (every panel)", options={
+            _tlabel(t): float(t) for t in run.times})
         self.tstep = pn.widgets.IntInput(name="Every … outputs", value=5, start=1)
         self.tfill = pn.widgets.Button(name="Fill from the shown time", height=32,
                                        button_type="light", button_style="outline")
+        self.pz = pn.widgets.TextInput(name="Heights (km), one per panel", value="1, 3, 6",
+                                       placeholder="e.g. 1, 3, 6",
+                                       description="The layers at a height follow the "
+                                                   "panel's (unless a layer keeps its own)")
+        self.pz_mode = pn.widgets.Select(name="Panels at", options={
+            "Heights (km AGL)": "height", "Model levels (k)": "level"})
         self.tm_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.pf_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.pf_rows = []
@@ -148,11 +196,10 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         # ---- Panels: runs
         self.runs_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.run_rows = []
-        self.add_sel = pn.widgets.Select(name="Add a run (next to this one, or recent)",
-                                         options={}, sizing_mode="stretch_width")
-        self.add_path = pn.widgets.TextInput(name="… or its folder", placeholder="/path/to/run")
-        self.add_btn = pn.widgets.Button(name="+ Add run", button_type="primary",
-                                         button_style="outline", height=32)
+        self.add_pick = RunPicker(run.path, on_open=lambda p: self._add_run(p),
+                                  open_label="+ Add run", compact=True,
+                                  exclude=lambda: [r["path"] for r in self.run_rows])
+        self.add_path = self.add_pick.query  # (a folder typed or pasted there)
         self.runs_msg = pn.pane.HTML(sizing_mode="stretch_width")
         # ---- Layers
         self.layer_box = pn.Column(sizing_mode="stretch_width", margin=0)
@@ -190,9 +237,28 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                 "Mixed layer": "ml", "Surface": "sb", "Most unstable": "mu", "None": "none"}),
             params=_chk("CAPE / CIN in legend", True), legend=_chk("Legend (one sounding)", False),
             guides=_chk("Adiabats", True), barbs=_chk("Wind barbs", True),
-            hodo=_chk("Hodograph", True), hodo_max=_f("Hodograph ± (m/s)", 40.0, step=5),
-            hodo_top=_f("Hodograph top (km)", 9.0, step=1),
             legend_loc=pn.widgets.Select(name="Legend at", options=LOCS))
+        hd = self.hd = dict(
+            layout=pn.widgets.Select(name="Panels show", options=SND_LAYOUTS),
+            hodo_max=_f("Hodograph ± (m/s)", 40.0, step=5),
+            hodo_top=_f("Hodograph top (km)", 9.0, step=1),
+            hodo_kin=_chk("Storm motions (Bunkers, mean wind)", True),
+            hodo_labels=_chk("Heights along the trace", True),
+            hodo_key=_chk("Key of the height colours", True),
+            srh=pn.widgets.Select(name="SRH shading", options={
+                "None": "", "0–1 km": "1", "0–3 km": "3"}),
+            storm=pn.widgets.Select(name="Storm motion (SRH, ring)", options=STORM_MOTIONS),
+            storm_u=_f("Storm u (m/s)", 0.0, step=1.0),
+            storm_v=_f("Storm v (m/s)", 0.0, step=1.0),
+            hodo_storm=_chk("Ring at the storm motion", True),
+            inset_loc=pn.widgets.Select(name="Inset at", options={
+                "Auto (clear of the traces)": "auto", "Upper right": "upper right",
+                "Upper left": "upper left"}))
+        sk_main = list(sk.values())
+        sk.update(hd)  # (one dict for the spec)
+        sk["table"] = pn.widgets.MultiChoice(
+            name="Parameter table under each panel (blank: none)",
+            options={f"{h} ({u})" if u else h: k for k, h, u in figdraw.SND_PARAMS})
         self.snd_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.snd_tab = pn.widgets.Button(name="+ The map's soundings", height=32,
                                          button_type="primary", button_style="outline")
@@ -202,7 +268,16 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             _hint("Soundings with the same <b>Panel</b> number share a skew-T (colour = "
                   "sounding). Storm soundings follow each run’s track."),
             _row(self.snd_tab, self.snd_new), self.snd_box,
-            _section("Skew-T and hodograph", _grid(*sk.values())),
+            _section("Skew-T and hodograph", _grid(hd["layout"]), _grid(*sk_main),
+                     _grid((sk["table"], 3)),
+                     _hint("Hodograph"), _grid(*list(hd.values())[1:]),
+                     _hint("The key and SRH shading are drawn in a hodograph of its own "
+                           "(side by side, or the hodograph alone), not in the inset. SRH "
+                           "(shading, legend, table) is relative to the chosen storm "
+                           "motion; custom: ground-relative u, v. The ring marks it; with "
+                           "one sounding, dotted lines show the storm-relative inflow and "
+                           "the 0–500 m shear (the critical angle), as in the Sounding "
+                           "tab.")),
             sizing_mode="stretch_width", margin=0)
         # time axes of time-height / time-series panels
         self.ts_tmin = pn.widgets.TextInput(name="From (min)", placeholder="data")
@@ -259,7 +334,16 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self.tl_t0 = _f("Minutes counted from", 0.0, step=10,
                         description="Time zero for {min}, in model minutes (e.g. the "
                                     "initiation time)")
+        self.zl_on = pn.widgets.Checkbox(name="Height label (panels at heights)")
+        self.zl_fmt = pn.widgets.TextInput(name="Text (blank: z = … km / k = …)",
+                                           description="{z}: the height (km), {k}: the "
+                                                       "model level; e.g. {z:g} km AGL")
+        self.zl_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
+        self.zl_size = _f("Size (pt)", 12.0, step=1)
+        self.zl_bold = pn.widgets.Checkbox(name="Bold")
+        self.zl_box = pn.widgets.Checkbox(name="White box")
         self.rl_on = pn.widgets.Checkbox(name="Run name (several runs)")
+        self.rl_color = pn.widgets.Checkbox(name="In the run's colour")
         self.rl_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
         self.rl_size = _f("Size (pt)", 12.0, step=1)
         self.rl_bold = pn.widgets.Checkbox(name="Bold")
@@ -306,6 +390,23 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self.ann_add = pn.widgets.Button(name="+ Add", button_type="primary",
                                          button_style="outline", height=32)
         self.ann_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        # ---- Annotate: the figure's own code
+        self.code_on = _chk("Run the code", False)
+        # highlighted (Ace, which the browser loads from a CDN), or a plain box that
+        # needs nothing from the internet; both hold the same text
+        self.code = pn.widgets.CodeEditor(
+            value="", language="python", theme="tomorrow_night", height=220,
+            sizing_mode="stretch_width", on_keyup=False, indent=4, soft_tabs=True,
+            print_margin=False)
+        self.code_plain = pn.widgets.TextAreaInput(
+            name="Python, run after the figure is drawn", height=200,
+            sizing_mode="stretch_width", visible=False,
+            placeholder="e.g.\nax = axs[0]\nax.plot([-5, 5], [0, 0], 'w--', lw=1)\n"
+                        "ax.text(0.5, 1.02, 'my note', transform=ax.transAxes)",
+            stylesheets=["textarea { font-family: ui-monospace, Menlo, Consolas, monospace;"
+                         " font-size: 12px; }"])
+        self.code_box = _chk("Plain text box (if the highlighted editor stays blank, e.g. "
+                             "without internet)", config.state("figure_code_plain") == "1")
         # ---- Export (the bar above the preview, and the Export tab)
         self._fig_dir = config.figures_dir(run.path)  # followed while the box is in it
         self.path = pn.widgets.TextInput(
@@ -348,7 +449,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             margin=(4, 4), description="Actual size: as large as the printed figure "
                                        "(at 96 pixels per inch) to judge the font sizes")
         self.status = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8))
-        self.image = pn.pane.HTML(sizing_mode="stretch_width", margin=(4, 8))
+        self.image = ClickImage(sizing_mode="stretch_width", margin=(4, 8))
+        self._build_click()
 
         # ---- the tabs
         self.grid_sec = _section(
@@ -358,7 +460,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             _hint("The height follows the panels (grid, colorbar, titles) until you type "
                   "a size; <b>Fit height</b> makes it follow again."))
         self.times_sec = _section("Times", _grid(self.time1, self.tstep, self.tfill),
-                                  self.tm_box, self.pf_box, self.pc_box)
+                                  _grid(self.pz_mode, (self.pz, 2)), self.tm_box, self.pf_box,
+                                  self.pc_box)
         self.titles_sec = _section("Titles", self.suptitle, self.titles_box,
                                    _row(self.auto_titles, self.clear_titles))
         self.area_plan = pn.Column(_grid(self.dom, self.half, self.box_btn, self.coords),
@@ -377,18 +480,27 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                           "run has its own storm track, for storm-centred panels and "
                           "storm-relative fields: the viewer's track for this run, or a track "
                           "file (storm_tracks/*.csv is found automatically)."),
-            self.runs_box, self.add_sel, _grid((self.add_path, 2), self.add_btn),
-            self.runs_msg, collapsed=True)
-        panels_tab = pn.Column(self.grid_sec, self.times_sec, self.titles_sec, self.area_sec,
-                               self.ts_sec, self.runs_sec, sizing_mode="stretch_width")
+            self.runs_box,
+            _hint("<b>Add a run</b>: your recent runs, the runs next to this one and those "
+                  "under <b>Where your runs live</b> (⚙ Settings). Type to filter, or paste "
+                  "a folder. The <b>Run</b> lists of the panels and soundings offer them "
+                  "too."),
+            self.add_pick.body, self.runs_msg, collapsed=True)
+        self._build_combo()
+        panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.times_sec, self.titles_sec,
+                               self.area_sec, self.ts_sec, self.runs_sec,
+                               sizing_mode="stretch_width")
         layers_tab = pn.Column(self.plan_layers, self.series_col, self.snd_col,
                                sizing_mode="stretch_width")
         let = _grid(self.let_fmt, self.let_loc, self.let_size, self.let_bold, self.let_box)
         tl = _grid((self.tl_fmt, 2), self.tl_loc, self.tl_size, self.tl_bold, self.tl_box)
-        rl = _grid(self.rl_loc, self.rl_size, self.rl_bold, self.rl_box)
+        rl = _grid(self.rl_loc, self.rl_size, self.rl_bold, self.rl_box, self.rl_color)
+        zl = _grid((self.zl_fmt, 2), self.zl_loc, self.zl_size, self.zl_bold, self.zl_box)
+        self.zl_row = pn.Column(self.zl_on, zl, margin=0, sizing_mode="stretch_width")
         _when(self.let_on, let)
         _when(self.tl_on, tl)
         _when(self.rl_on, rl)
+        _when(self.zl_on, zl)
         _when(self.grid, self.grid_ls)
         self.ck_opts = _grid(self.ck_layer, self.ck_label, self.ck_frame, self.ck_x, self.ck_y,
                              self.ck_size, self.ck_fs)
@@ -407,7 +519,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                 _hint("Labels take matplotlib math, e.g. <code>w (m s$^{-1}$)</code>. Tick "
                       "labels on outer panels only when the panels share their ranges.")),
             _section("Panel labels", self.let_on, let, self.tl_on, tl,
-                     _grid(self.tl_t0), self.rl_on, rl),
+                     _grid(self.tl_t0), self.zl_row, self.rl_on, rl),
             _section("Colorbar", _grid(self.cb_mode), self.cb_opts),
             _section("Legend", _grid(self.lg_loc, self.lg_panel, self.lg_ncol, self.lg_frame),
                      _hint("The legend lists layers with a legend entry (contours, shading, "
@@ -424,6 +536,15 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                 "Nested circles labelled with a contour layer's levels (a key for unlabelled "
                 "contours), placed in figure fractions from the lower left."),
                 self.ck_on, self.ck_opts),
+            _section("Your own code", _hint(
+                "Python run after everything else is drawn, for what the editor has no "
+                "setting for. It has <code>fig</code>, <code>axs</code> (the panels' axes: "
+                "<code>axs[0]</code> is panel a), <code>data</code> (the panels' arrays), "
+                "<code>spec</code>, <code>np</code> and <code>matplotlib</code>. It is saved "
+                "with the figure and runs in its script too. An error stops the code, not "
+                "the figure (the status line says where). The code is read when you "
+                "click outside the box."), self.code_on, self.code, self.code_plain,
+                self.code_box, collapsed=True),
             sizing_mode="stretch_width")
         export_tab = pn.Column(
             _section("Image", _grid(self.tight, self.pad, self.bg),
@@ -439,7 +560,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                             ("Annotate", annotate_tab), ("Export", export_tab),
                             dynamic=False, sizing_mode="stretch_width")
         self.editor = pn.Column(
-            _hint("New figure from", margin=(6, 4, 0, 4)),
+            self.start_hint,
             _row(self.start_map, self.start_xs, self.start_ser, self.start_snd, self.start_def),
             self.tabs, scroll="y-auto", sizing_mode="stretch_height", width=580,
             styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
@@ -449,9 +570,9 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                               self.dl, flex_wrap="wrap", align_items="flex-end", gap="0 2px",
                               sizing_mode="stretch_width")
         view_bar = pn.Row(self.update, self.auto, self.undo_btn, self.redo_btn, self.zoom,
-                          self.status, margin=0, sizing_mode="stretch_width")
+                          self.place_mode, self.status, margin=0, sizing_mode="stretch_width")
         self.preview = pn.Column(
-            save_bar, self.msg, view_bar, self.image, scroll="y-auto",
+            save_bar, self.msg, view_bar, self.place_hint, self.image, scroll="y-auto",
             sizing_mode="stretch_both", styles={"min-width": "0"})
         self.panel = pn.Row(self.preview, self.editor, sizing_mode="stretch_both", margin=0)
         self._wire()
@@ -468,22 +589,30 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                   self.let_on, self.let_fmt, self.let_loc, self.let_size, self.let_bold,
                   self.let_box, self.tl_on, self.tl_fmt, self.tl_loc, self.tl_size,
                   self.tl_bold, self.tl_box, self.tl_t0, self.rl_on, self.rl_loc,
-                  self.rl_size, self.rl_bold, self.rl_box, self.cb_mode, self.cb_loc,
+                  self.rl_size, self.rl_bold, self.rl_box, self.rl_color, self.zl_on,
+                  self.zl_fmt, self.zl_loc, self.zl_size, self.zl_bold, self.zl_box,
+                  self.cb_mode, self.cb_loc,
                   self.cb_label, self.cb_ticks, self.cb_shrink, self.cb_fraction, self.cb_pad,
                   self.cb_lsize, self.cb_tsize, self.cb_lbold, self.cb_lside, self.cb_fmt,
                   self.lg_loc, self.lg_panel, self.lg_ncol,
                   self.lg_frame, self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad,
-                  self.bg, self.tight, self.pad, self.run_sel):
+                  self.bg, self.tight, self.pad):
             w.param.watch(rq, "value")
+        self.run_sel.param.watch(self._on_run_sel, "value")
         self.cb_mode.param.watch(lambda e: self._show_cbar(), "value")
         for w in (self.rows, self.cols):
             w.param.watch(lambda e: self._on_layout(), "value")
         self.vary.param.watch(lambda e: self._on_vary(), "value")
+        self.pz.param.watch(lambda e: self._on_heights(), "value")
+        self.pz_mode.param.watch(lambda e: self._on_zmode(), "value")
+        self.sk["storm"].param.watch(lambda e: self._show_storm(), "value")
+        self.sk["layout"].param.watch(lambda e: self._show_storm(), "value")
+        self.code_plain.param.watch(lambda e: self._sync_code(e.new), "value")
+        self.code.param.watch(lambda e: self._sync_code(e.new), "value")
+        self.code_box.param.watch(lambda e: self._show_code(True), "value")
         self.runs_as.param.watch(lambda e: self._on_vary(), "value")
         self.size_preset.param.watch(self._on_preset, "value")
         self.fit_btn.on_click(lambda e: self._refit())
-        self.add_btn.on_click(lambda e: self._add_run())
-        self.add_sel.param.watch(lambda e: setattr(self.add_path, "value", e.new or ""), "value")
         self.kind.param.watch(lambda e: self._on_kind(), "value")
         self.dom.param.watch(self._on_dom, "value")
         self.box_btn.on_click(lambda e: self._use_view())
@@ -503,18 +632,22 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
         self.snd_tab.on_click(lambda e: self._add_tab_soundings())
+        for k in ("layout", "table"):
+            self.sk[k].param.watch(lambda e: self._fit_size(), "value")
         self.snd_new.on_click(lambda e: self._add_sounding())
         self.ann_add.on_click(lambda e: self._add_annotation())
         for w in (*self.sk.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
                   self.ts_ymin, self.ts_ymax,
                   self.ts_legend, self.ts_legloc, self.ts_zero, self.ck_on, self.ck_layer,
                   self.ck_label, self.ck_x, self.ck_y, self.ck_size, self.ck_fs,
-                  self.ck_frame):
+                  self.ck_frame, self.code_on, self.code):
             w.param.watch(rq, "value")
         self.update.on_click(lambda e: self.request(force=True, delay=False))
         self.undo_btn.on_click(lambda e: self.undo())
         self.redo_btn.on_click(lambda e: self.redo())
         self.zoom.param.watch(lambda e: self._show_image(), "value")
+        self.image.param.watch(self._on_click, "click")
+        self.image.param.watch(self._on_drag, "drag")
         self.save_img.on_click(lambda e: self._save(False))
         self.save_all.on_click(lambda e: self._save(True))
         self.load_btn.on_click(lambda e: self._load_spec())
@@ -539,8 +672,6 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self.rows.value, self.cols.value = int(s["rows"]), int(s["cols"])
             self.width.value, self.height.value = float(s["size"][0]), float(s["size"][1])
             self.size_preset.value = ""
-            t1 = fg.tindex(self.run, s["time_s"])
-            self.time1.value = t1 if t1 is not None else self.v.t
             self.suptitle.value = s.get("suptitle", "")
             d = s["domain"]
             self.dom.value, self.half.value = d["mode"], float(d.get("half", 12.5))
@@ -589,6 +720,13 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self.rl_on.value, self.rl_loc.value = R.get("on", True), R.get("loc", "upper left")
             self.rl_size.value, self.rl_bold.value = float(R.get("size", 12)), R.get("bold", True)
             self.rl_box.value = bool(R.get("box", False))
+            self.rl_color.value = bool(R.get("run_color", False))
+            Z = s.get("z_label", {})
+            self.zl_on.value, self.zl_fmt.value = bool(Z.get("on", False)), Z.get("fmt", "")
+            self.zl_loc.value = Z.get("loc", "upper right")
+            self.zl_size.value, self.zl_bold.value = float(Z.get("size", 12)), Z.get("bold", True)
+            self.zl_box.value = bool(Z.get("box", False))
+            self.part_share.value = _num(s.get("share"))
             c = s["colorbar"]
             self.cb_mode.value = c.get("mode", "shared")
             self.cb_loc.value = c.get("location") or (
@@ -629,6 +767,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self.ts_legloc.value = ts.get("legend_loc", "best")
             self.ts_ymin.value, self.ts_ymax.value = _num(ts.get("ymin")), _num(ts.get("ymax"))
             sk = s.get("skewt", {})
+            sk = dict(sk, layout=figdraw.sounding_layout(sk))
             for k, wdg in self.sk.items():
                 if k in sk:
                     wdg.value = sk[k] if not isinstance(wdg, pn.widgets.FloatInput) \
@@ -639,12 +778,19 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self.ck_size.value, self.ck_fs.value = float(ck.get("size", 0.1)), \
                 float(ck.get("fs", 10.0))
             self.ck_frame.value = ck.get("frame", True)
+            code = s.get("code") or {}
+            self.code_on.value, self.code.value = bool(code.get("on")), code.get("text") or ""
+            self.code_plain.value = self.code.value
             self._build_cards(s["layers"])
             self.ck_layer.value = int(ck.get("layer", -1)) \
                 if int(ck.get("layer", -1)) in self.ck_layer.options.values() else -1
-            self._build_times([NONE if t is None else fg.tindex(self.run, t)
-                               for t in s["times_s"]], extend=False)
+            self._refresh_time1(float(s["time_s"]) if s.get("time_s") is not None
+                                else self._shown_s(), snap=False)
+            self._build_times([NONE if t is None else float(t) for t in s["times_s"]],
+                              extend=False, snap=False)
             self._build_pf(s.get("panel_fills", []))
+            self.pz_mode.value = s.get("panel_zmode", "height")
+            self.pz.value = ", ".join(f"{float(z):g}" for z in s.get("panel_z") or [1, 3, 6])
             self._build_pc(s.get("panels", []))
             self._build_titles(s.get("titles", []))
             self.ser_cards = [self._ser_card(e) for e in s.get("series", [])]
@@ -659,6 +805,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self._on_kind(render_=False)
         self._show_vary()
         self._show_cbar()
+        self._show_storm()
+        self._show_code()
         self._set_dl_name()
         self.request(delay=False)
 
@@ -668,7 +816,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         tv = self._time_values()
         while tv and tv[-1] == NONE:
             tv.pop()
-        times = [None if t == NONE else int(t) for t in tv]
+        times_s = [None if t == NONE else float(t) for t in tv]
         titles = [w.value for w in self.title_ws]
         while titles and not titles[-1].strip():
             titles.pop()
@@ -677,15 +825,17 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             cols=int(self.cols.value or 1),
             size=[float(self.width.value or 8), float(self.height.value or 6)],
             size_auto=bool(self._auto_size),
-            times=times, time=int(self.time1.value),
-            times_s=[None if t is None else float(self.run.times[t]) for t in times],
-            time_s=float(self.run.times[int(self.time1.value)]),
+            times=[None if t is None else self._index_of(t) for t in times_s],
+            time=self._index_of(float(self.time1.value), one=True),
+            times_s=times_s, time_s=float(self.time1.value),
             runs=self._runs_collect(), run=int(self.run_sel.value or 0),
             runs_as=self.runs_as.value,
             panels=[dict(run=int(r["run"].value), time_s=float(r["time"].value))
                     for r in self.pc_rows if r["time"].value is not None],
             layers=[c.collect() for c in self.cards],
             panel_fills=[self._pf_collect(r) for r in self.pf_rows],
+            panel_z=_heights(self.pz.value), panel_zmode=self.pz_mode.value,
+            share=_num(self.part_share.value),
             suptitle=self.suptitle.value, titles=titles,
             coords=self.coords.value, background=self.bg.value)
         s["domain"] = dict(s["domain"], mode=self.dom.value, half=float(self.half.value or 12.5))
@@ -716,7 +866,10 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                                t0_min=float(self.tl_t0.value or 0))
         s["run_label"] = dict(on=self.rl_on.value, loc=self.rl_loc.value,
                               size=float(self.rl_size.value or 12), bold=self.rl_bold.value,
-                              box=self.rl_box.value)
+                              box=self.rl_box.value, run_color=self.rl_color.value)
+        s["z_label"] = dict(on=self.zl_on.value, fmt=self.zl_fmt.value.strip(),
+                            loc=self.zl_loc.value, size=float(self.zl_size.value or 12),
+                            bold=self.zl_bold.value, box=self.zl_box.value)
         loc = self.cb_loc.value
         s["colorbar"] = dict(s["colorbar"], mode=self.cb_mode.value, location=loc,
                              orientation="horizontal" if loc in ("bottom", "top") else "vertical",
@@ -744,6 +897,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             except ValueError:
                 return None
 
+        s["code"] = dict(on=bool(self.code_on.value), text=self.code.value or "")
         s["series"] = [c.collect() for c in self.ser_cards]
         s["soundings"] = [c.collect() for c in self.snd_cards]
         s["annotations"] = [r.collect() for r in self.ann_rows]
@@ -765,14 +919,15 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
 
     # ------------------------------------------------------------ undo / redo
     def _remember(self, spec):
-        """Record a rendered spec: the one before it goes on the undo list."""
+        """Record a rendered figure (spec: collect_all, so adding, removing and changing
+        parts can be undone): the one before it goes on the undo list."""
         j = json.dumps(spec, sort_keys=True, default=float)
         if self._restoring or self._last is None:
             self._restoring = False
-        elif j != self._last:
+        elif j != self._last[0]:
             self._hist = (self._hist + [self._last])[-50:]
             self._future = []
-        self._last = j
+        self._last = (j, self.part_i)  # (switching parts alone is no change)
         self._show_history()
 
     def _show_history(self):
@@ -791,11 +946,12 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self._hist.append(self._last)
         self._restore(self._future.pop())
 
-    def _restore(self, j):
-        self._last, self._restoring = j, True
-        self.set_spec(json.loads(j))
+    def _restore(self, state):
+        j, part = state
+        self._last, self._restoring = state, True
+        self.set_parts(json.loads(j), part)
         if not self.auto.value:  # (no render to record it)
-            self._remember(self.collect())
+            self._remember(self.collect_all())
 
     # ------------------------------------------------------------ layers
     def _build_cards(self, layers):
@@ -816,7 +972,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             '<div class="cv-empty">No layers: add one above.</div>')]
         self._show_region()
         opts = {"First contours": -1} | {
-            f"{j + 1}. {self.F[c.w['field'].value].label}": j
+            f"{j + 1}. {self.fields[c.w['field'].value].label}": j
             for j, c in enumerate(self.cards) if c.type == "contour"}
         v = self.ck_layer.value
         hold, self._hold = self._hold, True
@@ -827,7 +983,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self._hold = hold
 
     def _add_layer(self, kind, ev=None):
-        F = self.F
+        F = self.fields
         field = None
         if kind in ("fill", "contour", "shade"):
             field = {"fill": "dbz", "contour": "winterp", "shade": "winterp"}[kind]
@@ -858,8 +1014,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             run, _ = self.open_run(self.run_rows[k]["path"])
         except Exception:  # noqa: BLE001
             return {}
-        return {f"{run.time_label(t)}  ({run.times[t] / 60:g} min)": float(run.times[t])
-                for t in range(len(run.times))}
+        return {_tlabel(t): float(t) for t in run.times}
 
     def _build_pc(self, panels):
         n = int(self.rows.value or 1) * int(self.cols.value or 1)
@@ -880,13 +1035,16 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         names = self._run_names()
         k = int(p["run"]) if int(p["run"]) in names.values() else 0
         r = dict(run=pn.widgets.Select(name=f"Panel {figdraw.panel_letter(i, '{a}')}: run",
-                                       options=names, value=k))
+                                       value=k, **self._run_choices(names)))
         opts = self._time_opts(k)
         ts = p.get("time_s")
         r["time"] = pn.widgets.Select(name="time", options=opts, value=self._nearest(opts, ts))
 
         def on_run(ev):
             if self._hold:
+                return
+            if isinstance(ev.new, str):  # a run not in the figure yet
+                self._pick_other(r["run"], ev.old)
                 return
             o = self._time_opts(ev.new)
             cur = r["time"].value
@@ -926,21 +1084,100 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         return 0
 
     def _time_values(self):
-        """Output index of each time picker (NONE: an empty panel)."""
+        """Model time (s) of each time picker (NONE: an empty panel)."""
         return [w.value for w in self.tm_rows]
 
-    def _build_times(self, values=None, extend=True):
+    def _shown_s(self):
+        return float(self.run.times[self.v.t])
+
+    def _sel_run(self):
+        """The run of "Run" (panels in time or in field)."""
+        k = int(self.run_sel.value or 0)
+        try:
+            return self.open_run(self.run_rows[k]["path"])[0]
+        except Exception:  # noqa: BLE001
+            return self.run
+
+    def _panel_times(self, grid=None):
+        """(model times in s, those some runs lack) the time pickers offer: the outputs
+        of the panels' run, or of every run in a run x time grid."""
+        if grid is None:
+            grid = self.vary.value == "grid"
+        if not grid:
+            return [float(t) for t in self._sel_run().times], set()
+        lists = []
+        for r in self.run_rows:
+            try:
+                lists.append([float(t) for t in self.open_run(r["path"])[0].times])
+            except Exception:  # noqa: BLE001
+                pass
+        lists = lists or [[float(t) for t in self.run.times]]
+        out = []
+        for t in sorted(t for ts in lists for t in ts):
+            if not out or t - out[-1] > 1.0:  # (the same output time in several runs)
+                out.append(t)
+        some = {t for t in out if any(_match(ts, t) is None for ts in lists)}
+        return out, some
+
+    def _topts(self, values=(), grid=None):
+        """Time picker options: the outputs, plus any chosen time that has none (a
+        figure opened from another run keeps its times; the panel says it has no
+        output there)."""
+        tl, some = self._panel_times(grid)
+        opts = {_tlabel(t) + (" · not in every run" if t in some else ""): t for t in tl}
+        for v in values:
+            if v not in (None, NONE) and _match(tl, v) is None:
+                opts[_tlabel(v) + " · no output"] = float(v)
+        return opts
+
+    def _index_of(self, ts, one=False):
+        """Output index of time ts (s) in the panels' run (the first run of a grid that
+        has it), for older readers of the spec."""
+        runs = [self._sel_run()]
+        if self.vary.value == "grid" and not one:
+            for r in self.run_rows:
+                try:
+                    runs.append(self.open_run(r["path"])[0])
+                except Exception:  # noqa: BLE001
+                    pass
+        for run in runs:
+            k = fg.tindex(run, ts)
+            if k is not None:
+                return k
+        ts0 = runs[0].times
+        return min(range(len(ts0)), key=lambda k: abs(ts0[k] - ts))
+
+    def _build_times(self, values=None, extend=True, snap=True):
         """A time picker per panel (per column / row of a run x time grid), keeping the
-        chosen times.  Pickers added to a grid continue every `tstep` outputs (extend),
-        or start empty."""
+        chosen times (snap: moved to the nearest output the pickers offer).  Pickers
+        added to a grid continue every `tstep` outputs (extend), or start empty."""
         vals = list(self._time_values() if values is None else values)
-        nt, step = len(self.run.times), int(self.tstep.value or 1)
+        tl, _ = self._panel_times()
+        step = int(self.tstep.value or 1)
+        if snap:  # different times stay different (e.g. moving to a coarser run)
+            taken, out = set(), []
+            for v in vals:
+                if v in (None, NONE):
+                    out.append(NONE)
+                    continue
+                free = [t for t in tl if t not in taken] or tl
+                out.append(_nearest_t(free, v))
+                taken.add(out[-1])
+            vals = out
+        else:
+            vals = [NONE if v in (None, NONE) else _place(tl, v, False) for v in vals]
         n = self._slots()
         while len(vals) < n:
-            last = next((v for v in reversed(vals) if v not in (None, NONE)), None)
-            nxt = (self.v.t if last is None else last + step) if extend else NONE
-            vals.append(nxt if nxt is not None and 0 <= nxt < nt else NONE)
-        opts = {"— empty —": NONE} | self.topts
+            last = next((v for v in reversed(vals) if v != NONE), None)
+            if not extend or not tl:
+                vals.append(NONE)
+                continue
+            if last is None:
+                vals.append(_nearest_t(tl, self._shown_s()))
+                continue
+            q = tl.index(_nearest_t(tl, last)) + step
+            vals.append(tl[q] if q < len(tl) else NONE)
+        opts = {"— empty —": NONE} | self._topts(vals)
         grid = self.vary.value == "grid"
         rows = []
         for i in range(n):
@@ -952,15 +1189,42 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             rows.append(w)
         self.tm_rows = rows
         self.tm_box.objects = [_grid(*rows)] if rows else []
+        self._refresh_time1(snap=snap)
+
+    def _refresh_time1(self, value=None, snap=True):
+        """The one time of a figure in fields: the outputs of the panels' run."""
+        v = self.time1.value if value is None else value
+        tl, _ = self._panel_times(grid=False)
+        if v is not None and tl:
+            v = _place(tl, v, snap)
+        opts = self._topts([v], grid=False)
+        hold, self._hold = self._hold, True
+        try:
+            self.time1.options = opts
+            self.time1.value = v if v in opts.values() else next(iter(opts.values()), None)
+        finally:
+            self._hold = hold
+
+    def _on_run_sel(self, ev):
+        if self._hold:
+            return
+        if isinstance(ev.new, str):  # a run not in the figure yet
+            self._pick_other(self.run_sel, ev.old)
+            return
+        self._build_times()  # (the new run's outputs)
+        self.request()
 
     def _fill_times(self):
         """The time pickers from the shown time, every `tstep` outputs."""
-        step, t0, nt = int(self.tstep.value or 1), self.v.t, len(self.run.times)
+        tl, _ = self._panel_times()
+        if not tl:
+            return
+        step, p0 = int(self.tstep.value or 1), tl.index(_nearest_t(tl, self._shown_s()))
         hold, self._hold = self._hold, True
         try:
             for k, w in enumerate(self.tm_rows):
-                t = t0 + step * k
-                w.value = t if t < nt else NONE
+                q = p0 + step * k
+                w.value = tl[q] if q < len(tl) else NONE
         finally:
             self._hold = hold
         self.request()
@@ -997,7 +1261,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             pf = fills[i] if i < len(fills) else None
             if pf is None:
                 pf = {k: base[k] for k in ("field", "cmap", "vmin", "vmax")} if base else \
-                    {k: v for k, v in fg.layer_defaults("fill", self.F, next(iter(self.F.defs)))
+                    {k: v for k, v in fg.layer_defaults("fill", self.fields,
+                                                        next(iter(self.fields.defs)))
                      .items() if k in ("field", "cmap", "vmin", "vmax")}
             rows.append(self._pf_row(i, pf))
         self.pf_rows = rows
@@ -1006,7 +1271,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self.pf_box.objects = head + [r["panel"] for r in rows]
 
     def _pf_row(self, i, pf):
-        F = self.F
+        F = self.fields
         r = dict(
             field=pn.widgets.Select(name=f"Panel {figdraw.panel_letter(i, '{a}')}: field",
                                     groups=F.groups(), value=pf["field"]),
@@ -1033,11 +1298,75 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
     def _pf_collect(self, r):
         # the panel's own field defaults (blanking, colorbar ends) override the shared
         # fill layer's (e.g. reflectivity's "blank where <= 0")
-        d = fg.layer_defaults("fill", self.F, r["field"].value)
+        d = fg.layer_defaults("fill", self.fields, r["field"].value)
         return dict(field=r["field"].value, cmap=r["cmap"].value, vmin=float(r["vmin"].value),
                     vmax=float(r["vmax"].value), units=d["units"],
                     mask_below=d["mask_below"], extend=d["extend"], white_first=False,
                     reverse=False)
+
+    # ------------------------------------------------------------ panel heights
+    def _on_heights(self, layout=False):
+        """New panel heights: a grid with a cell for each (and no empty row)."""
+        if self._hold:
+            return
+        try:
+            n = len(_heights(self.pz.value))
+        except ValueError:
+            n = 0  # (the status line says what is wrong)
+        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
+        if n and (r * c < n or r * c - n >= c):
+            r, c = (1, n) if n <= 4 else (-(-n // 3), 3)
+            hold, self._hold = self._hold, True
+            try:
+                self.rows.value, self.cols.value = r, c
+            finally:
+                self._hold = hold
+            layout = True
+        if layout:
+            self._on_layout()
+        else:
+            self.request()
+
+    def _on_zmode(self):
+        """Panels at model levels instead of heights, or back: the panels' heights
+        become the nearest levels of the panels' run (and back)."""
+        if self._hold:
+            return
+        try:
+            vals = _heights(self.pz.value)
+        except ValueError:
+            vals = []
+        z = np.asarray(self._sel_run().z, dtype=float)  # (km, at the levels)
+        if self.pz_mode.value == "level":
+            new = [int(np.argmin(np.abs(z - v))) for v in vals]
+        else:
+            new = [round(float(z[min(max(int(round(v)), 0), z.size - 1)]), 2) for v in vals]
+        hold, self._hold = self._hold, True
+        try:
+            self.pz.value = ", ".join(f"{v:g}" for v in new)
+        finally:
+            self._hold = hold
+        self._show_vary()
+        self.request()
+
+    def _show_storm(self):
+        """The custom storm motion's u, v, and the inset's place, when they apply."""
+        sk = self.sk
+        sk["storm_u"].visible = sk["storm_v"].visible = sk["storm"].value == "custom"
+        sk["inset_loc"].visible = sk["layout"].value == "inset"
+        sk["hodo_storm"].visible = sk["layout"].value != "skewt"
+
+    def _sync_code(self, text):
+        """The highlighted editor and the plain box hold the same code."""
+        for w in (self.code, self.code_plain):
+            if w.value != text:
+                w.value = text
+
+    def _show_code(self, save=False):
+        plain = bool(self.code_box.value)
+        self.code.visible, self.code_plain.visible = not plain, plain
+        if save:  # (remembered for the next figures)
+            config.set_state("figure_code_plain", "1" if plain else "")
 
     # ------------------------------------------------------------ events
     def _on_layout(self):
@@ -1063,6 +1392,9 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self._th_grid()
             self._on_layout()
             return
+        if self.vary.value == "height":
+            self._on_heights(layout=True)
+            return
         if self.vary.value == "grid":
             chosen = [t for t in self._time_values() if t != NONE]
             nr, nt = len(self.run_rows), max(1, len(chosen))
@@ -1085,15 +1417,28 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         self.times_sec.visible = maps
         self.times_sec.title = {
             "time": "Times (one per panel)", "field": "Time and fields",
+            "height": "Time and heights",
             "grid": "Times (one per " + ("column)" if self.runs_as.value == "rows" else "row)"),
             "custom": "Run and time of each panel"}.get(vary, "Times")
         self.tm_box.visible = self.tstep.visible = self.tfill.visible = \
             vary in ("time", "grid")
-        self.time1.visible = vary == "field"
+        self.time1.visible = vary in ("field", "height")
+        self.pz.visible = self.pz_mode.visible = vary == "height"
+        self.pz.name = ("Model levels (k), one per panel" if self.pz_mode.value == "level"
+                        else "Heights (km), one per panel")
+        self.zl_row.visible = vary == "height" and maps
         self.pf_box.visible = vary == "field"
         self.pc_box.visible = vary == "custom"
         self.runs_as.visible = (vary == "grid" and maps) or kind == "th"
-        self.run_sel.visible = len(self.run_rows) > 1 and vary in ("time", "field") and maps
+        self.run_sel.visible = (len(self.run_rows) > 1 or bool(self._other_runs())) and \
+            vary in ("time", "field", "height") and maps
+        opts = VARY if kind != "xsec" else {k: v for k, v in VARY.items() if v != "height"}
+        if list(self.vary.options) != list(opts):  # (sections have no heights to vary)
+            hold, self._hold = self._hold, True
+            try:
+                self.vary.options = opts
+            finally:
+                self._hold = hold
         self.plan_layers.visible = self.area_sec.visible = maps
         self.series_col.visible = self.ts_sec.visible = kind in ("th", "line")
         self.ts_sec.title = "Time and height axes" if kind == "th" else "Time and value axes"
@@ -1197,6 +1542,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
         if render_ and not self._hold:
             self._hold = True
             try:
+                if kind == "xsec" and self.vary.value == "height":
+                    self.vary.value = "time"
                 if kind == "xsec":
                     self.xlabel.value = ("distance from storm (km)"
                                          if self.xs_mode.value == "storm" else "distance (km)")
@@ -1243,6 +1590,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self._show_cbar()
             self.request()
         self._show_vary()
+        if self._multi_part():
+            self._show_parts()  # (the part's kind in its name)
 
     def _on_dom(self, ev):
         if ev.new == "box" and not self.spec["domain"].get("box"):
@@ -1318,7 +1667,10 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self._set_titles(ts)
             return
         if s["vary"] == "field":
-            ts = [self.F[pf["field"]].label for pf in s["panel_fills"]]
+            ts = [self.fields[pf["field"]].label for pf in s["panel_fills"]]
+        elif s["vary"] == "height":
+            ts = [f"k = {int(round(z))}" if s.get("panel_zmode") == "level" else f"{z:g} km"
+                  for z in s["panel_z"]]
         elif s["vary"] in ("grid", "custom"):
             ts = []
             for i in range(fg.npanels(s)):
@@ -1327,8 +1679,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self.rl_on.value = False  # the titles name the runs now
         else:
             fill = next((lay for lay in s["layers"] if lay["type"] == "fill"), None)
-            ts = [self.F[fill["field"]].label if fill and t is not None else ""
-                  for t in s["times"]]
+            ts = [self.fields[fill["field"]].label if fill and t is not None else ""
+                  for t in s["times_s"]]
         self._set_titles(ts)
 
     _auto_size = False  # the figure size follows the grid until it is set by hand
@@ -1351,7 +1703,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             return
         try:
             self._follow_size()
-            spec = self.collect()
+            spec = self.collect_all()  # (several parts: the figure of them)
         except Exception as e:  # noqa: BLE001
             self._status(f"Incomplete settings: {e}", True)
             return
@@ -1363,6 +1715,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
 
     def panel_data(self, spec, progress=None, cancelled=None):
         """{panel: arrays} of the spec, from the cache where possible."""
+        if spec["kind"] == "combo":
+            return self._combo_data(spec, progress, cancelled)
         if spec["kind"] in ("th", "line"):
             return self._series_data(spec)
         if spec["kind"] == "sounding":
@@ -1411,7 +1765,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                     self.cache.popitem(last=False)
             else:
                 self.cache.move_to_end(key)
-            data[i] = dict(d, run_label=entry.get("label", "")) if multi else d
+            data[i] = dict(d, run=k, **({"run_label": entry.get("label", "")} if multi
+                                         else {}))
         return data
 
     def _job(self, g, spec):
@@ -1432,6 +1787,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             self._lims = {i: (d["xlim"], d["ylim"]) for i, d in data.items()
                           if "xlim" in d and "ylim" in d and not d.get("missing")}
             fig = figdraw.draw(spec, data)
+            code_err = getattr(fig, "_cv_code_error", None)
+            watch_tight(fig)  # (where the panels are in the image, for clicks)
             # sharp at the page's size, and on screen at 96 px per inch when actual size
             dpi = min(float(spec["export"]["dpi"]), max(1100.0 / max(spec["size"][0], 0.5),
                                                          192.0))
@@ -1439,6 +1796,10 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             figdraw.save(spec, fig, buf, format="png", **fg.save_kw(spec, dpi))
             raw = buf.getvalue()
             wh = struct.unpack(">II", raw[16:24])  # the PNG header's width and height
+            place = place_map(fig, spec, wh, dpi)
+            origin = {int(i) % 1000: tuple(d["origin"]) for i, d in data.items()
+                      if "origin" in d and (spec["kind"] != "combo" or
+                                            int(i) // 1000 == self.part_i)}
             png = base64.b64encode(raw).decode()
             miss = [i for i, d in data.items() if d.get("missing")]
             w_in, h_in = wh[0] / dpi, wh[1] / dpi  # as saved (after trimming)
@@ -1447,13 +1808,17 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                     f"({w_in * float(spec['export']['dpi']):.0f} × "
                     f"{h_in * float(spec['export']['dpi']):.0f} px at "
                     f"{spec['export']['dpi']} dpi) · {_time.time() - t0:.1f} s")
-            pend = self.series_pending() if spec["kind"] in ("th", "line") else []
+            kinds = {p["kind"] for p in spec.get("parts", [spec])}
+            pend = self.series_pending() if kinds & {"th", "line"} else []
             if pend:
                 note += (' · <span class="busy">● computing series '
                          + "; ".join(p for p in pend if p) + "</span>")
+            if code_err:
+                note += (' · <span style="color:#f87171">your code stopped at '
+                         f'{html.escape(code_err)}</span>')
             if miss:
                 note += (f" · no data in panel{'s' if len(miss) > 1 else ''} "
-                         + ", ".join(figdraw.panel_letter(i, "{a}") for i in miss))
+                         + ", ".join(panel_name(spec, i) for i in miss))
                 storm = (spec["kind"] == "plan" and spec["domain"]["mode"] == "storm") or \
                     (spec["kind"] == "xsec" and spec["xsec"]["mode"] == "storm")
                 if storm and any(not e.get("track") for e in spec["runs"]):
@@ -1463,17 +1828,20 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
                                                         for e in spec["runs"]):
                     note += (" · storm-centred panels need a track: follow the storm in "
                              "the <b>Track</b> tab (Map), or pick another area in "
-                             "<b>Region</b>")
+                             "<b>Area</b>")
             self.v._schedule(partial(self._apply, g, png, note, (wh, dpi,
-                                                                 spec.get("background"))))
+                                                                 spec.get("background")),
+                                     (place, spec, origin)))
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             self.v._schedule(partial(self._status, f"Could not draw: {e}", True))
 
-    def _apply(self, g, png, note, info=None):
+    def _apply(self, g, png, note, info=None, place=None):
         if g != self.v.gen["fig"]:
             return
         self._png = (png,) + tuple(info or ((None, None), 100.0, "white"))
+        if place is not None:
+            self._place, self._place_spec, self._place_origin = place
         self._show_image()
         self._status(note)
 
@@ -1490,9 +1858,11 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
             size = f"width:{w / dpi * 96:.0f}px;max-width:none;"
         else:
             size = "max-width:100%;max-height:calc(100vh - 230px);width:auto;height:auto;"
-        self.image.object = (f'<img src="data:image/png;base64,{png}" style="{size}{back}'
-                             f'display:block;margin:auto;'
-                             f'box-shadow:0 4px 18px rgba(0,0,0,.5)">')
+        mode = self.place_mode.value
+        cursor = "cursor:move;" if mode == "move" else "cursor:crosshair;" if mode else ""
+        self.image.param.update(src=f"data:image/png;base64,{png}",
+                                css=f"{size}{back}{cursor}display:block;margin:auto;"
+                                    "box-shadow:0 4px 18px rgba(0,0,0,.5)")
 
     def _status(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""

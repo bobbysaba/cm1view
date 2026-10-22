@@ -19,16 +19,23 @@ def _is_path(text):
 
 
 class RunPicker:
-    """`body` holds the controls; `modal` wraps them in a dialog (with `extra` below)."""
+    """`body` holds the controls; `modal` wraps them in a dialog (with `extra` below).
 
-    def __init__(self, current=None, extra=()):
-        self.current = current
+    on_open(path), when given, is called with the chosen run instead of opening it in
+    the browser (e.g. the figure editor adding a run); exclude() -> paths left out of
+    the list (besides `current`); compact: a shorter list that fills its column."""
+
+    def __init__(self, current=None, extra=(), on_open=None, open_label="Open run",
+                 exclude=None, compact=False):
+        self.current, self.on_open, self.exclude = current, on_open, exclude
+        size = dict(sizing_mode="stretch_width") if compact else {}
         self.query = pn.widgets.TextInput(
             placeholder="Filter runs, or paste a folder (e.g. /scratch/you/cm1/run1)",
-            width=520, margin=(5, 10, 5, 0))
-        self.open = pn.widgets.Button(name="Open run", button_type="primary", width=110,
+            width=None if compact else 520, margin=(5, 10, 5, 0), **size)
+        self.open = pn.widgets.Button(name=open_label, button_type="primary", width=110,
                                       disabled=True, margin=(5, 0))
-        self.list = pn.widgets.Select(options={}, size=13, width=640, margin=(5, 0))
+        self.list = pn.widgets.Select(options={}, size=7 if compact else 13,
+                                      width=None if compact else 640, margin=(5, 0), **size)
         self.msg = _html()
         # navigation happens in the browser: the new session opens the run from ?run=
         self.go = pn.widgets.TextInput(visible=False)
@@ -39,8 +46,8 @@ class RunPicker:
             q.set('run', p); q.delete('t');
             window.location.search = q.toString();
         """)
-        self.body = pn.Column(pn.Row(self.query, self.open, margin=0), self.list, self.msg,
-                              self.go, margin=0)
+        self.body = pn.Column(pn.Row(self.query, self.open, margin=0, **size), self.list,
+                              self.msg, self.go, margin=0, **size)
         self.modal = pn.Modal(
             _html('<div class="cv-maptitle" style="font-size:16px"><b>Open a CM1 run</b>'
                   '</div>'),
@@ -63,7 +70,11 @@ class RunPicker:
 
     def rescan(self):
         """Look again for the runs under the runs_root setting."""
-        self._known, self._complete = config.scan_runs(config.get("runs_root"))
+        self.set_known(*config.scan_runs(config.get("runs_root")))
+
+    def set_known(self, runs, complete=True):
+        """The runs under runs_root (from a scan made elsewhere)."""
+        self._known, self._complete = list(runs), complete
         self._under.clear()
         self._refresh()
 
@@ -101,8 +112,9 @@ class RunPicker:
         self._select(keep or "", hint)
 
     def _known_options(self, text):
-        recent = [p for p in registry.recent_runs() if p != self.current]
-        runs = recent + [r for r in self._known if r not in recent and r != self.current]
+        skip = {self.current} | set(self.exclude() if self.exclude else ())
+        recent = [p for p in registry.recent_runs() if p not in skip]
+        runs = recent + [r for r in self._known if r not in recent and r not in skip]
         words = text.lower().split()
         runs = [r for r in runs if all(w in r.lower() for w in words)]
         opts = {}
@@ -166,4 +178,12 @@ class RunPicker:
 
     def _open(self):
         if self.selected and not self.open.disabled:
-            self.go.value = self.selected
+            if self.on_open is not None:
+                self.on_open(self.selected)
+            else:
+                self.go.value = self.selected
+
+    def clear(self):
+        """An empty box (after a pick), and the list of runs again."""
+        self.query.value = self.query.value_input = ""
+        self._refresh()

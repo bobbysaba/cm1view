@@ -1487,7 +1487,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
 
 
 def create_app(reg, maxpix=None):
-    pn.extension("plotly", "modal", "tabulator", notifications=False, raw_css=[CSS])
+    pn.extension("plotly", "modal", "tabulator", "codeeditor", notifications=False,
+                 raw_css=[CSS])
     maxpix = maxpix or config.get("maxpix")
     want, error = None, ""
     try:  # ?run=/path/to/run picks the run directory

@@ -44,7 +44,8 @@ class FigureAnimation:
             "Animation (GIF)",
             _hint("Plan views and cross-sections, redrawn at successive output times from "
                   "the panels' own times: every panel steps forward together, and "
-                  "storm-centred panels follow the storm. Saved as "
+                  "storm-centred panels follow the storm. In a figure of parts, every "
+                  "part steps (soundings too; time–height and time series stay). Saved as "
                   "<code>&lt;Save as&gt;.gif</code> (frames in "
                   "<code>&lt;Save as&gt;_frames/</code>)."),
             _grid(self.an_n, self.an_step, self.an_fps),
@@ -56,17 +57,16 @@ class FigureAnimation:
         self.an_msg.object = f'<div class="cv-status"{col}>{html}</div>'
 
     def _anim_offsets(self, spec):
-        runs = {k: self.open_run(spec["runs"][k]["path"])[0]
-                for k in {r[0] for r in (fg.panel_ref(spec, i)
-                                         for i in range(fg.npanels(spec))) if r}}
+        runs = {p: self.open_run(p)[0] for p in {p for p, _ in fg.time_refs(spec)}}
         return fg.frame_offsets(spec, runs, int(self.an_n.value or 2),
                                 int(self.an_step.value or 1))
 
     def _on_anim(self):
-        spec = self.collect()
-        if spec["kind"] not in ("plan", "xsec"):
+        spec = self.collect_all()
+        if not fg.animated(spec):
             self._anim_msg("Animations are made of plan views or cross-sections (the "
-                           "panels' kind in <b>Panels</b>).", True)
+                           "panels' kind in <b>Panels</b>; in a figure of parts, at least "
+                           "one part of them).", True)
             return
         base = config.expand(self.path.value.strip())
         if not base:

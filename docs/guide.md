@@ -144,7 +144,8 @@ come from the computed result without recomputing. *Auto limits* clears them. Th
 
 **Figure workspace** (Map | 3D | **Figure**). Publication figures, previewed at their
 final size. *New figure from* the map view, the cross-section, the series, the
-soundings or a time grid; every change can be undone (↶ ↷ above the preview), and
+soundings or a time grid; every change can be undone (↶ ↷ above the preview; adding,
+removing and changing figure parts too), and
 *Actual size* shows the figure as large as it prints, to judge the font sizes. Saving
 sits above the preview: *Save as* (folder/name), format, DPI, *Save*, *+ script & data*
 and *Download*. The editor has five tabs of folding sections:
@@ -153,15 +154,48 @@ and *Download*. The editor has five tabs of folding sections:
   height follows the panels until you type a size, *Fit height* makes it follow
   again), the time of each panel (any cell can stay empty), the titles of the figure
   and of each panel, the area or section, and the **Runs** the panels can come from.
+  The time lists offer the outputs of the panels' run (in a runs × times grid, of every
+  run, marked where a run has none), so runs with different output intervals work
+  together. Every *Run* list also offers runs not yet in the figure (your recent runs,
+  the runs next to this one and those under *Where your runs live*): picking one adds
+  it, with its storm track. In **Runs**, the same list finds a run to add by filtering
+  or by pasting a folder (the runs under *Where your runs live* are found in the
+  background, and join the lists when the search is done). Each run has a label, a
+  colour and a line style and a storm track; the colour is the default for its time
+  series, its storm track layers, its run name in the panels and, when each sounding
+  of a panel comes from another run, its soundings. Removing a run takes its panels and soundings with it; those of
+  the runs after it stay on their runs. The field lists hold the fields of every run.
   *Panels show*:
-  - *Plan views* / *Vertical cross-sections*: panels in time, in field, as a
-    runs × times grid or each with its own run and time; centred on each run's
-    tracked storm, a fixed box or the whole domain.
+  - *Plan views* / *Vertical cross-sections*: panels in time, in field, at several
+    heights or model levels (plan views: e.g. 1, 3 and 6 km, or levels 5, 10 and 20;
+    a layer can keep its own height; *Style → Panel labels → Height label* names each
+    panel's height or level), as a runs × times grid or each with its own run and
+    time; centred on each run's tracked storm, a fixed box or the whole domain.
   - *Time–height (series)*: a row per series and a column per run, one colorbar per row; a series can be plotted as its d/dz or d/dt.
   - *Time series*: series with the same panel number share a panel; series in other
-    units get their own y axis; one series from several runs is coloured by run.
-  - *Soundings*: skew-T log-p with adiabats, parcel, barbs and a hodograph inset;
-    several soundings (runs, times, storm-relative spots) per panel.
+    units get their own y axis; one series from several runs is coloured by run. A
+    series' *Runs* list also offers runs not in the figure (picking one adds it).
+  - *Soundings*: skew-T log-p with adiabats, parcel and barbs, and a hodograph: as an
+    inset, side by side with the skew-T, or alone (or no hodograph). The hodograph
+    marks the Bunkers right and left movers, the 0–6 km mean wind, the heights along
+    the trace (labels that would overlap on a short hodograph move aside) and, with a
+    ring, the storm motion chosen for the SRH: Bunkers right or left mover, the 0–6 km
+    mean wind or a custom motion (one sounding: dotted lines show the storm-relative
+    inflow and the 0–500 m shear, as in the Sounding tab). The SRH shading, legend and
+    parameter table use that motion. A hodograph of its own adds a key of the height
+    colours and optional 0–1 or 0–3 km SRH shading; the inset sits in the upper right,
+    the upper left, or (*Auto*) the top corner the temperature and dewpoint traces
+    cross least. A parameter table under each panel can list CAPE, CIN, LCL, SRH,
+    shear, STP and SCP, a row per sounding. Several soundings (runs, times,
+    storm-relative spots) per panel.
+  - **Figure parts** (top of Panels): a figure can have parts with different kinds of
+    panels, e.g. plan views beside soundings, or a plan view with its A–B line above
+    the cross-section. Each part has its own panels, runs, layers and style, and keeps
+    its own size; the parts are side by side or stacked, and the panel letters run on
+    from part to part. Edit one part at a time (*Figure parts* picks it; *New figure
+    from* then makes the part anew). The whole figure can be given a width and height
+    (the parts then share it by their sizes), each part a share of it (0–1), and the
+    figure one colorbar for all its parts.
 - **Layers**: fill (colormap, range, steps, linear / log scale, opacity, blanking,
   colorbar arrows and label), contours (levels, labels and their format), shading,
   vectors or streamlines, storm track and section line; the series of time–height and
@@ -173,12 +207,24 @@ and *Download*. The editor has five tabs of folding sections:
   row, column or panel; where, length, thickness, label, ticks and their sizes),
   the legend and the spacing between panels.
 - **Annotate**: text, markers, arrows, lines, boxes and circles, and a contour key
-  (nested circles).
+  (nested circles). They can also be placed by clicking the preview (the *Click …*
+  list above it; in a skew-T, at a temperature and pressure), as can a section's A and
+  B in a plan view; for two-point items a drag from one point to the other does both.
+  *Drag: move an annotation* moves one (from its text, marker, centre or middle; from
+  an end, that end), and *Drag a box: plan-view area* sets the plan views' area.
+  *Your own code*: Python
+  run after the figure is drawn, with `fig`, `axs` (by panel), `data`, `spec`, `np`
+  and `matplotlib`, for anything the editor has no setting for; it is saved with the
+  figure and runs in its script too. Code in a figure you open runs only once you tick
+  *Run the code*. The code box highlights Python; the editor is loaded by the browser
+  from a CDN, so where the browser has no internet tick *Plain text box*.
 - **Export**: trimming, margin and a transparent background; animations; reopen a saved
   figure (its image, script or `_spec.json`) to keep editing.
 
 **Animations** (Export → *Animation (GIF)*). Plan-view and cross-section figures can be
-saved as animated GIFs. Each frame redraws the figure exactly as it is set up, a few
+saved as animated GIFs, and so can figures of parts with at least one part of them:
+every part steps together (soundings too; time–height and time-series parts stay as
+they are). Each frame redraws the figure exactly as it is set up, a few
 outputs later: every panel steps forward together, and storm-centred panels and sections
 follow the storm. Set the number of frames, how many outputs each frame steps
 (*Every … outputs*), the frame rate, the DPI (keep it low: a GIF grows quickly with its
@@ -194,7 +240,10 @@ automatically; see `track_dirs` / `track_patterns`). *+ script & data* also save
 stand-alone script with the plotted arrays and spec: the script redraws the identical
 image without the viewer. The image and script sit side by side, the arrays and spec in
 `_src/` next to them; the script finds them relative to itself, so the folder can be
-moved or copied.
+moved or copied. The spec and the script's header record the cm1view version and, from
+a git checkout, its commit, and a hash (sha256) of each run's `namelist.input`; the spec
+also records the settings that change what a figure shows (`output_glob`,
+`track_dirs`, `track_patterns`, `pdecomp_script`).
 
 **Switching runs.** Click the run name in the header. You can type a directory, pick
 one of the runs next to the current one (*Runs here*), browse with *Folders* (↑ .. goes

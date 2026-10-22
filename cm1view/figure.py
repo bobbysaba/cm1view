@@ -16,6 +16,7 @@ the spec as a Python dict), the plotted arrays (.npz) and the spec (.json), so t
 figure can be redrawn or restyled later without the viewer.
 """
 
+import hashlib
 import json
 import os
 import pprint
@@ -56,8 +57,9 @@ def layer_defaults(kind, F, field=None, z=1.0):
         return dict(type="vectors", on=True, z=0.0, spacing=2.0, zspacing=0.5,
                     frame="ground", scale=250.0, width=0.002, color="k", key=0.0,
                     style="arrows", density=1.5, slw=0.8, arrowsize=1.0)
-    if kind == "track":
-        return dict(type="track", on=True, color="k", lw=1.0, ls="-", marker=True, legend="")
+    if kind == "track":  # (in its run's colour, run_color)
+        return dict(type="track", on=True, color="k", run_color=True, lw=1.0, ls="-",
+                    marker=True, legend="")
     if kind == "line":
         return dict(type="line", on=True, color="k", lw=2.0, labels="X, X′", legend="")
     raise ValueError(kind)
@@ -111,7 +113,8 @@ def default_spec(run, F, t=0):
     return dict(
         version=1, kind="plan", size=[8.0, 6.0 if rows > 1 else 3.2], size_auto=True,
         rows=rows, cols=cols, vary="time",
-        times=times, time=t, panel_fills=[], layers=layers,
+        times=times, time=t, panel_fills=[], panel_z=[1.0, 3.0, 6.0], panel_zmode="height",
+        layers=layers,
         times_s=[float(run.times[k]) for k in times], time_s=float(run.times[t]),
         runs=[run_entry(run, "viewer")], run=0, runs_as="rows", panels=[],
         domain=dict(mode="storm", half=12.5, box=None), coords="grid",
@@ -122,7 +125,8 @@ def default_spec(run, F, t=0):
         letters=dict(on=True, fmt="{a}", loc="lower left", size=12, bold=True),
         time_label=dict(on=True, fmt="t = {min:g} min", loc="lower right", size=12,
                         bold=True, t0_min=0.0),
-        run_label=dict(on=True, loc="upper left", size=12, bold=True),
+        run_label=dict(on=True, loc="upper left", size=12, bold=True, run_color=True),
+        z_label=dict(on=False, fmt="", loc="upper right", size=12, bold=True),
         titles=[], suptitle="",
         colorbar=dict(mode="shared", orientation="horizontal", label="", shrink=0.7,
                       fraction=0.05, pad=0.02, ticks=""),
@@ -130,12 +134,15 @@ def default_spec(run, F, t=0):
         series=[], ts=dict(tmin=None, tmax=None, zmin=0.0, zmax=10.0, legend=True,
                            legend_loc="best", zero_line=False),
         soundings=[], skewt=dict(pmax=1000.0, pmin=100.0, tmin=-40.0, tmax=50.0, skew=35.0,
-                                 parcel="ml", guides=True, barbs=True, hodo=True,
+                                 parcel="ml", guides=True, barbs=True, layout="inset",
                                  hodo_max=40.0, hodo_top=9.0, lw=1.8, legend=False,
-                                 legend_loc="upper left", params=True),
+                                 legend_loc="upper left", params=True, hodo_kin=True,
+                                 hodo_labels=True, hodo_key=True, srh="", table=[],
+                                 storm="rm", storm_u=0.0, storm_v=0.0, hodo_storm=True,
+                                 inset_loc="auto"),
         contour_key=dict(on=False, layer=-1, label="w", x=0.01, y=0.01, size=0.1, fs=10.0,
                          r0=0.35, step=0.15, yoffset=0.06, frame=True),
-        annotations=[],
+        annotations=[], code=dict(on=False, text=""),
         font=dict(family="sans-serif", size=10), background="white",
         spacing=dict(w_pad=0.04, h_pad=0.04, wspace=0.02, hspace=0.02),
         export=dict(format="png", dpi=250, tight=True),
@@ -149,14 +156,15 @@ def npanels(spec):
 def panel_ref(spec, i):
     """(run index, model time in s) of panel i, or None for an empty grid cell.
     vary: "time" (one run, a time per panel), "field" (one run and time, a fill per
-    panel), "grid" (runs x times: rows are runs when runs_as == "rows", else columns)
-    or "custom" (spec["panels"]: a run and time per panel)."""
+    panel), "height" (one run and time, a height per panel: spec["panel_z"]), "grid"
+    (runs x times: rows are runs when runs_as == "rows", else columns) or "custom"
+    (spec["panels"]: a run and time per panel)."""
     vary, nr = spec["vary"], len(spec.get("runs") or [None])
     if vary == "time":  # (a time of None: an empty grid cell)
         ts = spec["times_s"]
         return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) and ts[i] is not None \
             else None
-    if vary == "field":
+    if vary in ("field", "height"):
         return int(spec.get("run", 0)), float(spec["time_s"])
     if vary == "grid":
         r, c = divmod(i, int(spec["cols"]))
@@ -202,25 +210,53 @@ def storm_motion(run, fixes, t):
 
 def shift_times(spec, dt_s):
     """A copy of `spec` with every panel's time moved by dt_s seconds (a frame of an
-    animation: the panels step through time together)."""
+    animation: the panels step through time together; in a figure of parts, the
+    panels of every part, and the soundings)."""
     s = json.loads(json.dumps(spec, default=float))
+    if s.get("kind") == "combo":
+        s["parts"] = [shift_times(p, dt_s) for p in s["parts"]]
+        return s
     s["times_s"] = [None if t is None else float(t) + dt_s for t in s.get("times_s", [])]
     if s.get("time_s") is not None:
         s["time_s"] = float(s["time_s"]) + dt_s
     for p in s.get("panels") or []:
         p["time_s"] = float(p["time_s"]) + dt_s
+    for e in s.get("soundings") or []:
+        e["time_s"] = float(e["time_s"]) + dt_s
     return s
+
+
+def animated(spec):
+    """Whether the spec has panels that step in time (plan views, sections, soundings;
+    time-height and time-series panels stay as they are)."""
+    parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
+    return any(p["kind"] in ("plan", "xsec") for p in parts)
+
+
+def time_refs(spec):
+    """(run path, model time s) of every panel that steps in an animation: plan views
+    and sections (all parts of a figure of parts) and soundings."""
+    out = []
+    for p in spec["parts"] if spec.get("kind") == "combo" else [spec]:
+        runs = p.get("runs") or []
+        if p["kind"] in ("plan", "xsec"):
+            out += [(runs[k]["path"], ts) for k, ts in
+                    (panel_ref(p, i) for i in range(npanels(p)) if panel_ref(p, i))]
+        elif p["kind"] == "sounding":
+            out += [(runs[int(e.get("run", 0))]["path"], float(e["time_s"]))
+                    for e in p.get("soundings") or [] if int(e.get("run", 0)) < len(runs)]
+    return out
 
 
 def frame_offsets(spec, runs, n, step=1):
     """Time offsets (s) of up to n animation frames, every `step` outputs of the first
     panel's run from the figure's own times, while every panel has an output at its
-    shifted time.  runs: {run index: CM1Run} of the panels' runs."""
-    refs = [r for r in (panel_ref(spec, i) for i in range(npanels(spec))) if r]
+    shifted time.  runs: {run path: CM1Run} of the panels' runs (time_refs)."""
+    refs = time_refs(spec)
     if not refs:
         return []
-    k0, ts0 = refs[0]
-    run0 = runs[k0]
+    p0, ts0 = refs[0]
+    run0 = runs[p0]
     i0 = tindex(run0, ts0)
     if i0 is None:
         return []
@@ -230,7 +266,7 @@ def frame_offsets(spec, runs, n, step=1):
         if not 0 <= i < len(run0.times):
             break
         dt = float(run0.times[i] - run0.times[i0])
-        if any(tindex(runs[k], ts + dt) is None for k, ts in refs):
+        if any(tindex(runs[p], ts + dt) is None for p, ts in refs):
             break
         out.append(dt)
     return out
@@ -344,6 +380,7 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out):
     j1 = min(run.nj, int(np.searchsorted(run.yh, y1)) + 1)
     out["x"], out["y"] = run.xh[i0:i1] - ox, run.yh[j0:j1] - oy
     out["xlim"], out["ylim"] = (x0 - ox, x1 - ox), (y0 - oy, y1 - oy)
+    out["origin"] = np.array([ox, oy], dtype=float)  # grid km of the axes' (0, 0)
     for j, lay in enumerate(figdraw.spec_layers(spec, i)):
         if not lay.get("on", True):
             continue
@@ -351,9 +388,10 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out):
             a = F.plane(lay["field"], t, lay.get("mode", "height"), float(lay["z"]),
                         storm=storm)
             out[f"L{j}"] = np.asarray(a[j0:j1, i0:i1], dtype=np.float32)
-        elif lay["type"] == "vectors":
-            u = F.plane("uinterp", t, "height", float(lay["z"]))[j0:j1, i0:i1]
-            v = F.plane("vinterp", t, "height", float(lay["z"]))[j0:j1, i0:i1]
+        elif lay["type"] == "vectors":  # (at a height, or a model level: panels by level)
+            mode = "level" if lay.get("mode") == "level" else "height"
+            u = F.plane("uinterp", t, mode, float(lay["z"]))[j0:j1, i0:i1]
+            v = F.plane("vinterp", t, mode, float(lay["z"]))[j0:j1, i0:i1]
             u, v = _frame(run, u, v, lay["frame"], storm)
             if lay.get("style") == "streamlines":  # the winds on a (thinned) grid
                 g = max(1, int(np.ceil(max(u.shape) / 300.0)))
@@ -608,11 +646,21 @@ def sounding_defaults(run_index=0, time_s=0.0, where=None, n=0, label=""):
     width (km) of the box averaged around the point)."""
     return dict(run=int(run_index), time_s=float(time_s), panel=0, label=label,
                 where=dict(where or dict(kind="trk", x=0.0, y=0.0, avg=0.0)),
-                color=LINE_COLORS[n % len(LINE_COLORS)])
+                color="")  # ("": automatic, figdraw.sounding_colors)
 
 
-def sounding_column(run, entry, fixes, progress=None):
-    """thermo.analyze result of a sounding entry, or a string (why there is none)."""
+def storm_choice(skewt):
+    """(storm, custom) for thermo.analyze of a spec's skewt options: the storm motion
+    of the SRH (rm, lm, mean, or custom (u, v) ground-relative m/s)."""
+    st = skewt.get("storm", "rm")
+    if st not in ("rm", "lm", "mean", "custom"):
+        st = "rm"
+    return st, (float(skewt.get("storm_u") or 0.0), float(skewt.get("storm_v") or 0.0))
+
+
+def sounding_column(run, entry, fixes, progress=None, storm=("rm", (0.0, 0.0))):
+    """thermo.analyze result of a sounding entry, or a string (why there is none).
+    storm: (storm, custom) of storm_choice."""
     t = tindex(run, float(entry["time_s"]))
     if t is None:
         return f"no output at {float(entry['time_s']) / 60:g} min in this run"
@@ -637,7 +685,26 @@ def sounding_column(run, entry, fixes, progress=None):
             a = vol[:, j0:j1, i0:i1] if vol is not None else run.read_box(v, t, i0, i1, j0, j1)
             c[v] = a.mean(axis=(1, 2), dtype=np.float64)
     return thermo.analyze(run.z * 1000.0, c["prs"], c["th"], c["qv"], c["uinterp"] + run.umove,
-                          c["vinterp"] + run.vmove, domain=(run.umove, run.vmove))
+                          c["vinterp"] + run.vmove, storm=storm[0], custom=storm[1],
+                          domain=(run.umove, run.vmove))
+
+
+def _param(r, key):
+    """A value of figdraw.SND_PARAMS from a thermo.analyze result (NaN if none)."""
+    try:
+        if key.endswith(("cape", "cin")):
+            return float(r[key[:2]][key[2:]])
+        if key == "mllcl":
+            return float(r["ml"]["lcl_z"])
+        if key in ("srh1", "srh3", "esrh"):
+            return float(r["kin"][key])
+        if key == "shear06":
+            return float(np.hypot(*r["kin"]["shear06"]))
+        if key in ("stp_eff", "scp"):
+            return float(r["comp"][key])
+    except (KeyError, TypeError, ValueError):
+        pass
+    return float("nan")
 
 
 def sounding_label(entry, run_label, run, multi):
@@ -675,6 +742,14 @@ def sounding_panel(spec, i, get, auto_label=None):
             out[f"N{n}_Tp"] = r[parcel]["T"] - 273.15
         out[f"N{n}_u"], out[f"N{n}_v"], out[f"N{n}_z"] = pr["u"], pr["v"], pr["z"] / 1000.0
         out[f"N{n}_e"] = e
+        kin = r.get("kin", {})
+        for k, name in (("rm", "rm"), ("lm", "lm"), ("mean06", "mean"), ("storm", "storm")):
+            if k in kin:
+                out[f"N{n}_{name}"] = np.asarray(kin[k], dtype=float)
+        for k in ("srh1", "srh3"):
+            if k in kin:
+                out[f"N{n}_{k}"] = float(kin[k])
+        out[f"N{n}_par"] = np.array([_param(r, k) for k, _, _ in figdraw.SND_PARAMS])
         lab = ent.get("label") or (auto_label(e) if auto_label else "")
         if spec.get("skewt", {}).get("params", True) and parcel in ("sb", "ml", "mu"):
             lab += (f" ({parcel.upper()}CAPE {r[parcel]['cape']:.0f}, "
@@ -741,9 +816,60 @@ def bundle_paths(spec, base):
                 spec=os.path.join(src, f"{name}_spec.json"))
 
 
+_PROVENANCE = None
+
+
+def provenance():
+    """What made the figure: cm1view's version and, from a git checkout, its commit
+    (with "+changes" when the checkout has uncommitted changes)."""
+    global _PROVENANCE
+    if _PROVENANCE is None:
+        import subprocess
+        from . import __version__
+        here = os.path.dirname(os.path.abspath(__file__))
+        commit = ""
+        try:
+            git = ["git", "-C", here]
+            commit = subprocess.run(git + ["rev-parse", "--short", "HEAD"], text=True,
+                                    capture_output=True, timeout=10).stdout.strip()
+            if commit and subprocess.run(git + ["status", "--porcelain", "--", "."],
+                                         text=True, capture_output=True,
+                                         timeout=10).stdout.strip():
+                commit += "+changes"
+        except (OSError, subprocess.SubprocessError):
+            pass
+        _PROVENANCE = dict(cm1view=__version__, commit=commit)
+    return dict(_PROVENANCE)
+
+
+# the settings that change what a figure shows (which files are output, which track)
+SETTINGS_USED = ("output_glob", "track_dirs", "track_patterns", "pdecomp_script")
+
+
+def namelist_hash(path):
+    """sha256 (first 16 hex digits) of the namelist.input of the run in `path` ("" when
+    it has none): which setup the figure's data came from."""
+    try:
+        with open(os.path.join(path, "namelist.input"), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def made_with(spec):
+    """The provenance saved with a figure: cm1view's version and commit, the date, each
+    run's namelist hash, and the settings in SETTINGS_USED."""
+    return dict(provenance(), date=_time.strftime("%Y-%m-%d %H:%M"),
+                runs=[dict(label=r.get("label", ""), path=r["path"],
+                           namelist_sha256=namelist_hash(r["path"]))
+                      for r in spec.get("runs") or []],
+                settings={k: config.get(k) for k in SETTINGS_USED})
+
+
 def save_bundle(spec, data, base, run=None, note=""):
     """Image + script side by side, data + spec in _src/ (see bundle_paths).
     Returns the paths."""
+    spec = dict(spec, made_with=made_with(spec))
     out = bundle_paths(spec, base)
     os.makedirs(os.path.dirname(out["data"]), exist_ok=True)
     out["image"] = save_image(spec, data, out["image"])
@@ -760,12 +886,21 @@ def script(spec, npz_name, out_name, run=None, note=""):
     """A stand-alone script that redraws the figure from the saved arrays."""
     import inspect
     src = inspect.getsource(figdraw)
+    made = provenance()
+    nml = {r["path"]: r.get("namelist_sha256", "")
+           for r in (spec.get("made_with") or {}).get("runs", [])}
+
+    def tag(path):
+        return f"  (namelist sha256 {nml[path]})" if nml.get(path) else ""
+
     head = [
-        f'"""Figure made with cm1view on {_time.strftime("%Y-%m-%d %H:%M")}.',
+        f'"""Figure made with cm1view {made["cm1view"]}'
+        + (f' (commit {made["commit"]})' if made["commit"] else "")
+        + f' on {_time.strftime("%Y-%m-%d %H:%M")}.',
         "",
-        *(["runs:"] + [f"  {r['label']}: {r['path']}" for r in spec["runs"]]
+        *(["runs:"] + [f"  {r['label']}: {r['path']}{tag(r['path'])}" for r in spec["runs"]]
           if len(spec.get("runs") or []) > 1 else
-          [f"run: {run.path}" if run is not None else ""]),
+          [f"run: {run.path}{tag(run.path)}" if run is not None else ""]),
         note,
         "Redraw:  python this_script.py   (needs numpy and matplotlib; cmweather or pyart",
         "for their colormaps).  Change SPEC below to restyle (colours, ranges, labels, size, ...);",
@@ -798,6 +933,8 @@ def script(spec, npz_name, out_name, run=None, note=""):
         "    here = os.path.dirname(os.path.abspath(__file__))",
         f"    data = load_data(os.path.join(here, *{npz_name!r}.split('/')))",
         "    fig = draw(SPEC, data)",
+        "    if getattr(fig, '_cv_code_error', None):",
+        "        print('the figure code stopped at', fig._cv_code_error)",
         f"    out = os.path.join(here, {out_name!r})",
         "    ex = SPEC.get('export', {})",
         "    tight = ex.get('tight', True)",

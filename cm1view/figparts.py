@@ -39,6 +39,7 @@ MATH_FONTS = {"DejaVu Sans": "dejavusans", "Like the text font": "custom",
               "Computer Modern (LaTeX)": "cm"}
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
 VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
+        "Height (one run, one time)": "height",
         "Run × time grid": "grid", "Each panel: own run & time": "custom"}
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
@@ -152,7 +153,7 @@ class LayerCard:
 
     def __init__(self, ed, lay, collapsed=False):
         self.ed, self.type = ed, lay["type"]
-        F, g = ed.F, ed.F.groups()
+        F, g = ed.fields, ed.fields.groups()
         self.lay = dict(lay)
         self.w = w = {}
         w["on"] = pn.widgets.Checkbox(value=lay.get("on", True), width=20, margin=(8, 2, 0, 4))
@@ -167,6 +168,8 @@ class LayerCard:
             w["mode"] = pn.widgets.Select(name="Level", options=LEVEL_MODES,
                                           value=lay.get("mode", "height"))
             w["z"] = _f("Height (km)", lay.get("z", 1.0), step=0.25)
+        if t in ("fill", "contour", "shade", "vectors"):
+            w["z_fixed"] = _chk("Own height (not the panel's)", lay.get("z_fixed", False))
         if t == "fill":
             w["cmap"] = pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
                                           value=lay["cmap"] if lay["cmap"] in FIG_CMAPS
@@ -237,6 +240,7 @@ class LayerCard:
             w["lw"] = _f("Outline width" if t == "shade" else "Line width", lay.get("lw", 1.0),
                          step=0.25)
         if t == "track":
+            w["run_color"] = _chk("Run's colour", lay.get("run_color", False))
             w["ls"] = pn.widgets.Select(name="Style", options={"solid": "-", "dashed": "--",
                                                                "dotted": ":"},
                                         value=lay.get("ls", "-"))
@@ -264,35 +268,41 @@ class LayerCard:
     def _layout(self):
         w, t = self.w, self.type
         if t == "fill":
-            return [_grid((w["field"], 2), w["mode"], w["z"], w["style"], w["mask_below"]),
+            return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["style"],
+                          w["mask_below"]),
                     _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
                           (w["cbar_label"], 3), (w["panels"], 3))]
         if t == "contour":
-            return [_grid((w["field"], 2), w["mode"], w["z"], (w["levels"], 2), w["color"],
+            return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], (w["levels"], 2),
+                          w["color"],
                           w["lw"], w["neg_dashed"], w["clabel"], w["clabel_size"],
                           w["clabel_fmt"], (w["legend"], 3), (w["panels"], 3))]
         if t == "shade":
-            return [_grid((w["field"], 2), w["mode"], w["z"], w["threshold"], w["above"],
+            return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["threshold"],
+                          w["above"],
                           w["color"], w["alpha"], w["outline_on"], w["outline"], w["lw"],
                           (w["legend"], 3), (w["panels"], 3))]
         if t == "vectors":
-            return [_grid(w["style"], w["frame"], w["color"], w["z"], w["spacing"],
+            return [_grid(w["style"], w["frame"], w["color"], w["z"], w["z_fixed"], w["spacing"],
                           w["zspacing"], w["scale"], w["width"], w["key"], w["density"],
                           w["slw"], w["arrowsize"], (w["panels"], 3))]
         if t == "track":
-            return [_grid(w["color"], w["lw"], w["ls"], w["marker"], (w["legend"], 2),
-                          (w["panels"], 3))]
+            return [_grid(w["run_color"], w["color"], w["lw"], w["ls"], w["marker"],
+                          (w["legend"], 3), (w["panels"], 3))]
         return [_grid(w["color"], w["lw"], w["labels"], (w["legend"], 3), (w["panels"], 3))]
 
     def show(self, kind):
         """Only the settings that matter for this layer in `kind` panels (a section
         samples the fields along the section, at every height)."""
         w, t, xs = self.w, self.type, kind == "xsec"
+        by_z = self.ed.vary.value == "height" and not xs  # panels at their own heights
         if "mode" in w:
             m = w["mode"].value
             w["mode"].visible = not xs
-            w["z"].visible = not xs and m in ("height", "level")
+            w["z_fixed"].visible = by_z and m == "height"
+            w["z"].visible = not xs and m in ("height", "level") and (
+                m == "level" or not by_z or w["z_fixed"].value)
             w["z"].name = "Model level (k)" if m == "level" else "Height (km)"
         if t == "vectors":
             st = w["style"].value == "streamlines"
@@ -300,12 +310,15 @@ class LayerCard:
                 w[k].visible = st
             for k in ("scale", "width", "key"):
                 w[k].visible = not st
-            w["z"].visible = not xs
+            w["z_fixed"].visible = by_z
+            w["z"].visible = not xs and (not by_z or w["z_fixed"].value)
             w["spacing"].visible = not st
             w["spacing"].name = "Spacing along (km)" if xs else "Spacing (km)"
             w["zspacing"].visible = xs and not st
         if t == "shade":
             w["outline"].visible = w["lw"].visible = w["outline_on"].value
+        if t == "track":  # (each panel's run's colour: Panels → Runs)
+            w["color"].visible = not w["run_color"].value
         if t == "contour":
             w["clabel_size"].visible = w["clabel_fmt"].visible = w["clabel"].value
         if t == "fill":
@@ -320,12 +333,14 @@ class LayerCard:
         t, w = self.type, self.w
         sub = ""
         if "field" in w:
-            d = self.ed.F[w["field"].value]
+            d = self.ed.fields[w["field"].value]
             sub = f" · {d.label}"
             m = w["mode"].value
             if self.ed.kind.value != "xsec":
                 z = w["z"].value or 0
-                sub += {"height": f" · {z:g} km", "level": f" · k = {z:g}",
+                own = self.ed.vary.value == "height" and not w["z_fixed"].value
+                sub += {"height": " · the panel's height" if own else f" · {z:g} km",
+                        "level": f" · k = {z:g}",
                         "colmax": " · column max", "colmin": " · column min"}.get(m, "")
         elif t == "vectors":
             sub = " · streamlines" if w["style"].value == "streamlines" else " · arrows"
@@ -340,7 +355,7 @@ class LayerCard:
 
     def _on_fill_field(self, ev):
         """New fill field: its default colours, range and units."""
-        d = fg.layer_defaults("fill", self.ed.F, ev.new)
+        d = fg.layer_defaults("fill", self.ed.fields, ev.new)
         self.lay["units"] = d["units"]
         self.ed._hold = True
         try:
@@ -364,7 +379,7 @@ class LayerCard:
                 lay["mask_below"] = float(mb) if mb else None
             except ValueError:
                 lay["mask_below"] = None
-            lay["units"] = self.ed.F[lay["field"]].units
+            lay["units"] = self.ed.fields[lay["field"]].units
             lay["alpha"] = float(w["alpha"].value if w["alpha"].value is not None else 1.0)
         if self.type == "shade":
             lay["outline"] = w["outline"].value if w["outline_on"].value else ""
@@ -412,8 +427,13 @@ SER_REGIONS = {"Around tracked storm": "track", "Whole domain": "domain",
 SER_REDUCE = {"Maximum": "max", "Minimum": "min", "Mean": "mean", "Percentile": "pct"}
 SER_OPS = {"Value": "", "d/dz (per m)": "ddz", "d/dt (per s)": "ddt"}
 MARKERS = {"none": "", "dots": "o", "squares": "s", "triangles": "^"}
+SND_LAYOUTS = {"Skew-T with a hodograph inset": "inset",
+               "Skew-T and hodograph side by side": "side", "Skew-T only": "skewt",
+               "Hodograph only": "hodo"}
 SND_WHERE = {"Storm (offset, km)": "trk", "Point (model x, y km)": "pt",
              "Domain mean": "mean"}
+STORM_MOTIONS = {"Bunkers right mover": "rm", "Bunkers left mover": "lm",
+                 "0–6 km mean wind": "mean", "Custom (u, v)": "custom"}
 ANN_KINDS = {"Text": "text", "Marker": "marker", "Arrow": "arrow", "Line": "line",
              "Vertical line": "vline", "Horizontal line": "hline", "Box": "box",
              "Circle": "circle"}
@@ -440,7 +460,7 @@ class SeriesCard:
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
-        F, r = ed.F, ent["recipe"]
+        F, r = ed.fields, ent["recipe"]
         self.box = r.get("box")
         self.w = w = {}
         self.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
@@ -490,7 +510,8 @@ class SeriesCard:
         w["axis"] = pn.widgets.Select(name="y axis", options={"By units": "auto",
                                                               "Own axis (right)": "right"},
                                       value=ent.get("axis", "auto"), width=140)
-        w["runs"] = pn.widgets.MultiChoice(name="Runs (blank: all)", options=ed._run_names(),
+        w["runs"] = pn.widgets.MultiChoice(name="Runs (blank: all)",
+                                           options=ed._series_run_opts(),
                                            value=[int(k) for k in (ent.get("runs") or [])],
                                            width=260)
         w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)",
@@ -505,6 +526,7 @@ class SeriesCard:
             if k not in recipe_keys and k not in ("field", "panel"):
                 x.param.watch(lambda e: ed.request(), "value")
         w["panel"].param.watch(lambda e: ed._series_changed(), "value")
+        w["runs"].param.watch(self._on_runs, "value")
         w["field"].param.watch(self._on_field, "value")
         w["op"].param.watch(lambda e: self._set_title(), "value")
         self.th_row = _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
@@ -520,7 +542,7 @@ class SeriesCard:
         self.show(ed.kind.value)
 
     def show(self, kind):
-        w, two = self.w, self.ed.F[self.w["field"].value].ndim == 2
+        w, two = self.w, self.ed.fields[self.w["field"].value].ndim == 2
         lay = w["vmode"].value == "layer"
         w["vmode"].visible = not two
         w["z"].visible = not two and not lay
@@ -531,8 +553,26 @@ class SeriesCard:
         self.th_row.visible = kind == "th"
         self.line_row.visible = kind == "line"
 
+    def _on_runs(self, ev):
+        """A run not in the figure picked (its path): add it to the figure, and keep
+        it picked here."""
+        new = [v for v in ev.new if isinstance(v, str)]
+        if self.ed._hold or not new:
+            return
+        keep = [v for v in ev.new if not isinstance(v, str)]
+        for p in new:
+            k = self.ed._add_run(p, grid=False)
+            if k is not None:
+                keep.append(k)
+        hold, self.ed._hold = self.ed._hold, True
+        try:
+            self.w["runs"].value = sorted(set(keep))
+        finally:
+            self.ed._hold = hold
+        self.ed._series_changed()
+
     def _set_title(self):
-        d = self.ed.F[self.w["field"].value]
+        d = self.ed.fields[self.w["field"].value]
         op = {"ddz": " · d/dz", "ddt": " · d/dt"}.get(self.w["op"].value, "")
         self.title.object = f"<b>Series</b> · {d.label}{op}"
 
@@ -546,7 +586,7 @@ class SeriesCard:
     def _auto_label(self):
         """Keep an automatic label in step with the recipe (an edited one stays)."""
         old = self.ent.get("_auto", self.ent.get("label", ""))
-        d = self.ed.F[self.w["field"].value]
+        d = self.ed.fields[self.w["field"].value]
         new = ser.describe(self.recipe(), d.label)
         if self.w["label"].value in ("", old):
             hold, self.ed._hold = self.ed._hold, True
@@ -558,7 +598,7 @@ class SeriesCard:
 
     def _on_field(self, ev):
         """New field: its colours and range."""
-        e = fg.series_defaults(self.ed.F, self.recipe())
+        e = fg.series_defaults(self.ed.fields, self.recipe())
         self.ed._hold = True
         try:
             for k in ("vmin", "vmax", "extend", "white_first"):
@@ -570,7 +610,7 @@ class SeriesCard:
         self._changed()
 
     def recipe(self):
-        w, d = self.w, self.ed.F[self.w["field"].value]
+        w, d = self.w, self.ed.fields[self.w["field"].value]
         r = dict(field=d.name, vmode="2d" if d.ndim == 2 else w["vmode"].value,
                  z=w["z"].value or 0.0, z0=w["z0"].value or 0.0, z1=w["z1"].value or 0.0,
                  region=w["region"].value, radius=w["radius"].value or 5.0,
@@ -590,8 +630,8 @@ class SeriesCard:
         e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
         e["lw"] = float(w["lw"].value or 1.5)
         e["panel"] = max(0, int(w["panel"].value or 1) - 1)
-        e["runs"] = sorted(int(k) for k in w["runs"].value) or None
-        e["base_units"] = self.ed.F[e["recipe"]["field"]].units
+        e["runs"] = sorted(int(k) for k in w["runs"].value if not isinstance(k, str)) or None
+        e["base_units"] = self.ed.fields[e["recipe"]["field"]].units
         e["units"] = fg.op_units(e["base_units"], e["op"])
         return e
 
@@ -605,7 +645,7 @@ class SoundingCard:
         self.rm = pn.widgets.Button(name="✕", description="Remove the sounding", **_BTN)
         names = ed._run_names()
         k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
-        w["run"] = pn.widgets.Select(name="Run", options=names, value=k, width=170)
+        w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
         opts = ed._time_opts(k)
         w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
                                       value=ed._nearest(opts, ent.get("time_s")))
@@ -618,7 +658,8 @@ class SoundingCard:
                       start=0.0)
         w["label"] = pn.widgets.TextInput(name="Legend text (blank: automatic)",
                                           value=ent.get("label", ""), width=220)
-        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color", "k")),
+        w["auto_color"] = _chk("Automatic colour", not ent.get("color"))
+        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color") or "k"),
                                             width=70)
         w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
                                          value=int(ent.get("panel", 0)) + 1)
@@ -630,13 +671,16 @@ class SoundingCard:
         self.title = pn.pane.HTML("<b>Sounding</b>", margin=(6, 4, 0, 4))
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.rm],
-            [_grid(w["run"], (w["time"], 2), w["kind"], w["x"], w["y"], w["avg"], w["color"],
-                   w["panel"], (w["label"], 3))])
+            [_grid(w["run"], (w["time"], 2), w["kind"], w["x"], w["y"], w["avg"],
+                   w["auto_color"], w["color"], w["panel"], (w["label"], 3)),
+             _hint("Automatic colour: the run's colour (<b>Panels → Runs</b>) when each "
+                   "sounding of the panel is from another run, else the next colour.")])
         self._show()
 
     def _show(self):
         w = self.w
         w["x"].visible = w["y"].visible = w["avg"].visible = w["kind"].value != "mean"
+        w["color"].visible = not w["auto_color"].value
         where = {"trk": "storm", "pt": "point", "mean": "domain mean"}[w["kind"].value]
         when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
         self.title.object = (f"<b>Sounding</b> · {where} · {when.split('(')[-1].rstrip(')')} "
@@ -648,6 +692,9 @@ class SoundingCard:
 
     def _on_run(self, ev):
         if self.ed._hold:
+            return
+        if isinstance(ev.new, str):  # a run not in the figure yet
+            self.ed._pick_other(self.w["run"], ev.old)
             return
         o = self.ed._time_opts(ev.new)
         cur = self.w["time"].value
@@ -663,7 +710,7 @@ class SoundingCard:
         w = self.w
         return dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0),
                     panel=max(0, int(w["panel"].value or 1) - 1), label=w["label"].value,
-                    color=w["color"].value,
+                    color="" if w["auto_color"].value else w["color"].value,
                     where=dict(kind=w["kind"].value, x=float(w["x"].value or 0.0),
                                y=float(w["y"].value or 0.0),
                                avg=float(w["avg"].value or 0.0)))

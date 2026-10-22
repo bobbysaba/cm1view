@@ -221,7 +221,13 @@ class FigureSources:
         if kind == "th":
             w, h = 4.5 * c + 1.0, 2.8 * r + 0.6
         elif kind == "sounding":
-            w, h = 5.0 * c + 0.5, 5.0 * r
+            lay = self.sk["layout"].value
+            w = {"side": 8.2, "hodo": 4.5}.get(lay, 5.0) * c + 0.5
+            h = (4.5 if lay == "hodo" else 5.0) * r
+            if self.sk["table"].value:  # (a row per sounding of the fullest panel)
+                per = max([sum(int(c.w["panel"].value or 1) == p + 1 for c in self.snd_cards)
+                           for p in range(r * c)] or [1])
+                h += r * (0.45 + 0.25 * per)
         else:
             w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
         hold, self._hold = self._hold, True
@@ -419,6 +425,7 @@ class FigureSources:
                 r = get(*ref)
                 d = (dict(missing=got[ref]) if r is None else
                      fg.th_panel(r[0], r[1], spec["series"][ref[1]], spec))
+                d["run"] = ref[0]
                 if multi:
                     d["run_label"] = spec["runs"][ref[0]].get("label", "")
             else:
@@ -432,6 +439,7 @@ class FigureSources:
         runs, ents = spec["runs"], spec.get("soundings", [])
         res, labels = {}, {}
         multi = len(runs) > 1
+        storm = fg.storm_choice(spec.get("skewt", {}))  # (of the SRH and the ring)
 
         def get(e):
             if e in res:
@@ -447,13 +455,13 @@ class FigureSources:
                 sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
                                         for t, f in fx.items())) \
                     if ent["where"].get("kind") == "trk" else ""
-                key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig],
+                key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig, storm],
                                  sort_keys=True)
                 r = self.snd_cache.get(key)
                 if r is None:
                     if progress:
                         progress(e, len(ents))
-                    r = fg.sounding_column(run, ent, fx)
+                    r = fg.sounding_column(run, ent, fx, storm=storm)
                     self.snd_cache[key] = r
                     while len(self.snd_cache) > 40:
                         self.snd_cache.popitem(last=False)
@@ -521,6 +529,8 @@ class FigureSources:
         s["axes"] = dict(s["axes"], xlabel="temperature (°C)", ylabel="pressure (hPa)",
                          ticklabels="all", equal=False)
         s["colorbar"] = dict(s["colorbar"], mode="none")
-        s["letters"] = dict(s["letters"], on=False)
+        # one sounding figure: no letters; a part of a figure: letters above, clear of
+        # the time and the legend
+        s["letters"] = dict(s["letters"], on=self._multi_part(), loc="above left")
         s["time_label"] = dict(s["time_label"], loc="lower left")
         self.set_spec(s)
