@@ -232,27 +232,60 @@ def _bar(*groups):
                       styles={"pointer-events": "none"}, sizing_mode="stretch_width")
 
 
-class ModeToggles:
-    """Mutually exclusive toggle buttons that may all be off (value None)."""
+# the analysis tools down the left of the map: button -> (icon, label, tooltip)
+TOOLS = {
+    "Sounding": ("temperature", "Sounding", "Soundings: click the map (or drag a box for "
+                                            "an area mean)"),
+    "Cross-section": ("slice", "Section", "Vertical cross-section: click A, then B"),
+    "Track": ("route", "Track", "Storm track: click a storm to follow it through time"),
+    "Series": ("chart-line", "Series", "Time series of a field over a region"),
+    "3D region": ("cube", "3D box", "Drag a box on the map to view it in 3D"),
+}
+# click mode -> its tool button (both kinds of sounding are the Sounding tool)
+TOOL_OF = {"Area sounding": "Sounding"}
+# click mode -> its panel (tab of the analysis panel); 3D region has none
+PANELS = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2, "Series": 3}
+TAB_MODE = {0: "Sounding", 1: "Cross-section", 2: "Track", 3: "Series"}
+PANEL_TITLES = ["Sounding", "Cross-section", "Storm track", "Time series"]
 
-    def __init__(self, options, **kw):
-        self.btns = {o: pn.widgets.Toggle(name=o, button_type="primary",
-                                          button_style="outline", **kw) for o in options}
-        self.value, self._busy, self._cbs = None, False, []
-        for o, b in self.btns.items():
-            b.param.watch(partial(self._on, o), "value")
+RAIL_BTN = """
+.bk-btn { display: flex !important; flex-direction: column; align-items: center; gap: 3px;
+          width: 64px; padding: 7px 0 6px 0 !important; font-size: 11px !important;
+          border-color: transparent !important; background-color: transparent !important;
+          color: #94a3b8 !important; box-shadow: none !important; }
+.bk-btn:hover { background-color: rgba(148,163,184,.14) !important; color: #e2e8f0 !important; }
+:host(.cv-on) .bk-btn { background-color: rgba(34,211,238,.18) !important;
+                        color: #a5f3fc !important; }
+.bk-btn .bk-TablerIcon { font-size: 20px; }
+"""
 
-    def _on(self, o, ev):
-        if not self._busy:
-            self.set(o if ev.new else None)
+
+class ToolRail:
+    """The analysis tools: one on at a time, or none (value None).  The value is the
+    click mode; a tool button can stand for several modes (TOOL_OF)."""
+
+    def __init__(self, modes):
+        self.btns = {}
+        for m in modes:
+            icon, label, tip = TOOLS[m]
+            b = pn.widgets.Button(name=label, icon=icon, description=tip, width=64,
+                                  height=58, margin=(2, 4), stylesheets=[RAIL_BTN])
+            b.on_click(partial(self._on, m))
+            self.btns[m] = b
+        self.value, self._cbs = None, []
+        self.mode_for = {}  # tool -> the mode its button picks (e.g. Area sounding)
+        self.reclick = None  # f(tool) -> True: the lit button pressed again stays on
+
+    def _on(self, tool, ev):
+        if TOOL_OF.get(self.value, self.value) != tool:
+            self.set(self.mode_for.get(tool, tool))
+        elif self.reclick is None or not self.reclick(tool):
+            self.set(None)
 
     def set(self, o):
-        self._busy = True
-        try:
-            for k, b in self.btns.items():
-                b.value = k == o
-        finally:
-            self._busy = False
+        tool = TOOL_OF.get(o, o)
+        for k, b in self.btns.items():
+            b.css_classes = ["cv-on"] if k == tool else []
         if o != self.value:
             self.value = o
             for cb in self._cbs:
@@ -292,6 +325,7 @@ class Viewer:
         self._build_panels()
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
         self.figed = figui.FigureEditor(self)
+        self._build_items()
         self._wire()
         # save folders from the settings (followed while the boxes still point there)
         self._auto_dirs = {k: config.exports_dir(run.path, k) for k in ("tracks", "series")}
@@ -363,15 +397,26 @@ class Viewer:
         self._play_cb = None
         self.time_html = _html(margin=(0, 8, 0, 4), align="center")
 
-        # 3D is offered only once a 3D region exists (_sync_workspace)
         self.workspace = pn.widgets.RadioButtonGroup(
-            options=["Map", "Figure"], value="Map", button_type="primary",
-            button_style="outline", width=127, height=32, margin=(4, 2))
-        modes = ["Sounding", "Area sounding", "Cross-section", "3D region"]
-        if trk.available(run):
-            modes.append("Track")
-        self.mode = ModeToggles(modes, height=32, margin=(4, 1))
+            options=["Map", "3D", "Figure"], value="Map", button_type="primary",
+            button_style="outline", width=190, height=32, margin=(4, 2))
+        tools = ["Sounding", "Cross-section"] + (["Track"] if trk.available(run) else []) \
+            + ["Series", "3D region"]
+        self.mode = ToolRail(tools)
         self.hint = _html()
+        # the Sounding tool's click: a point, or a dragged box (area mean)
+        self.snd_pick = pn.widgets.RadioButtonGroup(
+            options={"Click a point": "Sounding", "Drag a box (area mean)": "Area sounding"},
+            value="Sounding", button_type="primary", button_style="outline",
+            margin=(5, 10, 8, 4), description="What a click on the map makes")
+        # the storm track, for everything storm-relative (shown in the top bar)
+        self.storm_btn = pn.widgets.Button(
+            name="No storm track", icon="tornado", button_type="light",
+            button_style="outline", height=32, margin=(4, 2), visible=trk.available(run),
+            stylesheets=[ON, ":host(.cv-warn) .bk-btn { color: #fbbf24 !important; }"],
+            description="The tracked storm: storm-relative soundings, tracked storm "
+                        "motion, series around the storm, figures centred on it. Click to "
+                        "make, load or edit the track.")
 
         # ---- fill layer
         fd = F[default_fill]
@@ -551,10 +596,12 @@ class Viewer:
                                           description="Expand the analysis panel to the full "
                                                       "window (sounding graphics become "
                                                       "zoomable)")
-        self.panel_btn = pn.widgets.Button(name="", icon="layout-sidebar-right-collapse",
-                                           button_type="light", button_style="outline",
-                                           width=40, height=32, margin=(4, 2),
-                                           description="Hide / show the analysis panel")
+        self.panel_btn = pn.widgets.Button(name="", icon="x", button_type="light",
+                                           button_style="outline", width=40, height=32,
+                                           margin=(4, 2),
+                                           description="Close the panel (the tool stays "
+                                                       "on; its button reopens it)")
+        self.panel_title = _html(margin=(0, 4), align="center")
         self._build_run_picker()
 
     def _build_run_picker(self):
@@ -770,8 +817,9 @@ class Viewer:
                                               end=float(np.floor(self.run.z[-1])), step=0.5,
                                               value=min(15.0, float(np.floor(self.run.z[-1]))),
                                               width=150)
-        self.xs_status = _html('<div class="cv-empty">Switch the click mode to '
-                               '<b>Cross-section</b> and click two points on the map.</div>')
+        self.xs_status = _html('<div class="cv-empty">Click two points on the map, A then B '
+                               '(the <b>Section</b> tool is on while this panel is open).'
+                               '</div>')
 
     # ================================================================ panels
     def _build_track(self):
@@ -856,8 +904,10 @@ class Viewer:
         fig.scatter("tmin", "value", source=self.trk_ts_now, size=11, fill_alpha=0,
                     line_color="#fbbf24", line_width=2.5)
         fig.select_one(HoverTool).tooltips = [("t", "@hms"), ("value", "@value{0.000}")]
-        fig.visible = False  # until there is a track
         self.trk_fig = fig
+        # shown once there are tracked values (a loaded track may have none: an all-NaN
+        # plot is an empty box)
+        self.trk_pane = _bokeh(fig, sizing_mode="stretch_width", visible=False)
         self.trk_table = pn.widgets.Tabulator(
             pd_empty(), disabled=True, show_index=False, theme="midnight", height=260,
             sizing_mode="stretch_width", layout="fit_data_fill", visible=False)
@@ -1154,10 +1204,10 @@ class Viewer:
         self.v3_render = pn.widgets.Button(name="Render 3D", button_type="primary",
                                            icon="cube", height=34, margin=(5, 3))
         self.v3_region = _html(margin=0, align="center")
-        self.v3_status = _html('<div class="cv-hint">Pick a region (button above, or '
-                               '<b>3D region</b> click mode on the map) or use the current '
-                               'map view, then <b>Render 3D</b>. Keep it storm-scale '
-                               '(≲ 50 km) for full resolution.</div>')
+        self.v3_status = _html('<div class="cv-hint">No 3D region yet: <b>Pick region on '
+                               'map</b> (or the <b>3D box</b> tool on the map) and drag a '
+                               'box, or <b>Use map view</b>, then <b>Render 3D</b>. Keep it '
+                               'storm-scale (≲ 50 km) for full resolution.</div>')
         self.plot3d = pn.pane.Plotly(None, sizing_mode="stretch_both", min_height=400,
                                      config={"displaylogo": False, "responsive": True},
                                      visible=False)
@@ -1179,7 +1229,7 @@ class Viewer:
         look_btn = _settings_toggle(snd_look, "palette", "Plot style: colours, line widths, "
                                                          "axis limits")
         snd_opts = pn.Column(
-            pn.FlexBox(self.mean_btn, self.pin_btn, self.snd_clear, self.compare,
+            pn.FlexBox(self.snd_pick, self.mean_btn, self.pin_btn, self.snd_clear, self.compare,
                        _settings_toggle(snd_set, description="Sounding settings: parcel, "
                                                              "storm motion, averaging"),
                        look_btn, flex_wrap="wrap",
@@ -1224,7 +1274,7 @@ class Viewer:
                            align_items="center", gap="0 4px", sizing_mode="stretch_width"),
                 trk_set,
                 self.trk_status,
-                _bokeh(self.trk_fig, sizing_mode="stretch_width"),
+                self.trk_pane,
                 pn.FlexBox(self.trk_path, self.trk_save, self.trk_dl, self.trk_load,
                            flex_wrap="wrap",
                            align_items="flex-end", gap="0 4px", sizing_mode="stretch_width"),
@@ -1244,7 +1294,14 @@ class Viewer:
                            self.ser_load, flex_wrap="wrap", align_items="flex-end",
                            gap="0 4px", sizing_mode="stretch_width"),
                 self.ser_file_msg, scroll="y-auto", sizing_mode="stretch_both")),
-            sizing_mode="stretch_both", dynamic=False,
+            sizing_mode="stretch_both", dynamic=False, margin=0,
+            # no tab strip: the tool rail picks the panel (_show_panel)
+            stylesheets=[":host > .bk-header { display: none !important; }"])
+        # the open tool's panel, right of the map: its name, expand and close
+        self.panel_col = pn.Column(
+            pn.Row(self.panel_title, pn.Spacer(), self.full_btn, self.panel_btn, margin=0,
+                   sizing_mode="stretch_width", styles={"border-bottom": f"1px solid {GRID}"}),
+            self.tabs, sizing_mode="stretch_both", margin=(0, 8, 0, 4),
             styles={"flex": "1 1 48%", "min-width": "0"})
 
     def _build_streamline_card(self):
@@ -1320,7 +1377,8 @@ class Viewer:
                        self.time_html)
         times.styles = dict(times.styles, flex="1 1 420px", **{"min-width": "0"})
         return pn.Column(
-            _bar(self.ws_group, self.mode_group, _group(self.run_btn, self.gear_btn), times),
+            _bar(self.ws_group, _group(self.run_btn, self.gear_btn),
+                 _group(self.storm_btn), times),
             styles=dict(BAR, **{"z-index": "40"}), margin=0, sizing_mode="stretch_width")
 
     def _map_toolbar(self):
@@ -1341,8 +1399,15 @@ class Viewer:
         d.panel.styles = dict(d.panel.styles, **DRAWER)
         bar = _bar(_group(self.fill_var, self.fill_mode, self.fill_lvl),
                    _group(style, *ovb, vec))
-        self.mode_group = _group(*self.mode.btns.values(), self.clear_pts, self.panel_btn,
-                                 self.full_btn)
+        # the tools, down the left edge: each sets what a map click does and opens its
+        # panel; the eraser clears every marker on the map
+        self.clear_pts.param.update(name="Clear", width=64, height=58, margin=(2, 4),
+                                    stylesheets=[RAIL_BTN])
+        self.rail = pn.Column(
+            *self.mode.btns.values(), pn.Spacer(), self.clear_pts, margin=0, width=72,
+            sizing_mode="stretch_height",
+            styles={"flex": "0 0 72px", "padding": "6px 0", "align-items": "center",
+                    "background": PANEL, "border-right": f"1px solid {GRID}"})
         return pn.Column(bar, d.panel, styles=BAR, margin=0, sizing_mode="stretch_width")
 
     def _3d_toolbar(self):
@@ -1392,10 +1457,10 @@ class Viewer:
             self.map_bar, _bokeh(self.fig, sizing_mode="stretch_both",
                                         styles=dict(FILL, position="relative",
                                                     **{"z-index": "0"})),
-            caption, sizing_mode="stretch_both",
+            self.items_bar, caption, sizing_mode="stretch_both",
             styles={"position": "relative", "flex": "1 1 55%", "min-width": "0"})
-        self.tabs.margin = (0, 8, 0, 4)
-        self.map_ws = pn.Row(map_area, self.tabs, sizing_mode="stretch_width", margin=0,
+        self.map_ws = pn.Row(self.rail, map_area, self.panel_col,
+                             sizing_mode="stretch_width", margin=0,
                              styles=FILL)
         self.plot3d.margin = 0
         self.plot3d.styles = dict(FILL, position="relative", **{"z-index": "0"})
@@ -1490,7 +1555,12 @@ class Viewer:
         self.v3_render.on_click(lambda e: self.request_3d())
         self.v3_pick.on_click(self._on_pick_region)
         self.workspace.param.watch(self._on_workspace, "value")
-        self.panel_btn.on_click(lambda e: self._show_panel(not self.tabs.visible))
+        self.panel_btn.on_click(lambda e: self._show_panel(False))
+        self.mode.reclick = self._on_tool_reclick
+        self.snd_pick.param.watch(
+            lambda e: self.mode.set(e.new) if self.mode.value in PANELS and
+            PANELS[self.mode.value] == 0 else None, "value")
+        self.storm_btn.on_click(self._on_storm_btn)
         self.full_btn.on_click(lambda e: self._set_full(not self.full))
         # once a scene is shown or being rendered, 3D settings re-render it
         r3 = lambda *e: self.request_3d() if self.gen["3d"] else None  # noqa: E731
@@ -1535,6 +1605,7 @@ class Viewer:
         self._on_mode(None, init=True)
         self._show_panel(False)  # the map gets the full width until a panel is needed
         self._update_time_html()
+        self._update_items()
         if self.doc is not None:
             pn.state.add_periodic_callback(self._update_cache_html, period=3000)
         self._update_cache_html()
@@ -1563,6 +1634,8 @@ class Viewer:
                 w.value = os.path.join(new, os.path.basename(w.value))
             self._auto_dirs[kind] = new
         self.figed.config_changed()
+        self._track_found = ()  # track_dirs / track_patterns may have changed
+        self._update_storm_btn()
         allowed = pdecomp.writes_allowed()
         if allowed != self._pd_allowed:
             self.pd_write.value = self._pd_allowed = allowed
@@ -1613,7 +1686,7 @@ class Viewer:
             return
         if self.points and self.follow.value:
             self.request_soundings()
-        if len(self.xs_pts) == 2 and self.tabs.visible and self.tabs.active == 1:
+        if len(self.xs_pts) == 2 and self.panel_col.visible and self.tabs.active == 1:
             self.request_xsec()
         if self.v3_follow.value and self.plot3d.visible and self.workspace.value == "3D":
             self.request_3d()
@@ -1646,7 +1719,8 @@ class Viewer:
 
     def _on_mode(self, mode, init=False):
         hints = {
-            None: "Pick a click mode (Sounding, Cross-section, 3D region) to query the map",
+            None: "Pick a tool on the left (Sounding, Section, Track, Series, 3D box) to "
+                  "query the map",
             "Sounding": "Click: sounding at a point · <kbd>Shift</kbd>-click: add a point "
                         "(up to 4)",
             "Area sounding": "Drag a box: sounding averaged over it · <kbd>Shift</kbd>-drag: "
@@ -1656,13 +1730,31 @@ class Viewer:
             "Track": "Auto-track: click the meso to follow it through time; click near the "
                      "track at another time to correct it · Place by hand: each click sets "
                      "the fix at the shown time",
+            "Series": "Choose a field and a region in the panel, then Compute · click a "
+                      "series plot to go to that time",
         }
         self.hint.object = f'<div class="cv-hint">{hints[mode]}</div>'
         self.fig.toolbar.active_drag = self.bsel if mode in ("3D region", "Area sounding") \
             else self.pan
-        tabs = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2}
-        if not init and mode in tabs:
-            self._show_panel(True, tabs[mode])
+        if mode in ("Sounding", "Area sounding"):  # the Sounding button reopens this kind
+            self.mode.mode_for["Sounding"] = self.snd_pick.value = mode
+        if init:
+            return
+        if self.full and PANELS.get(mode) != self.tabs.active:
+            self._set_full(False)  # another tool: back to the map
+        if mode in PANELS:
+            self._show_panel(True, PANELS[mode])
+        elif mode is None:
+            self._show_panel(False)
+
+    def _on_tool_reclick(self, tool):
+        """The lit tool's button pressed again: reopen its closed panel (True), or
+        let the tool switch off (False)."""
+        tab = PANELS.get(tool)
+        if tab is None or (self.panel_col.visible and self.tabs.active == tab):
+            return False
+        self._show_panel(True, tab)
+        return True
 
     def _zoom_image(self, filename, **kw):
         z = ZoomImage(filename=filename, interactive=self.full, sizing_mode="stretch_width",
@@ -1684,28 +1776,30 @@ class Viewer:
         self.full = on
         self.map_area.visible = not on
         if on:
-            self.tabs.visible = True
-        self.tabs.styles = dict(self.tabs.styles, flex="1 1 100%" if on else "1 1 48%")
+            self.panel_col.visible = True
+        self.panel_col.styles = dict(self.panel_col.styles,
+                                     flex="1 1 100%" if on else "1 1 48%")
         self.full_btn.param.update(name="Map" if on else "",
                                    icon="arrows-minimize" if on else "arrows-maximize")
-        self.panel_btn.disabled = on
         for z in self._zoom_images():
             z.interactive = on
 
     def _show_panel(self, show, tab=None):
+        """Show (or close) the panel, on tab `tab`.  The tool rail follows the panel:
+        opening a tool's panel makes it the active tool."""
         if not show and self.full:
             self._set_full(False)
-        self.tabs.visible = show
-        self.panel_btn.icon = ("layout-sidebar-right-collapse" if show
-                               else "layout-sidebar-right-expand")
+        self.panel_col.visible = show
         if tab is not None:
             self.tabs.active = tab
+            self.panel_title.object = f'<div class="cv-h" style="margin:0">{PANEL_TITLES[tab]}</div>'
+            if show and PANELS.get(self.mode.value) != tab:
+                self.mode.set(self.snd_pick.value if tab == 0 else TAB_MODE[tab])
 
     def _on_workspace(self, ev):
         is3d, isfig = ev.new == "3D", ev.new == "Figure"
         self.v3_ws.visible, self.fig_ws.visible = is3d, isfig
         self.map_ws.visible = not (is3d or isfig)
-        self.mode_group.visible = ev.new == "Map"
         if is3d and self.box is None:
             self._update_region_html()
         if isfig:
@@ -1723,17 +1817,8 @@ class Viewer:
         opts["Around tracked storm"] = "track"
         return opts
 
-    def _sync_workspace(self):
-        """Map | 3D | Figure, with 3D only while a 3D region box exists."""
-        opts = ["Map", "3D", "Figure"] if self.box is not None else ["Map", "Figure"]
-        if self.workspace.options == opts:
-            return
-        if self.workspace.value not in opts:
-            self.workspace.value = "Map"
-        self.workspace.param.update(options=opts, width=63 * len(opts) + 1)
-
     def _update_region_html(self):
-        self._sync_workspace()
+        self._update_items()
         if hasattr(self, "ser_region"):
             opts = self._ser_regions()
             if self.ser_region.options != opts:
@@ -1961,6 +2046,7 @@ class Viewer:
             x=[xy[0] for _, xy, _ in boxes], y=[xy[1] for _, xy, _ in boxes],
             w=[wh[0] for _, _, wh in boxes], h=[wh[1] for _, _, wh in boxes],
             color=[POINT_COLORS[n] for n, _, _ in boxes])
+        self._update_items()
 
     def _draw_xs(self):
         pts = self.xs_pts
@@ -1968,6 +2054,141 @@ class Viewer:
                                    label=["A", "B"][:len(pts)])
         self.xs_line_src.data = dict(x=[p[0] for p in pts], y=[p[1] for p in pts]) \
             if len(pts) == 2 else dict(x=[], y=[])
+        self._update_items()
+
+    # ================================================================ items tray
+    def _build_items(self):
+        """The tray under the map: what has been made (soundings, section, 3D box,
+        series), each removable, each kind with a way into a figure."""
+        self.items_bar = pn.Row(
+            margin=0, sizing_mode="stretch_width",
+            styles={"flex": "0 0 auto", "height": "44px", "overflow-x": "auto",
+                    "overflow-y": "hidden", "padding": "4px 12px 0 60px",
+                    "align-items": "center", "gap": "8px"})
+        self._items_key = None
+
+    def _item_entries(self):
+        """(kind, key, label, colour) of every item, in tray order."""
+        run, out = self.run, []
+        for n, (kind, where, tp) in enumerate(self.points):
+            if kind == "mean":
+                lab = "domain mean"
+            elif kind == "trk":
+                lab = ("meso" if not any(where[:2]) else
+                       f"meso {where[0]:+.1f}, {where[1]:+.1f} km")
+            else:
+                lab = f"({where[0]:.1f}, {where[1]:.1f}) km"
+            if len(where or ()) == 4:
+                lab = f"box {where[2]:.3g}×{where[3]:.3g} km at {lab}"
+            if tp is not None:
+                lab += f" · {run.time_label(tp)}"
+            out.append(("snd", n, f"{POINT_LABELS[n]} {lab}", POINT_COLORS[n]))
+        if len(self.xs_pts) == 2:
+            (ax, ay), (bx, by) = self.xs_pts
+            out.append(("xs", 0, f"Section A–B · {np.hypot(bx - ax, by - ay):.1f} km", ""))
+        if self.box is not None:
+            x0, x1, y0, y1 = self.box
+            out.append(("box", 0, f"3D box · {x1 - x0:.1f} × {y1 - y0:.1f} km", ""))
+        for k, v in getattr(self, "series", {}).items():
+            out.append(("ser", k, v["label"], v["color"]))
+        return out
+
+    def _update_items(self):
+        if not hasattr(self, "items_bar"):
+            return
+        entries = self._item_entries()
+        if entries == self._items_key:
+            return
+        self._items_key = entries
+        ib = dict(button_type="light", height=30, margin=(4, 0))
+
+        def icon(name, tip, cb):
+            b = pn.widgets.Button(name="", icon=name, description=tip, width=30, **ib)
+            b.on_click(lambda e: cb())
+            return b
+
+        def label(text, cb, color="", tip=""):
+            dot = (f'<span style="color:{color}">●</span> ' if color else "")
+            b = pn.widgets.Button(name=text, description=tip or None, **ib,
+                                  stylesheets=[".bk-btn { max-width: 300px; overflow: hidden;"
+                                               " text-overflow: ellipsis; white-space: nowrap;"
+                                               " }"])
+            b.on_click(lambda e: cb())
+            return [_html(dot, margin=(0, 0, 0, 6), align="center"), b] if dot else [b]
+
+        def group(*objs):
+            g = _group(*objs)
+            g.margin = 0
+            g.styles = dict(g.styles, flex="0 0 auto", height="38px")
+            return g
+
+        def to_fig(make):
+            def go():
+                make()
+                self.workspace.value = "Figure"
+            return go
+
+        groups = [group(*label("Map view", lambda: None, tip="What the map shows now"),
+                        icon("photo", "Make a figure of the map view", to_fig(
+                            self.figed.from_map)))]
+        snd = [e for e in entries if e[0] == "snd"]
+        if snd:
+            objs = [_html('<span class="cv-hint">Soundings</span>', margin=(0, 4, 0, 6),
+                          align="center")]
+            for _, n, lab, col in snd:
+                objs += label(lab, lambda: self._show_panel(True, 0), col)
+                objs.append(icon("x", "Remove this sounding", partial(self._remove_point, n)))
+            objs.append(icon("photo", "Make a figure of these soundings (skew-T)",
+                             to_fig(self.figed.from_soundings)))
+            groups.append(group(*objs))
+        for kind, k, lab, col in entries:
+            if kind == "xs":
+                groups.append(group(
+                    *label(lab, lambda: self._show_panel(True, 1)),
+                    icon("x", "Remove the section", self._remove_xs),
+                    icon("photo", "Make a figure of the section", to_fig(
+                        self.figed.from_xsec))))
+            elif kind == "box":
+                groups.append(group(
+                    *label(lab, self._open_3d, tip="Show it in the 3D view"),
+                    icon("x", "Remove the 3D box", self._remove_box),
+                    icon("cube", "Show it in the 3D view", self._open_3d)))
+        ser = [e for e in entries if e[0] == "ser"]
+        if ser:
+            objs = [_html('<span class="cv-hint">Series</span>', margin=(0, 4, 0, 6),
+                          align="center")]
+            for _, k, lab, col in ser:
+                objs += label(lab, partial(self._show_series, k), col)
+                objs.append(icon("x", "Remove this series", partial(self._on_ser_remove,
+                                                                     None, k)))
+            objs.append(icon("photo", "Make a figure of the series (time–height or "
+                                      "time series)", to_fig(self.figed.from_series)))
+            groups.append(group(*objs))
+        self.items_bar.objects = groups
+
+    def _remove_point(self, n):
+        if n < len(self.points):
+            self.points.pop(n)
+            self._draw_points()
+            self.request_soundings()
+
+    def _remove_xs(self):
+        self.xs_pts = []
+        self._draw_xs()
+
+    def _remove_box(self):
+        self.box = None
+        self.box_src.data = dict(left=[], right=[], bottom=[], top=[])
+        self._update_region_html()
+
+    def _open_3d(self):
+        self.workspace.value = "3D"
+        if self.gen["3d"] == 0:  # nothing rendered yet
+            self.request_3d()
+
+    def _show_series(self, key):
+        self._show_panel(True, 3)
+        self.ser_pick.value = key
 
     # ================================================================ map job
     def _field_storm(self, t):
@@ -2697,8 +2918,8 @@ class Viewer:
     def _track_summary(self, note=""):
         run, ts = self.run, sorted(self.fixes)
         if not ts:
-            return ('<div class="cv-empty">Pick <b>Track</b> in the click modes and click '
-                    'on the storm, or press <b>Find strongest</b> to start from the '
+            return ('<div class="cv-empty">With the <b>Track</b> tool on, click on the '
+                    'storm, or press <b>Find strongest</b> to start from the '
                     'domain-wide maximum. It is followed through time from there; the path '
                     'is drawn on the map.</div>')
         mv = ""
@@ -2729,7 +2950,8 @@ class Viewer:
             import pandas as pd
             df = pd.DataFrame(trk.rows(run, fx)).drop(columns=["file", "time_s"])
             self.trk_table.value = df.round(4)
-        self.trk_table.visible = self.trk_fig.visible = bool(ts)
+        self.trk_table.visible = bool(ts)
+        self.trk_pane.visible = bool(np.isfinite(np.asarray(vals, float)).any())
         self.trk_save.disabled = self.trk_dl.disabled = not ts
         self.storm_follow.disabled = not ts
         if not ts:
@@ -2740,7 +2962,43 @@ class Viewer:
         if self._storm_fields_shown() and self.trk_stop_btn.disabled:
             self.request_map()
 
+    def _on_storm_btn(self, ev):
+        """The Storm chip: load the run's track file if there is no track yet, and open
+        the Track tool."""
+        found = None if self.fixes else self._track_file()
+        self._show_panel(True, 2)
+        if found:
+            self.trk_path.value = found
+            self._on_load_track(None)
+
+    _track_found = ()
+
+    def _track_file(self):
+        """The run's storm track file (track_dirs / track_patterns), or None; looked up
+        once (again after a settings change)."""
+        if self._track_found == ():
+            self._track_found = config.find_track(self.run.path)
+        return self._track_found
+
+    def _update_storm_btn(self):
+        """The Storm chip says whether there is a track and a fix at the shown time."""
+        ts = sorted(self.fixes)
+        b = self.storm_btn
+        if not ts:
+            found = self._track_file()
+            name, cls = (f"Load storm track ({os.path.basename(found)})" if found
+                         else "No storm track"), []
+        elif self.t in self.fixes:
+            name, cls = (f"Storm track · {len(ts)} fixes, {self.run.time_label(ts[0])}–"
+                         f"{self.run.time_label(ts[-1])}"), ["cv-on"]
+        else:
+            name, cls = f"Storm track · no fix at this time ({len(ts)} fixes)", ["cv-warn"]
+        if b.name != name:
+            b.name = name
+        b.css_classes = cls
+
     def _update_track_now(self):
+        self._update_storm_btn()
         f = self.fixes.get(self.t)
         self.trk_del.disabled = f is None
         self.trk_now_src.data = dict(x=[f["x"]], y=[f["y"]]) if f else dict(x=[], y=[])
@@ -2802,8 +3060,8 @@ class Viewer:
             r.update(region="box", box=self.view)
         elif reg == "box3d":
             if self.box is None:
-                return None, ("Pick a 3D region first (<b>3D region</b> click mode on the "
-                              "map), or choose another region")
+                return None, ("Draw a 3D region first (<b>3D box</b> tool on the map), "
+                              "or choose another region")
             r.update(region="box", box=self.box)
         else:
             r["region"] = reg
@@ -2831,6 +3089,7 @@ class Viewer:
         else:
             self.series[key]["ds"] = ds
         self.ser_pick.options = {v["label"]: k for k, v in self.series.items()}
+        self._update_items()
         if self.ser_pick.value == key:
             self._ser_select()
         else:
@@ -3113,11 +3372,13 @@ class Viewer:
             self.tslider.value = t
             self._refresh_panels()
 
-    def _on_ser_remove(self, ev):
-        self.series.pop(self.ser_pick.value, None)
+    def _on_ser_remove(self, ev, key=None):
+        self.series.pop(self.ser_pick.value if key is None else key, None)
         self.ser_pick.options = {v["label"]: k for k, v in self.series.items()}
-        self.ser_pick.value = next(iter(self.series), None)
+        if self.ser_pick.value not in self.series:
+            self.ser_pick.value = next(iter(self.series), None)
         self._ser_select()
+        self._update_items()
 
     def _on_ser_fmt(self, ev):
         base, _ = os.path.splitext(self.ser_path.value)

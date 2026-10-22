@@ -248,12 +248,12 @@ class FigureEditor:
         self.start_xs = pn.widgets.Button(name="From cross-section", button_type="primary",
                                           button_style="outline", height=32)
         self.start_ser = pn.widgets.Button(
-            name="From Series tab", button_type="primary", button_style="outline", height=32,
+            name="From series", button_type="primary", button_style="outline", height=32,
             description="Time–height panels (layer series) or time series of the series "
-                        "computed in the Series tab, for every run of the figure")
+                        "computed with the Series tool, for every run of the figure")
         self.start_snd = pn.widgets.Button(
             name="Soundings", button_type="primary", button_style="outline", height=32,
-            description="Skew-T panels of the Sounding tab's soundings (or the storm's "
+            description="Skew-T panels of the map's soundings (or the storm's "
                         "inflow at the shown time)")
         self.start_def = pn.widgets.Button(name="Default grid",
                                            button_type="light", button_style="outline",
@@ -326,7 +326,7 @@ class FigureEditor:
                                      sizing_mode="stretch_width", margin=0)
         # series (time-height and time-series panels)
         self.ser_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.ser_from = pn.widgets.Select(name="A series of the Series tab", options={},
+        self.ser_from = pn.widgets.Select(name="A series from the Series tool", options={},
                                           sizing_mode="stretch_width", min_width=260)
         self.ser_add = pn.widgets.Button(name="+ Add", button_type="primary",
                                          button_style="outline", height=32)
@@ -335,7 +335,7 @@ class FigureEditor:
         self.series_col = pn.Column(
             pn.pane.HTML('<div class="cv-hint">Each series is computed for every run of the '
                          'figure (<b>Runs</b> tab; regions around the storm use each run’s '
-                         'track) and cached, like the Series tab. Time–height panels: a row '
+                         'track) and cached, like the Series tool. Time–height panels: a row '
                          'per series and a column per run (<b>Layout</b>: Runs are rows / '
                          'columns). Time series: series with the same <b>Panel</b> number '
                          'share a panel; other units get their own axis.</div>',
@@ -356,7 +356,7 @@ class FigureEditor:
             hodo=_chk("Hodograph", True), hodo_max=_f("Hodograph ± (m/s)", 40.0, 130, step=5),
             hodo_top=_f("Hodograph top (km)", 9.0, 130, step=1))
         self.snd_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.snd_tab = pn.widgets.Button(name="+ The Sounding tab's soundings", height=32,
+        self.snd_tab = pn.widgets.Button(name="+ The map's soundings", height=32,
                                          button_type="primary", button_style="outline")
         self.snd_new = pn.widgets.Button(name="+ Sounding", button_type="light",
                                          button_style="outline", height=32)
@@ -481,7 +481,7 @@ class FigureEditor:
             ("Runs", pn.Column(
                 pn.pane.HTML('<div class="cv-hint">Runs the panels can come from. Each run '
                              'has its own storm track (for storm-centred panels and '
-                             'storm-relative fields): the viewer\'s Track tab for this run, '
+                             'storm-relative fields): the viewer\'s storm track for this run, '
                              'or a track file (storm_tracks/*.csv is found automatically).'
                              '</div>', margin=(6, 4, 2, 4)),
                 self.runs_box, self.add_sel, _row(self.add_path, self.add_btn),
@@ -840,7 +840,7 @@ class FigureEditor:
         own = os.path.abspath(e["path"]) == self.run.path
         r = dict(path=os.path.abspath(e["path"]))
         r["label"] = pn.widgets.TextInput(name="Label", value=e.get("label", ""), width=130)
-        r["tab"] = pn.widgets.Checkbox(name="Track tab", value=e.get("track") == "viewer",
+        r["tab"] = pn.widgets.Checkbox(name="Viewer's track", value=e.get("track") == "viewer",
                                        visible=own, margin=(5, 6, 12, 6))
         r["track"] = pn.widgets.TextInput(
             name="Track file (blank: none)", sizing_mode="stretch_width", min_width=200,
@@ -1363,7 +1363,7 @@ class FigureEditor:
     def from_xsec(self):
         v, F, t = self.v, self.F, self.v.t
         if len(v.xs_pts) != 2:
-            self._msg("Draw a cross-section on the map first (Cross-section click mode).", True)
+            self._msg("Draw a cross-section on the map first (Section tool).", True)
             return
         fill = fg.layer_defaults("fill", F, v.xs_fill.value)
         fill.update(cmap=v.xs_cmap.value, reverse=v.xs_rev.value)
@@ -1401,7 +1401,7 @@ class FigureEditor:
         for c in self.ser_cards:
             c.show(self.kind.value)
         self.ser_box.objects = [c.panel for c in self.ser_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No series: add one of the Series tab above, or a new '
+            '<div class="cv-empty">No series: add one from the Series tool above, or a new '
             'one.</div>')]
         ss = getattr(self.v, "series", {}) or {}
         self.ser_from.options = {"": ""} | {v["label"]: k for k, v in ss.items()}
@@ -1520,7 +1520,7 @@ class FigureEditor:
 
     def _show_soundings(self):
         self.snd_box.objects = [c.panel for c in self.snd_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No soundings: add the Sounding tab\'s, or a new one.'
+            '<div class="cv-empty">No soundings: add the map\'s, or a new one.'
             '</div>')]
 
     def _remove_snd(self, c):
@@ -1550,8 +1550,8 @@ class FigureEditor:
     def _add_tab_soundings(self):
         new = self.tab_soundings()
         if not new:
-            self._msg("The Sounding tab has no soundings: click the map in Sounding mode "
-                      "first, or add one here.", True)
+            self._msg("No soundings yet: click the map with the Sounding tool first, or "
+                      "add one here.", True)
             return
         self.snd_cards += [self._snd_card(e) for e in new]
         self._show_soundings()
@@ -1729,7 +1729,7 @@ class FigureEditor:
         or time series when the active one is at one height; every run of the figure."""
         ss = getattr(self.v, "series", {}) or {}
         if not ss:
-            self._msg("Compute a series in the Series tab first (or add series in "
+            self._msg("Compute a series with the Series tool first (or add series in "
                       "<b>Layers</b>).", True)
             return
         act = self.v.ser_pick.value if self.v.ser_pick.value in ss else next(iter(ss))

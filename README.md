@@ -90,8 +90,15 @@ A figure from several runs has no run folder of its own: choose its folder in *S
 
 ## Using it
 
-The top bar holds time controls, used by every view. The **Map | 3D** switch appears
-once a 3D region has been picked. Both workspaces use full width.
+The top bar holds what every view shares: the **Map | 3D | Figure** workspaces, the
+run (click its name to open another) and ⚙ settings, the **storm track**, and the time
+controls.
+
+**Storm track** (top bar). Storm-relative soundings, the tracked storm motion, series
+around the storm, storm-relative vorticity and figures centred on the storm all use it.
+The chip says how many fixes there are and turns amber when the shown time has none.
+Without a track it offers the run's track file when one is found (`track_dirs` /
+`track_patterns`): one click loads it. Clicking it otherwise opens the Track tool.
 
 **Map workspace.** The toolbar above the map always shows the fill field and its
 level (height km AGL, model level, or column max/min). Each pill opens its controls in a
@@ -101,11 +108,19 @@ drawer under the toolbar. Click the pill again to close it.
   shows what is drawn. Winds are drawn as arrows or as streamlines (*Draw as*; the
   density slider sets how close the streamlines are), ground-, grid- or storm-relative.
 
-Zooming re-renders at full resolution for the area in view. The analysis panel
-(Sounding / Cross-section / Track) opens when a click mode is chosen or a result
-arrives. The panel button in the top bar hides or shows it. The expand button next to
-it (⤢) gives the panel the whole window; **Map** brings the map back. Less-used options
-in the Sounding and Track tabs sit behind **⚙ Settings**.
+Zooming re-renders at full resolution for the area in view.
+
+**Tools** (down the left edge): *Sounding*, *Section*, *Track*, *Series* and *3D box*.
+A tool sets what a click on the map does and opens its panel to the right of the map.
+Pressing the lit tool again switches it off. The panel's ✕ closes the panel but leaves
+the tool on (its button reopens it), and ⤢ gives the panel the whole window; **Map**
+brings the map back. *Clear* removes every marker from the map. Less-used options in the
+Sounding and Track panels sit behind the settings button (sliders icon).
+
+**Items** (the row under the map): what you have made. *Map view*, the soundings, the
+section, the 3D box and the computed series. Click an item to open its panel; ✕ removes
+it, and the picture button makes a figure from it in the Figure workspace (the box's cube
+opens it in 3D).
 
 **Zooming soundings.** Click the skew-T/hodograph or the profile panels to expand the
 panel. All sounding controls stay available. In the expanded view, drag a box on the
@@ -122,7 +137,7 @@ hodograph it shows the level nearest the pointer (height, wind). On the profile 
 it shows every quantity at the pointer's height. A dashed line or dot marks the
 position read.
 
-**Plot style** (🎨 in the Sounding tab): colours of temperature, dewpoint, parcel and
+**Plot style** (palette button in the Sounding panel): colours of temperature, dewpoint, parcel and
 base state; widths of the T/Td, parcel, hodograph and profile lines; skew-T top and
 temperature range; hodograph ring spacing and top; CAPE/CIN shading, wind barbs and
 adiabats on or off. Changes only redraw (no new analysis). *Default style* resets them.
@@ -133,17 +148,21 @@ again for metres. The choice stays while the soundings update. The
 **Profile panels … km AGL** selector just above the profile panels sets their height
 range. It does not change the skew-T.
 
-**Click modes** (toolbar, right):
-- *Sounding*: click to get a sounding; Shift-click adds up to 4 for comparison.
+**What each tool does on the map:**
+- *Sounding*, *Click a point*: click to get a sounding; Shift-click adds up to 4 for
+  comparison.
   This shows a skew-T, a hodograph, SB/ML/MU parcels, shear, SRH, the effective inflow
   layer, STP/SCP, critical angle, and profiles of storm-relative wind, shear,
   streamwise/crosswise vorticity, cumulative SRH and θ/θe. The base state is shown
   dashed for reference. *Column average* gives box-mean soundings.
-- *Area sounding*: drag a box to get the sounding averaged over it; Shift-drag adds a
-  box (up to 4, mixed freely with point soundings). The box is drawn on the map.
-- *Cross-section*: click A then B. A and B are marked at the ends of the distance axis.
-- *3D region*: drag a box. The app switches to the 3D workspace and renders it.
+- *Sounding*, *Drag a box (area mean)*: drag a box to get the sounding averaged over it;
+  Shift-drag adds a box (up to 4, mixed freely with point soundings). The box is drawn
+  on the map.
+- *Section*: click A then B. A and B are marked at the ends of the distance axis.
 - *Track*: click a storm to follow it through time (see below).
+- *Series*: no clicks; choose a field and a region in its panel (see below).
+- *3D box*: drag a box. The app switches to the 3D workspace and renders it. The 3D
+  workspace can also be opened first: *Pick region on map* or *Use map view* there.
 
 **Comparing times.** *📌 Pin this time* freezes sounding 1 at the current time. Sounding 1
 keeps following the time slider, so moving the slider overlays the two times (up to 4
@@ -154,7 +173,7 @@ inflow) as time changes, and pinning it compares the same storm-relative spot at
 times. *Storm motion → Tracked meso motion* uses the track's motion at each sounding's
 time for SRH, storm-relative winds and the hodograph.
 
-**Storm tracking** (Track click mode and tab). The default follows the method of
+**Storm tracking** (Track tool). The default follows the method of
 `phd_scripts/storm_tracking.ipynb`: the maximum of w at 1 km after a Gaussian smoothing
 of σ = 3 grid points. Clicking snaps to the maximum of the smoothed field within the
 search radius; *Find strongest* starts from the domain-wide maximum instead. The track
@@ -169,7 +188,7 @@ choosing one loads its default height, smoothing (Gaussian or box) and stop valu
 costs about a second per time for w or ζ, a few seconds for UH.
 - Clicking near an existing track at another time corrects it from that time on (or
   backward, if before the start), keeping the rest. Clicking far away starts a new track.
-- *Place by hand* (Track tab): each click sets the fix at the shown time to exactly where
+- *Place by hand* (Track panel): each click sets the fix at the shown time to exactly where
   you click. Tick *Snap click to max* to snap it to the nearby maximum instead. *Step time
   after each click* advances the slider so you can click through the storm's life. Each
   hand fix still records the tracked value at that spot. *Delete fix at this time*
@@ -200,13 +219,13 @@ resolution, reflectivity floor).
   opacity or switch them off.
 - Once a scene is shown, changing a 3D control re-renders it.
 
-**Series tab** (analysis panel). One field reduced over a region at every output time:
+**Series** (tool and panel). One field reduced over a region at every output time:
 any native or derived field, at a height or over a layer (a layer also keeps every
 level, for the *Time–height* view), over the whole domain, the map view, the 3D box or
 a disc around the tracked storm (with an offset, e.g. the inflow), as min / max / mean /
 percentile. Results are cached in `<cache_dir>/series` per run and recipe, and
 saved as .nc (everything), .csv / .txt or .pkl. Series in other units than the first
-get their own y axis on the right. Click a plot to go to that time. **⚙ Plot** sets
+get their own y axis on the right. Click a plot to go to that time. **Plot** sets
 the time and y limits (heights in the time–height view) and the time–height
 colormap and colour range. For layer series it can also reduce over a sub-layer
 (e.g. max w over 0–2 km out of a 0–10 km layer) for min / max / mean. All of these
@@ -214,7 +233,7 @@ come from the computed result without recomputing. *Auto limits* clears them. Th
 3D region box is offered as a region once one has been drawn.
 
 **Figure workspace** (Map | 3D | **Figure**). Publication figures, previewed at their
-final size. Start from the map view, the cross-section, the Series tab, the soundings,
+final size. Start from the map view, the cross-section, the series, the soundings,
 or a default grid; *Panels show*:
 - *Plan views* / *Vertical cross-sections*: layers (fill, contours, shading, vectors or
   streamlines, storm track, section line), panels in time, in field, as a runs × times
@@ -228,7 +247,7 @@ or a default grid; *Panels show*:
   soundings (runs, times, storm-relative spots) per panel.
 
 **Runs** lists the runs panels can come from (e.g. tornadic vs non-tornadic), each with
-its storm track (the Track tab, or `storm_tracks/<run>.csv`, found automatically; see
+its storm track (the Track tool, or `storm_tracks/<run>.csv`, found automatically; see
 `track_dirs` / `track_patterns`).
 **Annotate** adds a contour key (nested circles, as `funcs.circlelegend`) and text,
 markers, arrows, lines, boxes and circles. **Export** saves the image, and optionally a
@@ -297,7 +316,7 @@ cm1view/render.py         map + cross-section computations (contours, vectors, s
 cm1view/track.py          meso tracking + CSV/text export
 cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
 cm1view/zoomview.py       zoomable image component (sounding graphics)
-cm1view/series.py         time series of reduced fields (Series tab): compute, cache, files
+cm1view/series.py         time series of reduced fields (Series tool): compute, cache, files
 cm1view/figure.py         figure spec, panel data, export (image, script, data, spec)
 cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported scripts)
 cm1view/figui.py          Figure workspace UI
