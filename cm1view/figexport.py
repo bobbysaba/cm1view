@@ -148,6 +148,10 @@ class FigureExport:
         except (OSError, ValueError) as e:
             self._msg(f"Could not load <code>{path}</code>: {e}", True)
             return
+        self._open_spec(spec, f"Loaded <code>{path}</code>")
+
+    def _open_spec(self, spec, note):
+        """Show a saved figure (or an applied template) in the editor."""
         parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
         bases, ran = [], False
         for part in parts:
@@ -163,6 +167,6 @@ class FigureExport:
                 ran = True
             bases.append(base)
         self.set_parts(dict(spec, parts=bases) if spec.get("kind") == "combo" else bases[0])
-        self._msg(f"Loaded <code>{path}</code>" + (
+        self._msg(note + (
             ". It has code of its own (<b>Annotate → Your own code</b>): read it, then tick "
             "<b>Run the code</b>." if ran else ""))

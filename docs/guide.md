@@ -243,7 +243,14 @@ and *Download*. The editor has five tabs of folding sections:
   (the grid moves with umove, vmove); or a *storm-following mean* (composite) in the
   box that moves with the tracked storm (needs a track). Results are kept in the cache
   folder (Settings), so redrawing or restyling reads nothing again.
-- **Style**: fonts (family, math / units font, sizes of tick labels, axis labels,
+  *Copy a layer's look* puts one layer's colours, lines, style and colorbar onto others
+  of its kind (its range, levels and labels too when they show the same field).
+- **Style**: *Presets* set the text, frame, background, width and export at once:
+  *AMS journal* (8 pt sans-serif, (a) letters, 3.2 in wide for one column, else 6.5 in;
+  PDF at 600 DPI), *Talk* (large text, 10 in wide) and *Talk, dark* (on black; Undo
+  takes a preset back). *matplotlib style* takes a style name (e.g. `dark_background`)
+  or a `.mplstyle` file for colours and lines; the fonts and sizes stay the editor's.
+  Then fonts (family, math / units font, sizes of tick labels, axis labels,
   titles and legends), axes and ticks (labels, tick spacing and direction, minor ticks,
   grid lines, frame width, equal scale), panel labels (letters, times and run names,
   in a corner, on a white box or above the panel), colorbars (one for the figure, per
@@ -261,8 +268,13 @@ and *Download*. The editor has five tabs of folding sections:
   figure and runs in its script too. Code in a figure you open runs only once you tick
   *Run the code*. The code box highlights Python; the editor is loaded by the browser
   from a CDN, so where the browser has no internet tick *Plain text box*.
-- **Export**: trimming, margin and a transparent background; animations; reopen a saved
-  figure (its image, script or `_spec.json`) to keep editing.
+- **Export**: trimming, margin and a black or transparent background; animations;
+  reopen a saved figure (its image, script or `_spec.json`) to keep editing.
+  *Templates*: *Save as template* keeps the figure's panels, layers and look without its
+  runs, in `templates/` next to the settings file; *Apply to this run* opens it on the
+  run shown, its times moved to the map's time and as far apart as they were (each at
+  the nearest output; panels past the run's end stay empty). What only another run had
+  (its soundings, a difference from it) is left out.
 
 **Animations** (Export → *Animation (GIF)*). Plan-view and cross-section figures can be
 saved as animated GIFs, and so can figures of parts with at least one part of them:

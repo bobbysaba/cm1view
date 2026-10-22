@@ -43,6 +43,7 @@ from .figcombo import FigureCombo, panel_name
 from .figexport import FigureExport
 from .figruns import AllFields, FigureRuns
 from .figsources import FigureSources
+from .figstyle import FigureStyle
 from .figtree import FigureTree
 
 
@@ -76,7 +77,7 @@ def _place(times, t_s, snap):
 
 
 class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, FigureCombo,
-                   FigureClick, FigureTree):
+                   FigureClick, FigureTree, FigureStyle):
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
@@ -478,6 +479,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         self.tight = pn.widgets.Checkbox(name="Trim white space")
         self.pad = _f("Margin when trimmed (in)", 0.05, step=0.01, start=0.0)
         self.bg = pn.widgets.Select(name="Background", options={"White": "white",
+                                                                "Black": "black",
                                                                 "Transparent": "none"})
         self.spec_path = pn.widgets.TextInput(name="A saved figure (_spec.json)",
                                               placeholder="…/_src/figure_spec.json")
@@ -485,6 +487,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                                           button_style="outline", height=32)
         self.msg = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8))
         self._build_anim()
+        self._build_style()
+        self.plan_layers.append(self.look_row)
         # ---- preview
         self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(12, 8, 0, 8))
         self.update = pn.widgets.Button(name="Redraw", icon="refresh", height=32,
@@ -556,6 +560,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                              self.cb_lbold, self.cb_lside, self.cb_lsize, self.cb_pad,
                              self.cb_ticks, self.cb_fmt, self.cb_tsize)
         style_tab = pn.Column(
+            self.preset_sec,
             _section("Text", _grid(self.font, self.math, self.fsize, self.fs_tick,
                                    self.fs_label, self.fs_title, self.fs_sup, self.fs_legend),
                      _hint("Blank sizes follow the base size.")),
@@ -602,6 +607,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                 "<b>+ script & data</b> also writes a Python script that redraws the figure "
                 "without the viewer, and the figure's spec: open the spec here to keep "
                 "editing."), _grid((self.spec_path, 2), self.load_btn)),
+            self.tpl_sec,
             sizing_mode="stretch_width")
         self.tabs = pn.Tabs(("Panels", panels_tab), ("Layers", layers_tab),
                             ("Tree", self.tree_tab), ("Style", style_tab),
@@ -646,7 +652,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                   self.cb_lsize, self.cb_tsize, self.cb_lbold, self.cb_lside, self.cb_fmt,
                   self.lg_loc, self.lg_panel, self.lg_ncol,
                   self.lg_frame, self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad,
-                  self.bg, self.tight, self.pad):
+                  self.bg, self.mplstyle, self.tight, self.pad):
             w.param.watch(rq, "value")
         self.run_sel.param.watch(self._on_run_sel, "value")
         self.cb_mode.param.watch(lambda e: self._show_cbar(), "value")
@@ -812,6 +818,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             self.tight.value = e.get("tight", True)
             self.pad.value = float(e.get("pad", 0.05))
             self.bg.value = s.get("background", "white")
+            self.mplstyle.value = s.get("mplstyle") or ""
             ts = s.get("ts", {})
             self.ts_tmin.value = "" if ts.get("tmin") in (None, "") else f"{float(ts['tmin']):g}"
             self.ts_tmax.value = "" if ts.get("tmax") in (None, "") else f"{float(ts['tmax']):g}"
@@ -900,7 +907,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             panel_z=_heights(self.pz.value), panel_zmode=self.pz_mode.value,
             share=_num(self.part_share.value),
             suptitle=self.suptitle.value, titles=titles,
-            coords=self.coords.value, background=self.bg.value)
+            coords=self.coords.value, background=self.bg.value,
+            mplstyle=self.mplstyle.value.strip())
         s["domain"] = dict(s["domain"], mode=self.dom.value, half=float(self.half.value or 12.5))
         s["xsec"] = dict(s["xsec"], mode=self.xs_mode.value,
                          angle=float(self.xs_angle.value or 0.0),
@@ -1042,6 +1050,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         self.layer_box.objects = [c.panel for c in self.cards] or [pn.pane.HTML(
             '<div class="cv-empty">No layers: add one above.</div>')]
         self._show_region()
+        self._look_opts()
         opts = {"First contours": -1} | {
             f"{j + 1}. {self.fields[c.w['field'].value].label}": j
             for j, c in enumerate(self.cards) if c.type == "contour"}

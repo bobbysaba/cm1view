@@ -60,6 +60,7 @@ Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts
 """
 
 import copy
+import os
 import string
 
 import numpy as np
@@ -577,15 +578,17 @@ def save(spec, fig, fname, **kw):
 
 
 def rc(spec):
-    """matplotlib settings of the spec's fonts and axes."""
+    """matplotlib settings of the spec's matplotlib style ("mplstyle"), fonts and axes
+    (the fonts and sizes are the spec's own whatever the style sets)."""
     font, ax = spec.get("font", {}), spec.get("axes", {})
     fs = float(font.get("size", 10))
     fam = font.get("family", "sans-serif")
-    rc = {"font.size": fs, "font.family": fam,
+    rc = mpl_style(spec.get("mplstyle"))
+    rc.update({"font.size": fs, "font.family": fam,
           "axes.titlesize": font_size(spec, "title"), "axes.labelsize": font_size(spec, "label"),
           "xtick.labelsize": font_size(spec, "tick"), "ytick.labelsize": font_size(spec, "tick"),
           "xtick.direction": ax.get("tickdir", "out"), "ytick.direction": ax.get("tickdir", "out"),
-          "pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "none"}
+          "pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "none"})
     math = font.get("math", "dejavusans")
     rc["mathtext.fontset"] = math
     if math == "custom":  # math in the text font
@@ -597,6 +600,23 @@ def rc(spec):
         rc.update({"axes.linewidth": lw, "xtick.major.width": lw, "ytick.major.width": lw,
                    "xtick.minor.width": 0.6 * lw, "ytick.minor.width": 0.6 * lw})
     return rc
+
+
+def mpl_style(name):
+    """The rc settings of a matplotlib style: a name (matplotlib.style.available) or
+    a .mplstyle file ({} for none)."""
+    name = str(name or "").strip()
+    if not name:
+        return {}
+    from matplotlib.style.core import STYLE_BLACKLIST
+    if name in matplotlib.style.library:
+        rc = dict(matplotlib.style.library[name])
+    else:
+        path = os.path.abspath(os.path.expanduser(os.path.expandvars(name)))
+        if not os.path.isfile(path):
+            raise ValueError(f"matplotlib style {name!r}: no such style or file")
+        rc = dict(matplotlib.rc_params_from_file(path, use_default_template=False))
+    return {k: v for k, v in rc.items() if k not in STYLE_BLACKLIST}
 
 
 def font_size(spec, what):

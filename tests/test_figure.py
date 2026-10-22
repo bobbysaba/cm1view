@@ -279,7 +279,7 @@ def test_time_series_y_range(ed):
 
 
 @pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists", "difference",
-                                   "swath"])
+                                   "swath", "dark"])
 def test_script_redraws_the_identical_image(ed, tmp_path, start):
     import os
     import subprocess
@@ -289,6 +289,9 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
         _difference(ed)
     elif start == "swath":
         _swath(ed)
+    elif start == "dark":  # (a matplotlib style in the spec)
+        ed.preset.value = "dark"
+        ed._apply_preset()
     elif start == "series":
         ed.from_series()
         ed.panel_data(ed.collect())
@@ -1233,3 +1236,75 @@ def test_swaths_follow_the_ground_and_composites_the_storm(tmp_path, monkeypatch
     assert n == 3 and np.array_equal(np.flatnonzero(a[0] > 0), [4]) and a[0, 4] == 1.0
     with pytest.raises(ValueError, match="track"):
         swath.reduce(_Run(), _Fields(lambda t: 0), lay, 2, {})
+
+
+def test_templates_apply_to_another_run(ed, coarse_run):
+    import os
+    from cm1view import figure as fg
+    spec = ed.collect()
+    ed.tpl_name.value = "two by three"
+    ed._save_template()
+    path = ed.tpl_sel.value
+    assert "Saved" in txt(ed.msg.object), ed.msg.object
+    assert os.path.dirname(path) == fg.templates_dir() and not ed.tpl_go.disabled
+    tpl = fg.load_template(path)
+    assert "runs" not in tpl and tpl["template"]["time_s"] == spec["time_s"]
+    run, _ = ed.open_run(coarse_run)
+    out = fg.from_template(tpl, run, 2)
+    dt, half = run.times[2] - spec["time_s"], float(np.diff(run.times).max()) / 2 + 1
+    assert out["time_s"] == run.times[2] and "runs" not in out
+    assert len(out["times_s"]) == len(spec["times_s"])
+    for a, b in zip(spec["times_s"], out["times_s"]):  # (as far apart, at outputs)
+        assert b is None or (b in run.times and abs(b - (a + dt)) <= half)
+    assert out["layers"] == spec["layers"]
+    ed.tpl_sel.value = path
+    ed._apply_template()  # (onto the run shown)
+    assert "Applied" in txt(ed.msg.object), ed.msg.object
+    got = ed.collect()
+    assert got["layers"] == spec["layers"] and got["runs"][0]["path"] == ed.run.path
+    render(ed)
+
+
+def test_style_presets_and_matplotlib_styles(ed, tmp_path):
+    from cm1view import figdraw
+    ed.preset.value = "ams"
+    ed._apply_preset()
+    s = ed.collect()
+    assert (s["font"]["size"], s["letters"]["fmt"], s["export"]["format"]) == \
+        (8.0, "({a})", "pdf")
+    assert s["size"][0] == (3.2 if s["cols"] == 1 else 6.5) and not s["size_auto"]
+    ed.preset.value = "dark"
+    ed._apply_preset()
+    s = ed.collect()
+    assert (s["background"], s["mplstyle"], ed.bg.value) == ("black", "dark_background", "black")
+    assert figdraw.rc(s)["axes.edgecolor"] == "white" and figdraw.rc(s)["font.size"] == 14.0
+    render(ed)
+    f = tmp_path / "thick.mplstyle"
+    f.write_text("lines.linewidth: 3\nbackend: agg\n")
+    rc = figdraw.rc(dict(s, mplstyle=str(f)))
+    assert rc["lines.linewidth"] == 3 and "backend" not in rc
+    with pytest.raises(ValueError, match="no such style"):
+        figdraw.rc(dict(s, mplstyle="no-such-style"))
+    ed.preset.value = "default"
+    ed._apply_preset()
+    assert (ed.collect()["mplstyle"], ed.collect()["font"]["size"]) == ("", 10.0)
+
+
+def test_copy_a_layers_look(ed):
+    ed._add_layer("contour")
+    src, dst = [c for c in ed.cards if c.type == "contour"][:2]
+    other = next(f for f in ed.fields.defs if f != src.w["field"].value)
+    dst.w["field"].value = other
+    src.w["color"].value, src.w["lw"].value = "#ff0000", 2.0
+    levels = dst.collect()["levels"]
+    i, j = ed.cards.index(src), ed.cards.index(dst)
+    fill = next(k for k, c in enumerate(ed.cards) if c.type == "fill")
+    cmap = ed.cards[fill].collect()["cmap"]
+    assert set(ed.look_from.options.values()) == set(range(len(ed.cards)))
+    ed.look_from.value, ed.look_to.value = i, [j, fill]
+    ed._copy_look()
+    new = ed.cards[j].collect()
+    assert (new["color"], new["lw"], new["field"], new["levels"]) == \
+        ("#ff0000", 2.0, other, levels)  # (another field: its levels stay)
+    assert "another kind" in txt(ed.msg.object) and ed.cards[fill].collect()["cmap"] == cmap
+    render(ed)

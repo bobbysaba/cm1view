@@ -191,7 +191,7 @@ def combine(parts, arrange="row", title="", like=None, size=None, one_colorbar=F
                 size_set=[own[0] or None, own[1] or None], colorbar=cb,
                 runs=runs, suptitle=title, export=like.get("export", {}),
                 background=like.get("background", "white"), font=like.get("font", {}),
-                spacing=like.get("spacing", {}))
+                mplstyle=like.get("mplstyle", ""), spacing=like.get("spacing", {}))
 
 
 def panel_name(spec, i):
