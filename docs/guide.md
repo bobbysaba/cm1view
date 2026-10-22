@@ -94,10 +94,18 @@ first weighted by a Gaussian of distance from the expected position (σ = radius
 keeps the track from hopping to a neighbouring, slightly stronger updraft. *Search whole
 domain each time* takes the domain-wide maximum at every time (it can jump between
 storms). It stops
-when the maximum drops below *Stop below*. Other tracked fields (⚙ Settings): ζ at a
-height, or instantaneous 2–5 km updraft helicity (Σ w ζ Δz, from `winterp` and `zvort`);
-choosing one loads its default height, smoothing (Gaussian or box) and stop value. This
-costs about a second per time for w or ζ, a few seconds for UH.
+when the maximum drops below *Stop below* (leave it empty to never stop), or at the end of
+the *From*–*To* window. By default the window runs from the clicked time to the end of the
+run. Set *From* to an earlier time to track backward as well, or pick any other first and
+last time.
+Other tracked fields (⚙ Settings): ζ at a height, instantaneous 2–5 km updraft helicity
+(Σ w ζ Δz, from `winterp` and `zvort`), the pressure low (minimum p′ at a height; stops
+when p′ rises above *Stop above*), or *Other field*: the maximum or minimum of any field
+at a height. Choosing one loads its default height, smoothing (Gaussian or box) and stop
+value. *Fix at: Centroid* puts each fix at the field-weighted centre of the area around
+the extreme where the smoothed field is beyond *Centroid cutoff* (% of the way from 0 to
+the extreme). This gives a smoother track than the single peak point. Tracking costs
+about a second per time for a field at one height, and a few seconds for UH.
 - Clicking near an existing track at another time corrects it from that time on (or
   backward, if before the start), keeping the rest. Clicking far away starts a new track.
 - *Place by hand* (Track panel): each click sets the fix at the shown time to exactly where

@@ -41,7 +41,6 @@ def test_snap_without_weighting_finds_the_maximum(viewer):
 def test_find_strongest_follows_the_storm(viewer, demo_root):
     v = viewer
     run = v.run
-    v.trk_dir.value = "forward"
     v._show_panel(True, 2)
     v.request_track(None, None)  # Find strongest
     wait(lambda: v.trk_stop_btn.disabled and v.fixes, msg="track")
@@ -62,7 +61,6 @@ def test_find_strongest_follows_the_storm(viewer, demo_root):
 
 def test_whole_domain_search(viewer):
     v = viewer
-    v.trk_dir.value = "forward"
     v.trk_whole.value = True
     assert v.trk_radius.disabled
     v.request_track(None, None)
@@ -70,11 +68,59 @@ def test_whole_domain_search(viewer):
     assert len(v.fixes) == 9 and max(steps(v.fixes)) < 2.0
 
 
+def test_pressure_low_and_any_field(viewer, demo_root):
+    """Min p′ follows the meso; 'any field' at its max / min matches the presets."""
+    v = viewer
+    run = v.run
+    v.trk_metric.value = "pmin"
+    assert v.trk_stop.name == "Stop above" and v.trk_stop.value < 0
+    v.request_track(None, None)
+    wait(lambda: v.trk_stop_btn.disabled and v.fixes, msg="track")
+    ref = truth(demo_root, run)
+    assert sorted(v.fixes) == sorted(ref)
+    for t, f in v.fixes.items():
+        assert np.hypot(f["x"] - ref[t]["x"], f["y"] - ref[t]["y"]) < 1.5, t
+        assert f["value"] < 0
+    assert "minimum of p′" in trk.to_text(run, v.fixes, v.trk_spec, fields=v.F)
+    pmin = trk.place(run, 4, ref[4]["x"] + 1, ref[4]["y"], dict(v.trk_spec, snap=True),
+                     fields=v.F)
+    v.trk_metric.value = "field"
+    assert v.trk_field.visible and v.trk_stop.value is None
+    v.trk_field.value, v.trk_sense.value = "prspert", "min"
+    o = dict(v._trk_opts(), radius=v.trk_spec["radius"], smooth=v.trk_spec["smooth"],
+             kernel=v.trk_spec["kernel"], snap=True)
+    other = trk.place(run, 4, ref[4]["x"] + 1, ref[4]["y"], o, fields=v.F)
+    assert (other["x"], other["y"], other["value"]) == (pmin["x"], pmin["y"], pmin["value"])
+    assert trk.column(o) == "min_prspert_1km"
+
+
+def test_centroid_fix_and_time_window(viewer, demo_root):
+    v = viewer
+    run = v.run
+    ref = truth(demo_root, run)
+    v.trk_fix.value = "centroid"
+    assert v.trk_cut.visible
+    v.tslider.value = 4
+    v.trk_from.value, v.trk_to.value = 2, 6
+    v.request_track(None, None)
+    wait(lambda: v.trk_stop_btn.disabled and v.fixes, msg="track")
+    assert sorted(v.fixes) == [2, 3, 4, 5, 6]
+    for t, f in v.fixes.items():
+        assert np.hypot(f["x"] - ref[t]["x"], f["y"] - ref[t]["y"]) < 1.5, t
+    # a centroid is not tied to grid points
+    assert any(f["x"] not in run.xh for f in v.fixes.values())
+    head = trk.to_text(run, v.fixes, v.trk_spec)
+    assert "centroid" in head and f"{run.time_label(2)} – {run.time_label(6)}" in head
+    # a click outside the window is refused
+    v.tslider.value = 8
+    v.request_track(None, None)
+    assert "outside the From–To window" in txt(v.trk_status.object)
+
+
 def test_click_track_correction_and_new_track(viewer, demo_root):
     v = viewer
     ref = truth(demo_root, v.run)
     v.mode.set("Track")
-    v.trk_dir.value = "forward"
     tap(v, ref[1]["x"] + 1.0, ref[1]["y"] - 1.0)
     wait(lambda: v.trk_stop_btn.disabled and v.fixes, msg="track")
     assert len(v.fixes) == 9
@@ -86,7 +132,7 @@ def test_click_track_correction_and_new_track(viewer, demo_root):
     assert all(v.fixes[t] == before[t] for t in before if t < 4)
     # a click far away starts a new track (on the second cell, backward only; it is
     # below the stop threshold before t = 4, so the track ends there)
-    v.trk_dir.value = "backward"
+    v.trk_from.value, v.trk_to.value = 0, "click"
     tap(v, ref[4]["x"] + 16.0, ref[4]["y"] + 14.0)
     wait(lambda: v.trk_stop_btn.disabled, msg="new track")
     assert 4 in v.fixes and max(v.fixes) == 4
@@ -101,7 +147,7 @@ def test_manual_fixes_delete_save_load(viewer, demo_root, tmp_path):
     ref = truth(demo_root, v.run)
     v.mode.set("Track")
     v.trk_how.value = "manual"
-    assert not v.trk_dir.visible and v.trk_advance.visible
+    assert not v.trk_from.visible and v.trk_advance.visible
     for t in (1, 2, 3):  # each click advances the time
         tap(v, ref[t]["x"] + 0.3, ref[t]["y"])
     assert v.t == 4 and sorted(v.fixes) == [1, 2, 3]

@@ -29,6 +29,24 @@ class TrackPanel:
         self.trk_z = pn.widgets.FloatInput(name="Height (km)", value=1.0, step=0.25,
                                            start=0.0, end=float(run.z[-1]), width=90,
                                            visible=self.trk_metric.value != "uh")
+        groups = self.F.groups()
+        self.trk_field = pn.widgets.Select(
+            name="Field", groups=groups, width=200, visible=False,
+            value="winterp" if "winterp" in self.F else
+            next(iter(next(iter(groups.values())).values())))
+        self.trk_sense = pn.widgets.Select(
+            name="Track the", options={"Maximum": "max", "Minimum": "min"}, value="max",
+            width=110, visible=False)
+        self.trk_fix = pn.widgets.Select(
+            name="Fix at", options={"Peak": "peak", "Centroid": "centroid"}, value="peak",
+            width=110,
+            description="Peak: the strongest point.  Centroid: the field-weighted centre "
+                        "of the area around it beyond the cutoff (a smoother track)")
+        self.trk_cut = pn.widgets.FloatInput(
+            name="Centroid cutoff (%)", value=50.0, step=5.0, start=1.0, end=99.0,
+            width=130, visible=False,
+            description="The centroid area: where the smoothed field is beyond this "
+                        "percentage of the way from the background (0) to the peak")
         self.trk_radius = pn.widgets.FloatInput(
             name="Search radius (km)", value=5.0, step=0.5, start=0.5, width=120,
             description="How far from the expected position to look at the next time")
@@ -44,11 +62,16 @@ class TrackPanel:
             name="Search whole domain each time", value=False, margin=(5, 10, 14, 10))
         self.trk_stop = pn.widgets.FloatInput(
             name="Stop below", value=trk.METRIC_STOP[self.trk_metric.value], width=100,
-            description="Tracking ends when the maximum in the search disc falls below "
-                        "this (meso lost)")
-        self.trk_dir = pn.widgets.Select(
-            name="Direction", options={"Forward + backward": "both", "Forward": "forward",
-                                       "Backward": "backward"}, value="both", width=160)
+            description="Tracking ends when the extreme in the search disc is no longer "
+                        "beyond this (meso lost); empty: never")
+        times = {run.time_label(t): t for t in range(len(run.times))}
+        self.trk_from = pn.widgets.Select(
+            name="From", options={"Clicked time": "click", **times}, value="click",
+            width=120, description="First time to track (earlier than the clicked time "
+                                   "tracks backward too)")
+        self.trk_to = pn.widgets.Select(
+            name="To", options={"End of run": "end", "Clicked time": "click", **times},
+            value="end", width=120, description="Last time to track")
         self.trk_snap = pn.widgets.Checkbox(  # move the click to the max within the radius
             name="Snap click to max", value=True, margin=(5, 10, 14, 10))
         self.trk_near = pn.widgets.Checkbox(  # distance-weight the max (no core hopping)
@@ -73,8 +96,9 @@ class TrackPanel:
         self.trk_find = pn.widgets.Button(
             name="Find strongest", button_type="primary", button_style="outline", height=32,
             margin=(5, 4, 8, 4),
-            description="Start the track from the domain-wide maximum of the (smoothed) "
-                        "field at the shown time, then follow it forward and backward")
+            description="Start the track from the domain-wide extreme of the "
+                        "(smoothed) field at the shown time, then follow it through the "
+                        "From–To window")
         self.trk_stop_btn = pn.widgets.Button(name="Stop", button_type="danger",
                                               button_style="outline", height=32,
                                               margin=(5, 4, 8, 10), disabled=True)
@@ -113,24 +137,46 @@ class TrackPanel:
 
     # ================================================================ meso track
     def _trk_opts(self):
-        return dict(metric=self.trk_metric.value, zkm=float(self.trk_z.value or 0.0),
-                    radius=float(self.trk_radius.value or 5.0),
-                    smooth=float(self.trk_smooth.value or 0.0), kernel=self.trk_kernel.value,
-                    stop=float(self.trk_stop.value or 0.0), snap=self.trk_snap.value,
-                    nearest=self.trk_near.value, whole=self.trk_whole.value)
+        stop = self.trk_stop.value
+        o = dict(metric=self.trk_metric.value, zkm=float(self.trk_z.value or 0.0),
+                 radius=float(self.trk_radius.value or 5.0),
+                 smooth=float(self.trk_smooth.value or 0.0), kernel=self.trk_kernel.value,
+                 stop=None if stop is None else float(stop), snap=self.trk_snap.value,
+                 nearest=self.trk_near.value, whole=self.trk_whole.value,
+                 fix=self.trk_fix.value, cutoff=float(self.trk_cut.value or 50.0))
+        if o["metric"] == "field":
+            o.update(field=self.trk_field.value, sense=self.trk_sense.value)
+        return o
+
+    def _trk_window(self, t0):
+        """(first, last) output index to track for a click at t0."""
+        f, t = self.trk_from.value, self.trk_to.value
+        return (t0 if f == "click" else int(f),
+                len(self.run.times) - 1 if t == "end" else t0 if t == "click" else int(t))
+
+    def _trk_stop_label(self):
+        mn = trk.sense(dict(metric=self.trk_metric.value, sense=self.trk_sense.value))
+        self.trk_stop.name = "Stop above" if mn == "min" else "Stop below"
 
     def _trk_preset(self, metric):
         """Default settings per tracked field.  Updraft: w at 1 km with a Gaussian of
         sigma = 3 grid points, as in storm_tracking.ipynb."""
         dxk = self.run.dx / 1000.0
         z, smooth, kernel = {"w": (1.0, 3 * dxk, "gauss"), "zeta": (1.0, 1.0, "box"),
-                             "uh": (self.trk_z.value, 1.0, "box")}[metric]
+                             "uh": (self.trk_z.value, 1.0, "box"),
+                             "pmin": (1.0, 1.0, "box"),
+                             "field": (self.trk_z.value, 1.0, "box")}[metric]
         self.trk_z.param.update(value=z, visible=metric != "uh")
+        self.trk_field.visible = self.trk_sense.visible = metric == "field"
         self.trk_smooth.value, self.trk_kernel.value = round(smooth, 3), kernel
         self.trk_stop.value = trk.METRIC_STOP[metric]
+        self._trk_stop_label()
 
     def _on_trk_metric(self, ev):
         self._trk_preset(ev.new)
+
+    def _on_trk_fix(self, ev):
+        self.trk_cut.visible = ev.new == "centroid"
 
     def _on_trk_whole(self, ev):
         self.trk_radius.disabled = self.trk_near.disabled = ev.new
@@ -143,10 +189,19 @@ class TrackPanel:
         if self.trk_how.value == "manual" and x is not None:
             self._place_fix(x, y, opts)
             return
-        direction, existing = self.trk_dir.value, None
+        lo, hi = self._trk_window(t0)
+        if not lo <= t0 <= hi:
+            self.trk_status.object = (
+                f'<div class="cv-status" style="color:#f87171">The shown time '
+                f'{run.time_label(t0)} is outside the From–To window; change the time '
+                f'or the window</div>')
+            return
+        opts.update(t_from=lo, t_to=hi)
+        direction, existing = "both", None
         same = self.trk_spec is not None and all(
-            self.trk_spec.get(k) == opts[k]
-            for k in ("metric", "zkm", "smooth", "kernel", "nearest", "whole"))
+            self.trk_spec.get(k) == opts.get(k)
+            for k in ("metric", "zkm", "field", "sense", "smooth", "kernel", "nearest",
+                      "whole", "fix", "cutoff"))
         if x is None:  # Find strongest: a new track from the domain-wide maximum
             direction = "both"
         elif self.fixes and same:
@@ -167,7 +222,7 @@ class TrackPanel:
     def _on_trk_how(self, ev):
         manual = ev.new == "manual"
         self.trk_advance.visible = manual
-        self.trk_dir.visible = self.trk_stop.visible = not manual
+        self.trk_from.visible = self.trk_to.visible = self.trk_stop.visible = not manual
         if manual:
             self.trk_snap.value = False
 
@@ -189,7 +244,7 @@ class TrackPanel:
 
     def _place_job(self, g, t, x, y, opts):
         try:
-            fx = trk.place(self.run, t, x, y, opts)
+            fx = trk.place(self.run, t, x, y, opts, fields=self.F)
         except Exception:  # noqa: BLE001
             traceback.print_exc()
             return
@@ -249,7 +304,8 @@ class TrackPanel:
 
         try:
             fixes = trk.track(run, t0, x, y, opts, direction, existing=existing,
-                              on_fix=on_fix, cancelled=cancelled, progress=progress)
+                              on_fix=on_fix, cancelled=cancelled, progress=progress,
+                              fields=self.F)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             msg = f'<div class="cv-status" style="color:#f87171">Tracking error: {e}</div>'
@@ -288,8 +344,9 @@ class TrackPanel:
             spd, dirn = np.hypot(u, v), np.degrees(np.arctan2(-u, -v)) % 360
             mv = f' · mean motion {spd:.1f} m/s from {dirn:.0f}° (u {u:.1f}, v {v:.1f})'
         elif self.fixes[ts[0]].get("source") == "auto":
-            mv = (' · tracking stopped after one time: the signal was below '
-                  '<i>Stop below</i> at the next time')
+            mv = (' · tracking stopped after one time: the signal was not past '
+                  f'<i>{self.trk_stop.name}</i> at the next time, or the From–To '
+                  'window ends there')
         return (f'<div class="cv-status">{len(ts)} fixes, {run.time_label(ts[0])} → '
                 f'{run.time_label(ts[-1])}{mv}{note}</div>')
 
@@ -302,8 +359,8 @@ class TrackPanel:
         self.trk_pts_src.data = dict(x=xs, y=ys, hms=hms, value=vals)
         self.trk_ts_src.data = dict(tmin=[run.times[t] / 60.0 for t in ts], value=vals,
                                     hms=hms)
-        m = (self.trk_spec or self._trk_opts())["metric"]
-        self.trk_fig.yaxis.axis_label = f"{trk.METRIC_LABEL[m]} ({trk.METRIC_UNITS[m]})"
+        lab, units = trk.label(self.trk_spec or self._trk_opts(), self.F)
+        self.trk_fig.yaxis.axis_label = f"{lab} ({units})" if units else lab
         if ts:
             import pandas as pd
             df = pd.DataFrame(trk.rows(run, fx)).drop(columns=["file", "time_s"])
@@ -381,7 +438,8 @@ class TrackPanel:
 
     def _track_download(self):
         fmt = "csv" if self.trk_dl.filename.lower().endswith(".csv") else "txt"
-        text = trk.to_text(self.run, self.fixes, self.trk_spec or self._trk_opts(), fmt)
+        text = trk.to_text(self.run, self.fixes, self.trk_spec or self._trk_opts(), fmt,
+                           self.F)
         return io.BytesIO(text.encode())
 
     def _trk_default(self):
@@ -394,7 +452,8 @@ class TrackPanel:
 
     def _save_track(self, path):
         try:
-            path = trk.save(self.run, self.fixes, self.trk_spec or self._trk_opts(), path)
+            path = trk.save(self.run, self.fixes, self.trk_spec or self._trk_opts(), path,
+                            self.F)
         except OSError as e:
             self.trk_status.object = (f'<div class="cv-status" style="color:#f87171">Could '
                                       f'not save: {e}</div>')

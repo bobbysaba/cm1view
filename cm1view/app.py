@@ -679,9 +679,10 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, DistPanel, SectionPanel, Vi
             self.xs_status, self.xs_pd_btn,
             _bokeh(self.xs_fig, sizing_mode="stretch_width"),
             sizing_mode="stretch_width")
-        trk_set = pn.FlexBox(self.trk_metric, self.trk_z, self.trk_smooth, self.trk_kernel,
-                             self.trk_radius, self.trk_stop, self.trk_dir, self.trk_snap,
-                             self.trk_near, self.trk_whole,
+        trk_set = pn.FlexBox(self.trk_metric, self.trk_field, self.trk_sense, self.trk_z,
+                             self.trk_smooth, self.trk_kernel, self.trk_radius,
+                             self.trk_fix, self.trk_cut, self.trk_stop, self.trk_from,
+                             self.trk_to, self.trk_snap, self.trk_near, self.trk_whole,
                              flex_wrap="wrap", align_items="flex-end", gap="0 4px",
                              sizing_mode="stretch_width",
                              styles={"border-top": f"1px solid {GRID}"})
@@ -977,6 +978,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, DistPanel, SectionPanel, Vi
         self.sl_pin.on_click(self._on_pin)
         self.trk_metric.param.watch(self._on_trk_metric, "value")
         self.trk_whole.param.watch(self._on_trk_whole, "value")
+        self.trk_sense.param.watch(lambda e: self._trk_stop_label(), "value")
+        self.trk_fix.param.watch(self._on_trk_fix, "value")
         self.trk_find.on_click(lambda e: (self._show_panel(True, 2),
                                           self.request_track(None, None)))
         self.trk_stop_btn.on_click(lambda e: self._cancel_track())
