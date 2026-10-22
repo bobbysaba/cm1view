@@ -455,7 +455,7 @@ def job_memory_gb():
     except (OSError, ValueError):
         pass
     if limit is None or limit > 1 << 50:
-        try:  # cgroup v1 (Casper)
+        try:  # cgroup v1
             cg = [line.split(":")[2].strip() for line in open("/proc/self/cgroup")
                   if ":memory:" in line][0]
             limit = int(open(f"/sys/fs/cgroup/memory{cg}/memory.limit_in_bytes").read())
