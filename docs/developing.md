@@ -36,6 +36,7 @@ cm1view/render.py         map + cross-section computations (contours, vectors, s
 cm1view/track.py          meso tracking + CSV/text export
 cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
 cm1view/series.py         time series of reduced fields: compute, cache, files
+cm1view/dist.py           distributions: a field's values over a region, their summary
 cm1view/figure.py         figure spec, panel data, export (image, script, data, spec)
 cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported scripts)
 cm1view/pdecomp.py        pressure decomposition: file fields, computing one time on request
@@ -50,13 +51,15 @@ cm1view/ui.py             shared UI pieces: constants, figure styling, drawers, 
 cm1view/sndui.py          Viewer mixin: soundings, their graphics, style and zoom
 cm1view/trackui.py        Viewer mixin: storm tracking and the storm chip
 cm1view/seriesui.py       Viewer mixin: the Series panel and plots
+cm1view/distui.py         Viewer mixin: the Distribution panel, plots and statistics
 cm1view/xsecui.py         Viewer mixin: cross-sections
 cm1view/view3dui.py       Viewer mixin: 3D scene, pressure-decomposition button, streamlines
 cm1view/itemsui.py        Viewer mixin: the items tray
 cm1view/figui.py          the Figure workspace editor
 cm1view/figparts.py       its constants, widget helpers and cards
 cm1view/figruns.py        editor mixin: runs
-cm1view/figsources.py     editor mixin: new figures from the viewer, series / sounding lists
+cm1view/figsources.py     editor mixin: new figures from the viewer, series / sounding /
+                          distribution lists
 cm1view/figexport.py      editor mixin: saving and reopening figures
 cm1view/zoomview.py       zoomable image component (sounding graphics)
 cm1view/settings.py       settings window (first run and ⚙) and the overwrite prompt

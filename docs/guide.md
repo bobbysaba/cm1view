@@ -20,7 +20,8 @@ drawer under the toolbar. Click the pill again to close it.
 
 Zooming re-renders at full resolution for the area in view.
 
-**Tools** (down the left edge): *Sounding*, *Section*, *Track*, *Series* and *3D box*.
+**Tools** (down the left edge): *Sounding*, *Section*, *Track*, *Series*, *Distribution*
+and *3D box*.
 A tool sets what a click on the map does and opens its panel to the right of the map.
 Pressing the lit tool again switches it off. The panel's ✕ closes the panel but leaves
 the tool on (its button reopens it), and ⤢ gives the panel the whole window; **Map**
@@ -71,6 +72,7 @@ range. It does not change the skew-T.
 - *Section*: click A then B. A and B are marked at the ends of the distance axis.
 - *Track*: click a storm to follow it through time (see below).
 - *Series*: no clicks; choose a field and a region in its panel (see below).
+- *Distribution*: no clicks; choose a field and a region in its panel (see below).
 - *3D box*: drag a box. The app switches to the 3D workspace and renders it. The 3D
   workspace can also be opened first: *Pick region on map* or *Use map view* there.
 
@@ -127,6 +129,13 @@ resolution, reflectivity floor).
   the streamline's frame. The selection follows the same seed when the scene re-renders
   (e.g. in time). Isosurfaces in front of a line can catch the click: lower their
   opacity or switch them off.
+- To compare streamlines, press the pin on the card: the line keeps a colour of its own
+  (in the scene, with its seed, and on the card, its height dashed) and the next click
+  selects another. Pin as many as you like; the card plots them all, each against
+  distance from its own seed, and lists them as #1, #2, …. Click a pinned line to
+  select it again and press the pin to unpin it. Pins follow their seeds through
+  re-renders (a pin whose seed is not in the new scene is counted as "not in this
+  scene" and comes back when it is). × clears the selection and every pin.
 - Once a scene is shown, changing a 3D control re-renders it.
 
 **Series** (tool and panel). One field reduced over a region at every output time:
@@ -142,9 +151,23 @@ colormap and colour range. For layer series it can also reduce over a sub-layer
 come from the computed result without recomputing. *Auto limits* clears them. The
 3D region box is offered as a region once one has been drawn.
 
+**Distribution** (tool and panel). Every value of one field at the shown time: at a
+height, over a layer or over the whole depth, in the whole domain, the map view, the 3D
+box or a disc around the tracked storm, optionally only values in a range (e.g. w ≥
+1 m/s for updrafts). Compute again at other times, heights, fields or regions to
+compare them: they are drawn together as histograms (count, PDF or fraction per bin,
+in shared bins), box plots (whiskers at 1.5 × IQR, min–max, 5–95 % or 1–99 %; the
+diamond is the mean), violins or cumulative distributions (fraction at or below x, or
+above x for the tails; log scale for both). A table gives each one's count, mean,
+standard deviation, extremes, median and 1st / 99th percentiles. The plots come from a
+summary of each distribution (a 4000-bin histogram of every value from its minimum to
+its maximum, and its quantiles), so changing the plot reads nothing again. *Follow the
+time slider* computes the chosen one again when the time settles. *Figure of these*
+opens them as a figure (Figure workspace), drawn the same way.
+
 **Figure workspace** (Map | 3D | **Figure**). Publication figures, previewed at their
 final size. *New figure from* the map view, the cross-section, the series, the
-soundings or a time grid; every change can be undone (↶ ↷ above the preview; adding,
+soundings, the distributions or a time grid; every change can be undone (↶ ↷ above the preview; adding,
 removing and changing figure parts too), and
 *Actual size* shows the figure as large as it prints, to judge the font sizes. Saving
 sits above the preview: *Save as* (folder/name), format, DPI, *Save*, *+ script & data*
@@ -163,7 +186,8 @@ and *Download*. The editor has five tabs of folding sections:
   background, and join the lists when the search is done). Each run has a label, a
   colour and a line style and a storm track; the colour is the default for its time
   series, its storm track layers, its run name in the panels and, when each sounding
-  of a panel comes from another run, its soundings. Removing a run takes its panels and soundings with it; those of
+  of a panel comes from another run, its soundings and distributions. Removing a run
+  takes its panels, soundings and distributions with it; those of
   the runs after it stay on their runs. The field lists hold the fields of every run.
   *Panels show*:
   - *Plan views* / *Vertical cross-sections*: panels in time, in field, at several
@@ -188,6 +212,13 @@ and *Download*. The editor has five tabs of folding sections:
     cross least. A parameter table under each panel can list CAPE, CIN, LCL, SRH,
     shear, STP and SCP, a row per sounding. Several soundings (runs, times,
     storm-relative spots) per panel.
+  - *Distributions*: histograms (counts, PDF or fractions; bins by number or width;
+    filled outlines, outlines or bars), box plots, violins or cumulative
+    distributions, of any field at a height, over a layer or the whole depth, in the
+    whole domain, a box or around each run's track, with an optional value range.
+    Each has its own run and time; those with the same panel number share a panel
+    (e.g. w at two times, or two runs), coloured by run when each is from another
+    run. *Mean, sd, n in legend* adds the statistics.
   - **Figure parts** (top of Panels): a figure can have parts with different kinds of
     panels, e.g. plan views beside soundings, or a plan view with its A–B line above
     the cross-section. Each part has its own panels, runs, layers and style, and keeps
@@ -199,7 +230,8 @@ and *Download*. The editor has five tabs of folding sections:
 - **Layers**: fill (colormap, range, steps, linear / log scale, opacity, blanking,
   colorbar arrows and label), contours (levels, labels and their format), shading,
   vectors or streamlines, storm track and section line; the series of time–height and
-  time-series figures; the soundings and skew-T settings.
+  time-series figures; the soundings and skew-T settings; the distributions and how
+  they are drawn.
 - **Style**: fonts (family, math / units font, sizes of tick labels, axis labels,
   titles and legends), axes and ticks (labels, tick spacing and direction, minor ticks,
   grid lines, frame width, equal scale), panel labels (letters, times and run names,

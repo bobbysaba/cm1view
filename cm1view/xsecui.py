@@ -23,8 +23,9 @@ class SectionPanel:
     _hold_xs = False
 
     def _build_xsec(self):
-        # static view: no pan/zoom, so the plot can't be dragged off the sampled data
-        fig = figure(sizing_mode="stretch_width", height=430, tools="save",
+        # zoom and pan stay inside the sampled data (range bounds, set with the data)
+        fig = figure(sizing_mode="stretch_width", height=430,
+                     tools="box_zoom,wheel_zoom,pan,reset,save", active_drag="box_zoom",
                      toolbar_location="above", x_axis_label="Distance from A toward B (km)",
                      y_axis_label="Height (km AGL)", x_range=Range1d(0, 1),
                      y_range=Range1d(0, 15))
@@ -98,6 +99,24 @@ class SectionPanel:
                                               end=float(np.floor(self.run.z[-1])), step=0.5,
                                               value=min(15.0, float(np.floor(self.run.z[-1]))),
                                               width=150)
+        # plot style: axis limits (blank = the whole section), size, fonts, guides
+        lim = dict(value=None, placeholder="auto", width=85)
+        self.xs_smin = pn.widgets.FloatInput(name="From (km)", **lim)
+        self.xs_smax = pn.widgets.FloatInput(name="To (km)", **lim)
+        self.xs_zmin = pn.widgets.FloatInput(name="Bottom (km)", **lim)
+        self.xs_zmax = pn.widgets.FloatInput(name="Top (km)", **lim)
+        self.xs_height = pn.widgets.IntSlider(name="Plot height (px)", start=250, end=900,
+                                              step=10, value=430, width=150)
+        self.xs_font = pn.widgets.IntSlider(name="Font size", start=8, end=20, value=12,
+                                            width=120)
+        self.xs_grid = pn.widgets.Checkbox(name="Grid lines", value=True,
+                                           margin=(5, 10, 14, 10))
+        self.xs_ab = pn.widgets.Checkbox(name="A / B labels", value=True,
+                                         margin=(5, 10, 14, 10))
+        self.xs_style_reset = pn.widgets.Button(name="Default style", button_type="light",
+                                                button_style="outline", height=32,
+                                                margin=(5, 4, 14, 4))
+        self._xs_view = None  # (section length, top, limits) the plot's ranges were set for
         self.xs_status = _html('<div class="cv-empty">Click two points on the map, A then B '
                                '(the <b>Section</b> tool is on while this panel is open).'
                                '</div>')
@@ -217,11 +236,10 @@ class SectionPanel:
         self.xs_pos.data = res.get("pos", dict(EMPTY_LINES))
         self.xs_neg.data = res.get("neg", dict(EMPTY_LINES))
         self.xs_vec.data = res.get("vec", dict(EMPTY_VEC))
-        self.xs_fig.x_range.update(start=0.0, end=float(s[-1]))
-        self.xs_fig.y_range.update(start=0.0, end=float(zq[-1]))
+        self._xs_extent = (float(s[-1]), float(zq[-1]))
+        self._xs_limits()
         self.xs_lab[1].x = float(s[-1])
-        for a in self.xs_lab:
-            a.visible = True
+        self._xs_look()
         self.xs_cbar_label.axis_label = d.title + (
             f' · {spec["fnote"][1]}' if spec["fnote"] and d.storm else "")
         (xa, ya), (xb, yb) = spec["A"], spec["B"]
@@ -235,3 +253,56 @@ class SectionPanel:
                f'{pdecomp.source(self.run, spec["t"], block=False)[1]}'
                if any(pdecomp.is_pdecomp(F, n) for n in (spec["fill"], spec["cont"])) else "")
             + '</div>')
+
+    _xs_extent = None  # (length, top) of the section shown (km)
+
+    def _xs_limits(self, *e, force=False):
+        """Axis ranges from the From/To/Bottom/Top limits (blank: the whole section).  A
+        new section (length or top) or new limits reset the view; otherwise a zoom is
+        kept.  The reset tool goes back to the limits; zoom and pan stay inside the data."""
+        if self._xs_extent is None:
+            return
+        L, top = self._xs_extent
+
+        def val(w, default, hi):
+            v = w.value
+            return default if v is None else float(min(max(v, 0.0), hi))
+
+        s0, s1 = val(self.xs_smin, 0.0, L), val(self.xs_smax, L, L)
+        z0, z1 = val(self.xs_zmin, 0.0, top), val(self.xs_zmax, top, top)
+        if s1 <= s0:
+            s0, s1 = 0.0, L
+        if z1 <= z0:
+            z0, z1 = 0.0, top
+        view = (L, top, s0, s1, z0, z1)
+        if view == self._xs_view and not force:
+            return
+        self._xs_view = view
+        self.xs_fig.x_range.update(start=s0, end=s1, reset_start=s0, reset_end=s1,
+                                   bounds=(0.0, L))
+        self.xs_fig.y_range.update(start=z0, end=z1, reset_start=z0, reset_end=z1,
+                                   bounds=(0.0, top))
+        for a in self.xs_lab:  # A and B sit on the bottom axis of the limits
+            a.y = z0
+
+    def _xs_look(self, *e):
+        """Plot height, fonts, grid lines and the A / B labels (no new section needed)."""
+        fig, fs = self.xs_fig, int(self.xs_font.value)
+        fig.height = int(self.xs_height.value)
+        for ax in fig.axis:
+            ax.major_label_text_font_size = f"{max(fs - 1, 6)}px"
+            if ax is not self.xs_cbar_label:
+                ax.axis_label_text_font_size = f"{fs}px"
+        self.xs_cbar_label.axis_label_text_font_size = f"{fs}px"
+        self.xs_cbar.major_label_text_font_size = f"{max(fs - 1, 6)}px"
+        fig.grid.visible = self.xs_grid.value
+        for a in self.xs_lab:
+            a.text_font_size = f"{fs + 2}px"
+            a.visible = self.xs_ab.value and self._xs_extent is not None
+
+    def _on_xs_style_reset(self, ev):
+        for w in (self.xs_smin, self.xs_smax, self.xs_zmin, self.xs_zmax):
+            w.value = None
+        self.xs_height.value, self.xs_font.value = 430, 12
+        self.xs_grid.value = self.xs_ab.value = True
+        self._xs_limits(force=True)

@@ -4,11 +4,14 @@ import numpy as np
 from scipy.ndimage import gaussian_filter, map_coordinates
 from skimage.measure import marching_cubes
 
-from .fields import _NWS_REF
+from .fields import _NWS_REF, mpl_cmap
 from .theme import BG, GRID, MUTED, TEXT
 
 MAX_FACES = 700_000
 SELECTED = "#fde047"  # highlighted streamline
+# pinned streamlines, in pin order (cycled); none of them is the selection's yellow
+PIN_COLORS = ["#38bdf8", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#2dd4bf", "#f87171",
+              "#e2e8f0"]
 
 
 def box_indices(run, box):
@@ -177,6 +180,32 @@ def _ref_colorscale():
     return cs
 
 
+def floor_colorscale(cmap, reverse=False, n=32):
+    """Plotly colorscale for the floor: the stepped NWS scale for 'reflectivity' (meant
+    for a 0-75 dBZ range), otherwise n stops of the matplotlib colormap."""
+    if cmap == "reflectivity" and not reverse:
+        return _ref_colorscale()
+    cm = mpl_cmap(cmap, reverse)
+    return [[float(f), "rgb({:.0f},{:.0f},{:.0f})".format(*(255 * np.asarray(cm(f)[:3])))]
+            for f in np.linspace(0.0, 1.0, n)]
+
+
+def floor_range(a, vrange=None, diverging=False, mode="data"):
+    """(lo, hi) for the floor colours.  mode 'field': the field's display range (data
+    when it has none); 'data': 1st-99th percentiles, symmetric about 0 if diverging."""
+    if mode == "field" and vrange is not None:
+        return float(vrange[0]), float(vrange[1])
+    v = np.asarray(a, np.float64)
+    v = v[np.isfinite(v)]
+    if not v.size:
+        return 0.0, 1.0
+    if diverging:
+        m = float(np.percentile(np.abs(v), 99)) or float(np.abs(v).max()) or 1.0
+        return -m, m
+    lo, hi = (float(x) for x in np.percentile(v, [1, 99]))
+    return (lo, hi) if hi > lo else (lo - 0.5, lo + 0.5)
+
+
 CAMERAS = {  # eye positions (scene units), plotly convention
     "oblique": dict(eye=dict(x=1.25, y=-1.45, z=0.75)),
     "top": dict(eye=dict(x=0.0, y=-0.01, z=2.2), up=dict(x=0, y=1, z=0)),
@@ -192,13 +221,19 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    if ground is not None:
-        gx, gy, ga = ground
+    if ground is not None:  # dict(x, y, a, colorscale, lo, hi, title) for the floor
+        ga = ground["a"]
         fig.add_trace(go.Surface(
-            x=gx, y=gy, z=np.zeros_like(ga), surfacecolor=np.nan_to_num(ga, nan=0.0),
-            colorscale=_ref_colorscale(), cmin=0, cmax=75, showscale=False,
+            x=ground["x"], y=ground["y"], z=np.zeros_like(ga),
+            surfacecolor=np.nan_to_num(ga, nan=ground["lo"]),
+            colorscale=ground["colorscale"], cmin=ground["lo"], cmax=ground["hi"],
+            colorbar=dict(title=dict(text=ground["title"], side="top",
+                                     font=dict(color=MUTED, size=11)),
+                          orientation="h", thickness=10, len=0.35, x=0.5, y=0.0,
+                          yanchor="bottom", tickfont=dict(color=MUTED, size=10),
+                          outlinewidth=0),
             hoverinfo="skip", lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0),
-            name="cref"))
+            name="floor"))
     for m in meshes:
         f = m["faces"]
         fig.add_trace(go.Mesh3d(
@@ -233,7 +268,17 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
             hovertemplate="z %{z:.2f} km · w %{customdata:.1f} m/s"
                           "<extra>click: select</extra>",
             name=stream["name"], showlegend=True))
-        # the selected streamline and its seed, filled in by the app on a click
+        # pinned streamlines (NaN-separated, a colour per point) and their seeds, then
+        # the selected streamline and its seed: all filled in by the app on a click
+        fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", meta="pinned",
+                                   line=dict(color=[], width=7), connectgaps=False,
+                                   hovertemplate="pinned streamline<extra>click: select"
+                                                 "</extra>",
+                                   name="Pinned streamlines", showlegend=False))
+        fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="markers", meta="pinseeds",
+                                   marker=dict(color=[], size=5, symbol="diamond",
+                                               line=dict(color=BG, width=1)),
+                                   hoverinfo="skip", name="Pinned seeds", showlegend=False))
         fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", meta="selected",
                                    line=dict(color=SELECTED, width=11), hoverinfo="skip",
                                    name="Selected streamline", showlegend=False))

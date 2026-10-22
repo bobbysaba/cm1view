@@ -5,11 +5,12 @@ turns it plus the panel arrays into a matplotlib figure.  Panels vary in time (o
 field setup at several times) or in field (several fills at one time), as plan views
 at fixed heights or vertical cross-sections, over the whole domain, a fixed box, or a
 window centred on the tracked storm.  Other kinds of panels: time-height plots and
-time series of reduced fields (the Series tab's recipes, spec["series"]), and
-soundings (skew-T + hodograph, spec["soundings"]).  Panels can come from different runs (e.g.
-tornadic vs non-tornadic): spec["runs"] lists the runs with a label and a storm track
-each, and panels refer to them by index, with times in model seconds so they match
-across runs.
+time series of reduced fields (the Series tab's recipes, spec["series"]), soundings
+(skew-T + hodograph, spec["soundings"]), and distributions of a field over a region at
+one time (histogram, box, violin or cumulative, spec["dists"]).  Panels can come from
+different runs (e.g. tornadic vs non-tornadic): spec["runs"] lists the runs with a
+label and a storm track each, and panels refer to them by index, with times in model
+seconds so they match across runs.
 
 Exporting writes the image and, optionally, a stand-alone script (figdraw's code +
 the spec as a Python dict), the plotted arrays (.npz) and the spec (.json), so the
@@ -24,7 +25,7 @@ import time as _time
 
 import numpy as np
 
-from . import config, figdraw, render, series as ser, thermo, track as trk
+from . import config, dist, figdraw, render, series as ser, thermo, track as trk
 from .run import FileBusy, MissingAtTime
 
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame",  # -> data
@@ -44,7 +45,7 @@ def layer_defaults(kind, F, field=None, z=1.0):
                     cmap=_refl_cmap() if refl else d.cmap, reverse=False,
                     white_first=False, vmin=0.0 if refl else lo, vmax=60.0 if refl else hi,
                     nlevels=0, style="mesh", mask_below=0.0 if refl else None,
-                    extend="max" if refl else ("both" if d.diverging else "neither"))
+                    extend="auto")  # (colorbar ends where the data pass vmin / vmax)
     if kind == "contour":
         return dict(type="contour", on=True, field=field, mode="height", z=z,
                     levels="10, 20", color="k",
@@ -140,6 +141,11 @@ def default_spec(run, F, t=0):
                                  hodo_labels=True, hodo_key=True, srh="", table=[],
                                  storm="rm", storm_u=0.0, storm_v=0.0, hodo_storm=True,
                                  inset_loc="auto"),
+        dists=[], dist=dict(plot="hist", norm="count", bins=50, width=None, xmin=None,
+                            xmax=None, ymin=None, ymax=None, logy=False, hstyle="stepfilled",
+                            alpha=0.35, lw=1.5, cum="below", whis="tukey", means=True,
+                            horizontal=False, legend=True, legend_loc="best", stats=False,
+                            zero_line=False),
         contour_key=dict(on=False, layer=-1, label="w", x=0.01, y=0.01, size=0.1, fs=10.0,
                          r0=0.35, step=0.15, yoffset=0.06, frame=True),
         annotations=[], code=dict(on=False, text=""),
@@ -154,27 +160,56 @@ def npanels(spec):
 
 
 def panel_ref(spec, i):
-    """(run index, model time in s) of panel i, or None for an empty grid cell.
-    vary: "time" (one run, a time per panel), "field" (one run and time, a fill per
-    panel), "height" (one run and time, a height per panel: spec["panel_z"]), "grid"
-    (runs x times: rows are runs when runs_as == "rows", else columns) or "custom"
-    (spec["panels"]: a run and time per panel)."""
-    vary, nr = spec["vary"], len(spec.get("runs") or [None])
-    if vary == "time":  # (a time of None: an empty grid cell)
-        ts = spec["times_s"]
-        return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) and ts[i] is not None \
-            else None
-    if vary in ("field", "height"):
-        return int(spec.get("run", 0)), float(spec["time_s"])
-    if vary == "grid":
-        r, c = divmod(i, int(spec["cols"]))
-        k, j = (r, c) if spec.get("runs_as", "rows") == "rows" else (c, r)
-        ts = spec["times_s"]
-        return (k, float(ts[j])) if k < nr and j < len(ts) and ts[j] is not None else None
-    pans = spec.get("panels", [])
-    if i < len(pans) and int(pans[i]["run"]) < nr:
-        return int(pans[i]["run"]), float(pans[i]["time_s"])
-    return None
+    """(run index, model time in s) of panel i, or None for an empty grid cell
+    (figdraw.panel_ref)."""
+    return figdraw.panel_ref(spec, i)
+
+
+def layer_groups(spec, i):
+    """{(run index, time s): [layer indices]} of the layers of plan or section panel i
+    drawn from another run or time than the panel's (their own "run" / "time_s")."""
+    ref = panel_ref(spec, i)
+    if ref is None or spec.get("kind") not in ("plan", "xsec"):
+        return {}
+    out = {}
+    for j, lay in enumerate(figdraw.spec_layers(spec, i)):
+        if not lay.get("on", True):
+            continue
+        k, ts = lay.get("run"), lay.get("time_s")
+        g = (ref[0] if k is None else int(k), ref[1] if ts is None else float(ts))
+        if g != ref and g[0] < len(spec.get("runs") or [None]):
+            out.setdefault(g, []).append(j)
+    return out
+
+
+def group_spec(spec, i, ref, keep):
+    """A spec of one panel: panel i at (run index, time s) ref with its layers `keep`
+    (indices) and the others off, to read the layers of another run or time."""
+    lays = [dict(lay, panels=[], on=lay.get("on", True) and j in keep)
+            for j, lay in enumerate(figdraw.spec_layers(spec, i))]
+    return dict(spec, vary="custom", rows=1, cols=1, layers=lays, edits={}, titles=[],
+                panel_fills=[], panels=[dict(run=int(ref[0]), time_s=float(ref[1]))])
+
+
+def merge_group(d, dd, js, layers):
+    """Panel arrays d with the arrays of its layers js read at another run or time (dd),
+    each with its own coordinates (L<j>_cx, L<j>_cy)."""
+    d = dict(d)
+    if dd.get("missing"):
+        return d
+    for j in js:
+        for key, v in dd.items():
+            if key == f"L{j}" or key.startswith(f"L{j}_"):
+                d[key] = v
+        if f"L{j}" in dd:
+            d[f"L{j}_cx"], d[f"L{j}_cy"] = dd["x"], dd["y"]
+        t = layers[j]["type"]
+        keys = ("track_x", "track_y", "now_x", "now_y") if t == "track" else \
+            ("line",) if t == "line" else ()
+        for key in keys:
+            if key in dd:
+                d[key] = dd[key]
+    return d
 
 
 def tindex(run, time_s):
@@ -221,8 +256,14 @@ def shift_times(spec, dt_s):
         s["time_s"] = float(s["time_s"]) + dt_s
     for p in s.get("panels") or []:
         p["time_s"] = float(p["time_s"]) + dt_s
-    for e in s.get("soundings") or []:
+    for e in (s.get("soundings") or []) + (s.get("dists") or []):
         e["time_s"] = float(e["time_s"]) + dt_s
+    for e in (s.get("edits") or {}).values():  # (panels and layers with their own time)
+        if e.get("time_s") is not None:
+            e["time_s"] = float(e["time_s"]) + dt_s
+        for lay in list((e.get("layers") or {}).values()) + list(e.get("extra") or []):
+            if lay.get("time_s") is not None and not lay.get("time_lock"):
+                lay["time_s"] = float(lay["time_s"]) + dt_s
     return s
 
 
@@ -235,16 +276,23 @@ def animated(spec):
 
 def time_refs(spec):
     """(run path, model time s) of every panel that steps in an animation: plan views
-    and sections (all parts of a figure of parts) and soundings."""
+    and sections (all parts of a figure of parts), soundings and distributions."""
     out = []
     for p in spec["parts"] if spec.get("kind") == "combo" else [spec]:
         runs = p.get("runs") or []
         if p["kind"] in ("plan", "xsec"):
-            out += [(runs[k]["path"], ts) for k, ts in
-                    (panel_ref(p, i) for i in range(npanels(p)) if panel_ref(p, i))]
-        elif p["kind"] == "sounding":
+            for i in range(npanels(p)):
+                ref = panel_ref(p, i)
+                if ref is None:
+                    continue
+                out.append((runs[ref[0]]["path"], ref[1]))
+                lays = figdraw.spec_layers(p, i)
+                out += [(runs[k]["path"], ts) for (k, ts), js in layer_groups(p, i).items()
+                        if not all(lays[j].get("time_lock") for j in js)]
+        elif p["kind"] in ("sounding", "dist"):
             out += [(runs[int(e.get("run", 0))]["path"], float(e["time_s"]))
-                    for e in p.get("soundings") or [] if int(e.get("run", 0)) < len(runs)]
+                    for e in p.get(figdraw.ENTRIES[p["kind"]]) or []
+                    if int(e.get("run", 0)) < len(runs)]
     return out
 
 
@@ -489,12 +537,11 @@ def series_defaults(F, recipe, n=0, label=""):
         hi, cmap = 0.0, "viridis_r"
     if recipe["field"] in ("winterp", "w") and red == "max":  # updraft speed
         cmap, white, lo, hi = _w_cmap(), True, 0.0, max(hi, 40.0)
-    ext = "max" if red == "max" else ("min" if red == "min" else "both")
     units = d.units if d is not None else ""
     return dict(recipe=recipe, label=label or (ser.describe(recipe, d.label) if d else
                                                recipe["field"]),
                 op="", cmap=cmap, reverse=False, white_first=white, vmin=float(lo),
-                vmax=float(hi), nlevels=0, style="mesh", mask_below=None, extend=ext,
+                vmax=float(hi), nlevels=0, style="mesh", mask_below=None, extend="auto",
                 units=units, base_units=units, color=LINE_COLORS[n % len(LINE_COLORS)],
                 lw=1.5, marker="", panel=0, axis="auto", ylabel="", runs=None)
 
@@ -765,6 +812,79 @@ def sounding_panel(spec, i, get, auto_label=None):
     return out
 
 
+# ------------------------------------------------------------------ distributions
+def dist_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
+    """A spec["dists"] entry: a dist recipe (dist.normalize) at a run and time."""
+    return dict(run=int(run_index), time_s=float(time_s), panel=0, label=label,
+                recipe=dist.normalize(recipe), color="")  # ("": figdraw.dist_colors)
+
+
+def dist_value_label(F, field):
+    """Value axis label of a field: its label and units."""
+    if field not in F:
+        return field
+    d = F[field]
+    return f"{d.label} ({d.units})" if d.units else d.label
+
+
+def dist_label(entry, run_label, F, multi, times):
+    """Legend text of a distribution: what (dist.describe), and the run and time when
+    the figure has several runs or the panel's distributions several times."""
+    r = entry["recipe"]
+    d = F[r["field"]] if r["field"] in F else None
+    lab = dist.describe(r, d.label if d else "", d.units if d else "")
+    when = f"{float(entry['time_s']) / 60:g} min" if times else ""
+    return " · ".join([x for x in ((run_label if multi else ""), when) if x] + [lab])
+
+
+def dist_compute(run, F, entry, fixes):
+    """dist.summarize result of a distribution entry, or a string (why there is
+    none)."""
+    t = tindex(run, float(entry["time_s"]))
+    if t is None:
+        return f"no output at {float(entry['time_s']) / 60:g} min in this run"
+    r = entry["recipe"]
+    if r["field"] not in F:
+        return f"this run has no {r['field']}"
+    center = None
+    if r["region"] == "track":
+        center = ser.track_centers(fixes or {}, len(run.times)).get(t)
+        if center is None:
+            return "no track position at this time"
+    storm = storm_motion(run, fixes, t) if F[r["field"]].storm else None
+    try:
+        st = dist.compute(run, F, r, t, storm, center)
+    except ValueError as e:
+        return str(e)
+    return st if st["n"] else "no values in the region (or the value limits)"
+
+
+def dist_panel(spec, i, get, auto_label=None, value_label=None):
+    """Arrays of distribution panel i.  get(entry index) -> summary or a string (why
+    there is none); auto_label(entry index) -> legend text when it has no label of its
+    own; value_label(entry index) -> its value axis label."""
+    out, n, why, times = {}, 0, "", set()
+    for e, ent in enumerate(spec.get("dists", [])):
+        if int(ent.get("panel", 0)) != i:
+            continue
+        r = get(e)
+        if isinstance(r, str) or r is None:
+            why = r or why
+            continue
+        out.update(figdraw.dist_arrays(r, n))
+        out[f"D{n}_e"] = e
+        out[f"D{n}_label"] = (ent.get("label") or (auto_label(e) if auto_label else "")).strip()
+        out[f"D{n}_xl"] = value_label(e) if value_label else ""
+        times.add(round(float(ent["time_s"]), 1))
+        n += 1
+    if not n:
+        return dict(missing=why or "no distribution in this panel")
+    out["ndist"] = n
+    if len(times) == 1:
+        out["time_s"] = times.pop()
+    return out
+
+
 # ------------------------------------------------------------------ export
 def flatten(data):
     """{panel: {name: array}} -> {'p<panel>__<name>': array} for .npz files."""
@@ -868,16 +988,19 @@ def made_with(spec):
 
 def save_bundle(spec, data, base, run=None, note=""):
     """Image + script side by side, data + spec in _src/ (see bundle_paths).
-    Returns the paths."""
-    spec = dict(spec, made_with=made_with(spec))
+    Returns the paths.  The spec is saved as version 2 (every panel written out) with
+    the editor's settings that made it under "form" (load_spec opens those); the
+    script draws the version-2 spec."""
     out = bundle_paths(spec, base)
+    form = dict(spec, made_with=made_with(spec))
+    v2, data = figdraw.upgrade(form, data)
     os.makedirs(os.path.dirname(out["data"]), exist_ok=True)
-    out["image"] = save_image(spec, data, out["image"])
+    out["image"] = save_image(v2, data, out["image"])
     np.savez_compressed(out["data"], **flatten(data))
     with open(out["spec"], "w") as f:
-        json.dump(spec, f, indent=1, default=float)
+        json.dump(dict(v2, form=form), f, indent=1, default=float)
     with open(out["script"], "w") as f:
-        f.write(script(spec, "_src/" + os.path.basename(out["data"]),
+        f.write(script(v2, "_src/" + os.path.basename(out["data"]),
                        os.path.basename(out["image"]), run, note))
     return out
 
@@ -961,10 +1084,17 @@ def _plain(o):
 
 
 def load_spec(path):
+    """The editor's settings of a saved figure: a version-1 spec as it is, of a
+    version-2 one the settings that made it ("form")."""
     with open(_abs(path)) as f:
         spec = json.load(f)
+    if spec.get("version") == 2:
+        if not isinstance(spec.get("form"), dict):
+            raise ValueError("this version-2 spec has no editor settings (\"form\"): "
+                             "redraw it with its script")
+        spec = spec["form"]
     if spec.get("version") != 1:
-        raise ValueError("not a cm1view figure spec (version 1)")
+        raise ValueError("not a cm1view figure spec (version 1 or 2)")
     for r in spec.get("runs") or []:
         if not os.path.isdir(r["path"]):
             raise ValueError(f"run folder {r['path']} not found")

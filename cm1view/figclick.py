@@ -25,7 +25,8 @@ PLACE = {"Click: nothing": "", "Click to add text": "text",
          "Drag a box: plan-view area": "area"}
 TWO = ("arrow", "line", "box", "circle", "section")
 DRAG = ("move", "area")  # (modes that need a drag, not a click)
-LINEAR = ("plan", "xsec", "th", "line", "sounding")  # (panels whose axes clicks map onto)
+# panels whose axes clicks map onto
+LINEAR = ("plan", "xsec", "th", "line", "sounding", "dist")
 GRAB = 0.06  # how near (a fraction of the panel) a drag must start to grab a point
 
 

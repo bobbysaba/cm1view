@@ -14,7 +14,7 @@ from . import figdraw, figure as fg
 from .figparts import _auto, _chk, _grid, _hint, _num, _section
 
 KIND_NAMES = {"plan": "plan views", "xsec": "cross-sections", "th": "time–height",
-              "line": "time series", "sounding": "soundings"}
+              "line": "time series", "sounding": "soundings", "dist": "distributions"}
 
 
 class FigureCombo:

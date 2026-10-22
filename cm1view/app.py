@@ -2,7 +2,8 @@
 
 The Viewer builds the widgets, the map and the page layout, wires the events and runs
 the map job here; its feature groups live in mixin modules: sndui (soundings), trackui
-(storm tracking), seriesui (series), xsecui (cross-sections), view3dui (3D, pressure
+(storm tracking), seriesui (series), distui (distributions), xsecui (cross-sections),
+view3dui (3D, pressure
 decomposition, streamline pick) and itemsui (the items tray).  Shared UI pieces are in
 ui.py, the Figure workspace in figui.py."""
 
@@ -34,6 +35,7 @@ from .ui import (
     _cbar_label, _group, _html, _pill, _settings_toggle, style_fig,
 )
 # the Viewer's feature groups, one module each
+from .distui import DistPanel
 from .itemsui import ItemsTray
 from .sndui import SoundingPanel
 from .seriesui import SeriesPanel
@@ -42,7 +44,8 @@ from .view3dui import View3DPanel
 from .xsecui import SectionPanel
 
 
-class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, ItemsTray):
+class Viewer(SoundingPanel, TrackPanel, SeriesPanel, DistPanel, SectionPanel, View3DPanel,
+             ItemsTray):
     def __init__(self, run, fields, maxpix=900, error="", reg=None):
         self.run, self.F = run, fields
         self.reg = reg  # the shared runs (figures with panels from other runs)
@@ -50,7 +53,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
         self.error = error
         self.doc = pn.state.curdoc
         self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
-                      for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser", "fig")}
+                      for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser", "dist",
+                            "fig")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
@@ -69,6 +73,7 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
         self._build_xsec()
         self._build_track()
         self._build_series()
+        self._build_dist()
         self._build_panels()
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
         self.figed = figui.FigureEditor(self)
@@ -150,7 +155,7 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
             options=["Map", "3D", "Figure"], value="Map", button_type="primary",
             button_style="outline", width=190, height=32, margin=(4, 2))
         tools = ["Sounding", "Cross-section"] + (["Track"] if trk.available(run) else []) \
-            + ["Series", "3D region"]
+            + ["Series", "Distribution", "3D region"]
         self.mode = ToolRail(tools)
         self.hint = _html()
         # the Sounding tool's click: a point, or a dragged box (area mean)
@@ -546,8 +551,26 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
         self.v3_res = pn.widgets.Select(name="Resolution",
                                         options={"Auto": 0, "Full": 1, "1/2": 2, "1/3": 3,
                                                  "1/4": 4}, value=0, width=100)
-        self.v3_ground = pn.widgets.Checkbox(name="Composite reflectivity floor",
-                                             value="cref" in F, margin=(5, 10, 14, 10))
+        # the floor: a 2D field, or a 3D field at one height
+        fl0 = "cref" if "cref" in F else ("dbz" if "dbz" in F else first3d)
+        self.v3_ground = pn.widgets.Checkbox(value=fl0 in ("cref", "dbz"), width=18,
+                                             margin=(14, 0, 0, 8))
+        self.v3_floor = pn.widgets.Select(name="Field", groups=F.groups(), value=fl0,
+                                          width=250)
+        self.v3_floor_z = pn.widgets.FloatSlider(name="Height (km AGL; 0 = lowest level)",
+                                                 start=0.0, end=min(10.0, ztop), step=0.05,
+                                                 value=0.0, width=210)
+        self.v3_floor_cmap = pn.widgets.Select(name="Colormap", options=["Field default"] +
+                                               CMAPS, value="Field default", width=150)
+        self.v3_floor_rev = pn.widgets.Checkbox(name="Reverse", value=False,
+                                                margin=(28, 10, 0, 10))
+        self.v3_floor_range = pn.widgets.Select(
+            name="Range", options={"From the data": "data", "Field default": "field",
+                                   "Custom": "custom"}, value="data", width=140)
+        self.v3_floor_min = pn.widgets.FloatInput(name="Min", value=0.0, width=90,
+                                                  visible=False)
+        self.v3_floor_max = pn.widgets.FloatInput(name="Max", value=1.0, width=90,
+                                                  visible=False)
         self.v3_follow = pn.widgets.Checkbox(name="Re-render when time changes", value=False,
                                              margin=(5, 10, 14, 10))
         self.v3_cam = pn.widgets.Select(
@@ -642,10 +665,17 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
             b.param.update(height=32, margin=(4, 2), button_type="light")
         xs_layers = _group(xs_style, xs_cont, xs_vec)
         xs_layers.margin = (0, 4, 6, 6)
+        xs_look = pn.FlexBox(self.xs_smin, self.xs_smax, self.xs_zmin, self.xs_zmax,
+                             self.xs_height, self.xs_font, self.xs_grid, self.xs_ab,
+                             self.xs_style_reset, flex_wrap="wrap", align_items="flex-end",
+                             gap="0 6px", sizing_mode="stretch_width",
+                             styles={"border-top": f"1px solid {GRID}"})
         xs = pn.Column(
             pn.FlexBox(self.xs_fill, self.xs_ztop, xs_layers,
+                       _settings_toggle(xs_look, "palette", "Plot style: axis limits, size, "
+                                                            "fonts, grid lines"),
                        flex_wrap="wrap", align_items="flex-end", gap="0 4px",
-                       sizing_mode="stretch_width"), d.panel,
+                       sizing_mode="stretch_width"), xs_look, d.panel,
             self.xs_status, self.xs_pd_btn,
             _bokeh(self.xs_fig, sizing_mode="stretch_width"),
             sizing_mode="stretch_width")
@@ -687,6 +717,23 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
                            self.ser_load, flex_wrap="wrap", align_items="flex-end",
                            gap="0 4px", sizing_mode="stretch_width"),
                 self.ser_file_msg, scroll="y-auto", sizing_mode="stretch_both")),
+            ("Distribution", pn.Column(
+                pn.FlexBox(self.dist_field, self.dist_vmode, self.dist_z, self.dist_z0,
+                           self.dist_z1, self.dist_region, self.dist_radius, self.dist_offx,
+                           self.dist_offy, self.dist_lo, self.dist_hi, self.dist_go,
+                           self.dist_follow, flex_wrap="wrap", align_items="flex-end",
+                           gap="0 4px", sizing_mode="stretch_width"),
+                self.dist_status,
+                pn.FlexBox(self.dist_pick, self.dist_remove, self.dist_clear,
+                           self.dist_to_fig, flex_wrap="wrap", align_items="flex-end",
+                           gap="0 4px", sizing_mode="stretch_width"),
+                pn.FlexBox(self.dist_kind, self.dist_norm, self.dist_bins, self.dist_cum,
+                           self.dist_whis, self.dist_logy, self.dist_x0, self.dist_x1,
+                           flex_wrap="wrap", align_items="flex-end", gap="0 4px",
+                           sizing_mode="stretch_width",
+                           styles={"border-top": f"1px solid {GRID}"}),
+                self.dist_plot, self.dist_table, scroll="y-auto",
+                sizing_mode="stretch_both")),
             sizing_mode="stretch_both", dynamic=False, margin=0,
             # no tab strip: the tool rail picks the panel (_show_panel)
             stylesheets=[":host > .bk-header { display: none !important; }"])
@@ -754,8 +801,15 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
                                      _html('<div class="cv-hint" style="margin:0 0 12px">'
                                            'Instantaneous streamlines seeded on an n×n grid '
                                            'over the region.</div>')))
+        fl = _pill(self.v3_ground, d.add(
+            "floor", "Floor", self.v3_floor, self.v3_floor_z,
+            pn.Row(self.v3_floor_cmap, self.v3_floor_rev, margin=0),
+            pn.Row(self.v3_floor_range, self.v3_floor_min, self.v3_floor_max, margin=0),
+            _html('<div class="cv-hint" style="margin:0 0 12px">A 2D field, or a 3D field '
+                  'at one height, coloured on the ground.  From the data: 1st–99th '
+                  'percentiles (symmetric about 0 for signed fields).</div>')))
         scene = d.add("scene", "Scene", self.v3_cam, self.v3_drag, self.v3_ztop, self.v3_exag,
-                      self.v3_smooth, self.v3_res, self.v3_ground, self.v3_follow,
+                      self.v3_smooth, self.v3_res, self.v3_follow,
                       _html('<div class="cv-hint" style="margin:0 0 12px">Drag: rotate · '
                             'right-drag: move (or set Mouse drag to Move) · '
                             'scroll: zoom · double-click: reset</div>'))
@@ -764,7 +818,7 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
         for b in (self.v3_pick, self.v3_view, self.v3_render):
             b.param.update(height=32, margin=(4, 2))
         d.panel.styles = dict(d.panel.styles, **DRAWER)
-        bar = _bar(_group(iso, sv, st, scene),
+        bar = _bar(_group(iso, fl, sv, st, scene),
                    _group(self.v3_region, self.v3_pick, self.v3_view, self.v3_render))
         return pn.Column(bar, d.panel, styles=BAR, margin=0, sizing_mode="stretch_width")
 
@@ -857,6 +911,11 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
             w.param.watch(rl, "value_throttled" if isinstance(w, pn.widgets.FloatSlider)
                           else "value")
         self.ps_reset.on_click(self._on_style_reset)
+        self.xs_style_reset.on_click(self._on_xs_style_reset)
+        for w in (self.xs_smin, self.xs_smax, self.xs_zmin, self.xs_zmax):
+            w.param.watch(self._xs_limits, "value")
+        for w in (self.xs_height, self.xs_font, self.xs_grid, self.xs_ab):
+            w.param.watch(self._xs_look, "value")
 
         def unzoom(*keys):
             def f(*e):
@@ -893,14 +952,20 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
         self.full_btn.on_click(lambda e: self._set_full(not self.full))
         # once a scene is shown or being rendered, 3D settings re-render it
         r3 = lambda *e: self.request_3d() if self.gen["3d"] else None  # noqa: E731
-        w3 = [self.v3_ground, self.v3_res, self.sv_on, self.sv_frame, self.sv_ref,
+        w3 = [self.v3_ground, self.v3_floor, self.v3_floor_cmap, self.v3_floor_rev,
+              self.v3_floor_range, self.v3_floor_min, self.v3_floor_max,
+              self.v3_res, self.sv_on, self.sv_frame, self.sv_ref,
               self.sv_color, self.st_on, self.st_dir, self.st_frame, self.st_color]
         for o in self.isos:
             w3 += [o["on"], o["var"], o["val"], o["color"]]
         for w in w3:
             w.param.watch(r3, "value")
-        for w in [self.v3_ztop, self.v3_exag, self.v3_smooth, self.sv_lvl, self.sv_density,
-                  self.st_z, self.st_n, self.st_len] + [o["op"] for o in self.isos]:
+        self.v3_floor.param.watch(self._floor_widgets, "value")
+        self.v3_floor_range.param.watch(self._floor_widgets, "value")
+        self._floor_widgets()
+        for w in [self.v3_ztop, self.v3_exag, self.v3_smooth, self.v3_floor_z, self.sv_lvl,
+                  self.sv_density, self.st_z, self.st_n, self.st_len] + \
+                [o["op"] for o in self.isos]:
             w.param.watch(r3, "value_throttled")
         for o in self.isos:
             o["on"].param.watch(lambda e: self._update_3d_labels(), "value")
@@ -908,7 +973,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
         self.v3_drag.param.watch(self._on_drag, "value")
         self.plot3d.param.watch(self._on_3d_click, "click_data")
         self.sl_field.param.watch(lambda e: self._sample_line(), "value")
-        self.sl_clear.on_click(lambda e: self._select_line(None))
+        self.sl_clear.on_click(lambda e: self._clear_lines())
+        self.sl_pin.on_click(self._on_pin)
         self.trk_metric.param.watch(self._on_trk_metric, "value")
         self.trk_whole.param.watch(self._on_trk_whole, "value")
         self.trk_find.on_click(lambda e: (self._show_panel(True, 2),
@@ -1022,6 +1088,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
             self.request_xsec()
         if self.v3_follow.value and self.plot3d.visible and self.workspace.value == "3D":
             self.request_3d()
+        if self.dist_follow.value and self.dists:
+            self._dist_follow()
 
     def _step(self, d):
         if self.playing:
@@ -1051,8 +1119,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
 
     def _on_mode(self, mode, init=False):
         hints = {
-            None: "Pick a tool on the left (Sounding, Section, Track, Series, 3D box) to "
-                  "query the map",
+            None: "Pick a tool on the left (Sounding, Section, Track, Series, Distribution, "
+                  "3D box) to query the map",
             "Sounding": "Click: sounding at a point · <kbd>Shift</kbd>-click: add a point "
                         "(up to 4)",
             "Area sounding": "Drag a box: sounding averaged over it · <kbd>Shift</kbd>-drag: "
@@ -1064,6 +1132,8 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
                      "the fix at the shown time",
             "Series": "Choose a field and a region in the panel, then Compute · click a "
                       "series plot to go to that time",
+            "Distribution": "Choose a field, height or layer and a region in the panel, then "
+                            "Compute: every value there at the shown time",
         }
         self.hint.object = f'<div class="cv-hint">{hints[mode]}</div>'
         self.fig.toolbar.active_drag = self.bsel if mode in ("3D region", "Area sounding") \
@@ -1151,13 +1221,15 @@ class Viewer(SoundingPanel, TrackPanel, SeriesPanel, SectionPanel, View3DPanel, 
 
     def _update_region_html(self):
         self._update_items()
-        if hasattr(self, "ser_region"):
+        for w in (getattr(self, "ser_region", None), getattr(self, "dist_region", None)):
+            if w is None:
+                continue
             opts = self._ser_regions()
-            if self.ser_region.options != opts:
-                if self.ser_region.value not in opts.values():
-                    self.ser_region.param.update(options=opts, value="domain")
+            if w.options != opts:
+                if w.value not in opts.values():
+                    w.param.update(options=opts, value="domain")
                 else:
-                    self.ser_region.options = opts
+                    w.options = opts
         if self.box is None:
             txt = "Region: current map view"
             box = self.view

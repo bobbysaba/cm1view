@@ -276,7 +276,7 @@ class FigureRuns:
         hold, self._hold = self._hold, True
         try:
             for w in [self.run_sel] + [r["run"] for r in self.pc_rows] + \
-                    [c.w["run"] for c in self.snd_cards]:
+                    [c.w["run"] for c in self.snd_cards + self.dist_cards]:
                 self._set_runs_of(w, w.value)
             opts = self._series_run_opts(names)
             for c in self.ser_cards:
@@ -339,8 +339,8 @@ class FigureRuns:
         return len(self.run_rows) - 1
 
     def _remove_run(self, r):
-        """Remove run k: panels, soundings and series of it go, and those of the runs
-        after it follow their run to its new number."""
+        """Remove run k: panels, soundings, distributions and series of it go, and those
+        of the runs after it follow their run to its new number."""
         k = self.run_rows.index(r)
         self.run_rows.remove(r)
         names = self._run_names()  # (the new numbering)
@@ -356,16 +356,18 @@ class FigureRuns:
                         p["run"].value -= 1
                     keep.append(p)
             self.pc_rows = keep
-            keep = []
-            for c in self.snd_cards:
-                j = int(c.w["run"].value or 0)
-                if j == k:
-                    gone.append("sounding")
-                    continue
-                if j > k:
-                    c.w["run"].value = j - 1
-                keep.append(c)
-            self.snd_cards = keep
+            for what in ("sounding", "distribution"):
+                keep = []
+                cards = self.snd_cards if what == "sounding" else self.dist_cards
+                for c in cards:
+                    j = int(c.w["run"].value or 0)
+                    if j == k:
+                        gone.append(what)
+                        continue
+                    if j > k:
+                        c.w["run"].value = j - 1
+                    keep.append(c)
+                cards[:] = keep
             keep = []
             for c in self.ser_cards:
                 old = [int(j) for j in c.w["runs"].value]
@@ -381,6 +383,7 @@ class FigureRuns:
             self._hold = False
         self._show_runs()
         self._show_soundings()
+        self._show_dists()
         self._show_series()
         if gone:
             n = {w: gone.count(w) for w in dict.fromkeys(gone)}

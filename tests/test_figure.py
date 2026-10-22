@@ -278,7 +278,7 @@ def test_time_series_y_range(ed):
     assert fig.axes[0].get_ylim() == (0.0, 50.0)
 
 
-@pytest.mark.parametrize("start", ["plan", "series", "soundings"])
+@pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists"])
 def test_script_redraws_the_identical_image(ed, tmp_path, start):
     import os
     import subprocess
@@ -290,6 +290,9 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
         wait(lambda: not ed.series_pending(), 120, "the series")
     elif start == "soundings":
         ed.from_soundings()
+    elif start == "dists":
+        ed.from_dists()
+        ed.ds["plot"].value = "violin"
     base = str(tmp_path / start)
     ed.path.value = base
     ed._save_job(ed.collect(), True, base)
@@ -771,3 +774,351 @@ def test_figure_of_parts_with_a_series_part(ed, tmp_path):
     assert r.returncode == 0, r.stderr[-500:]
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
 
+
+
+# ------------------------------------------------------------------ spec version 2
+def _pixels(fig):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    return np.asarray(canvas.buffer_rgba()).copy()
+
+
+def _setup(ed, how):
+    if how == "height":
+        ed.vary.value = "height"
+        ed.pz.value = "1, 3, 6"
+    elif how == "xsec":
+        ed.kind.value = "xsec"
+    elif how == "sounding":
+        ed.from_soundings()
+    elif how == "parts":
+        ed.rows.value, ed.cols.value = 1, 2
+        ed._add_part()
+        ed.from_soundings()
+
+
+@pytest.mark.parametrize("how", ["time", "height", "xsec", "sounding", "parts"])
+def test_upgraded_spec_draws_like_version_1(ed, how):
+    """Version-1 specs (and figures of parts) draw the same image through upgrade()."""
+    from cm1view import figdraw
+    _setup(ed, how)
+    ed.let_on.value = True
+    spec = ed.collect_all()
+    for part in spec.get("parts") or [spec]:  # (fixed ends: "auto" unites shared ones)
+        for lay in part.get("layers", []) + part.get("panel_fills", []):
+            lay["extend"] = "neither"
+    data = ed.panel_data(spec)
+    v2, d2 = figdraw.upgrade(spec, data)
+    assert v2["version"] == 2 and {p["id"] for p in v2["panels"]} >= set(data)
+    assert np.array_equal(_pixels(figdraw.draw_v1(spec, data)), _pixels(figdraw.draw(spec, data)))
+    again = figdraw.draw(spec, data)
+    assert set(again._cv_axes) == set(data)
+
+
+def test_upgrade_writes_out_each_panel():
+    from cm1view import figdraw
+    lay = dict(type="fill", on=True, field="dbz", mode="height", z=1.0, cmap="viridis",
+               vmin=0.0, vmax=60.0, extend="max")
+    cont = dict(type="contour", on=True, field="w", mode="height", z=3.0, levels="5",
+                z_fixed=True, panels=[2])
+    v1 = dict(version=1, kind="plan", rows=1, cols=3, vary="height", time_s=600.0,
+              times_s=[600.0], panel_z=[1.0, 3.0, 6.0], panel_zmode="height", run=0,
+              layers=[lay, cont], titles=["A", "", "C"], runs=[dict(path="/r", label="r")],
+              size=[8, 3], letters=dict(on=True), contour_key=dict(on=True, layer=-1),
+              annotations=[dict(kind="text", panel=1, text="x")])
+    v2, _ = figdraw.upgrade(v1)
+    pans = v2["panels"]
+    assert [p["z"] for p in pans] == [1.0, 3.0, 6.0]
+    assert [p["layers"][0]["z"] for p in pans] == [1.0, 3.0, 6.0]  # the fill follows the panel
+    assert [p["layers"][1]["on"] for p in pans] == [False, False, True]  # (panels=[2])
+    assert [p["title"] for p in pans] == ["A", "", "C"] and [p["letter"] for p in pans] == [0, 1, 2]
+    assert [p["cell"] for p in pans] == [[0, 0, 1, 1], [0, 1, 1, 1], [0, 2, 1, 1]]
+    assert all((p["run"], p["time_s"]) == (0, 600.0) for p in pans)
+    assert v2["blocks"] == [dict(rows=1, cols=3)] and "layers" not in v2
+    assert v2["contour_key"]["lay"]["field"] == "w"
+    assert figdraw.upgrade(v2)[0] is v2  # (already version 2)
+    assert v1["layers"][0]["extend"] == "max" and "lay" not in v1["contour_key"]  # (untouched)
+
+
+def test_upgrade_counts_soundings_within_their_panel():
+    from cm1view import figdraw
+    snd = [dict(run=0, time_s=0.0, panel=0), dict(run=1, time_s=0.0, panel=1),
+           dict(run=1, time_s=60.0, panel=0)]
+    v1 = dict(version=1, kind="sounding", rows=1, cols=2, soundings=snd, size=[8, 4],
+              runs=[dict(path="/a"), dict(path="/b")])
+    data = {0: dict(nsnd=2, N0_e=0, N1_e=2), 1: dict(nsnd=1, N0_e=1)}
+    v2, d2 = figdraw.upgrade(v1, data)
+    p0, p1 = v2["panels"]
+    assert [lay["run"] for lay in p0["layers"]] == [0, 1] and p1["layers"][0]["run"] == 1
+    assert all(lay["type"] == "sounding" and "panel" not in lay for lay in p0["layers"])
+    assert (d2[0]["N0_e"], d2[0]["N1_e"], d2[1]["N0_e"]) == (0, 1, 0)
+    assert data[0]["N1_e"] == 2  # (the caller's data unchanged)
+
+
+def test_upgrade_of_parts_keeps_each_parts_settings():
+    from cm1view import figdraw
+    part = dict(version=1, kind="plan", rows=2, cols=1, vary="time", times_s=[0.0, 60.0],
+                run=0, layers=[], runs=[dict(path="/b")], size=[4, 6], share=0.4,
+                font=dict(size=8), annotations=[dict(panel=1), dict(panel=-1)])
+    combo = dict(version=1, kind="combo", arrange="row", parts=[dict(part, share=None), part],
+                 size=[8, 6], colorbar=dict(mode="parts"), runs=[dict(path="/b")])
+    v2, _ = figdraw.upgrade(combo)
+    assert [p["id"] for p in v2["panels"]] == [0, 1, 1000, 1001]
+    assert [p["letter"] for p in v2["panels"]] == [0, 1, 2, 3]
+    b = v2["blocks"][1]
+    assert (b["rows"], b["cols"], b["share"]) == (2, 1, 0.4)
+    assert [a["panel"] for a in b["opts"]["annotations"]] == [1001, -1]
+    assert figdraw.block_view(v2, 1)["font"] == dict(size=8)
+    assert figdraw.block_shares(v2) == pytest.approx([0.6, 0.4])
+
+
+def test_colorbar_ends_auto_and_shared():
+    from cm1view import figdraw
+    lay = dict(type="fill", vmin=0.0, vmax=10.0, extend="auto")
+    assert figdraw.extend_of(lay, np.array([1.0, 5.0])) == "neither"
+    assert figdraw.extend_of(lay, np.array([1.0, 12.0, np.nan])) == "max"
+    assert figdraw.extend_of(lay, np.array([-1.0, 12.0])) == "both"
+    assert figdraw.extend_of(dict(lay, mask_below=0.0), np.array([-1.0, 5.0])) == "neither"
+    assert figdraw.extend_of(dict(lay, extend="min"), np.array([5.0])) == "min"
+    assert figdraw.union_extend(["min", "max"]) == "both"
+    assert figdraw.union_extend(["neither", "max"]) == "max"
+    assert figdraw.union_extend([]) == "neither"
+
+
+def _v2_plan(mode="shared"):
+    x = np.linspace(-5.0, 5.0, 11)
+    fill = dict(type="fill", on=True, cmap="viridis", vmin=0.0, vmax=10.0, extend="auto",
+                style="mesh", units="dBZ")
+    track = dict(type="track", on=True, run_color=True, run=1)
+    spec = dict(version=2, size=[8.0, 6.0], blocks=[dict(rows=2, cols=2)],
+                colorbar=dict(mode=mode), letters=dict(on=True), axes=dict(ticklabels="outer"),
+                runs=[dict(path="/a"), dict(path="/b", color="#00ff00")],
+                panels=[dict(id=0, kind="plan", cell=[0, 0, 1, 1], layers=[fill]),
+                        dict(id=1, kind="plan", cell=[0, 1, 1, 1], layers=[fill]),
+                        dict(id=2, kind="plan", cell=[1, 0, 1, 2], layers=[fill, track],
+                             letter=5, z=2.0)])
+    a = np.tile(x, (11, 1))
+    data = {0: dict(x=x, y=x, L0=a + 10.0, time_s=0.0),  # past vmax
+            1: dict(x=x, y=x, L0=a, time_s=0.0),  # below vmin
+            2: dict(x=x, y=x, L0=a * 0.1 + 5.0, time_s=0.0, track_x=x, track_y=x)}
+    return spec, data
+
+
+def test_version_2_panels_span_cells_and_share_colorbar_ends():
+    from cm1view import figdraw
+    from matplotlib.colors import to_hex
+    spec, data = _v2_plan()
+    assert figdraw._extends(spec, data) == {0: "both", 1: "both", 2: "both"}
+    fig = figdraw.draw(spec, data)
+    axs = fig._cv_axes
+    assert set(axs) == {0, 1, 2}
+    # panel 2 spans both columns: centred under them (an equal-aspect map of square data
+    # stays square, so its width does not double)
+    c = [(axs[i].get_position().x0 + axs[i].get_position().x1) / 2 for i in (0, 1, 2)]
+    assert abs(c[2] - (c[0] + c[1]) / 2) < 0.02 and c[1] - c[0] > 0.2
+    assert to_hex(axs[2].lines[0].get_color()) == "#00ff00"  # the track in its own run's colour
+    assert "f" in [a.txt._text.get_text() for a in axs[2].artists if hasattr(a, "txt")]
+    cbars = [a for a in fig.axes if a not in axs.values()]
+    assert len(cbars) == 1
+    spec, data = _v2_plan("row")
+    assert figdraw._extends(spec, data) == {0: "both", 1: "both", 2: "neither"}
+    fig = figdraw.draw(spec, data)
+    assert len([a for a in fig.axes if a not in fig._cv_axes.values()]) == 2
+
+
+def test_layers_take_the_panels_run_time_and_height():
+    from cm1view import figdraw
+    p = dict(run=1, time_s=600.0, z=2.0)
+    assert figdraw.resolved(p, dict(type="fill", z=None)) == \
+        dict(type="fill", run=1, time_s=600.0, z=2.0)
+    assert figdraw.resolved(p, dict(type="fill", run=0, z=5.0))["run"] == 0
+    assert figdraw.resolved({}, dict(type="fill"))["run"] == 0
+
+
+# ------------------------------------------------------------------ the panel tree
+def _edited_v1():
+    fill = dict(type="fill", on=True, field="dbz", mode="height", z=1.0, cmap="viridis",
+                vmin=0.0, vmax=60.0, extend="neither")
+    cont = dict(type="contour", on=True, field="w", mode="height", z=3.0, levels="5")
+    edits = {"1": dict(run=1, time_s=900.0, z=2.0, title="B",
+                       layers={"0": dict(cmap="magma", run=0, time_s=60.0)},
+                       extra=[cont])}
+    return dict(version=1, kind="plan", rows=1, cols=3, vary="time",
+                times_s=[0.0, 300.0, 600.0], run=0, layers=[fill], titles=["A"],
+                runs=[dict(path="/a"), dict(path="/b")], size=[9, 3], edits=edits)
+
+
+def test_panel_edits_change_that_panel_alone():
+    from cm1view import figdraw
+    v1 = _edited_v1()
+    assert figdraw.panel_ref(v1, 0) == (0, 0.0) and figdraw.panel_ref(v1, 1) == (1, 900.0)
+    assert figdraw.form_ref(v1, 1) == (0, 300.0)
+    lays = figdraw.spec_layers(v1, 1)
+    assert len(lays) == 2 and lays[1]["type"] == "contour"  # (the extra layer)
+    assert (lays[0]["z"], lays[0]["cmap"], lays[0]["run"]) == (2.0, "magma", 0)
+    assert figdraw.spec_layers(v1, 0)[0]["cmap"] == "viridis"
+    v2, _ = figdraw.upgrade(v1)
+    p0, p1 = v2["panels"][:2]
+    assert (p0["title"], p1["title"]) == ("A", "B")
+    assert (p1["run"], p1["time_s"], p1["z"]) == (1, 900.0, 2.0) and "z" not in p0
+    assert p1["layers"][0]["time_s"] == 60.0 and len(p1["layers"]) == 2
+    assert "edits" not in v2 and "edits" not in (v2["blocks"][0].get("opts") or {})
+
+
+def test_layers_of_another_run_or_time_are_read_apart():
+    from cm1view import figure as fg
+    v1 = _edited_v1()
+    assert fg.layer_groups(v1, 1) == {(0, 60.0): [0]}  # the fill; the contours: the panel's
+    assert fg.layer_groups(v1, 0) == {}
+    g = fg.group_spec(v1, 1, (0, 60.0), {0})
+    assert fg.panel_ref(g, 0) == (0, 60.0)
+    assert [lay["on"] for lay in fg.figdraw.spec_layers(g, 0)] == [True, False]
+    x = np.arange(3.0)
+    d = fg.merge_group(dict(x=x, y=x, L1=1), dict(x=x + 5, y=x, L0=2, L0_u=3), [0],
+                       fg.figdraw.spec_layers(v1, 1))
+    assert (d["L0"], d["L0_u"], d["L1"]) == (2, 3, 1) and d["L0_cx"][0] == 5.0
+
+
+def test_animation_moves_edited_times_but_locked_layers():
+    from cm1view import figure as fg
+    v1 = _edited_v1()
+    v1["edits"]["1"]["extra"][0].update(time_s=60.0, time_lock=True)
+    s = fg.shift_times(v1, 120.0)
+    e = s["edits"]["1"]
+    assert e["time_s"] == 1020.0 and e["layers"]["0"]["time_s"] == 180.0
+    assert e["extra"][0]["time_s"] == 60.0  # (kept)
+    assert v1["edits"]["1"]["time_s"] == 900.0  # (a copy)
+
+
+def test_tree_layer_from_another_time_is_drawn(ed):
+    """A layer of panel b at panel a's time: the same arrays as panel a's."""
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.dom.value = "full"
+    s = ed.collect()
+    t0, t1 = s["times_s"][:2]
+    assert t0 != t1
+    ed.edits = {"1": {"layers": {"0": {"time_s": t0}}}}
+    spec, data, fig = render(ed)
+    assert spec["edits"] == {"1": {"layers": {"0": {"time_s": t0}}}}
+    assert data[1]["time_s"] == pytest.approx(t1)  # (the panel keeps its time)
+    assert np.array_equal(data[1]["L0"], data[0]["L0"], equal_nan=True)
+    assert "L0_cx" in data[1] and set(fig._cv_axes) == {0, 1}
+
+
+def _w(col, kind, name):
+    return next(w for w in col.select(kind) if str(w.name).startswith(name))
+
+
+def test_tree_widgets_change_one_panel(ed):
+    import panel as pn
+    ed.rows.value, ed.cols.value = 1, 2
+    ed._tree_sync(force=True)
+    assert len(ed.tree_list.objects) == 2 and "✎" not in ed.tree_list.objects[1].name
+    ed._tree_pick(1)
+    _w(ed.tree_detail, pn.widgets.TextInput, "Title").value = "Later"
+    _w(ed.tree_detail, pn.widgets.TextInput, "Height").value = "3"
+    _w(ed.tree_detail, pn.widgets.Select, "Add a layer").value = "contour"
+    e = ed.collect()["edits"]
+    assert e["1"]["title"] == "Later" and e["1"]["z"] == 3.0
+    assert [lay["type"] for lay in e["1"]["extra"]] == ["contour"] and "0" not in e
+    assert "✎" in ed.tree_list.objects[1].name
+    s = ed.collect()
+    ed.set_spec(json.loads(json.dumps(s)))  # (the edits come back)
+    assert ed.collect()["edits"] == s["edits"]
+    render(ed)
+    ed._tree_pick(1)
+    btn = next(b for b in ed.tree_detail.select(pn.widgets.Button)
+               if b.name.startswith("Undo panel"))
+    btn.clicks += 1
+    assert ed.collect()["edits"] == {}
+
+
+def test_tree_lists_soundings_of_each_panel(ed):
+    ed.from_soundings()
+    ed._tree_sync(force=True)
+    assert ed.tree_list.objects and ed.tree_list.objects[0].name.startswith("a  Sounding")
+    ed._tree_pick(0)
+    assert "<li>" in "".join(str(getattr(o, "object", "")) for o in ed.tree_detail.objects)
+
+
+def test_saved_spec_is_version_2_and_reopens_with_its_edits(ed, tmp_path):
+    import os
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.edits = {"1": {"title": "edited"}}
+    base = str(tmp_path / "v2")
+    ed.path.value = base
+    ed._save_job(ed.collect(), True, base)
+    with open(os.path.join(str(tmp_path), "_src", "v2_spec.json")) as f:
+        saved = json.load(f)
+    assert saved["version"] == 2 and [p["title"] for p in saved["panels"]][1] == "edited"
+    assert saved["form"]["version"] == 1 and "made_with" in saved
+    ed.edits = {}
+    ed.spec_path.value = base + ".png"
+    ed._load_spec()
+    assert ed.collect()["edits"] == {"1": {"title": "edited"}}
+
+
+# ------------------------------------------------------------------ distributions
+@pytest.mark.parametrize("plot", ["hist", "box", "violin", "ecdf"])
+def test_distribution_figure_draws_each_plot(ed, plot):
+    from cm1view import figure as fg
+    ed.from_dists()  # (no distributions on the map: w over the domain)
+    assert ed.kind.value == "dist" and len(ed.dist_cards) == 1
+    t1 = float(ed.run.times[4])
+    e = fg.dist_defaults(dict(field="winterp", vmode="layer", z0=0.0, z1=5.0,
+                              region="domain", lo=0.5), 0, t1)
+    ed.dist_cards.append(ed._dist_card(e))
+    ed.ds["plot"].value = plot
+    ed.ds["stats"].value = True
+    spec, data, fig = render(ed)
+    d = data[0]
+    assert d["ndist"] == 2 and not d.get("missing") and "time_s" not in d  # (two times)
+    assert spec["dist"]["plot"] == plot and len(fig.axes) == 1
+    ax = fig.axes[0]
+    if plot in ("hist", "ecdf"):
+        assert ax.get_legend() is not None and "mean" in ax.get_legend().texts[0].get_text()
+        assert "(" in ax.get_xlabel()  # the field and its units
+    else:
+        ticks = [t.get_text() for t in ax.get_xticklabels()]
+        assert len(ticks) == 2 and ticks[1].startswith(str(d["D1_label"]))
+        assert "mean" in ticks[0] and "(" in ax.get_ylabel()
+    assert ed.dist_cache  # (restyling reads nothing again)
+    n = len(ed.dist_cache)
+    ed.ds["bins"].value, ed.ds["logy"].value = 20, True
+    render(ed)
+    assert len(ed.dist_cache) == n
+
+
+def test_distribution_figure_of_the_maps(ed, viewer):
+    v = viewer
+    v.dist_field.value, v.dist_vmode.value = "winterp", "all"
+    v._dist_request()
+    wait(lambda: len(v.dists) == 1, msg="the distribution")
+    v.dist_kind.value, v.dist_norm.value = "violin", "pdf"
+    v._on_dist_figure(None)
+    assert v.workspace.value == "Figure" and ed.kind.value == "dist"
+    s = ed.collect()
+    assert s["dist"]["plot"] == "violin" and s["dists"][0]["recipe"]["vmode"] == "all"
+    assert s["dists"][0]["time_s"] == float(ed.run.times[v.t])
+    spec, data, fig = render(ed)
+    st = next(iter(v.dists.values()))["st"]
+    assert data[0]["D0_s"][0] == st["n"]  # (the same values as the map's)
+
+
+def test_distribution_spec_upgrades_to_panels(ed):
+    from cm1view import figdraw, figure as fg
+    ed.from_dists()
+    e = dict(ed.dist_cards[0].collect(), panel=1)
+    ed.dist_cards.append(ed._dist_card(e))
+    ed._fit_grid(reset=True)
+    s = ed.collect()
+    assert fg.npanels(s) == 2
+    data = ed.panel_data(s)
+    v2, d2 = figdraw.upgrade(s, data)
+    assert [p["kind"] for p in v2["panels"]] == ["dist", "dist"]
+    assert [[lay["type"] for lay in p["layers"]] for p in v2["panels"]] == [["dist"], ["dist"]]
+    assert int(d2[1]["D0_e"]) == 0  # (counted within its panel)
+    figdraw.draw(s, data)
+    ed._tree_sync(force=True)
+    assert ed.tree_list.objects[0].name.startswith("a  Distribution")

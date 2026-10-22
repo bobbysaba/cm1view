@@ -1,5 +1,6 @@
 """Draw a figure from a spec (a dict) and the plotted arrays: plan views, vertical
-cross-sections, time-height plots, time series or soundings on a grid of panels.
+cross-sections, time-height plots, time series, soundings or distributions on a grid
+of panels.
 
 Needs only numpy and matplotlib (cmweather or pyart, if installed, for their colormaps).  cm1view
 copies this file into every exported figure script, so the script redraws exactly
@@ -32,9 +33,33 @@ sounding panels (kind "sounding"): nsnd, and per sounding n
                                      table of the chosen ones under the panel)
   spec["skewt"]["layout"]: "inset" (skew-T with a hodograph inset), "side" (skew-T and
   hodograph side by side), "skewt" (no hodograph) or "hodo" (the hodograph alone)
+distribution panels (kind "dist"): ndist, and per distribution n (a summary of all
+  the values of a field over a region at one time; spec["dist"]: how they are drawn,
+  hist (counts, PDF or fractions), box, violin or ecdf)
+  D<n>_s       [count, mean, std, min, max, lower and upper Tukey whisker]
+  D<n>_q       quantiles at DIST_PROBS;  D<n>_h  counts of a fine histogram, min to max
+  D<n>_e, D<n>_label, D<n>_xl   distribution entry index, legend text, value axis label
 figures of parts (kind "combo"): part k's panel i under k * 1000 + i
+
+Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts):
+  the figure's own settings (size, fonts, colorbar, labels, axes, skewt, ts, ...),
+  blocks   [{rows, cols, share, size, opts}]: grids of panels side by side (arrange
+           "row") or stacked ("col"); opts: settings of the block's own
+  panels   [{id, block, cell [row, col, rowspan, colspan], kind (plan, xsec, th, line,
+           sounding, dist), run, time_s, z, zmode, title, letter, opts, colorbar {show},
+           layers}]: data[id] is the panel's data; opts: settings of the panel's own
+  layers   a plan or section panel's map layers (as version 1), a time-height panel's
+           series ("series"), a time-series panel's lines ("series"), a sounding
+           panel's soundings ("sounding") or a distribution panel's distributions
+           ("dist"); S<n>_e, N<n>_e and D<n>_e count within the panel.
+           A layer's run, time_s and z: None (or missing) for the panel's
+           (resolved()); L<j>_cx, L<j>_cy: the layer's own coordinates (another run's)
+  Colorbar ends (a fill's "extend"): neither, min, max, both, or auto (from the data:
+  where it passes vmin / vmax); panels sharing a colorbar share the ends of all of
+  them.
 """
 
+import copy
 import string
 
 import numpy as np
@@ -66,6 +91,7 @@ SND_PARAMS = [  # (key, column heading, units) of the sounding parameter table
 HODO_BANDS = [(0, 1, "#e11d48"), (1, 3, "#16a34a"), (3, 6, "#ca8a04"), (6, 9, "#0284c7"),
               (9, 12, "#7c3aed")]
 KT = 1.943844
+ENTRIES = {"line": "series", "sounding": "soundings", "dist": "dists"}  # (kind -> list)
 
 
 def colormap(name, reverse=False, white_first=False):
@@ -257,13 +283,285 @@ def z_text(spec, i):
 
 
 def draw(spec, data):
-    """The matplotlib Figure of `spec` with arrays `data` (see the module notes).  Save
-    it with save(), which keeps the spec's fonts for what matplotlib draws late (tick
-    labels)."""
+    """The matplotlib Figure of `spec` (either version) with arrays `data` (see the
+    module notes).  Save it with save(), which keeps the spec's fonts for what
+    matplotlib draws late (tick labels)."""
+    spec, data = upgrade(spec, data)
+    return _draw2(spec, data)
+
+
+def draw_v1(spec, data):
+    """A version-1 spec drawn as before version 2 (kept to check upgrade() against)."""
     if spec.get("kind") == "combo":
         return _draw_combo(spec, data)
     with matplotlib.rc_context(rc(spec)):
         return _draw(spec, data, float(spec.get("font", {}).get("size", 10)))
+
+
+def _new_fig(spec):
+    gap = spec.get("spacing", {})
+    fig = Figure(figsize=tuple(float(v) for v in spec["size"]), layout="constrained",
+                 facecolor=spec.get("background", "white"))
+    fig.get_layout_engine().set(w_pad=float(gap.get("w_pad", 0.04)),
+                                h_pad=float(gap.get("h_pad", 0.04)),
+                                wspace=float(gap.get("wspace", 0.02)),
+                                hspace=float(gap.get("hspace", 0.02)))
+    return fig
+
+
+def _draw2(spec, data):
+    """A version-2 figure: its one block straight on the figure, or each block on a
+    subfigure (as large as its share says, block_shares), with spec["colorbar"]["mode"]
+    "figure" one colorbar for them all."""
+    blocks = spec["blocks"]
+    if len(blocks) == 1 and not blocks[0].get("opts"):
+        with matplotlib.rc_context(rc(spec)):
+            fig = _new_fig(spec)
+            _block(fig, spec, 0, block_view(spec, 0), data, _fs(spec), _extends(spec, data))
+            if spec.get("suptitle"):
+                fig.suptitle(spec["suptitle"], weight="bold",
+                             fontsize=font_size(spec, "suptitle"))
+            code = spec.get("code") or {}
+            if code.get("on") and str(code.get("text") or "").strip():
+                run_code(fig, fig._cv_grid, data, spec, code["text"])
+            return fig
+    row = spec.get("arrange", "row") == "row"
+    W, H = (float(v) for v in spec["size"])
+    fig = _new_fig(spec)
+    cb = spec.get("colorbar") or {}
+    one_cb = cb.get("mode") == "figure"
+    host, bar, side = fig, None, False
+    if one_cb:  # a strip along one side for the colorbar, the blocks in the rest
+        loc = cb.get("location") or "bottom"
+        side = loc in ("left", "right")
+        th = float(cb.get("strip", 1.0 if side else 0.7))  # (in: the bar and its labels)
+        size = (W if side else H) - th
+        rat = [max(size, 0.5), th] if loc in ("right", "bottom") else [th, max(size, 0.5)]
+        subs = fig.subfigures(1, 2, width_ratios=rat) if side else \
+            fig.subfigures(2, 1, height_ratios=rat)
+        host, bar = (subs[0], subs[1]) if loc in ("right", "bottom") else (subs[1], subs[0])
+        host.set_facecolor("none")
+        bar.set_facecolor("none")
+    ratios = block_shares(spec)
+    subs = np.atleast_1d(host.subfigures(1, len(blocks), width_ratios=ratios) if row else
+                         host.subfigures(len(blocks), 1, height_ratios=ratios)).ravel()
+    fig._cv_axes, mappables = {}, []
+    ext = _extends(spec, data)
+    for k, sf in enumerate(subs):
+        bv = block_view(spec, k)
+        if one_cb:
+            bv["colorbar"] = dict(bv.get("colorbar", {}), mode="none")
+        sf.set_facecolor("none")
+        with matplotlib.rc_context(rc(bv)):
+            _block(sf, spec, k, bv, data, _fs(bv), ext)
+        fig._cv_axes.update(sf._cv_axes)
+        mappables += sf._cv_mappables
+        err = getattr(sf, "_cv_code_error", None)
+        if err:
+            fig._cv_code_error = f"part {k + 1}, {err}"
+    if one_cb and mappables:
+        m, lay = mappables[0][2]
+        s = min(max(float(cb.get("shrink", 0.7)), 0.05), 1.0)
+        third = [0.5 * (1.0 - s), s, 0.5 * (1.0 - s)]
+        gs = bar.add_gridspec(3, 1, height_ratios=third) if side else \
+            bar.add_gridspec(1, 3, width_ratios=third)
+        cax = bar.add_subplot(gs[1])
+        c = bar.colorbar(m, cax=cax, orientation="vertical" if side else "horizontal",
+                         extend=lay.get("extend", "neither"))
+        if loc in ("left", "top"):
+            (c.ax.yaxis if side else c.ax.xaxis).set_ticks_position(loc)
+            (c.ax.yaxis if side else c.ax.xaxis).set_label_position(loc)
+        with matplotlib.rc_context(rc(block_view(spec, 0))):
+            _cbar_style(c, cb, lay, loc)
+    if spec.get("suptitle"):
+        fig.suptitle(spec["suptitle"], weight="bold", fontsize=font_size(spec, "suptitle"))
+    code = spec.get("code") or {}
+    if code.get("on") and str(code.get("text") or "").strip():
+        run_code(fig, [fig._cv_axes[i] for i in sorted(fig._cv_axes)], data, spec,
+                 code["text"])
+    return fig
+
+
+def _fs(spec):
+    return float(spec.get("font", {}).get("size", 10))
+
+
+def _cell(p):
+    """(row, col, rowspan, colspan) of panel p."""
+    c = [int(v) for v in p.get("cell", [0, 0])] + [1, 1]
+    return c[0], c[1], max(1, c[2]), max(1, c[3])
+
+
+def _block(fig, spec, k, bv, data, fs, ext):
+    """Draw the panels of block k into fig (a Figure or SubFigure) with the block's
+    settings bv (block_view): a plain grid of axes (hiding the empty cells, as version
+    1 did), or with panels spanning cells, axes for the panels only."""
+    b = spec["blocks"][k]
+    rows, cols = int(b["rows"]), int(b["cols"])
+    pans = sorted((p for p in spec["panels"] if int(p.get("block", 0)) == k),
+                  key=lambda p: _cell(p)[:2])
+    gkw = {key: [float(v) for v in b[name]] for key, name in
+           (("width_ratios", "widths"), ("height_ratios", "heights")) if b.get(name)}
+    if any(_cell(p)[2:] != (1, 1) for p in pans):
+        gs, grid = fig.add_gridspec(rows, cols, **gkw), None
+    else:
+        grid = list(np.atleast_1d(fig.subplots(rows, cols, squeeze=False,
+                                               gridspec_kw=gkw or None)).ravel())
+    order = {id(p): n for n, p in enumerate(spec["panels"])}
+    used, placed, mappables, legend = [], [], [], {}
+    for p in pans:
+        r, c, rs, cs = _cell(p)
+        d = data.get(p["id"]) if data is not None else None
+        if d is None:
+            continue
+        ax = grid[r * cols + c] if grid is not None else \
+            fig.add_subplot(gs[r:r + rs, c:c + cs])
+        V = panel_view(spec, p, bv)
+        used.append(ax)
+        ax, m = _panel(fig, ax, d, V, _panel_layers(p), fs, legend, ext.get(p["id"]))
+        used[-1] = ax
+        if grid is not None:
+            grid[r * cols + c] = ax
+        if m is not None and (p.get("colorbar") or {}).get("show", True):
+            mappables.append((p["id"], ax, m))
+        letter = p.get("letter")
+        _decorate(ax, d, V, fs, p.get("title") or "",
+                  order[id(p)] if letter is None else int(letter), _z_text(V, p), p["id"])
+        placed.append((p, ax, V))
+    if grid is not None:
+        for ax in grid:
+            if ax not in used:
+                ax.set_visible(False)
+    occ = {(r + a, c + e) for p, _, _ in placed for r, c, rs, cs in [_cell(p)]
+           for a in range(rs) for e in range(cs)}
+    cells = []
+    for p, ax, V in placed:
+        r, c, rs, cs = _cell(p)
+        cells.append((ax, c, r + rs >= rows or (r + rs, c) not in occ, p["kind"],
+                      V.get("axes", {})))
+    _ticks(cells, used, bv.get("axes", {}))
+    if legend:
+        lg = bv.get("legend", {})
+        where = used[min(int(lg.get("panel", 0)), len(used) - 1)] if used else None
+        if where is not None:
+            where.legend(list(legend.values()), list(legend.keys()),
+                         loc=lg.get("loc", "upper right"), fontsize=font_size(bv, "legend"),
+                         ncol=int(lg.get("ncol", 1) or 1),
+                         frameon=lg.get("frame", True), framealpha=0.85)
+    fig._cv_mappables = mappables
+    where = {p["id"]: _cell(p)[:2] for p in pans}
+    _colorbars(fig, bv.get("colorbar", {}), mappables, used, lambda i: where[i])
+    ck = bv.get("contour_key", {})
+    keyp = next((p for p in pans if p["id"] == ck.get("panel")), pans[0] if pans else None)
+    _contour_key(fig, bv, fs, keyp.get("layers", []) if keyp else [])
+    fig._cv_axes = {p["id"]: ax for p, ax, _ in placed}  # (panel -> axes)
+    fig._cv_grid = grid if grid is not None else [ax for _, ax, _ in placed]
+    opts = b.get("opts") or {}
+    if opts.get("suptitle"):
+        fig.suptitle(opts["suptitle"], weight="bold", fontsize=font_size(bv, "suptitle"))
+    code = opts.get("code") or {}
+    if code.get("on") and str(code.get("text") or "").strip():
+        run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
+                 code["text"])
+
+
+def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
+    """Draw panel data d into ax with `spec`'s settings (a version-1 spec, or a panel's
+    view of a version-2 one) and its map `layers` (the legend entries go into
+    `legend`); first_ext: the colorbar ends of its first fill (else its own).  Returns
+    (axes, (mappable, layer) of the first fill or None): a sounding's layout or table
+    may replace the axes."""
+    kind = spec["kind"]
+    m = None
+    if d.get("missing"):
+        ax.text(0.5, 0.5, str(d["missing"]), transform=ax.transAxes, ha="center",
+                va="center", color="0.4", fontsize=fs * 0.9, wrap=True)
+    elif kind == "line":
+        _lines(ax, d, spec, fs)
+    elif kind == "sounding":  # (a layout or table may replace the panel's axes)
+        ax = _sounding(fig, ax, d, spec, fs)
+    elif kind == "dist":
+        _dists(ax, d, spec, fs)
+    else:
+        xsec = kind == "xsec"
+        x, y = d["x"], d["y"]
+        for j, lay in enumerate(layers):
+            if not lay.get("on", True):
+                continue
+            t = lay["type"]
+            a = d.get(f"L{j}")
+            lx, ly = d.get(f"L{j}_cx", x), d.get(f"L{j}_cy", y)
+            if t == "fill" and a is not None:
+                ends = first_ext if m is None and first_ext else extend_of(lay, a)
+                lay = dict(lay, extend=ends)
+                mm = _fill(ax, lx, ly, a, lay)
+                m = m or (mm, lay)
+            elif t == "contour" and a is not None:
+                _contour(ax, lx, ly, a, lay)
+            elif t == "shade" and a is not None:
+                _shade(ax, lx, ly, a, lay)
+            elif t == "vectors":
+                _vectors(ax, d, j, lay, xsec)
+            elif t == "track" and "track_x" in d:
+                col = layer_color(spec, lay, d)
+                ax.plot(d["track_x"], d["track_y"], color=col,
+                        lw=float(lay.get("lw", 1.0)), ls=lay.get("ls", "-"))
+                if lay.get("marker", True) and "now_x" in d:
+                    ax.plot(d["now_x"], d["now_y"], marker="o", ms=4, color=col)
+            elif t == "line" and "line" in d:
+                xa, ya, xb, yb = d["line"]
+                ax.plot([xa, xb], [ya, yb], color=lay.get("color", "k"),
+                        lw=float(lay.get("lw", 2.0)))
+                la, lb = ([s.strip() for s in str(lay.get("labels", "")).split(",")]
+                          + ["", ""])[:2]
+                yl = d.get("ylim", (np.nanmin(y), np.nanmax(y)))
+                off = 0.02 * (yl[1] - yl[0])  # labels just above the line ends
+                for (px, py, txt) in ((xa, ya, la), (xb, yb, lb)):
+                    ax.text(px, py + off, txt, fontsize=fs * 1.1,
+                            weight="bold", color=lay.get("color", "k"), ha="center",
+                            va="bottom", clip_on=True)
+            if lay.get("legend") and t in ("contour", "shade", "track", "line"):
+                legend[lay["legend"]] = (
+                    Patch(facecolor=lay.get("color", "magenta"),
+                          alpha=float(lay.get("alpha", 0.6)),
+                          edgecolor=lay.get("outline") or "none")
+                    if t == "shade" else
+                    Line2D([], [], color=layer_color(spec, lay, d),
+                           lw=float(lay.get("lw", 1.0))))
+    return ax, m
+
+
+def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
+    """Limits, axis labels, title, the panel's letter (number `letter`), time, height
+    (ztxt) and run labels, and the annotations of panel `key`."""
+    kind = spec["kind"]
+    ax_opts = spec.get("axes", {})
+    if "xlim" in d and not d.get("missing") and kind != "sounding":
+        ax.set_xlim(*d["xlim"])
+        if "ylim" in d:
+            ax.set_ylim(*d["ylim"])
+    if kind == "plan" and ax_opts.get("equal", True):
+        ax.set_aspect("equal")
+    if not getattr(ax, "_cv_hodo", False):  # (a hodograph panel labels its rings)
+        if ax_opts.get("xlabel") or kind != "dist":  # distributions: the field's
+            ax.set_xlabel(ax_opts.get("xlabel", ""))
+        if ax_opts.get("ylabel") or kind not in ("line", "dist"):  # (time series: units)
+            ax.set_ylabel(ax_opts.get("ylabel", ""))
+    if title:
+        ax.set_title(title, weight="bold" if ax_opts.get("title_bold", True)
+                     else "normal", loc=ax_opts.get("title_loc", "center"))
+    labels, tlab, rlab = (spec.get(k, {}) for k in ("letters", "time_label", "run_label"))
+    if labels.get("on", True):
+        _anchored(ax, panel_letter(letter, labels.get("fmt", "{a}")), labels, fs * 1.2)
+    if tlab.get("on", True) and "time_s" in d:
+        _anchored(ax, time_text(d["time_s"], tlab), tlab, fs * 1.2)
+    zlab = spec.get("z_label", {})
+    if zlab.get("on") and ztxt:
+        _anchored(ax, ztxt, zlab, fs * 1.2)
+    if rlab.get("on", True) and d.get("run_label"):
+        _anchored(ax, str(d["run_label"]), rlab, fs * 1.2,
+                  run_color(spec, int(d.get("run", 0))) if rlab.get("run_color") else None)
+    _annotate(ax, key, spec.get("annotations", []), fs)
 
 
 def _draw_combo(spec, data):
@@ -388,26 +686,17 @@ def font_size(spec, what):
 
 
 def _draw(spec, data, fs, fig=None):
-    """Draw the panels into fig (a new Figure, or a part of one: a SubFigure)."""
+    """Draw the panels of a version-1 spec into fig (a new Figure, or a part of one: a
+    SubFigure)."""
     rows, cols = int(spec["rows"]), int(spec["cols"])
-    gap = spec.get("spacing", {})
     if fig is None:
-        fig = Figure(figsize=tuple(spec["size"]), layout="constrained",
-                     facecolor=spec.get("background", "white"))
-        fig.get_layout_engine().set(w_pad=float(gap.get("w_pad", 0.04)),
-                                    h_pad=float(gap.get("h_pad", 0.04)),
-                                    wspace=float(gap.get("wspace", 0.02)),
-                                    hspace=float(gap.get("hspace", 0.02)))
+        fig = _new_fig(spec)
     axs = np.atleast_1d(fig.subplots(rows, cols, squeeze=False)).ravel()
-    kind = spec["kind"]
-    xsec = kind == "xsec"
     ax_opts = spec.get("axes", {})
     labels = spec.get("letters", {})
-    tlab = spec.get("time_label", {})
     titles = spec.get("titles", [])
     cbar = spec.get("colorbar", {})
     npan = npanels(spec)
-    rlab = spec.get("run_label", {})
     mappables, used, legend = [], [], {}
     for i, ax in enumerate(axs):
         if i >= npan or i not in data:
@@ -415,85 +704,16 @@ def _draw(spec, data, fs, fig=None):
             continue
         d = data[i]
         used.append(ax)
-        layers = spec_layers(spec, i)
-        m = None
-        if d.get("missing"):
-            ax.text(0.5, 0.5, str(d["missing"]), transform=ax.transAxes, ha="center",
-                    va="center", color="0.4", fontsize=fs * 0.9, wrap=True)
-        elif kind == "line":
-            _lines(ax, d, spec, fs)
-        elif kind == "sounding":  # (a layout or table may replace the panel's axes)
-            ax = axs[i] = used[-1] = _sounding(fig, ax, d, spec, fs)
-        else:
-            x, y = d["x"], d["y"]
-            for j, lay in enumerate(layers):
-                if not lay.get("on", True):
-                    continue
-                t = lay["type"]
-                a = d.get(f"L{j}")
-                if t == "fill" and a is not None:
-                    mm = _fill(ax, x, y, a, lay)
-                    m = m or (mm, lay)
-                elif t == "contour" and a is not None:
-                    _contour(ax, x, y, a, lay)
-                elif t == "shade" and a is not None:
-                    _shade(ax, x, y, a, lay)
-                elif t == "vectors":
-                    _vectors(ax, d, j, lay, xsec)
-                elif t == "track" and "track_x" in d:
-                    col = layer_color(spec, lay, d)
-                    ax.plot(d["track_x"], d["track_y"], color=col,
-                            lw=float(lay.get("lw", 1.0)), ls=lay.get("ls", "-"))
-                    if lay.get("marker", True) and "now_x" in d:
-                        ax.plot(d["now_x"], d["now_y"], marker="o", ms=4, color=col)
-                elif t == "line" and "line" in d:
-                    xa, ya, xb, yb = d["line"]
-                    ax.plot([xa, xb], [ya, yb], color=lay.get("color", "k"),
-                            lw=float(lay.get("lw", 2.0)))
-                    la, lb = ([s.strip() for s in str(lay.get("labels", "")).split(",")]
-                              + ["", ""])[:2]
-                    yl = d.get("ylim", (np.nanmin(y), np.nanmax(y)))
-                    off = 0.02 * (yl[1] - yl[0])  # labels just above the line ends
-                    for (px, py, txt) in ((xa, ya, la), (xb, yb, lb)):
-                        ax.text(px, py + off, txt, fontsize=fs * 1.1,
-                                weight="bold", color=lay.get("color", "k"), ha="center",
-                                va="bottom", clip_on=True)
-                if lay.get("legend") and t in ("contour", "shade", "track", "line"):
-                    legend[lay["legend"]] = (
-                        Patch(facecolor=lay.get("color", "magenta"),
-                              alpha=float(lay.get("alpha", 0.6)),
-                              edgecolor=lay.get("outline") or "none")
-                        if t == "shade" else
-                        Line2D([], [], color=layer_color(spec, lay, d),
-                               lw=float(lay.get("lw", 1.0))))
-        if "xlim" in d and not d.get("missing") and kind != "sounding":
-            ax.set_xlim(*d["xlim"])
-            if "ylim" in d:
-                ax.set_ylim(*d["ylim"])
+        ax, m = _panel(fig, ax, d, spec, spec_layers(spec, i), fs, legend)
+        axs[i] = used[-1] = ax
         if m is not None:
             mappables.append((i, ax, m))
-        if kind == "plan" and ax_opts.get("equal", True):
-            ax.set_aspect("equal")
-        if not getattr(ax, "_cv_hodo", False):  # (a hodograph panel labels its rings)
-            ax.set_xlabel(ax_opts.get("xlabel", ""))
-            if ax_opts.get("ylabel") or kind != "line":  # time series: units by default
-                ax.set_ylabel(ax_opts.get("ylabel", ""))
-        if i < len(titles) and titles[i]:
-            ax.set_title(titles[i], weight="bold" if ax_opts.get("title_bold", True)
-                         else "normal", loc=ax_opts.get("title_loc", "center"))
-        if labels.get("on", True):
-            k = i + int(labels.get("start", 0))  # (parts of a figure: letters run on)
-            _anchored(ax, panel_letter(k, labels.get("fmt", "{a}")), labels, fs * 1.2)
-        if tlab.get("on", True) and "time_s" in d:
-            _anchored(ax, time_text(d["time_s"], tlab), tlab, fs * 1.2)
-        zlab = spec.get("z_label", {})
-        if zlab.get("on") and z_text(spec, i):
-            _anchored(ax, z_text(spec, i), zlab, fs * 1.2)
-        if rlab.get("on", True) and d.get("run_label"):
-            _anchored(ax, str(d["run_label"]), rlab, fs * 1.2,
-                      run_color(spec, int(d.get("run", 0))) if rlab.get("run_color") else None)
-        _annotate(ax, i, spec.get("annotations", []), fs)
-    _ticks(axs[:npan], used, ax_opts, rows, cols, kind)
+        _decorate(ax, d, spec, fs, titles[i] if i < len(titles) else "",
+                  i + int(labels.get("start", 0)), z_text(spec, i), i)
+    kind = spec["kind"]
+    cells = [(ax, i % cols, i // cols == rows - 1 or i + cols >= npan or axs[i + cols]
+              not in used, kind, ax_opts) for i, ax in enumerate(axs[:npan])]
+    _ticks(cells, used, ax_opts)
     if legend:
         lg = spec.get("legend", {})
         where = used[min(int(lg.get("panel", 0)), len(used) - 1)] if used else None
@@ -503,7 +723,7 @@ def _draw(spec, data, fs, fig=None):
                          ncol=int(lg.get("ncol", 1) or 1),
                          frameon=lg.get("frame", True), framealpha=0.85)
     fig._cv_mappables = mappables  # (a figure of parts may draw one colorbar for all)
-    _colorbars(fig, cbar, mappables, used, spec)
+    _colorbars(fig, cbar, mappables, used, lambda i: divmod(i, cols))
     _contour_key(fig, spec, fs)
     fig._cv_axes = {i: ax for i, ax in enumerate(axs) if ax in used}  # (panel -> axes)
     if spec.get("suptitle"):
@@ -537,11 +757,11 @@ def npanels(spec):
     kind, vary = spec.get("kind", "plan"), spec.get("vary", "time")
     if kind == "th":
         n = cells
-    elif kind in ("line", "sounding"):
-        ents = spec.get("series" if kind == "line" else "soundings", [])
+    elif kind in ENTRIES:
+        ents = spec.get(ENTRIES[kind], [])
         n = 1 + max([int(e.get("panel", 0)) for e in ents] or [0])
     elif vary == "time":
-        n = len(spec.get("times_s", spec["times"]))
+        n = len(spec.get("times_s") or spec.get("times") or [])
     elif vary == "field":
         n = max(1, len(spec.get("panel_fills", [])))
     elif vary == "height":
@@ -598,27 +818,305 @@ def spec_layers(spec, i):
                 if lay["type"] == "fill":
                     layers[j] = dict(lay, **pf[i])
                     break
-    return layers
+    return edited_layers(layers, panel_edit(spec, i))
 
 
-def _ticks(axs, used, opts, rows, cols, kind="plan"):
-    mode = opts.get("ticklabels", "all")  # all | outer | none
+def panel_edit(spec, i):
+    """The changes made to panel i alone (spec["edits"][str(i)], the panel tree): its
+    "run", "time_s", "z" (km), "title", "layers" ({str(j): the keys layer j has in
+    this panel only, its own "run", "time_s" and "z" among them}) and "extra" (layers
+    of this panel only, drawn after the others)."""
+    return (spec.get("edits") or {}).get(str(i)) or {}
+
+
+def edited_layers(layers, e):
+    """Layers with panel edit e: its height for the layers at a height (but those with
+    "z_fixed" or a height of their own), then each layer's own keys, then its extra
+    layers."""
+    if not e:
+        return layers
+    out = []
+    for j, lay in enumerate(layers):
+        own = (e.get("layers") or {}).get(str(j)) or {}
+        if e.get("z") is not None and "z" not in own and "z" in lay and \
+                not lay.get("z_fixed") and (lay["type"] == "vectors" or
+                                            lay.get("mode", "height") == "height"):
+            lay = dict(lay, z=float(e["z"]))
+        out.append(dict(lay, **own) if own else lay)
+    return out + [dict(lay) for lay in e.get("extra") or []]
+
+
+def panel_ref(spec, i):
+    """(run index, model time in s) of panel i of a version-1 spec, or None for an
+    empty grid cell: as its layout says (form_ref), or as changed in this panel alone
+    (panel_edit)."""
+    ref = form_ref(spec, i)
+    e = panel_edit(spec, i)
+    if ref is None or not e:
+        return ref
+    k = int(e["run"]) if e.get("run") is not None and \
+        int(e["run"]) < len(spec.get("runs") or [None]) else ref[0]
+    return k, float(e["time_s"]) if e.get("time_s") is not None else ref[1]
+
+
+def form_ref(spec, i):
+    """(run index, model time in s) of panel i as the layout says, or None.  vary:
+    "time" (one run, a time per panel), "field" (one run and time, a fill per panel),
+    "height" (one run and time, a height per panel:
+    spec["panel_z"]), "grid" (runs x times: rows are runs when runs_as == "rows", else
+    columns) or "custom" (spec["panels"]: a run and time per panel)."""
+    vary, nr = spec["vary"], len(spec.get("runs") or [None])
+    if vary == "time":  # (a time of None: an empty grid cell)
+        ts = spec["times_s"]
+        return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) and ts[i] is not None \
+            else None
+    if vary in ("field", "height"):
+        return int(spec.get("run", 0)), float(spec["time_s"])
+    if vary == "grid":
+        r, c = divmod(i, int(spec["cols"]))
+        k, j = (r, c) if spec.get("runs_as", "rows") == "rows" else (c, r)
+        ts = spec["times_s"]
+        return (k, float(ts[j])) if k < nr and j < len(ts) and ts[j] is not None else None
+    pans = spec.get("panels", [])
+    if i < len(pans) and int(pans[i]["run"]) < nr:
+        return int(pans[i]["run"]), float(pans[i]["time_s"])
+    return None
+
+
+# ------------------------------------------------------------------ spec version 2
+V1_PANEL_KEYS = ("version", "kind", "rows", "cols", "vary", "times", "time", "times_s",
+                 "time_s", "panel_fills", "panel_z", "panel_zmode", "layers", "run",
+                 "runs_as", "panels", "titles", "series", "soundings", "dists", "edits",
+                 "form")
+FIG_ONLY = ("version", "kind", "arrange", "parts", "blocks", "panels", "size", "size_set",
+            "size_auto", "share", "suptitle", "export", "made_with", "code")
+EXTENDS = ("auto", "neither", "min", "max", "both")
+
+
+def upgrade(spec, data=None):
+    """(version-2 spec, data) of a version-1 spec or a figure of parts (a version-2
+    spec comes back as it is): each panel written out with its own layers (the
+    shared layers as the panel had them, its height, fill, title and letter), each
+    part a block with its settings, and in `data` (a copy; None: none) each line's and
+    sounding's entry counted within its panel."""
+    if int(spec.get("version", 1)) >= 2:
+        return spec, data
+    combo = spec.get("kind") == "combo"
+    parts = spec["parts"] if combo else [spec]
+    out = {k: copy.deepcopy(v) for k, v in spec.items() if k not in V1_PANEL_KEYS + ("parts",)}
+    out.update(version=2, arrange=spec.get("arrange", "row"))
+    data = None if data is None else dict(data)
+    blocks, panels, start = [], [], 0
+    for k, part in enumerate(parts):
+        b = dict(rows=int(part["rows"]), cols=int(part["cols"]))
+        ck = None
+        if combo:
+            opts = {key: copy.deepcopy(v) for key, v in part.items() if key not in V1_PANEL_KEYS}
+            opts["annotations"] = [a if int(a.get("panel", -1)) == -1 else
+                                   dict(a, panel=k * 1000 + int(a["panel"]))
+                                   for a in opts.get("annotations", [])]
+            b.update(share=part.get("share"), size=list(part["size"]), opts=opts)
+            ck = opts.get("contour_key")
+        else:
+            ck = out.get("contour_key")
+        if ck and ck.get("on"):
+            ck["lay"] = copy.deepcopy(_key_layer(ck, part.get("layers", [])))
+        blocks.append(b)
+        n = npanels(part)
+        for i in range(n):
+            p = _v1_panel(part, i)
+            if p is None:
+                continue
+            key = k * 1000 + i if combo else i
+            p.update(id=key, block=k, letter=i + start)
+            panels.append(p)
+            if data is not None and key in data:
+                data[key] = _local_entries(part, i, data[key])
+        start += n
+    out.update(blocks=blocks, panels=panels)
+    return out, data
+
+
+def _v1_panel(spec, i):
+    """Panel i of a version-1 spec as a version-2 panel (None: an empty cell)."""
+    kind = spec.get("kind", "plan")
+    r, c = divmod(i, int(spec["cols"]))
+    titles = spec.get("titles") or []
+    p = dict(kind=kind, cell=[r, c, 1, 1], run=None, time_s=None,
+             title=titles[i] if i < len(titles) and titles[i] else "", layers=[])
+    if kind == "th":
+        ref = series_ref(spec, i)
+        if ref is None:
+            return None
+        p["run"] = ref[0]
+        p["layers"] = [dict(copy.deepcopy(spec["series"][ref[1]]), type="series", on=True)]
+    elif kind in ENTRIES:
+        p["layers"] = [dict({k: copy.deepcopy(v) for k, v in e.items() if k != "panel"},
+                            type="series" if kind == "line" else kind)
+                       for e in spec.get(ENTRIES[kind], []) if int(e.get("panel", 0)) == i]
+    else:
+        ref = panel_ref(spec, i)
+        if ref is None:
+            return None
+        p["run"], p["time_s"] = ref
+        p["layers"] = copy.deepcopy(spec_layers(spec, i))
+        zs = spec.get("panel_z") or []
+        if spec.get("vary") == "height" and i < len(zs) and zs[i] is not None:
+            p["z"], p["zmode"] = float(zs[i]), spec.get("panel_zmode", "height")
+        e = panel_edit(spec, i)
+        if e.get("z") is not None:
+            p["z"], p["zmode"] = float(e["z"]), "height"
+    if panel_edit(spec, i).get("title") is not None:
+        p["title"] = panel_edit(spec, i)["title"]
+    return p
+
+
+def _local_entries(spec, i, d):
+    """Panel data d of version-1 panel i with its lines' (soundings') entries counted
+    within the panel."""
+    kind = spec.get("kind")
+    if kind not in ENTRIES:
+        return d
+    key, count = {"line": ("S", "nlines"), "sounding": ("N", "nsnd"),
+                  "dist": ("D", "ndist")}[kind]
+    mine = [e for e, ent in enumerate(spec.get(ENTRIES[kind], []))
+            if int(ent.get("panel", 0)) == i]
+    where = {e: n for n, e in enumerate(mine)}
+    d = dict(d)
+    for j in range(int(d.get(count, 0))):
+        e = int(d[f"{key}{j}_e"])
+        d[f"{key}{j}_e"] = where.get(e, len(mine))
+    return d
+
+
+def block_view(spec, k):
+    """The settings of block k of a version-2 spec: the figure's (but those of the
+    figure alone: size, title, export, code) and the block's own (opts)."""
+    v = {key: val for key, val in spec.items() if key not in FIG_ONLY}
+    v.update(spec["blocks"][k].get("opts") or {})
+    if (v.get("colorbar") or {}).get("mode") in ("parts", "figure"):
+        v["colorbar"] = dict(v["colorbar"], mode="shared")
+    return v
+
+
+def panel_view(spec, p, bv=None):
+    """The settings panel p is drawn with: its block's (bv: block_view), then its own
+    (p["opts"]), with its kind and layers where version 1 kept them (soundings and
+    the series of a time-series panel and distributions under "soundings", "series"
+    and "dists")."""
+    v = dict(block_view(spec, int(p.get("block", 0))) if bv is None else bv)
+    v.update(p.get("opts") or {})
+    kind = v["kind"] = p["kind"]
+    v[ENTRIES.get(kind, "layers")] = p.get("layers") or []
+    return v
+
+
+def block_shares(spec):
+    """Each block's share of a version-2 figure (part_shares of its blocks)."""
+    return part_shares(dict(arrange=spec.get("arrange", "row"), parts=[
+        dict(share=b.get("share"), size=b.get("size") or spec["size"])
+        for b in spec["blocks"]]))
+
+
+def _panel_layers(p):
+    """The map layers panel p is drawn with (a time-height panel: its series' fill)."""
+    if p["kind"] == "th":
+        return [dict({k: lay[k] for k in FILL_KEYS if k in lay}, type="fill",
+                     on=lay.get("on", True)) for lay in p.get("layers", [])]
+    return p.get("layers") or []
+
+
+def resolved(p, lay):
+    """Layer lay of panel p with its run, time and height filled in from the panel's
+    (where the layer has None or none)."""
+    out = dict(lay)
+    for k in ("run", "time_s", "z"):
+        if out.get(k) is None and p.get(k) is not None:
+            out[k] = p[k]
+    if out.get("run") is None:
+        out["run"] = 0
+    return out
+
+
+def _z_text(spec, p):
+    """The height label of version-2 panel p (z_text), or "" for a panel without a
+    height of its own."""
+    if p.get("z") is None:
+        return ""
+    level = p.get("zmode", "height") == "level"
+    fmt = spec.get("z_label", {}).get("fmt") or ("k = {k}" if level else "z = {z:g} km")
+    return fmt.format(z=float(p["z"]), k=int(round(float(p["z"]))))
+
+
+def extend_of(lay, a):
+    """The colorbar ends of fill layer lay with values a: its own, or with "auto" the
+    ends the (unmasked) values pass vmin or vmax at."""
+    ends = lay.get("extend", "neither") or "neither"
+    if ends != "auto":
+        return ends
+    a = np.asarray(a, dtype=float)
+    if lay.get("mask_below") not in (None, ""):
+        a = a[a > float(lay["mask_below"])]
+    a = a[np.isfinite(a)]
+    if not a.size:
+        return "neither"
+    lo, hi = _bounds(lay)
+    return union_extend(["min"] * bool(a.min() < lo) + ["max"] * bool(a.max() > hi))
+
+
+def union_extend(ends):
+    """One colorbar's ends for fills with ends `ends` (min and max: both)."""
+    lo = any(e in ("min", "both") for e in ends)
+    hi = any(e in ("max", "both") for e in ends)
+    return "both" if lo and hi else "min" if lo else "max" if hi else "neither"
+
+
+def _extends(spec, data):
+    """{panel id: colorbar ends of its first fill}: the ends of all first fills that
+    share a colorbar (the block's colorbar mode: shared, row, col; "figure": all
+    blocks') united."""
+    fig_mode = (spec.get("colorbar") or {}).get("mode")
+    modes = [(block_view(spec, k).get("colorbar") or {}).get("mode", "shared")
+             for k in range(len(spec["blocks"]))]
+    groups, first = {}, {}
+    for p in spec["panels"]:
+        d = (data or {}).get(p["id"])
+        if d is None or d.get("missing") or p["kind"] in ENTRIES or \
+                not (p.get("colorbar") or {}).get("show", True):
+            continue
+        ends = next((extend_of(lay, d[f"L{j}"]) for j, lay in enumerate(_panel_layers(p))
+                     if lay["type"] == "fill" and lay.get("on", True)
+                     and d.get(f"L{j}") is not None), None)
+        if ends is None:
+            continue
+        k = int(p.get("block", 0))
+        r, c = _cell(p)[:2]
+        mode = modes[k]
+        g = ("figure",) if fig_mode == "figure" else \
+            (k, {"shared": "", "row": ("r", r), "col": ("c", c)}.get(mode, ("p", p["id"])))
+        groups.setdefault(g, []).append(ends)
+        first[p["id"]] = g
+    return {i: union_extend(groups[g]) for i, g in first.items()}
+
+
+def _ticks(cells, used, block_opts):
+    """Tick marks and labels of the panels: cells [(axes, column, in the bottom row (no
+    panel below), kind, axes options)]; block_opts["ticklabels"] outer: labels on the
+    left column and bottom row only (while all panels show the same ranges)."""
+    mode = block_opts.get("ticklabels", "all")  # all | outer | none
     lims = {(tuple(np.round(ax.get_xlim(), 6)), tuple(np.round(ax.get_ylim(), 6)))
             for ax in used}
     if mode == "outer" and len(lims) > 1:  # panels show different ranges: label all
         mode = "all"
-    for i, ax in enumerate(axs):
+    for ax, c, last_row, kind, opts in cells:
         if ax not in used:
             continue
         hodo = getattr(ax, "_cv_hodo", False)  # (a hodograph keeps its own look)
-        r, c = divmod(i, cols)
         if mode == "none" or not opts.get("ticks", True):
             ax.tick_params(labelleft=False, labelbottom=False)
             ax.set_xlabel("")
             ax.set_ylabel("")
         elif mode == "outer":
-            below = i + cols
-            last_row = r == rows - 1 or below >= len(axs) or axs[below] not in used
             if not last_row:
                 ax.tick_params(labelbottom=False)
                 ax.set_xlabel("")
@@ -640,7 +1138,10 @@ def _ticks(axs, used, opts, rows, cols, kind="plan"):
                     ls=opts.get("grid_ls", ":"), alpha=0.8)
 
 
-def _colorbars(fig, cb, mappables, used, spec):
+def _colorbars(fig, cb, mappables, used, cell):
+    """The colorbars of mappables [(panel, axes, (mappable, layer))]: cb["mode"]
+    shared (one), row / col (one per row / column of panels: cell(panel) -> (row,
+    col)), none, or else one per panel."""
     mode = cb.get("mode", "shared")
     if mode == "none" or not mappables:
         return
@@ -651,9 +1152,9 @@ def _colorbars(fig, cb, mappables, used, spec):
     if mode == "shared":
         groups = [(used, mappables[0][2])]
     elif mode in ("row", "col"):  # one colorbar per row (column) of panels
-        cols, by = int(spec["cols"]), {}
+        by = {}
         for i, ax, ml in mappables:
-            r, c = divmod(i, cols)
+            r, c = cell(i)
             by.setdefault(r if mode == "row" else c, []).append((ax, ml))
         groups = [([a for a, _ in items], items[0][1]) for items in by.values()]
     else:
@@ -693,8 +1194,8 @@ def run_color(spec, k):
 def layer_color(spec, lay, d):
     """Colour of a layer in panel data d: the run's (a track with "run_color"), else
     its own."""
-    if lay.get("run_color"):
-        return run_color(spec, int(d.get("run", 0)))
+    if lay.get("run_color"):  # (the layer's own run, else the panel's)
+        return run_color(spec, int(d.get("run", 0) if lay.get("run") is None else lay["run"]))
     return lay.get("color", "k")
 
 
@@ -752,6 +1253,226 @@ def _lines(ax, d, spec, fs):
         ax.legend(handles=handles, loc=ts.get("legend_loc", "best"),
                   fontsize=font_size(spec, "legend"), frameon=False,
                   ncol=int(spec.get("legend", {}).get("ncol", 1) or 1))
+
+
+# ------------------------------------------------------------------ distributions
+DIST_PROBS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 0.999, 1.0)
+DIST_NORM_LABEL = {"count": "count", "pdf": "probability density", "frac": "fraction"}
+
+
+def dist_span(lo, hi):
+    """The range of a summary's fine histogram: its minimum to maximum (one value:
+    ± 0.5 around it)."""
+    return (lo, hi) if hi > lo else (lo - 0.5, lo + 0.5)
+
+
+def dist_of(d, n):
+    """Summary n of distribution panel data d (as dist.summarize gives it)."""
+    s = [float(v) for v in np.asarray(d[f"D{n}_s"], dtype=float).ravel()]
+    return dict(n=s[0], mean=s[1], std=s[2], lo=s[3], hi=s[4], wlo=s[5], whi=s[6],
+                q=np.asarray(d[f"D{n}_q"], dtype=float), h=np.asarray(d[f"D{n}_h"], dtype=float))
+
+
+def dist_arrays(st, n):
+    """The panel arrays of summary st as distribution n (dist_of reads them back)."""
+    return {f"D{n}_s": np.array([st[k] for k in ("n", "mean", "std", "lo", "hi", "wlo", "whi")],
+                                dtype=float),
+            f"D{n}_q": np.asarray(st["q"], dtype=float), f"D{n}_h": np.asarray(st["h"])}
+
+
+def dist_q(st, p):
+    """Quantile p (one of DIST_PROBS) of summary st."""
+    return float(st["q"][DIST_PROBS.index(p)])
+
+
+def _fine_edges(st):
+    lo, hi = dist_span(st["lo"], st["hi"])
+    return np.linspace(lo, hi, len(st["h"]) + 1)
+
+
+def dist_edges(sts, bins=50, width=None, lo=None, hi=None):
+    """Bin edges shared by summaries sts: from lo to hi (None: the smallest minimum,
+    the largest maximum), `width` wide (None: `bins` bins)."""
+    los = [s["lo"] for s in sts if s["n"]]
+    his = [s["hi"] for s in sts if s["n"]]
+    a = float(lo) if lo is not None else min(los, default=0.0)
+    b = float(hi) if hi is not None else max(his, default=1.0)
+    if not b > a:
+        a, b = dist_span(a, a)
+    if width is not None and float(width) > 0:
+        k = max(1, min(2000, int(np.ceil((b - a) / float(width) - 1e-9))))
+        return a + float(width) * np.arange(k + 1)
+    return np.linspace(a, b, max(1, int(bins or 50)) + 1)
+
+
+def dist_hist(st, edges, norm="count"):
+    """Histogram of summary st in bins `edges`: counts, "pdf" (density: the whole
+    sample integrates to 1, so values outside the bins count too) or "frac" (fraction
+    of the whole sample per bin)."""
+    fe = _fine_edges(st)
+    v, _ = np.histogram(0.5 * (fe[:-1] + fe[1:]), bins=edges, weights=st["h"])
+    if norm == "pdf":
+        return v / (max(st["n"], 1.0) * np.diff(edges))
+    if norm == "frac":
+        return v / max(st["n"], 1.0)
+    return v
+
+
+def dist_cdf(st, above=False):
+    """(x, fraction of the sample at or below x), or above x."""
+    x = _fine_edges(st)
+    y = np.concatenate([[0.0], np.cumsum(st["h"])]) / max(st["n"], 1.0)
+    return x, (np.clip(1.0 - y, 0.0, 1.0) if above else y)
+
+
+def dist_kde(st, npts=256):
+    """(x, density) of summary st, minimum to maximum: its fine histogram smoothed
+    with a Gaussian kernel of Silverman's bandwidth (at least a grid step)."""
+    lo, hi = dist_span(st["lo"], st["hi"])
+    edges = np.linspace(lo, hi, npts + 1)
+    v = dist_hist(st, edges)
+    dx = edges[1] - edges[0]
+    iqr = dist_q(st, 0.75) - dist_q(st, 0.25)
+    sig = min(st["std"], iqr / 1.34) if iqr > 0 else st["std"]
+    s = max(0.9 * (sig or dx) * max(st["n"], 1.0) ** -0.2 / dx, 0.5)  # (grid steps)
+    k = np.arange(-min(int(np.ceil(4 * s)), npts - 1), min(int(np.ceil(4 * s)), npts - 1) + 1)
+    ker = np.exp(-0.5 * (k / s) ** 2)
+    dens = np.convolve(v, ker / ker.sum(), mode="same") / (max(st["n"], 1.0) * dx)
+    return 0.5 * (edges[:-1] + edges[1:]), dens
+
+
+def dist_whiskers(st, how="tukey"):
+    """Whisker ends of a box: "tukey" (the furthest values within 1.5 IQR of the box),
+    "range" (min, max), "p5" (5th, 95th percentile) or "p1" (1st, 99th)."""
+    if how == "range":
+        return st["lo"], st["hi"]
+    if how in ("p5", "p1"):
+        p = 0.05 if how == "p5" else 0.01
+        return dist_q(st, p), dist_q(st, round(1.0 - p, 3))
+    return st["wlo"], st["whi"]
+
+
+def dist_colors(spec, d):
+    """Colour of each distribution of panel data d: its own, else its run's when each
+    of the panel's distributions comes from another run, else the next of SND_COLORS."""
+    ents = spec.get("dists", [])
+    n = int(d.get("ndist", 0))
+    es = [ents[int(d[f"D{j}_e"])] if int(d[f"D{j}_e"]) < len(ents) else {} for j in range(n)]
+    runs = [int(e.get("run", 0)) for e in es]
+    by_run = n > 1 and len(set(runs)) == n
+    return [e.get("color") or (run_color(spec, k) if by_run else SND_COLORS[j % len(SND_COLORS)])
+            for j, (e, k) in enumerate(zip(es, runs))]
+
+
+def _dists(ax, d, spec, fs):
+    """Distribution panel: spec["dist"]["plot"] hist (in common bins), ecdf, box or
+    violin (one per distribution, side by side)."""
+    o = spec.get("dist", {})
+    n = int(d.get("ndist", 0))
+    sts = [dist_of(d, j) for j in range(n)]
+    cols = dist_colors(spec, d)
+    labels = [str(d.get(f"D{j}_label", "")) for j in range(n)]
+    if o.get("stats"):
+        labels = [f"{lab} (mean {s['mean']:.3g}, sd {s['std']:.3g}, n = {s['n']:,.0f})"
+                  .lstrip() for lab, s in zip(labels, sts)]
+
+    def num(k):
+        v = o.get(k)
+        return None if v in (None, "") else float(v)
+
+    kind, lw = o.get("plot", "hist"), float(o.get("lw", 1.5))
+    alpha = float(o.get("alpha", 0.35))
+    vlo, vhi = num("xmin"), num("xmax")
+    vlab = "; ".join(dict.fromkeys(str(d[f"D{j}_xl"]) for j in range(n) if d.get(f"D{j}_xl")))
+    handles = []
+    if kind in ("hist", "ecdf"):
+        if kind == "hist":
+            edges = dist_edges(sts, o.get("bins", 50), num("width"), vlo, vhi)
+            norm, style = o.get("norm", "count"), o.get("hstyle", "stepfilled")
+            for st, c, lab in zip(sts, cols, labels):
+                v = dist_hist(st, edges, norm)
+                if style == "bar":
+                    ax.bar(edges[:-1], v, width=np.diff(edges), align="edge", color=c,
+                           alpha=1.0 if n == 1 else alpha, edgecolor="white", lw=0.4)
+                    handles.append(Patch(facecolor=c, alpha=1.0 if n == 1 else alpha,
+                                         label=lab))
+                    continue
+                if style == "stepfilled":
+                    ax.stairs(v, edges, fill=True, color=c, alpha=alpha, lw=0)
+                h = ax.stairs(v, edges, color=c, lw=lw, label=lab)
+                handles.append(Patch(facecolor=c, alpha=alpha, edgecolor=c, label=lab)
+                               if style == "stepfilled" else h)
+            ax.set_xlim(edges[0], edges[-1])
+            ylab = DIST_NORM_LABEL.get(norm, "count")
+        else:
+            above = o.get("cum", "below") == "above"
+            for st, c, lab in zip(sts, cols, labels):
+                x, y = dist_cdf(st, above)
+                h, = ax.plot(x, y, color=c, lw=lw, label=lab)
+                handles.append(h)
+            ax.set_xlim(vlo, vhi)
+            ylab = "fraction above" if above else "cumulative fraction"
+        if o.get("logy"):
+            ax.set_yscale("log")
+        if num("ymin") is not None or num("ymax") is not None:
+            ax.set_ylim(num("ymin"), num("ymax"))
+        elif kind == "hist" and not o.get("logy"):
+            ax.set_ylim(bottom=0.0)
+        if o.get("zero_line"):
+            ax.axvline(0.0, color="0.6", lw=0.6, zorder=0)
+        ax.set_xlabel(vlab)
+        ax.set_ylabel(ylab)
+        if o.get("legend", True) and n > 1:
+            ax.legend(handles=handles, loc=o.get("legend_loc", "best"),
+                      fontsize=font_size(spec, "legend"), frameon=False,
+                      ncol=int(spec.get("legend", {}).get("ncol", 1) or 1))
+        return
+    horiz = bool(o.get("horizontal"))
+    # ("width" is the histogram bin width, None for automatic)
+    w = float(o.get("box_width") or (0.6 if kind == "box" else 0.8))
+
+    def seg(p0, p1, v0, v1, **kw):  # a line from (place, value) to (place, value)
+        if horiz:
+            ax.plot([v0, v1], [p0, p1], **kw)
+        else:
+            ax.plot([p0, p1], [v0, v1], **kw)
+
+    for p, (st, c) in enumerate(zip(sts, cols), start=1):
+        q1, med, q3 = (dist_q(st, k) for k in (0.25, 0.5, 0.75))
+        if kind == "violin":
+            x, dens = dist_kde(st)
+            dd = dens / max(dens.max(), 1e-300) * w / 2
+            (ax.fill_between if horiz else ax.fill_betweenx)(
+                x, p - dd, p + dd, facecolor=c, alpha=alpha, edgecolor=c, lw=lw * 0.6)
+            lo, hi = dist_whiskers(st, o.get("whis", "tukey"))
+            seg(p, p, lo, hi, color="0.15", lw=lw * 0.6, solid_capstyle="butt")
+            seg(p, p, q1, q3, color="0.15", lw=lw * 3.0, solid_capstyle="butt")
+            mx, my = (med, p) if horiz else (p, med)
+            ax.plot(mx, my, "o", ms=lw * 2.5, mfc="white", mec="0.15", mew=0.6)
+        else:
+            lo, hi = dist_whiskers(st, o.get("whis", "tukey"))
+            xy, wh = ((q1, p - w / 2), (q3 - q1, w)) if horiz else ((p - w / 2, q1), (w, q3 - q1))
+            ax.add_patch(Rectangle(xy, *wh, facecolor=c, alpha=alpha, edgecolor="none"))
+            ax.add_patch(Rectangle(xy, *wh, facecolor="none", edgecolor=c, lw=lw))
+            seg(p - w / 2, p + w / 2, med, med, color=c, lw=lw * 1.6, solid_capstyle="butt")
+            for a, b in ((q1, lo), (q3, hi)):
+                seg(p, p, a, b, color=c, lw=lw)
+                seg(p - w / 5, p + w / 5, b, b, color=c, lw=lw)
+        if o.get("means", True):
+            mx, my = (st["mean"], p) if horiz else (p, st["mean"])
+            ax.plot(mx, my, "D", ms=lw * 2.6, mfc="white", mec=c, mew=lw * 0.7, zorder=4)
+    pos = list(range(1, n + 1))
+    (ax.set_yticks if horiz else ax.set_xticks)(pos, labels)
+    (ax.set_ylim if horiz else ax.set_xlim)(0.5, n + 0.5)
+    if vlo is not None or vhi is not None:
+        (ax.set_xlim if horiz else ax.set_ylim)(vlo, vhi)
+    if o.get("logy"):
+        (ax.set_xscale if horiz else ax.set_yscale)("symlog" if any(
+            s["lo"] <= 0 for s in sts) else "log")
+    if o.get("zero_line"):
+        (ax.axvline if horiz else ax.axhline)(0.0, color="0.6", lw=0.6, zorder=0)
+    (ax.set_xlabel if horiz else ax.set_ylabel)(vlab)
+    (ax.set_ylabel if horiz else ax.set_xlabel)("")
 
 
 # ------------------------------------------------------------------ soundings
@@ -1130,16 +1851,23 @@ def _skewed(skew, T, p):
     return T + k * np.log(pb / np.maximum(p, 1e-6)), p
 
 
-def _contour_key(fig, spec, fs):
+def _key_layer(ck, layers):
+    """The contour layer of a contour key: layer ck["layer"], else the first contour
+    layer that is on (None: none)."""
+    k = int(ck.get("layer", -1))
+    return layers[k] if 0 <= k < len(layers) and layers[k]["type"] == "contour" else next(
+        (l for l in layers if l["type"] == "contour" and l.get("on", True)), None)
+
+
+def _contour_key(fig, spec, fs, layers=None):
     """Nested circles labelled with a contour layer's levels and the field's name in
-    the middle (a key for unlabelled contours, e.g. updraft speed)."""
+    the middle (a key for unlabelled contours, e.g. updraft speed): ck["lay"] (an
+    upgraded spec's), else _key_layer of `layers` (default: spec["layers"])."""
     ck = spec.get("contour_key", {})
     if not ck.get("on"):
         return
-    layers = spec.get("layers", [])
-    k = int(ck.get("layer", -1))
-    lay = layers[k] if 0 <= k < len(layers) and layers[k]["type"] == "contour" else next(
-        (l for l in layers if l["type"] == "contour" and l.get("on", True)), None)
+    lay = ck.get("lay") or _key_layer(ck, spec.get("layers", []) if layers is None
+                                      else layers)
     if lay is None:
         return
     labels = [f"{v:g}" for v in _levels(lay["levels"])]

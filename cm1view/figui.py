@@ -2,14 +2,15 @@
 several, e.g. tornadic vs non-tornadic), preview it at its final size, and export the
 image, a stand-alone script, the data and the spec.
 
-The editor has five tabs: Panels (what the grid shows: kind, size, times, titles,
-area, runs), Layers (what each panel draws), Style (fonts, axes, labels, colorbar,
-legend, spacing), Annotate and Export (with animated GIFs).  Saving sits above the preview.
+The editor has six tabs: Panels (what the grid shows: kind, size, times, titles,
+area, runs), Layers (what each panel draws), Tree (each panel alone), Style (fonts,
+axes, labels, colorbar, legend, spacing), Annotate and Export (with animated GIFs).
+Saving sits above the preview.
 
 The FigureEditor is here; its runs (figruns), sources and lists (figsources), export
-(figexport), animations (figanim), figures of several parts (figcombo) and placing by
-clicking the preview (figclick) are mixins, and the constants, helpers and cards are in
-figparts."""
+(figexport), animations (figanim), figures of several parts (figcombo), placing by
+clicking the preview (figclick) and the panel tree (figtree) are mixins, and the
+constants, helpers and cards are in figparts."""
 
 import base64
 import html
@@ -29,8 +30,9 @@ from . import config, figdraw, figure as fg, series as ser
 from .picker import RunPicker
 from .theme import GRID
 from .figparts import (
-    ANN_KINDS, CB_LOCS, CB_MODES, FIG_CMAPS, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS,
-    NONE, SIZE_PRESETS, SND_LAYOUTS, STORM_MOTIONS, TICKDIR, TYPE_LABEL, VARY, LayerCard,
+    ANN_KINDS, CB_LOCS, CB_MODES, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS,
+    DIST_WHIS, FIG_CMAPS, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS, NONE, SIZE_PRESETS,
+    SND_LAYOUTS, STORM_MOTIONS, TICKDIR, TYPE_LABEL, VARY, LayerCard,
     _auto, _chk, _f,
     _grid, _hint, _num, _row, _section, _when,
 )
@@ -41,6 +43,7 @@ from .figcombo import FigureCombo, panel_name
 from .figexport import FigureExport
 from .figruns import AllFields, FigureRuns
 from .figsources import FigureSources
+from .figtree import FigureTree
 
 
 def _tlabel(t_s):
@@ -73,7 +76,7 @@ def _place(times, t_s, snap):
 
 
 class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, FigureCombo,
-                   FigureClick):
+                   FigureClick, FigureTree):
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
@@ -85,7 +88,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         self._hold = False  # widgets being set from a spec: no re-render per widget
         self._req = 0
         self.cards = []
-        self.ser_cards, self.snd_cards, self.ann_rows = [], [], []
+        self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
         self.tm_rows, self.title_ws = [], []
         self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
         # undo / redo: (figure JSON with all its parts, part in the widgets) before each
@@ -97,6 +100,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         # dataset (filled in place while it is computed); state "running" / "done"
         self._ser_mem, self._ser_state, self._ser_prog = {}, {}, {}
         self.snd_cache = OrderedDict()  # sounding (run, time, where, track) -> analysis
+        self.dist_cache = OrderedDict()  # distribution (run, time, recipe, track) -> summary
         from concurrent.futures import ThreadPoolExecutor
         viewer.pools["figser"] = ThreadPoolExecutor(1, thread_name_prefix="cm1view-figser")
         viewer.gen["figser"] = 0
@@ -122,6 +126,10 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         self.start_snd = pn.widgets.Button(
             name="Soundings", description="Skew-T panels of the map's soundings (or the "
                                           "storm's inflow at the shown time)", **nb)
+        self.start_dist = pn.widgets.Button(
+            name="Distributions", description="Histogram, box, violin or cumulative "
+                                              "distribution of the Distribution tool's "
+                                              "samples (or w over the whole domain)", **nb)
         self.start_def = pn.widgets.Button(
             name="Time grid", description="Plan views centred on the storm at several times "
                                           "from the shown time", **nb)
@@ -133,7 +141,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         # ---- Panels: grid and size
         self.kind = pn.widgets.Select(name="Panels show", options={
             "Plan views": "plan", "Vertical cross-sections": "xsec",
-            "Time–height (series)": "th", "Time series": "line", "Soundings": "sounding"})
+            "Time–height (series)": "th", "Time series": "line", "Soundings": "sounding",
+            "Distributions": "dist"})
         self.vary = pn.widgets.Select(name="Panels differ in", options=VARY)
         self.run_sel = pn.widgets.Select(name="Run", options={})
         self.runs_as = pn.widgets.Select(name="Runs are", options={
@@ -278,6 +287,43 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                            "one sounding, dotted lines show the storm-relative inflow and "
                            "the 0–500 m shear (the critical angle), as in the Sounding "
                            "tab.")),
+            sizing_mode="stretch_width", margin=0)
+        # distributions
+        ds = self.ds = dict(
+            plot=pn.widgets.Select(name="Draw as", options=DIST_PLOTS),
+            norm=pn.widgets.Select(name="Histogram of", options=DIST_NORMS,
+                                   description="PDF: the whole sample integrates to 1 (values "
+                                               "outside the range count too); fraction: of "
+                                               "the whole sample per bin"),
+            bins=pn.widgets.IntInput(name="Bins", value=50, start=1, end=2000, width=90),
+            width=_auto("Bin width", description="Blank: the number of bins"),
+            hstyle=pn.widgets.Select(name="Bars as", options=DIST_HSTYLES),
+            cum=pn.widgets.Select(name="Fraction", options=DIST_CUM),
+            whis=pn.widgets.Select(name="Whiskers", options=DIST_WHIS),
+            xmin=_auto("Values from"), xmax=_auto("Values to"),
+            ymin=_auto("Count axis from"), ymax=_auto("Count axis to"),
+            logy=_chk("Log scale", False), means=_chk("Mean (diamond)", True),
+            horizontal=_chk("Horizontal", False), stats=_chk("Mean, sd, n in legend", False),
+            legend=_chk("Legend", True), legend_loc=pn.widgets.Select(
+                name="Legend at", options=["best"] + LOCS),
+            zero_line=_chk("Zero line", False),
+            alpha=_f("Fill opacity", 0.35, step=0.05, start=0.0, end=1.0),
+            lw=_f("Line width", 1.5, step=0.25, start=0.0))
+        self.dist_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.dist_tab = pn.widgets.Button(name="+ The map's distributions", height=32,
+                                          button_type="primary", button_style="outline")
+        self.dist_new = pn.widgets.Button(name="+ Distribution", button_type="light",
+                                          button_style="outline", height=32)
+        self.dist_col = pn.Column(
+            _hint("Distributions with the same <b>Panel</b> number share a panel (colour = "
+                  "distribution): e.g. one field at two times, or two runs."),
+            _row(self.dist_tab, self.dist_new), self.dist_box,
+            _section("Plot", _grid(*ds.values()),
+                     _hint("Values from / to: the value axis (histogram: the range of the "
+                           "bins; blank: the data's, minimum to maximum). Count axis: the "
+                           "histogram's or cumulative fraction's. The bins come from a "
+                           "4000-bin histogram of every value, so changing them reads "
+                           "nothing again.")),
             sizing_mode="stretch_width", margin=0)
         # time axes of time-height / time-series panels
         self.ts_tmin = pn.widgets.TextInput(name="From (min)", placeholder="data")
@@ -487,10 +533,11 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                   "too."),
             self.add_pick.body, self.runs_msg, collapsed=True)
         self._build_combo()
+        self._build_tree()
         panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.times_sec, self.titles_sec,
                                self.area_sec, self.ts_sec, self.runs_sec,
                                sizing_mode="stretch_width")
-        layers_tab = pn.Column(self.plan_layers, self.series_col, self.snd_col,
+        layers_tab = pn.Column(self.plan_layers, self.series_col, self.snd_col, self.dist_col,
                                sizing_mode="stretch_width")
         let = _grid(self.let_fmt, self.let_loc, self.let_size, self.let_bold, self.let_box)
         tl = _grid((self.tl_fmt, 2), self.tl_loc, self.tl_size, self.tl_bold, self.tl_box)
@@ -556,12 +603,15 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                 "without the viewer, and the figure's spec: open the spec here to keep "
                 "editing."), _grid((self.spec_path, 2), self.load_btn)),
             sizing_mode="stretch_width")
-        self.tabs = pn.Tabs(("Panels", panels_tab), ("Layers", layers_tab), ("Style", style_tab),
+        self.tabs = pn.Tabs(("Panels", panels_tab), ("Layers", layers_tab),
+                            ("Tree", self.tree_tab), ("Style", style_tab),
                             ("Annotate", annotate_tab), ("Export", export_tab),
                             dynamic=False, sizing_mode="stretch_width")
+        self.tabs.param.watch(lambda e: self._tree_sync() if e.new == 2 else None, "active")
         self.editor = pn.Column(
             self.start_hint,
-            _row(self.start_map, self.start_xs, self.start_ser, self.start_snd, self.start_def),
+            _row(self.start_map, self.start_xs, self.start_ser, self.start_snd, self.start_dist,
+                 self.start_def),
             self.tabs, scroll="y-auto", sizing_mode="stretch_height", width=580,
             styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
                     "overflow-x": "hidden"})
@@ -629,6 +679,10 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         for w in (self.width, self.height):
             w.param.watch(lambda e: self._size_by_hand(), "value")
         self.start_snd.on_click(lambda e: self.from_soundings())
+        self.start_dist.on_click(lambda e: self.from_dists())
+        self.dist_tab.on_click(lambda e: self._add_tab_dists())
+        self.dist_new.on_click(lambda e: self._add_dist())
+        self.ds["plot"].param.watch(lambda e: self._show_dist_opts(), "value")
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
         self.snd_tab.on_click(lambda e: self._add_tab_soundings())
@@ -636,7 +690,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             self.sk[k].param.watch(lambda e: self._fit_size(), "value")
         self.snd_new.on_click(lambda e: self._add_sounding())
         self.ann_add.on_click(lambda e: self._add_annotation())
-        for w in (*self.sk.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
+        for w in (*self.sk.values(), *self.ds.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
                   self.ts_ymin, self.ts_ymax,
                   self.ts_legend, self.ts_legloc, self.ts_zero, self.ck_on, self.ck_layer,
                   self.ck_label, self.ck_x, self.ck_y, self.ck_size, self.ck_fs,
@@ -660,6 +714,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
     def set_spec(self, spec):
         """Show `spec` in the widgets (one re-render at the end)."""
         self.spec = spec = fg.normalize(spec, self.run, self._own_track())
+        self.edits = json.loads(json.dumps(spec.get("edits") or {}))  # (the panel tree's)
         self.msg.object = ""
         self._auto_size = bool(spec.get("size_auto", False))  # until set by hand
         self._hold = True
@@ -772,6 +827,11 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                 if k in sk:
                     wdg.value = sk[k] if not isinstance(wdg, pn.widgets.FloatInput) \
                         else float(sk[k])
+            dd = s.get("dist", {})
+            for k, wdg in self.ds.items():
+                if k in dd:
+                    wdg.value = (None if dd[k] in (None, "") else float(dd[k])) \
+                        if isinstance(wdg, pn.widgets.FloatInput) else dd[k]
             ck = s.get("contour_key", {})
             self.ck_on.value, self.ck_label.value = ck.get("on", False), ck.get("label", "w")
             self.ck_x.value, self.ck_y.value = float(ck.get("x", 0.01)), float(ck.get("y", 0.01))
@@ -795,9 +855,11 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             self._build_titles(s.get("titles", []))
             self.ser_cards = [self._ser_card(e) for e in s.get("series", [])]
             self.snd_cards = [self._snd_card(e) for e in s.get("soundings", [])]
+            self.dist_cards = [self._dist_card(e) for e in s.get("dists", [])]
             self.ann_rows = [self._ann_row(a) for a in s.get("annotations", [])]
             self._show_series()
             self._show_soundings()
+            self._show_dists()
             self._show_anns()
         finally:
             self._hold = False
@@ -808,6 +870,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         self._show_storm()
         self._show_code()
         self._set_dl_name()
+        self._tree_sync(force=True)
         self.request(delay=False)
 
     def collect(self):
@@ -900,6 +963,13 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         s["code"] = dict(on=bool(self.code_on.value), text=self.code.value or "")
         s["series"] = [c.collect() for c in self.ser_cards]
         s["soundings"] = [c.collect() for c in self.snd_cards]
+        s["dists"] = [c.collect() for c in self.dist_cards]
+        s["dist"] = dict(s.get("dist", {}), **{
+            k: _num(w.value) if isinstance(w, pn.widgets.FloatInput) else w.value
+            for k, w in self.ds.items()})
+        for k, v in (("alpha", 0.35), ("lw", 1.5)):  # (not blank-able)
+            if s["dist"][k] is None:
+                s["dist"][k] = v
         s["annotations"] = [r.collect() for r in self.ann_rows]
         s["ts"] = dict(s.get("ts", {}), tmin=minutes(self.ts_tmin), tmax=minutes(self.ts_tmax),
                        zmin=float(self.ts_zmin.value or 0.0),
@@ -909,6 +979,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         s["skewt"] = dict(s.get("skewt", {}), **{
             k: (float(w.value or 0.0) if isinstance(w, pn.widgets.FloatInput) else w.value)
             for k, w in self.sk.items()})
+        s["edits"] = self._tree_collect()
         s["contour_key"] = dict(s.get("contour_key", {}), on=self.ck_on.value,
                                 layer=int(self.ck_layer.value), label=self.ck_label.value,
                                 x=float(self.ck_x.value or 0.0), y=float(self.ck_y.value or 0.0),
@@ -1446,6 +1517,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         for w in (self.ts_ymin, self.ts_ymax, self.ts_zero, self.ts_legend, self.ts_legloc):
             w.visible = kind == "line"
         self.snd_col.visible = kind == "sounding"
+        self.dist_col.visible = kind == "dist"
+        self._show_dist_opts()
         self.equal.visible = kind == "plan"
         for k in ("track", "line"):  # plan views only
             self.add_btns[k].visible = kind == "plan"
@@ -1453,6 +1526,19 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             c.show(kind)
             c._set_title()
         self._show_region()
+
+    def _show_dist_opts(self):
+        """The distribution plot settings the chosen kind of plot uses."""
+        ds, plot = self.ds, self.ds["plot"].value
+        hist, cum, boxy = plot == "hist", plot == "ecdf", plot in ("box", "violin")
+        for k in ("norm", "bins", "width", "hstyle"):
+            ds[k].visible = hist
+        ds["cum"].visible = cum
+        ds["whis"].visible = ds["means"].visible = ds["horizontal"].visible = boxy
+        ds["ymin"].visible = ds["ymax"].visible = not boxy
+        ds["ymin"].name = "Fraction axis from" if cum else "Count axis from"
+        ds["ymax"].name = "Fraction axis to" if cum else "Count axis to"
+        ds["legend"].visible = ds["legend_loc"].visible = not boxy
 
     def _show_cbar(self):
         self.cb_opts.visible = self.cb_mode.value != "none"
@@ -1505,7 +1591,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             else:
                 return 1.0
             return abs(y1 - y0) / max(abs(x1 - x0), 1e-6)
-        return {"xsec": 0.5, "th": 0.55, "line": 0.45, "sounding": 1.0}.get(s["kind"], 0.75)
+        return {"xsec": 0.5, "th": 0.55, "line": 0.45, "sounding": 1.0,
+                "dist": 0.7}.get(s["kind"], 0.75)
 
     def fit_height(self, s=None):
         """A figure height (in) that fits the panels at the figure's width: their shape
@@ -1559,6 +1646,9 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                         self.cb_mode.value, self.cb_loc.value = "row", "right"
                     else:
                         self.cb_mode.value = "none"
+                elif kind == "dist":
+                    self.xlabel.value = self.ylabel.value = ""  # (the field's, the plot's)
+                    self.cb_mode.value = "none"
                 else:
                     self.xlabel.value, self.ylabel.value = "temperature (°C)", "pressure (hPa)"
                     self.cb_mode.value = "none"
@@ -1576,8 +1666,13 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                 self.snd_cards = [self._snd_card(e) for e in self.tab_soundings()]
                 if not self.snd_cards:
                     self._add_sounding()
+            if kind == "dist" and not self.dist_cards:
+                self.dist_cards = [self._dist_card(e) for e in self.tab_dists()]
+                if not self.dist_cards:
+                    self._add_dist()
             self._show_series()
             self._show_soundings()
+            self._show_dists()
             self._auto_size = True
             if kind == "th":
                 self._th_grid()
@@ -1657,8 +1752,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             self.rl_on.value = False
             self._set_titles(ts)
             return
-        if s["kind"] in ("line", "sounding"):
-            ents = s["series" if s["kind"] == "line" else "soundings"]
+        if s["kind"] in figdraw.ENTRIES:
+            ents = s[figdraw.ENTRIES[s["kind"]]]
             ts = []
             for i in range(fg.npanels(s)):
                 labs = [e.get("label", "") for e in ents if int(e.get("panel", 0)) == i]
@@ -1707,6 +1802,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
         except Exception as e:  # noqa: BLE001
             self._status(f"Incomplete settings: {e}", True)
             return
+        self._tree_sync()
         self._remember(spec)
         self.v.gen["fig"] += 1
         g = self.v.gen["fig"]
@@ -1721,6 +1817,8 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             return self._series_data(spec)
         if spec["kind"] == "sounding":
             return self._sounding_data(spec, progress, cancelled)
+        if spec["kind"] == "dist":
+            return self._dist_data(spec, progress, cancelled)
         ctx = {}  # run index -> (run, Fields, fixes, centres, track signature)
 
         def context(k):
@@ -1733,6 +1831,31 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                 ctx[k] = (run, F, fx, ser.track_centers(fx, len(run.times)), sig)
             return ctx[k]
 
+        def read(s, i, k, ts, n, at):
+            """Arrays of panel i of spec s, read from run k at time ts (for panel `at`)."""
+            entry = spec["runs"][k]
+            try:
+                run, F, fx, centers, sig = context(k)
+            except Exception as e:  # noqa: BLE001
+                return dict(time_s=ts, missing=f"could not open {entry['path']}: {e}")
+            t = fg.tindex(run, ts)
+            c = centers.get(t) if t is not None else None
+            key = fg.data_key(s, i, c, run.path)
+            if any(lay["type"] == "track" for lay in figdraw.spec_layers(s, i)):
+                key += sig
+            d = self.cache.get(key)
+            if d is None:
+                if progress:
+                    progress(at, n)
+                storm = fg.storm_motion(run, fx, t) if t is not None else None
+                d = fg.extract(run, F, s, i, c, fx, storm)
+                self.cache[key] = d
+                while len(self.cache) > 60:
+                    self.cache.popitem(last=False)
+            else:
+                self.cache.move_to_end(key)
+            return d
+
         multi = len(spec["runs"]) > 1
         data = {}
         n = fg.npanels(spec)
@@ -1743,28 +1866,18 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             if ref is None:
                 continue  # an empty cell of a run x time grid
             k, ts = ref
-            entry = spec["runs"][k]
-            try:
-                run, F, fx, centers, sig = context(k)
-            except Exception as e:  # noqa: BLE001
-                data[i] = dict(time_s=ts, missing=f"could not open {entry['path']}: {e}")
-                continue
-            t = fg.tindex(run, ts)
-            c = centers.get(t) if t is not None else None
-            key = fg.data_key(spec, i, c, run.path)
-            if any(lay["type"] == "track" for lay in spec["layers"]):
-                key += sig
-            d = self.cache.get(key)
-            if d is None:
-                if progress:
-                    progress(i, n)
-                storm = fg.storm_motion(run, fx, t) if t is not None else None
-                d = fg.extract(run, F, spec, i, c, fx, storm)
-                self.cache[key] = d
-                while len(self.cache) > 60:
-                    self.cache.popitem(last=False)
+            groups = fg.layer_groups(spec, i)  # (layers of another run or time)
+            if not groups:
+                d = read(spec, i, k, ts, n, i)
             else:
-                self.cache.move_to_end(key)
+                others = {j for js in groups.values() for j in js}
+                lays = figdraw.spec_layers(spec, i)
+                d = read(fg.group_spec(spec, i, ref, set(range(len(lays))) - others), 0,
+                         k, ts, n, i)
+                for g, js in groups.items():
+                    dd = read(fg.group_spec(spec, i, g, set(js)), 0, g[0], g[1], n, i)
+                    d = fg.merge_group(d, dd, js, lays)
+            entry = spec["runs"][k]
             data[i] = dict(d, run=k, **({"run_label": entry.get("label", "")} if multi
                                          else {}))
         return data
@@ -1776,7 +1889,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
             return g != self.v.gen["fig"]
 
         def progress(i, n):
-            what = "sounding" if spec["kind"] == "sounding" else "panel"
+            what = {"sounding": "sounding", "dist": "distribution"}.get(spec["kind"], "panel")
             self.v._schedule(partial(self._status, f'<span class="busy">● Reading {what} '
                                                    f'{i + 1}/{n}…</span>'))
 

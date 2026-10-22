@@ -1,6 +1,6 @@
-"""Figure editor: new figures from the map, the cross-section, the series and the
-soundings, the series / sounding / annotation lists, and the series and sounding
-data of a figure.
+"""Figure editor: new figures from the map, the cross-section, the series, the
+soundings and the distributions, the series / sounding / distribution / annotation
+lists, and the series, sounding and distribution data of a figure.
 
 A mixin of the FigureEditor (cm1view/figui.py)."""
 
@@ -13,7 +13,7 @@ import panel as pn
 
 from . import figdraw, figure as fg, render, series as ser
 from .run import FileBusy, MissingAtTime
-from .figparts import AnnotationRow, LEVEL_MODES, SeriesCard, SoundingCard, _dark
+from .figparts import AnnotationRow, DistCard, LEVEL_MODES, SeriesCard, SoundingCard, _dark
 
 
 class FigureSources:
@@ -187,13 +187,14 @@ class FigureSources:
         self._series_changed()
 
     def _fit_grid(self, reset=False):
-        """Time-series / sounding figures: enough grid cells for the highest panel
-        number of the cards and no empty rows (reset: a column of up to 3, else 2
-        columns)."""
+        """Time-series / sounding / distribution figures: enough grid cells for the
+        highest panel number of the cards and no empty rows (reset: a column of up to
+        3, else 2 columns)."""
         kind = self.kind.value
-        if kind not in ("line", "sounding"):
+        if kind not in ("line", "sounding", "dist"):
             return
-        cards = self.ser_cards if kind == "line" else self.snd_cards
+        cards = {"line": self.ser_cards, "sounding": self.snd_cards,
+                 "dist": self.dist_cards}[kind]
         n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
         if reset:
@@ -228,6 +229,8 @@ class FigureSources:
                 per = max([sum(int(c.w["panel"].value or 1) == p + 1 for c in self.snd_cards)
                            for p in range(r * c)] or [1])
                 h += r * (0.45 + 0.25 * per)
+        elif kind == "dist":
+            w, h = (5.5 if c == 1 else 4.2 * c), 3.6 * r + 0.3
         else:
             w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
         hold, self._hold = self._hold, True
@@ -310,6 +313,57 @@ class FigureSources:
         e["panel"] = len(self.snd_cards)
         self.snd_cards.append(self._snd_card(e))
         self._show_soundings()
+        self._fit_grid()
+        self.request()
+
+    # ------------------------------------------------------------ distribution cards
+    def _dist_card(self, e):
+        c = DistCard(self, e)
+        c.rm.on_click(lambda ev: self._remove_dist(c))
+        return c
+
+    def _show_dists(self):
+        self.dist_box.objects = [c.panel for c in self.dist_cards] or [pn.pane.HTML(
+            '<div class="cv-empty">No distributions: add the map\'s (Distribution tool), '
+            'or a new one.</div>')]
+
+    def _remove_dist(self, c):
+        self.dist_cards.remove(c)
+        self._show_dists()
+        self._fit_grid()
+        self.request()
+
+    def tab_dists(self):
+        """spec["dists"] entries of the Distribution tool's distributions (this run),
+        all in the first panel."""
+        out = []
+        for n, s in enumerate((getattr(self.v, "dists", {}) or {}).values()):
+            out.append(fg.dist_defaults(s["recipe"], self._own_index(),
+                                        float(self.run.times[s["t"]]),
+                                        n + len(self.dist_cards)))
+        return out
+
+    def _add_tab_dists(self):
+        new = self.tab_dists()
+        if not new:
+            self._msg("No distributions yet: compute one with the Distribution tool on "
+                      "the map first, or add one here.", True)
+            return
+        self.dist_cards += [self._dist_card(e) for e in new]
+        self._show_dists()
+        self.request()
+
+    def _new_dist_recipe(self):
+        """A recipe for a new distribution: w over the whole domain at 1 km."""
+        f = "winterp" if "winterp" in self.F else next(iter(self.F.defs))
+        return dict(field=f, vmode="height", z=1.0, region="domain")
+
+    def _add_dist(self):
+        e = fg.dist_defaults(self._new_dist_recipe(), self._own_index(),
+                             float(self.run.times[self.v.t]), len(self.dist_cards))
+        e["panel"] = 0
+        self.dist_cards.append(self._dist_card(e))
+        self._show_dists()
         self._fit_grid()
         self.request()
 
@@ -481,6 +535,58 @@ class FigureSources:
             data[i] = fg.sounding_panel(spec, i, get, lambda e: labels.get(e, ""))
         return data
 
+    def _dist_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of a distribution figure; the summaries are kept
+        (dist_cache), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("dists", [])
+        res, labels, vlabs = {}, {}, {}
+        multi = len(runs) > 1
+
+        def get(e):
+            if e in res:
+                return res[e]
+            ent = ents[e]
+            k = int(ent.get("run", 0))
+            if k >= len(runs):
+                res[e] = "no such run"
+                return res[e]
+            try:
+                run, F = self.open_run(runs[k]["path"])
+                fx = self.run_fixes(runs[k], run)
+                track = ent["recipe"]["region"] == "track" or \
+                    (ent["recipe"]["field"] in F and F[ent["recipe"]["field"]].storm)
+                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                        for t, f in fx.items())) if track else ""
+                key = json.dumps([run.path, float(ent["time_s"]), ent["recipe"], sig],
+                                 sort_keys=True)
+                r = self.dist_cache.get(key)
+                if r is None:
+                    if progress:
+                        progress(e, len(ents))
+                    r = fg.dist_compute(run, F, ent, fx)
+                    self.dist_cache[key] = r
+                    while len(self.dist_cache) > 60:
+                        self.dist_cache.popitem(last=False)
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                times = len({round(float(x["time_s"]), 1) for x in mine}) > 1
+                labels[e] = fg.dist_label(ent, runs[k].get("label", ""), F, multi, times)
+                vlabs[e] = fg.dist_value_label(F, ent["recipe"]["field"])
+            except (MissingAtTime, FileBusy) as ex:
+                r = str(ex)
+            except Exception as ex:  # noqa: BLE001
+                traceback.print_exc()
+                r = f"{type(ex).__name__}: {ex}"
+            res[e] = r
+            return r
+
+        data = {}
+        for i in range(fg.npanels(spec)):
+            if cancelled and cancelled():
+                return None
+            data[i] = fg.dist_panel(spec, i, get, lambda e: labels.get(e, ""),
+                                    lambda e: vlabs.get(e, ""))
+        return data
+
     # ------------------------------------------------------------ start from series / soundings
     def from_series(self):
         """Time-height panels of the Series tab's layer series (the active one first),
@@ -533,4 +639,22 @@ class FigureSources:
         # the time and the legend
         s["letters"] = dict(s["letters"], on=self._multi_part(), loc="above left")
         s["time_label"] = dict(s["time_label"], loc="lower left")
+        self.set_spec(s)
+
+    def from_dists(self):
+        """One distribution panel of the Distribution tool's distributions (or w over
+        the whole domain at 1 km at the shown time when there are none), drawn as the
+        tool draws them."""
+        s = self._keep_runs(fg.default_spec(self.run, self.F, self.v.t))
+        ents = self.tab_dists() or [fg.dist_defaults(
+            self._new_dist_recipe(), s["run"], float(self.run.times[self.v.t]))]
+        look = getattr(self.v, "dist_look", None)
+        s.update(kind="dist", dists=ents, rows=1, cols=1, size=[5.5, 3.9], vary="time")
+        if look:
+            s["dist"] = dict(s["dist"], **look())
+        s["axes"] = dict(s["axes"], xlabel="", ylabel="", ticklabels="all", equal=False)
+        s["colorbar"] = dict(s["colorbar"], mode="none")
+        s["letters"] = dict(s["letters"], on=self._multi_part(), loc="above left")
+        s["time_label"] = dict(s["time_label"], loc="upper left")
+        s["run_label"] = dict(s["run_label"], on=False)
         self.set_spec(s)

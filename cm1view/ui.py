@@ -216,14 +216,18 @@ TOOLS = {
     "Cross-section": ("slice", "Section", "Vertical cross-section: click A, then B"),
     "Track": ("route", "Track", "Storm track: click a storm to follow it through time"),
     "Series": ("chart-line", "Series", "Time series of a field over a region"),
+    "Distribution": ("chart-histogram", "Distrib.", "Distribution of a field over a region "
+                                                    "at one time: histogram, box, violin, "
+                                                    "cumulative"),
     "3D region": ("cube", "3D box", "Drag a box on the map to view it in 3D"),
 }
 # click mode -> its tool button (both kinds of sounding are the Sounding tool)
 TOOL_OF = {"Area sounding": "Sounding"}
 # click mode -> its panel (tab of the analysis panel); 3D region has none
-PANELS = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2, "Series": 3}
-TAB_MODE = {0: "Sounding", 1: "Cross-section", 2: "Track", 3: "Series"}
-PANEL_TITLES = ["Sounding", "Cross-section", "Storm track", "Time series"]
+PANELS = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2, "Series": 3,
+          "Distribution": 4}
+TAB_MODE = {0: "Sounding", 1: "Cross-section", 2: "Track", 3: "Series", 4: "Distribution"}
+PANEL_TITLES = ["Sounding", "Cross-section", "Storm track", "Time series", "Distribution"]
 
 RAIL_BTN = """
 .bk-btn { display: flex !important; flex-direction: column; align-items: center; gap: 3px;
