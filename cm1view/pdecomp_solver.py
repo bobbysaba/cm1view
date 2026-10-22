@@ -10,8 +10,12 @@ with its own forcing F, by a horizontal FFT (periodic lateral boundaries) or cos
 transform (open ones) and a tridiagonal solve in the vertical, conservative on CM1's
 stretched grid.  p_nl is the residual: total p' - p_b - p_l.
 
-By Bobby Saba (pdecomp_new_fixed_mp.py, the multi-CPU version of pdecomp_new_fixed.py:
-same math, results identical to round-off).  cm1view runs it in a separate process
+Credits: based on code by Dr. John Peters, passed along and developed by Andrew Muehr,
+and adapted by Bobby Saba (pdecomp_new_fixed_mp.py, the multi-CPU version of
+pdecomp_new_fixed.py: same math, results identical to round-off).
+
+TODO before publishing: confirm with John Peters and Andrew Muehr that their code may be
+distributed under the GPL-3.0-or-later (see LICENSE), and record their agreement here.  cm1view runs it in a separate process
 (cm1view/pdecomp.py); the pdecomp_script setting can point at another script with the
 same functions instead.  It also works on its own:
 

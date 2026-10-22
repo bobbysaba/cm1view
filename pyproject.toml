@@ -9,6 +9,12 @@ description = "Interactive web viewer for CM1 netCDF output"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Bobby Saba", email = "bobbysabawx@gmail.com" }]
+license = { text = "GPL-3.0-or-later" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
 # environment.yml pins the versions cm1view is tested with (conda-forge); these are the
 # looser requirements for a pip install into an existing environment.
 dependencies = [

@@ -45,3 +45,12 @@ JupyterHub.
 
 Python 3.11 or newer with the packages in `environment.yml` (conda-forge); tested on
 Linux. Any modern browser.
+
+## License and credits
+
+cm1view is free software under the [GNU General Public License v3.0 or later](LICENSE):
+you may use, study, change and share it, and anything you distribute that is built on
+it must stay under the same license, with its source.
+
+The pressure-decomposition solver (`cm1view/pdecomp_solver.py`) is based on code by
+Dr. John Peters, passed along and developed by Andrew Muehr, and adapted by Bobby Saba.
