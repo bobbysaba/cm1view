@@ -1,7 +1,7 @@
 """Series: a field reduced over a region at every time -- the panel, computing,
 the line and time-height plots, and files.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import io
 import os

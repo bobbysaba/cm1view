@@ -1,7 +1,7 @@
 """The items tray under the map: what has been made (map view, soundings, section,
 3D box, series), to reopen, remove or make a figure from.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 from functools import partial
 

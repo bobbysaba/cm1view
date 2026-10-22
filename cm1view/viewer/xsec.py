@@ -1,6 +1,6 @@
 """Vertical cross-sections: the panel, the A-B line on the map and the section job.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import traceback
 from functools import partial

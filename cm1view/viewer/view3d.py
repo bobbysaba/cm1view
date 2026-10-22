@@ -1,7 +1,7 @@
 """3D workspace: the scene job, camera, the pressure decomposition button,
 and picking / sampling streamlines.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import os
 import traceback

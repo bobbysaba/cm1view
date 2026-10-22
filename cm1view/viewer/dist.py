@@ -3,7 +3,7 @@ computing (dist.py) and the histogram, box, violin and cumulative plots, with a
 table of statistics.  Several distributions (other fields, heights or times) are
 drawn together; "Figure of these" opens them in the Figure workspace.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import json
 import traceback

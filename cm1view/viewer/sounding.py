@@ -1,7 +1,7 @@
 """Soundings: the analysis jobs, the skew-T / hodograph / profile graphics,
 their style, and zoom / pan by redrawing with axes limits.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import traceback
 from functools import partial

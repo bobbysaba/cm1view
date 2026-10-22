@@ -1,7 +1,7 @@
 """Storm tracking: the Track panel, automatic and hand-placed fixes, the storm chip,
 and saving / loading tracks.
 
-A mixin of the Viewer (cm1view/app.py): its methods use the Viewer's widgets and state."""
+A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import io
 import os

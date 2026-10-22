@@ -50,7 +50,11 @@ pdecomp/                  pressure decomposition
   pdecomp_solver.py       the solver (runs in its own process; usable alone)
 
 viewer/                   the interactive page (Panel / Bokeh)
-  app.py                  the Viewer: widgets, map, layout, wiring, events; the page
+  app.py                  the Viewer (built from the mixins below), wiring; the page
+  widgets.py              Viewer mixin: the drawers' controls and the run picker
+  mapview.py              Viewer mixin: the map, storm motion and the map job
+  layout.py               Viewer mixin: panels, top bar, toolbars, the main column
+  events.py               Viewer mixin: time, playback, tool modes, map clicks and drags
   ui.py                   shared UI pieces: constants, figure styling, drawers, tool rail
   sounding.py             Viewer mixin: soundings, their graphics, style and zoom
   tracking.py             Viewer mixin: storm tracking and the storm chip
