@@ -6,7 +6,8 @@ import sys
 
 import pytest
 
-from cm1view import config, demo, registry, track as trk
+from cm1view import config, demo, registry
+from cm1view.core import track as trk
 
 
 def test_scan_skips_unreadable_links(tmp_path, demo_root):
@@ -104,7 +105,8 @@ def test_runs_tracks_and_save_folders(fresh, demo_root):
 
 
 def test_viewer_follows_saved_settings(fresh, reg, demo_root):
-    from cm1view import app as A, pdecomp
+    from cm1view.viewer import app as A
+    from cm1view import pdecomp
     C = config
     out = fresh / "out"
     C.save(dict(runs_root=[demo_root], figures_dir=f"{out}/figs", exports_dir=f"{out}/data"))
@@ -157,7 +159,8 @@ def test_viewer_follows_saved_settings(fresh, reg, demo_root):
 def test_figure_bundle_runs_anywhere(fresh, reg, demo_root):
     """Image and script side by side, data and spec in _src/; the script redraws the
     image from a copied folder.  Several runs: no folder of their own until chosen."""
-    from cm1view import app as A, figure as fg
+    from cm1view.viewer import app as A
+    from cm1view.figures import spec as fg
     C = config
     C.save(dict(runs_root=[demo_root], figures_dir=str(fresh / "figs")))
     run, F = reg.get()
@@ -198,6 +201,6 @@ def test_figure_bundle_runs_anywhere(fresh, reg, demo_root):
 
 
 def test_landing_page_without_a_run():
-    from cm1view import app
+    from cm1view.viewer import app
     _, st = app._landing()
     assert st.modal is not None

@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.real,
 
 @pytest.fixture(scope="module")
 def real():
-    from cm1view import app as A
+    from cm1view.viewer import app as A
     from cm1view.registry import Registry
     reg = Registry(os.path.abspath(os.path.expanduser(RUN)), 8, None)
     run, F = reg.get()
@@ -61,7 +61,7 @@ def test_cross_section(real):
 
 
 def test_series(real, tmp_path, monkeypatch):
-    from cm1view import series as S
+    from cm1view.core import series as S
     monkeypatch.setattr(S, "CACHE_DIR", str(tmp_path))
     v = real
     v.ser_field.value, v.ser_vmode.value, v.ser_reduce.value = "winterp", "height", "max"

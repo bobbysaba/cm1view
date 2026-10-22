@@ -46,8 +46,8 @@ Homepage = "https://github.com/bobbysaba/cm1view"
 [project.scripts]
 cm1view = "cm1view.__main__:main"
 
-[tool.setuptools]
-packages = ["cm1view"]
+[tool.setuptools.packages.find]
+include = ["cm1view*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

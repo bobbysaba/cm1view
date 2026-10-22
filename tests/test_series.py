@@ -7,8 +7,9 @@ import numpy as np
 import pytest
 from bokeh.models import DataRange1d, Range1d
 
-from cm1view import config, series as S, track as trk
-from cm1view.fields import palette
+from cm1view import config
+from cm1view.core import series as S, track as trk
+from cm1view.core.fields import palette
 from conftest import wait
 
 
@@ -44,7 +45,7 @@ def test_domain_min_matches_the_map(viewer, reg):
 
 
 def test_second_session_reads_the_cache(viewer, reg):
-    from cm1view import app as A
+    from cm1view.viewer import app as A
     run, F = reg.get()
     recipe = compute(viewer, "thpert", "min", z=1.0)["recipe"]
     assert int(S.cached(run, recipe).computed.sum()) == len(run.times)

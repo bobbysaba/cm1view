@@ -59,7 +59,7 @@ def reg(demo_run):
 @pytest.fixture
 def viewer(reg):
     """A fresh Viewer on the demo supercell, at the first storm time."""
-    from cm1view import app as A
+    from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)
     v.main()

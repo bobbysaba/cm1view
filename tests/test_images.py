@@ -22,7 +22,7 @@ DPI = 72
 
 def _png(ed, path):
     """Draw the editor's figure (every part) at DPI into path."""
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     spec = ed.collect_all()
     ed.panel_data(spec)
     wait(lambda: not ed.series_pending(), 120, "the series")

@@ -7,7 +7,8 @@ import threading
 import netCDF4
 import numpy as np
 
-from cm1view import config, track as trk
+from cm1view import config
+from cm1view.core import track as trk
 
 
 def test_theta_rho_matches_the_definition(reg):

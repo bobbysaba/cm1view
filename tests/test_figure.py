@@ -17,7 +17,7 @@ def ed(viewer):
 
 def render(ed):
     """Draw the editor's figure as the preview does (raises on errors)."""
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     spec = ed.collect()
     data = ed.panel_data(spec)
     return spec, data, figdraw.draw(spec, data)
@@ -35,7 +35,7 @@ def test_round_trip_keeps_the_spec(ed):
 
 
 def test_panel_time_pickers_follow_the_grid(ed):
-    from cm1view.figui import NONE
+    from cm1view.figures.editor import NONE
     ed.rows.value, ed.cols.value = 1, 2
     assert len(ed.tm_rows) == 2 and len(ed.title_ws) == 2
     ed.cols.value = 3  # a new panel continues the times
@@ -169,7 +169,7 @@ def coarse_run(demo_root, tmp_path_factory):
 
 def test_removing_a_run_keeps_soundings_and_series_on_their_runs(ed, demo_root, coarse_run):
     import os
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     for p in (os.path.join(demo_root, "demo", "supercell_weak"), coarse_run):
         ed.add_path.value = p
         ed._add_run()
@@ -242,8 +242,8 @@ def test_run_picker_adds_a_run(ed, demo_root):
 
 
 def test_field_lists_cover_every_run():
-    from cm1view.fields import FieldDef
-    from cm1view.figruns import AllFields
+    from cm1view.core.fields import FieldDef
+    from cm1view.figures.runs import AllFields
 
     class F:
         def __init__(self, *names):
@@ -314,7 +314,7 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
 
 def test_animation_steps_every_panel(ed, tmp_path):
     from PIL import Image
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     ed.rows.value, ed.cols.value = 1, 2
     ts = ed.run.times  # (the pickers hold model times in s)
     ed.tm_rows[0].value, ed.tm_rows[1].value = float(ts[1]), float(ts[2])
@@ -372,7 +372,7 @@ def test_sounding_layouts(ed, layout):
 
 
 def test_panels_at_heights(ed):
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     ed.vary.value = "height"
     ed.pz.value = "1, 3, 6"
     assert (ed.rows.value, ed.cols.value) == (1, 3) and ed.pz.visible
@@ -422,7 +422,7 @@ def test_figure_of_parts(ed, tmp_path):
     import subprocess
     import sys
     import matplotlib.image as mi
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     ed.rows.value, ed.cols.value = 1, 2
     ed._add_part()  # part 2: a copy, then soundings
     assert len(ed.parts) == 2 and ed.part_i == 1 and ed.part_sel.visible
@@ -512,7 +512,7 @@ def test_undo_covers_figure_parts(ed):
 
 def test_animation_of_figure_parts(ed, tmp_path):
     from PIL import Image
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     ed.rows.value, ed.cols.value = 1, 1
     ed._add_part()
     ed.from_soundings()  # part 2: a sounding at the plan view's time (the outputs are
@@ -689,7 +689,7 @@ def test_clicks_in_a_skewt_are_temperature_and_pressure(ed):
 
 
 def test_parts_size_share_and_one_colorbar(ed):
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     ed.rows.value, ed.cols.value = 1, 1
     ed._add_part()
     ed.part_w.value, ed.part_h.value = 9.0, 4.0
@@ -707,7 +707,7 @@ def test_parts_size_share_and_one_colorbar(ed):
 
 
 def test_panels_at_model_levels_with_height_labels(ed):
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     ed.vary.value = "height"
     ed.pz.value = "1, 3"
     ed.time1.value = ed._shown_s()
@@ -760,7 +760,7 @@ def test_figure_of_parts_with_a_series_part(ed, tmp_path):
     import subprocess
     import sys
     import matplotlib.image as mi
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     ed.rows.value, ed.cols.value = 1, 1
     ed._add_part()
     ed.from_series()
@@ -802,7 +802,7 @@ def _setup(ed, how):
 @pytest.mark.parametrize("how", ["time", "height", "xsec", "sounding", "parts"])
 def test_version_1_specs_upgrade_and_draw(ed, how):
     """Version-1 specs (and figures of parts) upgrade to version 2 and draw every panel."""
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     _setup(ed, how)
     ed.let_on.value = True
     spec = ed.collect_all()
@@ -814,7 +814,7 @@ def test_version_1_specs_upgrade_and_draw(ed, how):
 
 
 def test_upgrade_writes_out_each_panel():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     lay = dict(type="fill", on=True, field="dbz", mode="height", z=1.0, cmap="viridis",
                vmin=0.0, vmax=60.0, extend="max")
     cont = dict(type="contour", on=True, field="w", mode="height", z=3.0, levels="5",
@@ -839,7 +839,7 @@ def test_upgrade_writes_out_each_panel():
 
 
 def test_upgrade_counts_soundings_within_their_panel():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     snd = [dict(run=0, time_s=0.0, panel=0), dict(run=1, time_s=0.0, panel=1),
            dict(run=1, time_s=60.0, panel=0)]
     v1 = dict(version=1, kind="sounding", rows=1, cols=2, soundings=snd, size=[8, 4],
@@ -854,7 +854,7 @@ def test_upgrade_counts_soundings_within_their_panel():
 
 
 def test_upgrade_of_parts_keeps_each_parts_settings():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     part = dict(version=1, kind="plan", rows=2, cols=1, vary="time", times_s=[0.0, 60.0],
                 run=0, layers=[], runs=[dict(path="/b")], size=[4, 6], share=0.4,
                 font=dict(size=8), annotations=[dict(panel=1), dict(panel=-1)])
@@ -871,7 +871,7 @@ def test_upgrade_of_parts_keeps_each_parts_settings():
 
 
 def test_colorbar_ends_auto_and_shared():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     lay = dict(type="fill", vmin=0.0, vmax=10.0, extend="auto")
     assert figdraw.extend_of(lay, np.array([1.0, 5.0])) == "neither"
     assert figdraw.extend_of(lay, np.array([1.0, 12.0, np.nan])) == "max"
@@ -903,7 +903,7 @@ def _v2_plan(mode="shared"):
 
 
 def test_version_2_panels_span_cells_and_share_colorbar_ends():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     from matplotlib.colors import to_hex
     spec, data = _v2_plan()
     assert figdraw._extends(spec, data) == {0: "both", 1: "both", 2: "both"}
@@ -925,7 +925,7 @@ def test_version_2_panels_span_cells_and_share_colorbar_ends():
 
 
 def test_layers_take_the_panels_run_time_and_height():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     p = dict(run=1, time_s=600.0, z=2.0)
     assert figdraw.resolved(p, dict(type="fill", z=None)) == \
         dict(type="fill", run=1, time_s=600.0, z=2.0)
@@ -947,7 +947,7 @@ def _edited_v1():
 
 
 def test_panel_edits_change_that_panel_alone():
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     v1 = _edited_v1()
     assert figdraw.panel_ref(v1, 0) == (0, 0.0) and figdraw.panel_ref(v1, 1) == (1, 900.0)
     assert figdraw.form_ref(v1, 1) == (0, 300.0)
@@ -964,7 +964,7 @@ def test_panel_edits_change_that_panel_alone():
 
 
 def test_layers_of_another_run_or_time_are_read_apart():
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     v1 = _edited_v1()
     assert fg.layer_groups(v1, 1) == {(0, 60.0): [0]}  # the fill; the contours: the panel's
     assert fg.layer_groups(v1, 0) == {}
@@ -978,7 +978,7 @@ def test_layers_of_another_run_or_time_are_read_apart():
 
 
 def test_animation_moves_edited_times_but_locked_layers():
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     v1 = _edited_v1()
     v1["edits"]["1"]["extra"][0].update(time_s=60.0, time_lock=True)
     s = fg.shift_times(v1, 120.0)
@@ -1059,7 +1059,7 @@ def test_saved_spec_is_version_2_and_reopens_with_its_edits(ed, tmp_path):
 # ------------------------------------------------------------------ distributions
 @pytest.mark.parametrize("plot", ["hist", "box", "violin", "ecdf"])
 def test_distribution_figure_draws_each_plot(ed, plot):
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     ed.from_dists()  # (no distributions on the map: w over the domain)
     assert ed.kind.value == "dist" and len(ed.dist_cards) == 1
     t1 = float(ed.run.times[4])
@@ -1104,7 +1104,7 @@ def test_distribution_figure_of_the_maps(ed, viewer):
 
 
 def test_distribution_spec_upgrades_to_panels(ed):
-    from cm1view import figdraw, figure as fg
+    from cm1view.figures import draw as figdraw, spec as fg
     ed.from_dists()
     e = dict(ed.dist_cards[0].collect(), panel=1)
     ed.dist_cards.append(ed._dist_card(e))
@@ -1148,7 +1148,7 @@ def test_difference_layer(ed):
 
 
 def test_difference_of_different_grids():
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     x, y = np.arange(4.0), np.arange(3.0)
     a, b = np.ones((3, 4)), np.add.outer(y, x)
     d = fg.subtract(dict(x=x, y=y, L0=a), dict(x=x, y=y, L0=b), 0)
@@ -1178,7 +1178,7 @@ def _swath(ed):
 
 
 def test_time_window_layer(ed):
-    from cm1view import swath
+    from cm1view.core import swath
     c = _swath(ed)
     lay = c.collect()
     assert lay["reduce"] == dict(op="max", t0=lay["reduce"]["t0"], t1=None, every=1)
@@ -1218,7 +1218,7 @@ class _Fields:
 
 
 def test_swaths_follow_the_ground_and_composites_the_storm(tmp_path, monkeypatch):
-    from cm1view import swath
+    from cm1view.core import swath
     monkeypatch.setattr(swath, "CACHE_DIR", str(tmp_path))
     lay = dict(field="w", mode="height", z=1.0, reduce=dict(op="max", t0=None, t1=None))
     # the grid moves 1 km a minute: a blob fixed on the ground moves 1 column back
@@ -1240,7 +1240,7 @@ def test_swaths_follow_the_ground_and_composites_the_storm(tmp_path, monkeypatch
 
 def test_templates_apply_to_another_run(ed, coarse_run):
     import os
-    from cm1view import figure as fg
+    from cm1view.figures import spec as fg
     spec = ed.collect()
     ed.tpl_name.value = "two by three"
     ed._save_template()
@@ -1266,7 +1266,7 @@ def test_templates_apply_to_another_run(ed, coarse_run):
 
 
 def test_style_presets_and_matplotlib_styles(ed, tmp_path):
-    from cm1view import figdraw
+    from cm1view.figures import draw as figdraw
     ed.preset.value = "ams"
     ed._apply_preset()
     s = ed.collect()

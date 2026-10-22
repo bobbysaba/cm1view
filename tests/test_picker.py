@@ -4,7 +4,7 @@ import os
 import pytest
 
 from cm1view import registry
-from cm1view.picker import RunPicker
+from cm1view.viewer.picker import RunPicker
 
 
 @pytest.fixture

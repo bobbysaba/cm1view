@@ -6,8 +6,8 @@ import os
 import threading
 
 from . import config
-from .fields import Fields
-from .run import CM1Run, VolumeCache
+from .core.fields import Fields
+from .core.run import CM1Run, VolumeCache
 
 _OLD_RECENT = os.path.join(os.path.expanduser("~"), ".cache", "cm1view", "recent.json")
 

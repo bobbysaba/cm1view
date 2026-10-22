@@ -4,7 +4,7 @@ import os
 
 import numpy as np
 
-from cm1view import track as trk
+from cm1view.core import track as trk
 from conftest import tap, txt, wait
 
 

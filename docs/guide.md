@@ -340,7 +340,7 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
   from there (any file subset; the map title says which version wrote them, and warns
   for files written by early versions without a `pdecomp_version` tag). Elsewhere, a
   *Compute pressure decomposition* button computes that time in a separate process with
-  cm1view's solver (`cm1view/pdecomp_solver.py`). Each part solves the anelastic pressure
+  cm1view's solver (`cm1view/pdecomp/pdecomp_solver.py`). Each part solves the anelastic pressure
   equation, `cp [H ∂²π/∂x² + H ∂²π/∂y² + ∂/∂z(H ∂π/∂z)] = F` with `H = θv0 ρ0`, by a
   horizontal FFT (periodic lateral boundaries, `ebc = 1`) or cosine transform (open
   ones) and a tridiagonal solve in the vertical that is conservative on the stretched
@@ -369,5 +369,5 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
   like a 3D field) and `write_data`, and a module-level `nc` (`import netCDF4 as nc`)
   that it opens files with.
 
-Other derived fields are defined in `cm1view/fields.py` (`_make_fields`); see
+Other derived fields are defined in `cm1view/core/fields.py` (`_make_fields`); see
 [Developing](developing.md).

@@ -4,7 +4,8 @@ regions and layers of the demo run, and the map's Distribution panel."""
 import numpy as np
 import pytest
 
-from cm1view import dist, figdraw
+from cm1view.core import dist
+from cm1view.figures import draw as figdraw
 from conftest import txt, wait
 
 

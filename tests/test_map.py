@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from cm1view import render
+from cm1view.core import render
 from conftest import tap, wait
 
 

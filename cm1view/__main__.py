@@ -53,7 +53,7 @@ def main(argv=None):
         print(f"cm1view: could not read the settings ({config.read_error()}); "
               "using defaults until they are saved again", flush=True)
     from .registry import Registry
-    from .app import create_app
+    from .viewer.app import create_app
     import panel as pn
 
     cache, cache_how = config.cache_gb()

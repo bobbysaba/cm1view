@@ -28,43 +28,53 @@ processes and renders figures.
 ## Layout
 
 ```
-cm1view/run.py            file discovery, staggered->scalar reads, 3D cache, parallel reads
-cm1view/fields.py         field catalog, derived fields, colormaps
-cm1view/thermo.py         parcel theory (numba), kinematics, composite parameters
-cm1view/sounding_plot.py  skew-T / hodograph / profiles / parameter table
-cm1view/render.py         map + cross-section computations (contours, vectors, sampling)
-cm1view/track.py          meso tracking + CSV/text export
-cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly scene
-cm1view/series.py         time series of reduced fields: compute, cache, files
-cm1view/dist.py           distributions: a field's values over a region, their summary
-cm1view/figure.py         figure spec, panel data, export (image, script, data, spec)
-cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported scripts)
-cm1view/pdecomp.py        pressure decomposition: file fields, computing one time on request
-cm1view/pdecomp_solver.py the decomposition solver (runs in its own process; usable alone)
-cm1view/registry.py       open runs shared by sessions, run discovery
-cm1view/config.py         settings: config file, precedence, save folders, run search
-cm1view/demo.py           synthetic CM1 runs for cm1view --demo and the tests
+cm1view/                  config.py (settings: file, precedence, save folders, run search),
+                          registry.py (open runs shared by sessions, run discovery),
+                          theme.py (colours and CSS), demo.py (synthetic CM1 runs for
+                          cm1view --demo and the tests), __main__.py (command line)
 
-UI (Panel / Bokeh)
-cm1view/app.py            the Viewer: widgets, map, layout, wiring, events; the page
-cm1view/ui.py             shared UI pieces: constants, figure styling, drawers, tool rail
-cm1view/sndui.py          Viewer mixin: soundings, their graphics, style and zoom
-cm1view/trackui.py        Viewer mixin: storm tracking and the storm chip
-cm1view/seriesui.py       Viewer mixin: the Series panel and plots
-cm1view/distui.py         Viewer mixin: the Distribution panel, plots and statistics
-cm1view/xsecui.py         Viewer mixin: cross-sections
-cm1view/view3dui.py       Viewer mixin: 3D scene, pressure-decomposition button, streamlines
-cm1view/itemsui.py        Viewer mixin: the items tray
-cm1view/figui.py          the Figure workspace editor
-cm1view/figparts.py       its constants, widget helpers and cards
-cm1view/figruns.py        editor mixin: runs
-cm1view/figsources.py     editor mixin: new figures from the viewer, series / sounding /
+core/                     model output, no UI
+  run.py                  file discovery, staggered->scalar reads, 3D cache, parallel reads
+  fields.py               field catalog, derived fields, colormaps
+  thermo.py               parcel theory (numba), kinematics, composite parameters
+  sounding_plot.py        skew-T / hodograph / profiles / parameter table
+  render.py               map + cross-section computations (contours, vectors, sampling)
+  track.py                meso tracking + CSV/text export
+  volume3d.py             isosurfaces, surface vectors, streamlines + Plotly scene
+  series.py               time series of reduced fields: compute, cache, files
+  dist.py                 distributions: a field's values over a region, their summary
+  swath.py                time-window reductions (swaths, storm-following composites)
+
+pdecomp/                  pressure decomposition
+  __init__.py             file fields, computing one time on request
+  pdecomp_solver.py       the solver (runs in its own process; usable alone)
+
+viewer/                   the interactive page (Panel / Bokeh)
+  app.py                  the Viewer: widgets, map, layout, wiring, events; the page
+  ui.py                   shared UI pieces: constants, figure styling, drawers, tool rail
+  sounding.py             Viewer mixin: soundings, their graphics, style and zoom
+  tracking.py             Viewer mixin: storm tracking and the storm chip
+  series.py               Viewer mixin: the Series panel and plots
+  dist.py                 Viewer mixin: the Distribution panel, plots and statistics
+  xsec.py                 Viewer mixin: cross-sections
+  view3d.py               Viewer mixin: 3D scene, pressure-decomposition button, streamlines
+  items.py                Viewer mixin: the items tray
+  zoomview.py             zoomable image component (sounding graphics)
+  settings.py             settings window (first run and ⚙) and the overwrite prompt
+  picker.py               run picker (header dialog and the page without a run)
+
+figures/                  the Figure workspace
+  spec.py                 figure spec, panel data, export (image, script, data, spec)
+  draw.py                 matplotlib drawing of a figure (copied into exported scripts)
+  editor.py               the Figure workspace editor (FigureEditor)
+  cards.py                its constants, widget helpers and cards
+  runs.py                 editor mixin: runs
+  sources.py              editor mixin: new figures from the viewer, series / sounding /
                           distribution lists
-cm1view/figexport.py      editor mixin: saving and reopening figures
-cm1view/zoomview.py       zoomable image component (sounding graphics)
-cm1view/settings.py       settings window (first run and ⚙) and the overwrite prompt
-cm1view/picker.py         run picker (header dialog and the page without a run)
-cm1view/theme.py          colours and CSS
+  export.py               editor mixin: saving and reopening figures
+  anim.py, click.py,      editor mixins: animation, click-to-place, combining panels,
+  combo.py, style.py,     styles and templates, the figure tree
+  tree.py
 
 tests/                    pytest suite
 docs/                     these pages
@@ -76,7 +86,7 @@ the class's bases.
 
 ## Adding a derived field
 
-Derived fields are defined in `cm1view/fields.py` (`_make_fields`) as `FieldDef`s: a
+Derived fields are defined in `cm1view/core/fields.py` (`_make_fields`) as `FieldDef`s: a
 name, label, units and menu group, a default colormap and range, the fields it needs
 (`deps`) and a function of them (`func`). They then appear in every
 field menu (map, section, 3D, series, figures). Add a test in `tests/test_fields.py`
