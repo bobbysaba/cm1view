@@ -355,6 +355,12 @@ def write_run(path, vmax, wmax):
     return rows
 
 
+def is_demo(run_path):
+    """A run written by make() (its stamp file is two folders up)."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(run_path)))
+    return os.path.exists(os.path.join(root, ".cm1view-demo"))
+
+
 def _stamp():
     src = open(os.path.abspath(__file__), "rb").read()
     return f"{VERSION} {hashlib.sha1(src).hexdigest()[:12]}"

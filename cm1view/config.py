@@ -380,6 +380,15 @@ def is_output(fname):
     return fnmatch.fnmatch(fname, get("output_glob"))
 
 
+def _is(entry, kind):
+    """entry.is_file() / is_dir(), False where it cannot be checked (e.g. a link into
+    a project folder you cannot read)."""
+    try:
+        return entry.is_file() if kind == "file" else entry.is_dir()
+    except OSError:
+        return False
+
+
 def scan_runs(roots=None, depth=5, limit=500, seconds=4.0):
     """Run folders under the roots (breadth first, hidden folders skipped, no search
     inside a run).  Returns (runs, complete)."""
@@ -394,11 +403,11 @@ def scan_runs(roots=None, depth=5, limit=500, seconds=4.0):
                 ents = list(os.scandir(d))
             except OSError:
                 continue
-            if any(e.is_file() and is_output(e.name) for e in ents):
+            if any(_is(e, "file") and is_output(e.name) for e in ents):
                 runs.append(d)
                 continue
             nxt += sorted(e.path for e in ents
-                          if not e.name.startswith(".") and e.is_dir())
+                          if not e.name.startswith(".") and _is(e, "dir"))
         level = nxt
         if not level:
             break
@@ -462,13 +471,16 @@ def suggestions(run_path=None):
     from . import registry
     out = {k.name: file_value(k.name) for k in KEYS}
     if not exists():
-        recent = [p for p in ([run_path] if run_path else []) + registry.recent_runs() if p]
+        from . import demo
+        recent = [os.path.abspath(p) for p in ([run_path] if run_path else [])
+                  + registry.recent_runs() if p and not demo.is_demo(p)]
         if recent:
             # the folder that holds the runs: their common parent, or the grandparent
-            # of a single run (e.g. phd/ for phd/southeast/rm_tor_125m)
-            common = os.path.commonpath([os.path.abspath(p) for p in recent])
-            if len(set(recent)) == 1 or common in recent:
-                common = os.path.dirname(os.path.dirname(os.path.abspath(recent[0])))
+            # of a single run (e.g. phd/ for phd/southeast/rm_tor_125m); never one as
+            # broad as /glade, whose scan would take long and cross into other projects
+            common = os.path.commonpath(recent)
+            if len(set(recent)) == 1 or common in recent or common.count(os.sep) < 3:
+                common = os.path.dirname(os.path.dirname(recent[0]))
             out["runs_root"] = [common]
             if run_path:
                 out["default_run"] = os.path.abspath(run_path)

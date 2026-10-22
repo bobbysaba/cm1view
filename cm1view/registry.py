@@ -9,7 +9,12 @@ from . import config
 from .fields import Fields
 from .run import CM1Run, VolumeCache
 
-_RECENT = os.path.join(os.path.expanduser("~"), ".cache", "cm1view", "recent.json")
+_OLD_RECENT = os.path.join(os.path.expanduser("~"), ".cache", "cm1view", "recent.json")
+
+
+def _recent_file():
+    """Next to the settings file, so tests (with their own settings) keep theirs apart."""
+    return os.path.join(os.path.dirname(config.config_path()), "recent.json")
 
 
 def is_run(path):
@@ -57,18 +62,23 @@ def subfolders(path, limit=400):
 
 
 def recent_runs():
-    try:
-        with open(_RECENT) as f:
-            return [p for p in json.load(f) if os.path.isdir(p)]
-    except (OSError, ValueError):
-        return []
+    for fn in (_recent_file(), _OLD_RECENT):  # (older versions kept it in ~/.cache)
+        try:
+            with open(fn) as f:
+                return [p for p in json.load(f) if os.path.isdir(p)]
+        except (OSError, ValueError):
+            continue
+    return []
 
 
 def remember(path):
+    from . import demo
+    if demo.is_demo(path):
+        return
     lst = [path] + [p for p in recent_runs() if p != path]
     try:
-        os.makedirs(os.path.dirname(_RECENT), exist_ok=True)
-        with open(_RECENT, "w") as f:
+        os.makedirs(os.path.dirname(_recent_file()), exist_ok=True)
+        with open(_recent_file(), "w") as f:
             json.dump(lst[:15], f)
     except OSError:
         pass
