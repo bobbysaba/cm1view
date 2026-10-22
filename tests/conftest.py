@@ -84,3 +84,62 @@ def txt(html):
 
 def tap(v, x, y, shift=False):
     v._on_tap(type("E", (), {"x": x, "y": y, "modifiers": {"shift": shift}})())
+
+
+# ------------------------------------------------------------------ figure workspace
+@pytest.fixture
+def ed(viewer):
+    e = viewer.figed
+    e.auto.value = False  # renders only when a test asks
+    return e
+
+
+def render(ed):
+    """Draw the editor's figure as the preview does (raises on errors)."""
+    from cm1view.figures import draw as figdraw
+    spec = ed.collect()
+    data = ed.panel_data(spec)
+    return spec, data, figdraw.draw(spec, data)
+
+
+@pytest.fixture(scope="module")
+def coarse_run(demo_root, tmp_path_factory):
+    """The demo supercell with every other output (600 s apart, from 3600 s): a run
+    whose output times differ from the viewer's."""
+    import os
+    main = os.path.join(demo_root, "demo", "supercell")
+    d = tmp_path_factory.mktemp("coarse") / "supercell_coarse"
+    d.mkdir()
+    for f in ["namelist.input"] + [f"cm1out_{n:06d}.nc" for n in (2, 4, 6, 8, 10)]:
+        os.symlink(os.path.join(main, f), d / f)
+    return str(d)
+
+
+def difference_layer(ed):
+    """The first fill as a difference: minus the run's first output."""
+    c = next(c for c in ed.cards if c.type == "fill")
+    c.w["minus_on"].value = True
+    c.w["minus_time"].value = next(v for v in c.w["minus_time"].options.values() if v != "")
+    return c
+
+
+def swath_layer(ed):
+    """The first fill as a swath: its maximum from the run's first output to each panel's
+    time."""
+    c = next(c for c in ed.cards if c.type == "fill")
+    c.w["reduce_op"].value = "max"
+    c.w["reduce_t0"].value = next(v for v in c.w["reduce_t0"].options.values() if v != "")
+    return c
+
+
+def edited_v1():
+    """A version 1 plan spec of two runs with per-panel edits."""
+    fill = dict(type="fill", on=True, field="dbz", mode="height", z=1.0, cmap="viridis",
+                vmin=0.0, vmax=60.0, extend="neither")
+    cont = dict(type="contour", on=True, field="w", mode="height", z=3.0, levels="5")
+    edits = {"1": dict(run=1, time_s=900.0, z=2.0, title="B",
+                       layers={"0": dict(cmap="magma", run=0, time_s=60.0)},
+                       extra=[cont])}
+    return dict(version=1, kind="plan", rows=1, cols=3, vary="time",
+                times_s=[0.0, 300.0, 600.0], run=0, layers=[fill], titles=["A"],
+                runs=[dict(path="/a"), dict(path="/b")], size=[9, 3], edits=edits)

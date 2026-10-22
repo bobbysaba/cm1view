@@ -23,7 +23,10 @@ processes and renders figures.
   `$CM1VIEW_SHOTS` (default: a temporary folder, printed with `pytest -s`).
 - **Fixtures** (`tests/conftest.py`): `demo_root`, `demo_run`, `reg` (one Registry for
   the session) and `viewer` (a fresh Viewer on the demo supercell at its first storm
-  time). `wait(pred)` polls background work; `tap(v, x, y)` is a map click.
+  time). `wait(pred)` polls background work; `tap(v, x, y)` is a map click. For the
+  figure tests (`tests/test_figure*.py`): `ed` (the viewer's figure editor, no auto
+  render), `coarse_run` (a second run with other output times), `render(ed)`, and the
+  spec helpers `difference_layer`, `swath_layer`, `edited_v1`.
 
 ## Layout
 
