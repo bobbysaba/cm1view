@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 from cm1view import render
-from conftest import tap, txt, wait
+from conftest import tap, wait
 
 
 def region(v, x0, x1, y0, y1):
