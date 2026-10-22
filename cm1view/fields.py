@@ -120,7 +120,7 @@ _NATIVE = {
     "sus2": ("Max w at 5 km (translated)", "m/s", 1, "turbo", (0, 60), False),
     "shs": ("Max updraft helicity", "m²/s²", 1, "magma", (0, 500), False),
     "shs2": ("Max updraft helicity (translated)", "m²/s²", 1, "magma", (0, 500), False),
-    # pressure decomposition (phd_scripts/pdecomp_new_fixed.py)
+    # pressure decomposition (from the files, or computed with the pdecomp_script)
     "p_b": ("p′ buoyant (p_b)", "Pa", 1, "PuOr_r", None, True),
     "p_l": ("p′ linear dynamic (p_l)", "Pa", 1, "PuOr_r", None, True),
     "p_nl": ("p′ nonlinear dynamic (p_nl, residual)", "Pa", 1, "PuOr_r", None, True),
@@ -208,7 +208,7 @@ def _make_fields(avail):
     D.append(FieldDef("buoy", "Buoyancy (θρ′, with loading)", "m/s²", "Thermodynamics",
                       cmap="RdBu_r", vrange=(-0.3, 0.3), diverging=True,
                       deps=("th", "qv", "th0", "qv0", *hyd), func=buoy))
-    # density potential temperature, as funcs.theta_rho in phd_scripts
+    # density potential temperature (θ including the vapour and condensate loading)
     def thrho(f, c):
         load = sum(f(n) for n in hyd) if hyd else 0.0
         return f("th") * (1.0 + f("qv") / EPS) / (1.0 + f("qv") + load)

@@ -22,7 +22,7 @@ packages = ["cm1view"]
 testpaths = ["tests"]
 addopts = "-m 'not real and not browser'"
 markers = [
-    "real: needs the real CM1 runs on /glade (slow; pytest -m real)",
+    "real: checks on your own CM1 run, CM1VIEW_TEST_RUN=/path (slow; pytest -m real)",
     "browser: drives headless Firefox for screenshots (pytest -m browser)",
 ]
 filterwarnings = [  # third-party noise only

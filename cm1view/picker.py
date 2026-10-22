@@ -24,7 +24,7 @@ class RunPicker:
     def __init__(self, current=None, extra=()):
         self.current = current
         self.query = pn.widgets.TextInput(
-            placeholder="Filter runs, or paste a folder (e.g. /glade/derecho/scratch/...)",
+            placeholder="Filter runs, or paste a folder (e.g. /scratch/you/cm1/run1)",
             width=520, margin=(5, 10, 5, 0))
         self.open = pn.widgets.Button(name="Open run", button_type="primary", width=110,
                                       disabled=True, margin=(5, 0))

@@ -1,9 +1,9 @@
 """Pressure decomposition (p_b, p_l, p_nl and the matching vertical accelerations).
 
 The fields come from the output files when post-processing wrote them there, or are
-computed here for one time on request by running the user's own
-`pdecomp_new_fixed.py` (phd_scripts) unchanged, in a separate process, so the
-viewer's memory is freed again as soon as it is done.  With several CPUs and enough
+computed here for one time on request by running the user's own decomposition
+script (the pdecomp_script setting, e.g. `pdecomp_new_fixed.py`) unchanged, in a
+separate process, so the viewer's memory is freed again as soon as it is done.  With several CPUs and enough
 memory the script's inputs are read in parallel first and its FFTs use several
 threads (~45 s with 4 CPUs, ~40 GB peak; otherwise ~80 s, ~30 GB): the math is the
 script's own either way.  The result is kept in memory (run.extra) for the last

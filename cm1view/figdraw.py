@@ -67,7 +67,7 @@ def colormap(name, reverse=False, white_first=False):
             cm = matplotlib.colormaps[name]
     if reverse:
         cm = cm.reversed()
-    if white_first:  # as funcs.w_cmap: white, then 19 colours of the map, blended
+    if white_first:  # white, then 19 colours of the map, blended
         cols = cm(np.linspace(0, 1, 19))
         cm = LinearSegmentedColormap.from_list(cm.name + "_white",
                                                np.vstack([[1, 1, 1, 1], cols]))

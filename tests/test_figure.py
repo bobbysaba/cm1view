@@ -172,3 +172,26 @@ def test_time_series_y_range(ed):
     wait(lambda: not ed.series_pending(), 120, "the series")
     spec, data, fig = render(ed)
     assert fig.axes[0].get_ylim() == (0.0, 50.0)
+
+
+@pytest.mark.parametrize("start", ["plan", "series", "soundings"])
+def test_script_redraws_the_identical_image(ed, tmp_path, start):
+    import os
+    import subprocess
+    import sys
+    import matplotlib.image as mi
+    if start == "series":
+        ed.from_series()
+        ed.panel_data(ed.collect())
+        wait(lambda: not ed.series_pending(), 120, "the series")
+    elif start == "soundings":
+        ed.from_soundings()
+    base = str(tmp_path / start)
+    ed.path.value = base
+    ed._save_job(ed.collect(), True, base)
+    assert "Saved" in txt(ed.msg.object), ed.msg.object
+    os.rename(base + ".png", base + "_viewer.png")
+    r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
+                       cwd=str(tmp_path))
+    assert r.returncode == 0, r.stderr[-500:]
+    assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))

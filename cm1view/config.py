@@ -505,8 +505,8 @@ def suggestions(run_path=None):
                   + registry.recent_runs() if p and not demo.is_demo(p)]
         if recent:
             # the folder that holds the runs: their common parent, or the grandparent
-            # of a single run (e.g. phd/ for phd/southeast/rm_tor_125m); never one as
-            # broad as /glade, whose scan would take long and cross into other projects
+            # of a single run (e.g. cm1/ for cm1/project/run1); never one as broad
+            # as a filesystem root, whose scan would take long and cross into other projects
             common = os.path.commonpath(recent)
             if len(set(recent)) == 1 or common in recent or common.count(os.sep) < 3:
                 common = os.path.dirname(os.path.dirname(recent[0]))
