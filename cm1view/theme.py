@@ -1,5 +1,9 @@
 """Shared dark theme."""
 
+from panel.theme import Inherit
+from panel.theme import fast
+from panel.widgets import Widget
+
 BG = "#0b0f17"
 PANEL = "#111723"
 RAISED = "#161d2b"
@@ -18,6 +22,76 @@ DIALOG_DARK = f"""
 .dialog-overlay {{ background-color: rgba(5, 8, 14, 0.78) !important; }}
 .pnx-dialog-close {{ color: {MUTED} !important; }}
 .pnx-dialog-close:hover {{ color: {TEXT} !important; }}
+"""
+
+# Every widget's own stylesheet (Panel applies it inside each widget's shadow root):
+# one button, input and checkbox style across the window.  Selectors sit in :where()
+# so they carry no specificity: they beat Panel's / Fast's rules through !important,
+# and a stylesheet set on a widget (the borderless toolbar pills) still beats them.
+HOVER_LINE = "#3a4a66"
+WIDGETS = f"""
+:where(.bk-btn) {{
+  background-color: rgba(148,163,184,.06) !important; border: 1px solid {GRID} !important;
+  color: {TEXT} !important; box-shadow: none !important; }}
+:where(.bk-btn:hover) {{
+  background-color: rgba(148,163,184,.13) !important; border-color: {HOVER_LINE} !important; }}
+:where(.bk-btn.bk-active) {{
+  background-color: rgba(34,211,238,.18) !important; border-color: rgba(34,211,238,.5) !important;
+  color: #a5f3fc !important; }}
+:host(.solid) :where(.bk-btn.bk-btn-primary) {{
+  background-color: {ACCENT} !important; border-color: {ACCENT} !important;
+  color: #062830 !important; font-weight: 600; }}
+:host(.solid) :where(.bk-btn.bk-btn-primary:hover) {{
+  background-color: #67e8f9 !important; border-color: #67e8f9 !important; }}
+:where(.bk-btn.bk-btn-danger) {{ color: #fca5a5 !important;
+  border-color: rgba(248,113,113,.45) !important; }}
+:where(.bk-btn.bk-btn-warning) {{ color: #fcd34d !important;
+  border-color: rgba(251,191,36,.45) !important; }}
+:where(.bk-btn[disabled], .bk-btn[disabled]:hover),
+:host(.solid) :where(.bk-btn[disabled], .bk-btn[disabled]:hover) {{
+  background-color: transparent !important; border-color: {GRID} !important;
+  color: {MUTED} !important; opacity: .45 !important; cursor: not-allowed !important; }}
+
+:where(.bk-input) {{
+  background-color: #0d131e !important; border: 1px solid {GRID} !important;
+  color: {TEXT} !important; box-shadow: none !important; }}
+:where(.bk-input:hover) {{ border-color: {HOVER_LINE} !important; }}
+:where(.bk-input:focus) {{ border-color: rgba(34,211,238,.7) !important;
+  box-shadow: 0 0 0 2px rgba(34,211,238,.15) !important; outline: none !important; }}
+:where(.bk-input[disabled]) {{ opacity: .45 !important; }}
+:where(.choices__inner) {{ background-color: #0d131e !important;
+  border: 1px solid {GRID} !important; border-radius: 4px !important; }}
+:where(.choices__inner:hover) {{ border-color: {HOVER_LINE} !important; }}
+:where(.bk-spin-btn.bk-spin-btn-up)::before {{ border-bottom-color: {MUTED} !important; }}
+:where(.bk-spin-btn.bk-spin-btn-down)::before {{ border-top-color: {MUTED} !important; }}
+:where(.bk-spin-btn.bk-spin-btn-up:hover)::before {{ border-bottom-color: {TEXT} !important; }}
+:where(.bk-spin-btn.bk-spin-btn-down:hover)::before {{ border-top-color: {TEXT} !important; }}
+:where(.bk-spin-btn) {{ opacity: .7; }}
+
+:where(input[type=checkbox]) {{
+  appearance: none !important; -webkit-appearance: none !important; width: 15px !important;
+  height: 15px !important; margin: 0 6px 0 0 !important; flex: 0 0 auto;
+  border: 1.5px solid #5b6880 !important; border-radius: 4px !important;
+  background: transparent no-repeat center / 11px 11px !important;
+  cursor: pointer; vertical-align: -3px; }}
+:where(input[type=checkbox]:hover) {{ border-color: {TEXT} !important; }}
+:where(input[type=checkbox]:checked) {{
+  background-color: {ACCENT} !important; border-color: {ACCENT} !important;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 6.2 5 8.6l4.6-5' fill='none' stroke='%23062830' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>") !important; }}
+:where(input[type=checkbox]:checked)::before {{ content: none !important; }}
+:where(input[type=checkbox]:disabled) {{ opacity: .4 !important; cursor: not-allowed; }}
+:where(input[type=checkbox]:focus-visible) {{ outline: 2px solid rgba(34,211,238,.5); }}
+"""
+
+# Bokeh figures: no dotted focus ring around the whole plot after a click (the
+# canvas draws it in --highlight-color, which a rule on its host here overrides)
+FIGURE = """
+.bk-Canvas { --highlight-color: transparent; }
+"""
+# a figure's toolbar: dark when it sits over the plot (toolbar_inner)
+TOOLBAR = f"""
+:host(.bk-inner) {{ background-color: rgba(17,23,35,0.88) !important; opacity: 1 !important;
+  border-radius: 6px; }}
 """
 
 CSS = f"""
@@ -60,6 +134,17 @@ body, #main, .main {{ background: var(--cv-bg) !important; }}
                   font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
                   padding-top: 10px; border-bottom: 1px solid var(--cv-grid); }}
 .ptab tbody tr:not(.sec):hover td {{ background: var(--cv-raised); }}
+/* Bokeh hover tooltips (attached to the page body) in the dark theme */
+.bk-Tooltip {{ --tooltip-color: {RAISED}; --tooltip-text: {TEXT};
+  --tooltip-border: {GRID}; --tooltip-arrow-color: {GRID}; border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.45); }}
 .ptab .dot {{ display: inline-block; width: 9px; height: 9px; border-radius: 50%;
              margin-right: 6px; vertical-align: 0; }}
 """
+
+
+class Fast(fast.Fast):
+    """The template's Fast design plus the shared widget styles.  (Named Fast: Panel
+    finds a design's bundled files under the lower-cased class name.)"""
+
+    modifiers = {Widget: {"stylesheets": [Inherit, WIDGETS]}}

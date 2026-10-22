@@ -28,8 +28,8 @@ from .picker import RunPicker
 from .settings import ConfirmOverwrite, Settings
 from .zoomview import ParamTable, ZoomImage
 from .theme import (
-    ACCENT, BG, CSS, GRID, MUTED, PANEL, POINT_COLORS,
-    POINT_LABELS, TEXT,
+    ACCENT, BG, CSS, FIGURE, GRID, MUTED, PANEL, POINT_COLORS,
+    POINT_LABELS, TEXT, TOOLBAR, Fast,
 )
 
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
@@ -64,6 +64,13 @@ def style_fig(fig):
     fig.grid.grid_line_alpha = 0.35
     fig.toolbar.logo = None
     fig.min_border_left = 50
+    fig.toolbar.stylesheets = [*fig.toolbar.stylesheets, TOOLBAR]
+
+
+def _bokeh(fig, **kw):
+    """A Bokeh figure in a pane, with the figure styles (Panel replaces the figure's
+    own stylesheets with the pane's)."""
+    return pn.pane.Bokeh(fig, stylesheets=[FIGURE], **kw)
 
 
 def _svg(fig):
@@ -125,7 +132,10 @@ class Drawer:
         self.panel = pn.Column(
             sizing_mode="stretch_width", visible=False, margin=(0, 4, 4, 4),
             styles={"background": PANEL, "border": f"1px solid {GRID}",
-                    "border-radius": "10px", "padding": "2px 8px 6px 8px"})
+                    "border-radius": "10px", "padding": "2px 8px 6px 8px"},
+            # grow with the open row: Panel caps a layout at max-height 100%, which for
+            # the floating drawer is the height of the toolbar it hangs from
+            stylesheets=[":host { max-height: none !important; }"])
 
     def add(self, key, label, *content):
         btn = pn.widgets.Button(name=f"{label} ▾", button_type="default",
@@ -179,7 +189,8 @@ GHOST = """
           color: #cbd5e1 !important; box-shadow: none !important; }
 .bk-btn:hover { background-color: rgba(148,163,184,.14) !important; }
 .bk-btn.bk-active, :host(.cv-open) .bk-btn {
-  background-color: rgba(34,211,238,.18) !important; color: #a5f3fc !important; }
+  background-color: rgba(34,211,238,.18) !important; color: #a5f3fc !important;
+  border-color: transparent !important; }
 .bk-input { border-color: transparent !important; background-color: transparent !important; }
 .bk-input:hover { background-color: rgba(148,163,184,.10) !important; }
 """
@@ -196,13 +207,24 @@ def _group(*objs):
     return _ghost(pn.Row(*objs, styles=PILL, margin=(0, 0, 6, 0)))
 
 
-def _settings_toggle(body):
-    """A '⚙ Settings' toggle that shows / hides `body`."""
-    btn = pn.widgets.Toggle(name="⚙ Settings", value=False, button_type="primary",
-                            button_style="outline", height=32, margin=(5, 4, 8, 4))
-    btn.param.watch(lambda e: setattr(body, "visible", e.new), "value")
+def _settings_toggle(body, icon="adjustments-horizontal", description="Settings"):
+    """An icon button (settings by default) that shows / hides `body`; tinted while
+    `body` is shown."""
+    btn = pn.widgets.Button(name="", icon=icon, description=description,
+                            button_type="primary", button_style="outline", width=40,
+                            height=32, margin=(5, 4, 8, 4), stylesheets=[ON])
+
+    def flip(e):
+        body.visible = not body.visible
+        btn.css_classes = ["cv-on"] if body.visible else []
+    btn.on_click(flip)
     body.visible = False
     return btn
+
+
+# a button kept "pressed" by giving it the cv-on class
+ON = """:host(.cv-on) .bk-btn { background-color: rgba(34,211,238,.18) !important;
+  border-color: rgba(34,211,238,.5) !important; color: #a5f3fc !important; }"""
 
 
 def _bar(*groups):
@@ -327,8 +349,8 @@ class Viewer:
         except (AttributeError, TypeError, ValueError):
             pass
         self.tslider = pn.widgets.IntSlider(name="", start=0, end=len(run.times) - 1,
-                                            value=t0, show_value=False, width=260,
-                                            margin=(4, 12))
+                                            value=t0, show_value=False, min_width=120,
+                                            sizing_mode="stretch_width", margin=(4, 12))
         btn = dict(button_type="light", button_style="outline", width=34, height=32,
                    name="", icon_size="1.1em", margin=(4, 1))
         self.t_prev = pn.widgets.Button(icon="player-track-prev", **btn)
@@ -339,7 +361,7 @@ class Viewer:
                                          margin=(4, 4))
         self.playing = False
         self._play_cb = None
-        self.time_html = _html()
+        self.time_html = _html(margin=(0, 8, 0, 4), align="center")
 
         # 3D is offered only once a 3D region exists (_sync_workspace)
         self.workspace = pn.widgets.RadioButtonGroup(
@@ -539,7 +561,11 @@ class Viewer:
         run = self.run
         self.run_btn = pn.widgets.Button(name=run.name, button_type="light",
                                          button_style="outline", height=32,
-                                         icon="folder-open", margin=(4, 2))
+                                         icon="folder-open", margin=(4, 2),
+                                         description=f"{run.path}: open another run",
+                                         stylesheets=[".bk-btn { max-width: 260px; "
+                                                      "overflow: hidden; white-space: nowrap; "
+                                                      "text-overflow: ellipsis; }"])
         self.picker = RunPicker(run.path, extra=(
             _html(f'<div class="cv-h" style="margin-top:14px">This run</div>'
                   f'<div class="cv-run"><b>{run.path}</b><br>{run.ni}×{run.nj}×{run.nk} · '
@@ -547,7 +573,7 @@ class Viewer:
                   f'({run.umove:g}, {run.vmove:g}) m/s</div>'),
             pn.Row(self.cache_html, self.clear_btn)))
         p = self.picker
-        self.rp_path, self.rp_list, self.rp_dirs, self.rp_modal = p.path, p.list, p.dirs, p.modal
+        self.rp_modal = p.modal
         self.run_btn.on_click(lambda e: p.show())
         self.gear_btn = pn.widgets.Button(
             name="", icon="settings", button_type="light", button_style="outline", width=40,
@@ -567,12 +593,18 @@ class Viewer:
                      tools="", toolbar_location="right",
                      x_axis_label="x (km)", y_axis_label="y (km)")
         style_fig(fig)
-        fig.min_border_top = 96  # room for the floating toolbar
+        fig.min_border_top = 10
         fig.toolbar.autohide = True
+        fig.toolbar_inner = True  # over the plot's edge, clear of the colorbar label
         outline = fig.rect(x=[(x0 + x1) / 2], y=[(y0 + y1) / 2], width=[x1 - x0],
                            height=[y1 - y0], fill_alpha=0, line_color=GRID, line_width=1)
         outline.nonselection_glyph = outline.glyph
         outline.selection_glyph = outline.glyph
+        # shade what lies outside the model domain (the view can extend past it)
+        far = 1e5
+        fig.quad(left=[-far, x1, x0, x0], right=[x0, far, x1, x1],
+                 bottom=[-far, -far, -far, y1], top=[far, far, y0, far],
+                 fill_color=BG, fill_alpha=0.55, line_color=None)
         # equal x / y scale at every plot size (e.g. when the side panel opens)
         keep = CustomJS(args=dict(fig=fig, ext=list(self.extent)), code=KEEP_ASPECT_JS)
         fig.js_on_change("inner_width", keep)
@@ -824,6 +856,7 @@ class Viewer:
         fig.scatter("tmin", "value", source=self.trk_ts_now, size=11, fill_alpha=0,
                     line_color="#fbbf24", line_width=2.5)
         fig.select_one(HoverTool).tooltips = [("t", "@hms"), ("value", "@value{0.000}")]
+        fig.visible = False  # until there is a track
         self.trk_fig = fig
         self.trk_table = pn.widgets.Tabulator(
             pd_empty(), disabled=True, show_index=False, theme="midnight", height=260,
@@ -917,7 +950,7 @@ class Viewer:
                                   sizing_mode="stretch_width",
                                   styles={"border-top": f"1px solid {GRID}"})
         self.ser_set_btn = _settings_toggle(self.ser_set)
-        self.ser_set_btn.param.update(name="⚙ Plot", margin=(18, 4, 4, 4))
+        self.ser_set_btn.param.update(name="Plot", width=None, margin=(18, 4, 4, 4))
 
         fig = figure(sizing_mode="stretch_width", height=300, tools="pan,wheel_zoom,reset,save",
                      x_axis_label="time (min)", y_axis_label="")
@@ -951,7 +984,7 @@ class Viewer:
         th.add_layout(self.ser_th_now)
         th.on_event(Tap, self._on_ser_tap)
         self.ser_thfig = th
-        self.ser_plot = pn.pane.Bokeh(fig, sizing_mode="stretch_width")  # or the th view
+        self.ser_plot = _bokeh(fig, sizing_mode="stretch_width")  # or the th view
 
         self.ser_path = pn.widgets.TextInput(
             name="Save to / load from (on the server)",
@@ -1120,7 +1153,7 @@ class Viewer:
                                          button_style="outline", height=34, margin=(5, 3))
         self.v3_render = pn.widgets.Button(name="Render 3D", button_type="primary",
                                            icon="cube", height=34, margin=(5, 3))
-        self.v3_region = _html()
+        self.v3_region = _html(margin=0, align="center")
         self.v3_status = _html('<div class="cv-hint">Pick a region (button above, or '
                                '<b>3D region</b> click mode on the map) or use the current '
                                'map view, then <b>Render 3D</b>. Keep it storm-scale '
@@ -1143,11 +1176,13 @@ class Viewer:
                               self.ps_reset, flex_wrap="wrap", align_items="flex-end",
                               gap="0 6px", sizing_mode="stretch_width",
                               styles={"border-top": f"1px solid {GRID}"})
-        look_btn = _settings_toggle(snd_look)
-        look_btn.name = "🎨 Plot style"
+        look_btn = _settings_toggle(snd_look, "palette", "Plot style: colours, line widths, "
+                                                         "axis limits")
         snd_opts = pn.Column(
             pn.FlexBox(self.mean_btn, self.pin_btn, self.snd_clear, self.compare,
-                       _settings_toggle(snd_set), look_btn, flex_wrap="wrap",
+                       _settings_toggle(snd_set, description="Sounding settings: parcel, "
+                                                             "storm motion, averaging"),
+                       look_btn, flex_wrap="wrap",
                        align_items="center", gap="0 4px", sizing_mode="stretch_width"),
             snd_set, snd_look, sizing_mode="stretch_width", margin=0)
         d = self.xs_drawer = Drawer()
@@ -1160,14 +1195,16 @@ class Viewer:
                                            _html('<div class="cv-hint" style="margin:0 0 '
                                                  '12px">In-plane wind (along-section u, w)'
                                                  '</div>')))
-        for b, _ in d.items.values():
-            b.param.update(height=32, margin=(18, 2, 4, 2), button_type="light")
+        for b, _ in d.items.values():  # the same pill as the map's layer menus
+            b.param.update(height=32, margin=(4, 2), button_type="light")
+        xs_layers = _group(xs_style, xs_cont, xs_vec)
+        xs_layers.margin = (0, 4, 6, 6)
         xs = pn.Column(
-            pn.FlexBox(self.xs_fill, self.xs_ztop, xs_style, xs_cont, xs_vec,
+            pn.FlexBox(self.xs_fill, self.xs_ztop, xs_layers,
                        flex_wrap="wrap", align_items="flex-end", gap="0 4px",
                        sizing_mode="stretch_width"), d.panel,
             self.xs_status, self.xs_pd_btn,
-            pn.pane.Bokeh(self.xs_fig, sizing_mode="stretch_width"),
+            _bokeh(self.xs_fig, sizing_mode="stretch_width"),
             sizing_mode="stretch_width")
         trk_set = pn.FlexBox(self.trk_metric, self.trk_z, self.trk_smooth, self.trk_kernel,
                              self.trk_radius, self.trk_stop, self.trk_dir, self.trk_snap,
@@ -1176,21 +1213,22 @@ class Viewer:
                              sizing_mode="stretch_width",
                              styles={"border-top": f"1px solid {GRID}"})
         self.tabs = pn.Tabs(
-            ("Sounding", pn.Column(snd_opts, self.snd_msg, self.snd_col, scroll=True,
+            ("Sounding", pn.Column(snd_opts, self.snd_msg, self.snd_col, scroll="y-auto",
                                    sizing_mode="stretch_both")),
-            ("Cross-section", pn.Column(xs, scroll=True, sizing_mode="stretch_both")),
+            ("Cross-section", pn.Column(xs, scroll="y-auto", sizing_mode="stretch_both")),
             ("Track", pn.Column(
                 pn.FlexBox(self.trk_how, self.trk_find, self.trk_stop_btn, self.trk_del,
                            self.trk_clear,
-                           _settings_toggle(trk_set), self.trk_advance, flex_wrap="wrap",
+                           _settings_toggle(trk_set, description="Tracking settings"),
+                           self.trk_advance, flex_wrap="wrap",
                            align_items="center", gap="0 4px", sizing_mode="stretch_width"),
                 trk_set,
                 self.trk_status,
-                pn.pane.Bokeh(self.trk_fig, sizing_mode="stretch_width"),
+                _bokeh(self.trk_fig, sizing_mode="stretch_width"),
                 pn.FlexBox(self.trk_path, self.trk_save, self.trk_dl, self.trk_load,
                            flex_wrap="wrap",
                            align_items="flex-end", gap="0 4px", sizing_mode="stretch_width"),
-                self.trk_table, scroll=True, sizing_mode="stretch_both")),
+                self.trk_table, scroll="y-auto", sizing_mode="stretch_both")),
             ("Series", pn.Column(
                 pn.FlexBox(self.ser_field, self.ser_vmode, self.ser_z, self.ser_z0,
                            self.ser_z1, self.ser_region, self.ser_radius, self.ser_offx,
@@ -1205,7 +1243,7 @@ class Viewer:
                 pn.FlexBox(self.ser_path, self.ser_fmt, self.ser_save, self.ser_dl,
                            self.ser_load, flex_wrap="wrap", align_items="flex-end",
                            gap="0 4px", sizing_mode="stretch_width"),
-                self.ser_file_msg, scroll=True, sizing_mode="stretch_both")),
+                self.ser_file_msg, scroll="y-auto", sizing_mode="stretch_both")),
             sizing_mode="stretch_both", dynamic=False,
             styles={"flex": "1 1 48%", "min-width": "0"})
 
@@ -1255,7 +1293,7 @@ class Viewer:
         self.sl_card = pn.Column(
             pn.Row(self.sl_info, self.sl_field, self.sl_big, self.sl_clear, margin=0,
                    sizing_mode="stretch_width"),
-            pn.pane.Bokeh(fig, sizing_mode="stretch_width"),
+            _bokeh(fig, sizing_mode="stretch_width"),
             visible=False, margin=0,
             styles={"position": "absolute", "right": "12px", "bottom": "12px",
                     "width": "min(600px, 46vw)", "z-index": "25", "padding": "6px 8px",
@@ -1276,11 +1314,13 @@ class Viewer:
     def _top_bar(self):
         """Run, time and workspace pills floating across the top of the window."""
         self.ws_group = _group(self.workspace)  # Map | 3D | Figure
+        # the time pill comes last and takes the rest of the row; when the window is
+        # too narrow it wraps onto a row of its own, full width
+        times = _group(self.t_prev, self.t_play, self.t_next, self.t_speed, self.tslider,
+                       self.time_html)
+        times.styles = dict(times.styles, flex="1 1 420px", **{"min-width": "0"})
         return pn.Column(
-            _bar(self.ws_group,
-                 _group(self.t_prev, self.t_play, self.t_next, self.t_speed, self.tslider,
-                        self.time_html),
-                 self.mode_group, _group(self.run_btn, self.gear_btn)),
+            _bar(self.ws_group, self.mode_group, _group(self.run_btn, self.gear_btn), times),
             styles=dict(BAR, **{"z-index": "40"}), margin=0, sizing_mode="stretch_width")
 
     def _map_toolbar(self):
@@ -1338,17 +1378,27 @@ class Viewer:
         floor = {"position": "absolute", "left": "70px", "bottom": "56px", "z-index": "20",
                  "pointer-events": "none", "background": "rgba(11,15,23,0.75)",
                  "border-radius": "8px", "padding": "0 8px"}
-        caption = pn.Column(self.map_title, self.hint, self.status, self.pd_row, styles=floor,
-                            margin=0)
+        # below the map (not over its corner), in line with the plot's left edge; a
+        # fixed height, so a longer hint doesn't resize (and redraw) the map
+        for h in (self.map_title, self.hint, self.status):
+            h.margin = (2, 0)
+        caption = pn.Row(
+            pn.Column(self.map_title, self.hint, self.status, margin=0,
+                      sizing_mode="stretch_width"), self.pd_row,
+            margin=0, sizing_mode="stretch_width",
+            styles={"flex": "0 0 auto", "height": "60px", "overflow-y": "auto",
+                    "padding": "0 12px 0 60px"})
         self.map_area = map_area = pn.Column(
-            self.map_bar, pn.pane.Bokeh(self.fig, sizing_mode="stretch_both", styles=FILL),
+            self.map_bar, _bokeh(self.fig, sizing_mode="stretch_both",
+                                        styles=dict(FILL, position="relative",
+                                                    **{"z-index": "0"})),
             caption, sizing_mode="stretch_both",
             styles={"position": "relative", "flex": "1 1 55%", "min-width": "0"})
         self.tabs.margin = (0, 8, 0, 4)
         self.map_ws = pn.Row(map_area, self.tabs, sizing_mode="stretch_width", margin=0,
                              styles=FILL)
         self.plot3d.margin = 0
-        self.plot3d.styles = FILL
+        self.plot3d.styles = dict(FILL, position="relative", **{"z-index": "0"})
         self.v3_ws = pn.Column(
             self.v3_bar, self.plot3d,
             pn.Column(self.v3_status, styles=dict(floor, left="12px", bottom="12px"),
@@ -1537,7 +1587,7 @@ class Viewer:
 
     def _update_time_html(self):
         r = self.run
-        self.time_html.object = (f'<div class="cv-time" style="font-size:17px;margin-top:2px"'
+        self.time_html.object = (f'<div class="cv-time" style="font-size:17px;white-space:nowrap"'
                                  f' title="t = {r.times[self.t]:.0f} s">{r.time_label(self.t)}'
                                  f' <small>{self.t + 1}/{len(r.times)}</small></div>')
 
@@ -1700,7 +1750,7 @@ class Viewer:
         x0, x1, y0, y1 = box
         stride = volume3d.auto_stride(self.run, box, self.v3_ztop.value, 12e6)
         self.v3_region.object = (
-            f'<div class="cv-hint" style="margin:0 8px">{txt} {x1 - x0:.1f} × {y1 - y0:.1f} '
+            f'<div class="cv-hint" style="margin:0 8px;white-space:nowrap">{txt} {x1 - x0:.1f} × {y1 - y0:.1f} '
             f'km · auto res {"full" if stride == 1 else f"1/{stride}"}</div>')
 
     def _update_3d_labels(self):
@@ -2679,7 +2729,7 @@ class Viewer:
             import pandas as pd
             df = pd.DataFrame(trk.rows(run, fx)).drop(columns=["file", "time_s"])
             self.trk_table.value = df.round(4)
-        self.trk_table.visible = bool(ts)
+        self.trk_table.visible = self.trk_fig.visible = bool(ts)
         self.trk_save.disabled = self.trk_dl.disabled = not ts
         self.storm_follow.disabled = not ts
         if not ts:
@@ -3642,7 +3692,7 @@ def create_app(reg, maxpix=None):
               "overflow:hidden !important} .card-margin{margin:0 !important}"
               " #container{height:100vh}")
     return pn.template.FastListTemplate(
-        title="CM1 View", theme="dark", accent=ACCENT, header_background=BG,
+        title="CM1 View", theme="dark", design=Fast, accent=ACCENT, header_background=BG,
         main=[body], theme_toggle=False, main_layout=None, raw_css=[CSS, chrome])
 
 
@@ -3650,12 +3700,7 @@ def _landing(error=""):
     """The page without a run: pick one (and set up cm1view on the first visit)."""
     picker = RunPicker()
 
-    def saved():  # browse from the (new) runs folder
-        root = next(iter(config.get("runs_root")), "")
-        if root:
-            picker.path.value = config.expand(root)
-        picker.rescan()
-    settings = Settings(on_saved=saved)
+    settings = Settings(on_saved=picker.rescan)  # list the runs in the (new) folders
     gear = pn.widgets.Button(name="Settings", icon="settings", button_type="light",
                              button_style="outline", height=32)
     gear.on_click(lambda e: settings.show())
@@ -3663,8 +3708,8 @@ def _landing(error=""):
         picker.rescan()
     err = (f'<div class="cv-status" style="color:#f87171">{error}</div>' if error else "")
     head = _html('<div class="cv-maptitle" style="font-size:20px"><b>CM1 View</b></div>'
-                 '<div class="cv-hint">Open a run: pick one found in your folders, browse, '
-                 'or paste its path.</div>' + err)
+                 '<div class="cv-hint">Pick a run, or paste the folder it is in.</div>'
+                 + err)
     card = pn.Column(pn.Row(head, pn.Spacer(), gear, sizing_mode="stretch_width"),
                      picker.body, width=680, margin=(40, 20), align="center",
                      styles={"background": PANEL, "border": f"1px solid {GRID}",

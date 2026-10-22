@@ -518,10 +518,11 @@ class FigureEditor:
             pn.pane.HTML('<div class="cv-hint">Start from</div>', margin=(6, 4, 0, 4)),
             _row(self.start_map, self.start_xs, self.start_ser, self.start_snd,
                  self.start_def), tabs,
-            scroll=True, sizing_mode="stretch_height", width=560,
-            styles={"border-left": f"1px solid {GRID}", "padding": "0 8px"})
+            scroll="y-auto", sizing_mode="stretch_height", width=560,
+            styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
+                    "overflow-x": "hidden"})
         self.preview = pn.Column(
-            _row(self.update, self.auto), self.status, self.image, scroll=True,
+            _row(self.update, self.auto), self.status, self.image, scroll="y-auto",
             sizing_mode="stretch_both", styles={"min-width": "0"})
         self.panel = pn.Row(self.preview, self.editor, sizing_mode="stretch_both", margin=0)
         self._wire()
@@ -1902,8 +1903,11 @@ class FigureEditor:
     def _apply(self, g, png, note):
         if g != self.v.gen["fig"]:
             return
+        # the whole figure in view: within the width and the height left under the
+        # top bar and the preview's own controls (no scrolling for a typical figure)
         self.image.object = (f'<img src="data:image/png;base64,{png}" style="max-width:100%;'
-                             f'height:auto;display:block;margin:auto;'
+                             f'max-height:calc(100vh - 200px);width:auto;height:auto;'
+                             f'display:block;margin:auto;'
                              f'box-shadow:0 4px 18px rgba(0,0,0,.5)">')
         self._status(note)
 
