@@ -15,7 +15,8 @@ browser through an SSH tunnel or, where your site has one, JupyterHub.
 What it needs depends on the grid. Each 3D float32 field is `nx × ny × nz × 4` bytes:
 about 0.75 GB for 1280 × 1280 × 115. By default cm1view caches 3D fields in about 40% of
 the job's memory (`--cache-gb` to change that). The pressure decomposition, if you use
-it, needs about 30–40 GB more while it runs.
+it, needs about 30–40 GB more while it runs on a grid that size (less in proportion for
+smaller grids); it empties the cache first when the job is short.
 
 cm1view sets the cache size (at most 48 GB) and the number of reader processes (at most
 8) from what the scheduler gave the job: its cgroup memory limit and CPU affinity, or the

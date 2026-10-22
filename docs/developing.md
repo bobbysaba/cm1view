@@ -8,7 +8,6 @@ pytest                                  # the suite, on synthetic demo runs
 pytest tests/test_tracking.py -k manual # one file / matching tests
 CM1VIEW_TEST_RUN=/path/to/run pytest -m real   # checks on your own output (reads only)
 pytest -m browser                       # the viewer in headless Firefox, with screenshots
-CM1VIEW_PDECOMP_SCRIPT=/path/to/script.py pytest tests/test_pdecomp.py
 ```
 
 Run the suite on a compute node rather than a shared login node: it starts reader
@@ -39,7 +38,8 @@ cm1view/volume3d.py       isosurfaces, surface vectors, streamlines + Plotly sce
 cm1view/series.py         time series of reduced fields: compute, cache, files
 cm1view/figure.py         figure spec, panel data, export (image, script, data, spec)
 cm1view/figdraw.py        matplotlib drawing of a figure (copied into exported scripts)
-cm1view/pdecomp.py        pressure decomposition: file fields, runs of the user's script
+cm1view/pdecomp.py        pressure decomposition: file fields, computing one time on request
+cm1view/pdecomp_solver.py the decomposition solver (runs in its own process; usable alone)
 cm1view/registry.py       open runs shared by sessions, run discovery
 cm1view/config.py         settings: config file, precedence, save folders, run search
 cm1view/demo.py           synthetic CM1 runs for cm1view --demo and the tests

@@ -1,8 +1,8 @@
 """Pressure decomposition (p_b, p_l, p_nl and the matching vertical accelerations).
 
 The fields come from the output files when post-processing wrote them there, or are
-computed here for one time on request by running the user's own decomposition
-script (the pdecomp_script setting, e.g. `pdecomp_new_fixed.py`) unchanged, in a
+computed here for one time on request by the solver in pdecomp_solver.py (or the
+user's own script with the same functions: the pdecomp_script setting), in a
 separate process, so the viewer's memory is freed again as soon as it is done.  With several CPUs and enough
 memory the script's inputs are read in parallel first and its FFTs use several
 threads (~45 s with 4 CPUs, ~40 GB peak; otherwise ~80 s, ~30 GB): the math is the
@@ -27,8 +27,13 @@ from .run import IO_LOCK, VarInfo
 
 NAMES = ("p_b", "p_l", "p_nl", "acc_b", "acc_l", "acc_nl")
 NEEDS = ("th", "qv", "pi", "rho", "prs")
-NEED_GB = 34.0     # free memory wanted before starting (serial reads: peak ~30 GB)
-NEED_GB_PAR = 44.0  # inputs read in parallel up front: peak ~40 GB, ~45 s with 4 CPUs
+BUILTIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pdecomp_solver.py")
+# free memory wanted before starting, measured on a 1280 x 1280 x 115 grid (serial reads:
+# peak ~30 GB; inputs read in parallel up front: ~40 GB, ~45 s with 4 CPUs) and scaled
+# by the number of grid points (see need_gb)
+NEED_GB = 34.0
+NEED_GB_PAR = 44.0
+REF_POINTS = 1280 * 1280 * 115
 EXPECT_S = {False: 85.0, True: 50.0}  # typical durations (serial / parallel reads)
 MAX_TIMES = 2      # computed times kept in memory (6 float32 volumes each)
 
@@ -38,13 +43,22 @@ _one = threading.Lock()  # one decomposition at a time per server (~40 GB each)
 
 
 def script():
-    """The decomposition script (the pdecomp_script setting), or None."""
+    """The decomposition script: the pdecomp_script setting when set (None if that file
+    is missing), else the built-in solver."""
     p = config.pdecomp_script()
-    return p if p and os.path.isfile(p) else None
+    if not p:
+        return BUILTIN
+    return p if os.path.isfile(p) else None
 
 
 def script_name():
-    return os.path.basename(config.pdecomp_script()) or "(no script set)"
+    return os.path.basename(config.pdecomp_script()) or "cm1view's solver"
+
+
+def need_gb(run, parallel):
+    """Free memory (GB) a decomposition of this run's grid needs."""
+    frac = run.ni * run.nj * run.nk / REF_POINTS
+    return max(1.0, (NEED_GB_PAR if parallel else NEED_GB) * frac)
 
 
 def can_compute(run):
@@ -250,7 +264,7 @@ def writable(run, t):
 
 
 def compute(run, t, progress=None, write=False):
-    """Decompose time t with the user's script; stores the fields in run.extra and,
+    """Decompose time t (with pdecomp_solver.py or the user's script); stores the fields in run.extra and,
     with `write`, writes them into the output file (replacing older values).
     progress(elapsed_s, phase) is called about once a second.  Returns dict(elapsed,
     wrote, parallel, log).  Raises RuntimeError with a readable message on failure."""
@@ -287,20 +301,20 @@ def _compute(run, t, progress, write):
     sp = script()
     if sp is None:
         raise RuntimeError("pressure decomposition script not found: "
-                           f"{config.pdecomp_script() or '(pdecomp_script is not set)'}")
+                           f"{config.pdecomp_script()}")
     if write and not writable(run, t):
         raise RuntimeError(f"no write permission for {run.files[t]}")
     ncpu = len(os.sched_getaffinity(0))
     free = free_gb()
-    want = NEED_GB_PAR if ncpu > 1 else NEED_GB
+    want = need_gb(run, ncpu > 1)
     if free < want:  # make room from the 3D cache first
         run.trim_cache(int((want - free) * 1024**3))
         time.sleep(0.5)
         free = free_gb()
-    parallel = ncpu > 1 and free >= NEED_GB_PAR
-    if not parallel and free < NEED_GB:
+    parallel = ncpu > 1 and free >= need_gb(run, True)
+    if not parallel and free < need_gb(run, False):
         raise RuntimeError(
-            f"needs about {NEED_GB:.0f} GB of free memory, the job has {free:.0f} GB free "
+            f"needs about {need_gb(run, False):.0f} GB of free memory, the job has {free:.0f} GB free "
             f"after emptying the 3D cache (start the viewer in a job with more memory, or "
             f"with a smaller --cache-gb)")
     outdir = "/dev/shm" if os.path.isdir("/dev/shm") else os.path.expanduser("~/.cache")

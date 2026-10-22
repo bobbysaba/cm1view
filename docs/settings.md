@@ -1,8 +1,7 @@
 # Settings
 
 The first time cm1view opens in a browser, it asks where your CM1 runs live; the
-other settings are pre-filled (from your recent runs, `$SCRATCH`, and a
-`pdecomp_new_fixed*.py` in your home, `$WORK` or `$SCRATCH` folders) and can be
+other settings are pre-filled (from your recent runs and `$SCRATCH`) and can be
 changed then or later with the ⚙ button in the top bar (or the *Config file* tab, which
 edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 (`$CM1VIEW_CONFIG` or `--config` for another file).
@@ -14,7 +13,7 @@ edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 | `figures_dir` | `~/cm1view/figures` | figures go to `<this>/<parent>_<run>/` |
 | `exports_dir` | `~/cm1view/exports` | saved series / tracks go to `<this>/<parent>_<run>/series`, `/tracks` |
 | `cache_dir` | `~/.cache/cm1view` | throwaway files (computed series) |
-| `pdecomp_script` | none | pressure-decomposition script; empty hides the feature |
+| `pdecomp_script` | none | your own pressure-decomposition script instead of cm1view's solver |
 | `track_dirs` | `storm_tracks` | where storm track files are found (a plain name: that folder in the run folder or up to 4 above it) |
 | `track_patterns` | `{parent}_{name}.csv`, `{name}.csv`, … | track file names tried in each folder |
 | `output_glob` | `cm1out_[0-9]*.nc` | which files are CM1 output |

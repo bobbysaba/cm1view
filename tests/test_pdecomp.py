@@ -1,8 +1,4 @@
-"""Pressure decomposition, run with your own decomposition script (the pdecomp_script
-setting).  Skipped when none is set:
-
-  CM1VIEW_PDECOMP_SCRIPT=/path/to/pdecomp_new_fixed_mp.py pytest tests/test_pdecomp.py
-
+"""Pressure decomposition with cm1view's solver (or the pdecomp_script setting's).
 Works on copies of the demo run's first files (never on real output): computing one
 time, one decomposition at a time, writing into the file and reading it back, and a
 failed write that keeps the result in memory."""
@@ -19,10 +15,6 @@ import pytest
 from cm1view import pdecomp
 from cm1view.registry import Registry
 from conftest import txt, wait
-
-pytestmark = pytest.mark.skipif(pdecomp.script() is None,
-                                reason="no pressure-decomposition script set "
-                                       "(CM1VIEW_PDECOMP_SCRIPT)")
 
 
 @pytest.fixture
@@ -133,3 +125,32 @@ def test_failed_write_keeps_the_result(copy_run):
     with netCDF4.Dataset(path) as d:
         assert set(d.variables) == before
     assert np.isfinite(np.nanmax(F.plane("p_b", T, "level", 10)))
+
+
+def test_solver_satisfies_the_pressure_equation(demo_run):
+    """The solved Exner perturbation, put back into the discrete operator, gives the
+    forcing (open lateral boundaries: zero-gradient images)."""
+    from cm1view import pdecomp_solver as P
+    files = sorted(f for f in os.listdir(demo_run) if f.startswith("cm1out_"))
+    with netCDF4.Dataset(os.path.join(demo_run, files[0])) as d0:
+        dom, base = P.domain_info(d0), P.compute_base_state(d0)
+    solver = P.setup_pressure_solver(dom, base, P.lbc_type(demo_run + "/"))
+    assert not solver["isperiodic"]
+    with netCDF4.Dataset(os.path.join(demo_run, files[4])) as d:
+        B = P.compute_buoyancy(d, base)
+    rho0 = base["rho0"][:, None, None]
+    rb = P.interp_to_w_levels(rho0 * B, dom)
+    F = (rb[1:] - rb[:-1]) / dom["dz_layer"][:, None, None]
+    pi = P.solve_pressure_equation(F, solver)
+
+    def lap(a, axis, h):
+        e = np.concatenate([a.take([0], axis), a, a.take([-1], axis)], axis)
+        n = a.shape[axis]
+        return (e.take(range(2, n + 2), axis) - 2 * a + e.take(range(n), axis)) / h ** 2
+
+    H, Hf = base["H"], solver["Hf"]
+    flux = np.zeros((pi.shape[0] + 1,) + pi.shape[1:])
+    flux[1:-1] = Hf[:, None, None] * np.diff(pi, axis=0) / dom["dz_center"][:, None, None]
+    lhs = P.cp * (H[:, None, None] * (lap(pi, 2, dom["dx"]) + lap(pi, 1, dom["dy"]))
+                  + np.diff(flux, axis=0) / dom["dz_layer"][:, None, None])
+    assert np.abs(lhs - F).max() < 1e-6 * np.abs(F).max()

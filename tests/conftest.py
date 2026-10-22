@@ -4,8 +4,6 @@ one Registry for the whole session.
   pytest                 tests on the demo data (the default)
   pytest -m real         checks on your own run: CM1VIEW_TEST_RUN=/path/to/run (slow)
   pytest -m browser      the viewer in headless Firefox, with screenshots (slow)
-  CM1VIEW_PDECOMP_SCRIPT=/path/to/script.py pytest tests/test_pdecomp.py
-                         the pressure decomposition (skipped without a script)
 
 The demo data is written once to $CM1VIEW_TEST_DATA (default: <tmp>/cm1view-demo-$USER)
 and rewritten only when cm1view/demo.py changes.

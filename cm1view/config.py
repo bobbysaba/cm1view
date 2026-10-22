@@ -42,8 +42,9 @@ KEYS = [
         "Throwaway files cm1view can rebuild (computed series). Scratch is a good "
         "place: home quotas are small.", kind="outdir"),
     Key("pdecomp_script", "paths", "", "Pressure-decomposition script",
-        "Optional: the script run for times whose files lack p_b/p_l/p_nl. Leave "
-        "empty to hide the feature.", kind="file"),
+        "Optional: your own script for times whose files lack p_b/p_l/p_nl, with the "
+        "same functions as cm1view's solver (pdecomp_solver.py). Empty: cm1view's "
+        "solver.", kind="file"),
     Key("track_dirs", "tracks", ["storm_tracks"], "Track folders",
         "Where storm track files are looked for. A plain name (storm_tracks) is a "
         "folder of that name in the run folder or up to 4 folders above it; a full "
@@ -479,10 +480,7 @@ def cache_gb():
     if v != "auto":
         return float(v), "set"
     mem = job_memory_gb()
-    gb = 0.4 * mem
-    if pdecomp_script():  # the decomposition needs ~40 GB at its peak
-        gb = min(gb, mem - 48.0)
-    gb = float(max(2.0, min(48.0, gb)))
+    gb = float(max(2.0, min(48.0, 0.4 * mem)))
     return gb, f"auto: {gb:.0f} GB of {mem:.0f} GB job memory"
 
 
@@ -516,9 +514,6 @@ def suggestions(run_path=None):
         scratch = os.environ.get("SCRATCH")
         if scratch and os.path.isdir(scratch):
             out["cache_dir"] = os.path.join(scratch, ".cache", "cm1view")
-        found = _find_pdecomp()
-        if found:
-            out["pdecomp_script"] = found
         out["login_host"] = out["login_host"] or submit_host()
     return out
 
@@ -531,27 +526,6 @@ def submit_host():
         domain = socket.getfqdn().partition(".")[2]
         h = f"{h}.{domain}" if domain else h
     return h
-
-
-def _find_pdecomp():
-    """A pressure-decomposition script in the user's own folders, if there is one."""
-    bases = [os.path.expanduser("~")] + [os.environ[v] for v in ("WORK", "SCRATCH")
-                                          if os.environ.get(v)]
-    for name in ("pdecomp_new_fixed_mp.py", "pdecomp_new_fixed.py"):
-        for b in bases:
-            for d in (b, *(os.path.join(b, e) for e in _subdirs(b))):
-                p = os.path.join(d, name)
-                if os.path.isfile(p):
-                    return p
-    return ""
-
-
-def _subdirs(d):
-    try:
-        return sorted(e.name for e in os.scandir(d)
-                      if e.is_dir() and not e.name.startswith("."))[:200]
-    except OSError:
-        return []
 
 
 load()

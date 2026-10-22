@@ -225,32 +225,37 @@ time loads 5 fields (th, prs, qv, uinterp, vinterp).
 - **Pressure decomposition** (field group of that name): p_b, p_l, p_nl, the matching
   accelerations acc_b (B − ∂p_b/∂z/ρ), acc_l, acc_nl, plus p_l + p_nl, acc_l + acc_nl
   and the total. Where post-processing wrote them into the output files they are read
-  from there (any file subset; the map title says which script version wrote them, and
-  warns for files written before `pdecomp_new_fixed.py`). Elsewhere, a *Compute pressure
-  decomposition* button runs your own decomposition script (the `pdecomp_script`
-  setting; cm1view does not ship one) on that time in a separate
-  process, with its inputs read in
-  parallel first: ~25–35 s with 4 CPUs (~80 s on one). If the job lacks the memory, the 3D cache is emptied first;
-  if still short, it says so.
-  *Write into the output file* (offered when `allow_writes_to_output` is on) writes the
-  result with the script's
-  own `write_data` (float64, `pdecomp_version` attribute; about +40 s and +9 GB per
-  file for a 1280×1280×115 grid), replacing values from older scripts. While it writes,
-  the viewer releases that one file and reports it as busy. If the job is killed during
-  a write, the file can be left damaged, as with the script itself. Unticked, the
-  result is kept in memory only. The last 2 computed times stay in memory either way.
-  For older-script files the button offers *Recompute … and overwrite*. Use
-  `--pdecomp-script` or `$CM1VIEW_PDECOMP_SCRIPT` for another script with the same
-  functions.
+  from there (any file subset; the map title says which version wrote them, and warns
+  for files written by early versions without a `pdecomp_version` tag). Elsewhere, a
+  *Compute pressure decomposition* button computes that time in a separate process with
+  cm1view's solver (`cm1view/pdecomp_solver.py`). Each part solves the anelastic pressure
+  equation, `cp [H ∂²π/∂x² + H ∂²π/∂y² + ∂/∂z(H ∂π/∂z)] = F` with `H = θv0 ρ0`, by a
+  horizontal FFT (periodic lateral boundaries, `ebc = 1`) or cosine transform (open
+  ones) and a tridiagonal solve in the vertical that is conservative on the stretched
+  grid. The forcings are ∂(ρ0 B)/∂z for p_b and −2 ρ0 (∂U0/∂z ∂w/∂x + ∂V0/∂z ∂w/∂y)
+  for p_l. p_nl is the residual (total p′ − p_b − p_l). The horizontal grid must be
+  uniform.
 
-  The script is your own Python file; cm1view imports it in a separate process and calls
-  `lbc_type(run_dir)`, `domain_info(ds0)`, `compute_base_state(ds0)`,
-  `setup_pressure_solver(dom, base, periodic)`,
-  `pressure_decomposition(path, dom, base, solver, write=False)` (returning a dict with
-  `p_b`, `p_l`, `p_nl`, `acc_b`, `acc_l`, `acc_nl`, each shaped like a 3D field) and, for
-  writing, `write_data(ds, out)`. It opens files through a module-level `nc`
-  (`import netCDF4 as nc`). Without a script the feature is hidden; fields already in the
-  output files are still shown.
+  The inputs are read in parallel first, and the solver uses every CPU of the job:
+  ~25–35 s with 4 CPUs (~80 s on one) for a 1280 × 1280 × 115 grid, which needs about
+  30–40 GB of free memory (less for smaller grids, in proportion). If the job lacks the
+  memory, the 3D cache is emptied first; if still short, it says so.
+
+  *Write into the output file* (offered when `allow_writes_to_output` is on) writes the
+  result into the output file (float64, with a `pdecomp_version` attribute; about +40 s
+  and +9 GB per file for a 1280 × 1280 × 115 grid), replacing older values. While it
+  writes, the viewer releases that one file and reports it as busy. If the job is killed
+  during a write, the file can be left damaged. Unticked, the result is kept in memory
+  only. The last 2 computed times stay in memory either way. For files written by early
+  versions the button offers *Recompute … and overwrite*.
+
+  The solver also works on its own, outside the viewer (its docstring shows how). To
+  use another solver, point the `pdecomp_script` setting (or `--pdecomp-script`,
+  `$CM1VIEW_PDECOMP_SCRIPT`) at a Python file with the same functions: `lbc_type`,
+  `domain_info`, `compute_base_state`, `setup_pressure_solver`, `pressure_decomposition`
+  (returning a dict with `p_b`, `p_l`, `p_nl`, `acc_b`, `acc_l`, `acc_nl`, each shaped
+  like a 3D field) and `write_data`, and a module-level `nc` (`import netCDF4 as nc`)
+  that it opens files with.
 
 Other derived fields are defined in `cm1view/fields.py` (`_make_fields`); see
 [Developing](developing.md).
