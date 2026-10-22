@@ -13,8 +13,7 @@ import shutil
 import numpy as np
 import pytest
 
-from conftest import txt, wait
-from test_figure import _difference, _swath, ed  # noqa: F401  (ed: the fixture)
+from conftest import difference_layer, swath_layer, txt, wait
 
 BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline")
 DPI = 72
@@ -43,9 +42,9 @@ def _setup(ed, how):
         ed.from_dists()
         ed.ds["plot"].value = "violin"
     elif how == "difference":
-        _difference(ed)
+        difference_layer(ed)
     elif how == "swath":
-        _swath(ed)
+        swath_layer(ed)
     elif how == "dark":
         ed.preset.value = "dark"
         ed._apply_preset()
