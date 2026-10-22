@@ -198,7 +198,8 @@ class FigureStyle:
     # ------------------------------------------------------------ presets
     def _apply_preset(self):
         self.set_spec(fg.apply_style(self.collect(), self.preset.value))
-        self._msg(f"Preset <b>{html.escape(self.preset.label or '')}</b> applied "
+        name = next((k for k, v in PRESETS.items() if v == self.preset.value), "")
+        self._msg(f"Preset <b>{html.escape(name)}</b> applied "
                   "(Undo takes it back)")
 
     # ------------------------------------------------------------ copy look
