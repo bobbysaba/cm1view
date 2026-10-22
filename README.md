@@ -27,11 +27,32 @@ cm1view --demo                    # synthetic runs, to try it out
 cm1view /path/to/cm1/run          # your own output
 ```
 
-Open the URL it prints. On a cluster, start it in a batch or interactive job (4+ CPUs,
-32+ GB of memory) and reach it through the SSH tunnel command it prints, or through
-JupyterHub.
+Open the URL it prints. On a cluster, start it in a batch or interactive job, or on any
+compute node you can log in to when there is no scheduler, with the resources below.
+Reach it through the SSH tunnel command it prints, or through JupyterHub.
+
+## What resources to ask for
+
+Memory depends on the size of the grid, not on how many output times there are. Take
+`nx × ny × nz` from your `namelist.input` and use the row nearest yours:
+
+| Grid (nx × ny × nz) | Points | CPUs | Memory | With pressure decomposition |
+|---|---|---|---|---|
+| 256 × 256 × 80 | 5 million | 4 | 8 GB | 8 GB |
+| 512 × 512 × 100 | 26 million | 4 | 16 GB | 16 GB |
+| 1024 × 1024 × 100 | 105 million | 8 | 32 GB | 48 GB |
+| 1280 × 1280 × 115 | 188 million | 8 | 32 GB | 64 GB |
+| 2048 × 2048 × 150 | 629 million | 8 | 96 GB | 192 GB |
+
+Rule of thumb: about 4 GB plus 0.12 GB per million grid points to view a run, and another
+0.24 GB per million points free while a pressure decomposition runs. More than 8 CPUs
+doesn't help. See [Running on a cluster](docs/hpc.md#resources) for where the numbers
+come from and for machines without a scheduler.
 
 ## Documentation
+
+The full documentation is at **https://bobbysaba.github.io/cm1view/**, and also here
+in `docs/`:
 
 - [Installing](docs/install.md): conda or pip, disk space, checking the install
 - [Running on a cluster](docs/hpc.md): Slurm / PBS jobs, SSH tunnels, JupyterHub,

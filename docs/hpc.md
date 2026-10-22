@@ -6,17 +6,32 @@ browser through an SSH tunnel or, where your site has one, JupyterHub.
 
 ## Resources
 
-| | Minimum | Comfortable |
-|---|---|---|
-| CPUs | 4 | 8 (more CPUs means faster first reads at each time) |
-| Memory | 32 GB | 64 GB or more for large grids |
-| Time | as long as you'll be looking | |
+What cm1view needs depends on the grid, not on how many output times the run has. Take
+`nx × ny × nz` from the run's `namelist.input` and use the row nearest yours:
 
-What it needs depends on the grid. Each 3D float32 field is `nx × ny × nz × 4` bytes:
-about 0.75 GB for 1280 × 1280 × 115. By default cm1view caches 3D fields in about 40% of
-the job's memory (`--cache-gb` to change that). The pressure decomposition, if you use
-it, needs about 30–40 GB more while it runs on a grid that size (less in proportion for
-smaller grids); it empties the cache first when the job is short.
+| Grid (nx × ny × nz) | Points | CPUs | Memory | With pressure decomposition |
+|---|---|---|---|---|
+| 256 × 256 × 80 | 5 million | 4 | 8 GB | 8 GB |
+| 512 × 512 × 100 | 26 million | 4 | 16 GB | 16 GB |
+| 1024 × 1024 × 100 | 105 million | 8 | 32 GB | 48 GB |
+| 1280 × 1280 × 115 | 188 million | 8 | 32 GB | 64 GB |
+| 2048 × 2048 × 150 | 629 million | 8 | 96 GB | 192 GB |
+
+Time: as long as you'll be looking.
+
+**Working it out for another grid.** Each 3D float32 field is `nx × ny × nz × 4` bytes:
+about 0.75 GB for 1280 × 1280 × 115. Viewing needs room for Python and the server (about
+4 GB) plus a cache of recently used 3D fields, about 30 of them for comfortable use: 4 GB
+plus 0.12 GB per million grid points. The pressure decomposition needs about 0.24 GB per
+million points free while it runs (about 44 GB on 1280 × 1280 × 115), and it empties the
+cache first when the job is short, so the two don't fully add. The number of output
+times only changes how long the first scan of a run and a series over all times take.
+
+**CPUs.** cm1view reads with up to 8 processes, so 8 CPUs give the fastest first read at
+each time and more don't help. 4 is fine for small grids.
+
+By default cm1view caches 3D fields in about 40% of the job's memory (`--cache-gb` to
+change that).
 
 cm1view sets the cache size (at most 48 GB) and the number of reader processes (at most
 8) from what the scheduler gave the job: its cgroup memory limit and CPU affinity, or the
@@ -56,6 +71,28 @@ source ~/miniforge3/etc/profile.d/conda.sh   # or: module load conda
 conda activate cm1view
 cm1view /path/to/cm1/run
 ```
+
+**No scheduler.** On a machine where you log in to a node and run CM1 with `mpiexec`,
+cm1view needs no job: log in to one node that can see the output and start it there
+(not through `mpiexec`; it is one process on one machine). Nothing reserves resources
+for you, so check what is free first:
+
+```bash
+nproc          # CPUs (lscpu: "Thread(s) per core: 2" means half are hyperthreads)
+free -g        # memory: the "available" column is what you can use
+uptime         # load average: about how many CPUs are busy now
+```
+
+Then size cm1view yourself from the table above, and keep it on its own CPUs so it
+leaves room for other users and your own CM1 runs:
+
+```bash
+OMP_NUM_THREADS=8 NUMBA_NUM_THREADS=8 taskset -c 0-7 \
+    cm1view /path/to/cm1/run --workers 8 --cache-gb 48
+```
+
+`--cache-gb` is about 40% of the memory you mean to use (48 GB is the most it takes by
+default). Without these, cm1view sizes itself from the whole machine.
 
 ## 2. Start cm1view
 
