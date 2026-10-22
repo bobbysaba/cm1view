@@ -4,10 +4,10 @@ image, a stand-alone script, the data and the spec.
 
 The editor has five tabs: Panels (what the grid shows: kind, size, times, titles,
 area, runs), Layers (what each panel draws), Style (fonts, axes, labels, colorbar,
-legend, spacing), Annotate and Export.  Saving sits above the preview.
+legend, spacing), Annotate and Export (with animated GIFs).  Saving sits above the preview.
 
-The FigureEditor is here; its runs (figruns), sources and lists (figsources) and export
-(figexport) are mixins, and the constants, helpers and cards are in figparts."""
+The FigureEditor is here; its runs (figruns), sources and lists (figsources), export
+(figexport) and animations (figanim) are mixins, and the constants, helpers and cards are in figparts."""
 
 import base64
 import io
@@ -29,12 +29,13 @@ from .figparts import (
     _hint, _num, _row, _section, _when,
 )
 # the editor's feature groups, one module each
+from .figanim import FigureAnimation
 from .figexport import FigureExport
 from .figruns import FigureRuns
 from .figsources import FigureSources
 
 
-class FigureEditor(FigureRuns, FigureSources, FigureExport):
+class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation):
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
@@ -336,6 +337,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport):
         self.load_btn = pn.widgets.Button(name="Open", button_type="light",
                                           button_style="outline", height=32)
         self.msg = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8))
+        self._build_anim()
         # ---- preview
         self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(12, 8, 0, 8))
         self.update = pn.widgets.Button(name="Redraw", icon="refresh", height=32,
@@ -427,6 +429,7 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport):
             _section("Image", _grid(self.tight, self.pad, self.bg),
                      _hint("Save, the format and the DPI are above the preview. Publishers "
                            "usually ask for 300–600 DPI, or PDF / EPS for line art.")),
+            self.anim_sec,
             _section("Open a saved figure", _hint(
                 "<b>+ script & data</b> also writes a Python script that redraws the figure "
                 "without the viewer, and the figure's spec: open the spec here to keep "

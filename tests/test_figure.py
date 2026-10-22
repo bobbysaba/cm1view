@@ -195,3 +195,40 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
+
+
+def test_animation_steps_every_panel(ed, tmp_path):
+    from PIL import Image
+    from cm1view import figure as fg
+    ed.rows.value, ed.cols.value = 1, 2
+    spec = ed.collect()
+    ed.an_n.value, ed.an_step.value = 4, 2
+    offsets = ed._anim_offsets(spec)
+    dt = ed.run.times[1] - ed.run.times[0]
+    assert offsets[:2] == [0.0, 2 * dt]
+    last = max(t for t in spec["times_s"] if t is not None)
+    assert last + offsets[-1] <= ed.run.times[-1]
+    s = fg.shift_times(spec, offsets[1])
+    assert s["times_s"] == [t + offsets[1] for t in spec["times_s"]]
+    base = str(tmp_path / "loop")
+    ed._anim_job(ed._anim_gen, spec, offsets, base,
+                 dict(fps=5.0, dpi=40, loop=True, frames=True))
+    assert "Saved" in txt(ed.an_msg.object), ed.an_msg.object
+    gif = Image.open(base + ".gif")
+    assert gif.n_frames == len(offsets) and gif.info.get("loop") == 0
+    assert len(list((tmp_path / "loop_frames").glob("loop_*.png"))) == len(offsets)
+
+
+def test_animation_needs_plan_or_section(ed):
+    ed.from_soundings()
+    ed._on_anim()
+    assert "plan views or cross-sections" in txt(ed.an_msg.object)
+
+
+def test_stopped_animation_saves_nothing(ed, tmp_path):
+    spec = ed.collect()
+    base = str(tmp_path / "stopped")
+    ed._anim_job(ed._anim_gen - 1, spec, [0.0, 300.0], base,
+                 dict(fps=5.0, dpi=40, loop=True, frames=False))
+    assert "Stopped" in txt(ed.an_msg.object)
+    assert not (tmp_path / "stopped.gif").exists()

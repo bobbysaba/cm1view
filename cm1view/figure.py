@@ -200,6 +200,63 @@ def storm_motion(run, fixes, t):
     return (run.umove, run.vmove)
 
 
+def shift_times(spec, dt_s):
+    """A copy of `spec` with every panel's time moved by dt_s seconds (a frame of an
+    animation: the panels step through time together)."""
+    s = json.loads(json.dumps(spec, default=float))
+    s["times_s"] = [None if t is None else float(t) + dt_s for t in s.get("times_s", [])]
+    if s.get("time_s") is not None:
+        s["time_s"] = float(s["time_s"]) + dt_s
+    for p in s.get("panels") or []:
+        p["time_s"] = float(p["time_s"]) + dt_s
+    return s
+
+
+def frame_offsets(spec, runs, n, step=1):
+    """Time offsets (s) of up to n animation frames, every `step` outputs of the first
+    panel's run from the figure's own times, while every panel has an output at its
+    shifted time.  runs: {run index: CM1Run} of the panels' runs."""
+    refs = [r for r in (panel_ref(spec, i) for i in range(npanels(spec))) if r]
+    if not refs:
+        return []
+    k0, ts0 = refs[0]
+    run0 = runs[k0]
+    i0 = tindex(run0, ts0)
+    if i0 is None:
+        return []
+    out = []
+    for j in range(int(n)):
+        i = i0 + j * int(step)
+        if not 0 <= i < len(run0.times):
+            break
+        dt = float(run0.times[i] - run0.times[i0])
+        if any(tindex(runs[k], ts + dt) is None for k, ts in refs):
+            break
+        out.append(dt)
+    return out
+
+
+def write_gif(images, path, fps=4.0, loop=True):
+    """An animated GIF of PIL images (frames of different sizes are padded to the
+    largest, on white)."""
+    from PIL import Image
+    path = _abs(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    w = max(im.width for im in images)
+    h = max(im.height for im in images)
+    frames = []
+    for im in images:
+        if im.size != (w, h) or im.mode != "RGB":
+            canvas = Image.new("RGB", (w, h), "white")
+            canvas.paste(im, (0, 0), im if im.mode == "RGBA" else None)
+            im = canvas
+        frames.append(im.convert("P", palette=Image.Palette.ADAPTIVE, colors=256))
+    kw = dict(loop=0) if loop else {}
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=max(20, int(round(1000.0 / float(fps)))), disposal=2, **kw)
+    return path
+
+
 # ------------------------------------------------------------------ geometry
 def section_ends(run, spec, t, center):
     """Grid-km ends (A, B) of the cross-section at time t (None if it needs a track

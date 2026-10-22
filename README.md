@@ -15,6 +15,7 @@ a cluster) and opens in your own browser.
   reduced over a region (domain, 3D box, a disc around the storm) at every time.
 - **Figures**: publication figures from any of the above, across times and runs. Each
   saves with a stand-alone script and data that redraw the same image without cm1view.
+  Plan views and cross-sections can also be saved as animated GIFs.
 
 ## Quick start
 

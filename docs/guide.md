@@ -174,8 +174,20 @@ and *Download*. The editor has five tabs of folding sections:
   the legend and the spacing between panels.
 - **Annotate**: text, markers, arrows, lines, boxes and circles, and a contour key
   (nested circles).
-- **Export**: trimming, margin and a transparent background; reopen a saved figure
-  (its image, script or `_spec.json`) to keep editing.
+- **Export**: trimming, margin and a transparent background; animations; reopen a saved
+  figure (its image, script or `_spec.json`) to keep editing.
+
+**Animations** (Export → *Animation (GIF)*). Plan-view and cross-section figures can be
+saved as animated GIFs. Each frame redraws the figure exactly as it is set up, a few
+outputs later: every panel steps forward together, and storm-centred panels and sections
+follow the storm. Set the number of frames, how many outputs each frame steps
+(*Every … outputs*), the frame rate, the DPI (keep it low: a GIF grows quickly with its
+size) and whether it loops. The animation is saved as `<Save as>.gif`, and with *Also
+save the frames* each frame is saved too, as `<Save as>_frames/<name>_000.png`, … (to
+make a video, e.g. `ffmpeg -framerate 4 -i name_%03d.png -pix_fmt yuv420p name.mp4`). It
+stops early at the last time every panel has output; *Stop* abandons it. A single panel
+(1 × 1) is the usual choice, but any grid works: a 1 × 2 figure of two runs makes a
+side-by-side loop.
 
 Runs have their own storm track (the Track tool, or `storm_tracks/<run>.csv`, found
 automatically; see `track_dirs` / `track_patterns`). *+ script & data* also saves a
