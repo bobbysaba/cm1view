@@ -89,6 +89,13 @@ def find_track(path):
     return config.find_track(path)
 
 
+def spread_times(nt, t, n, step=5):
+    """Up to n different output indices from t, every `step` outputs (closer together
+    when the run ends sooner)."""
+    step = max(1, min(int(step), (nt - 1 - t) // max(1, n - 1)))
+    return [k for k in (t + step * j for j in range(n)) if k < nt]
+
+
 def default_spec(run, F, t=0):
     """A 2 x 3 plan-view figure in time: reflectivity at 1 km with w contours at 3 km
     and near-surface winds, centred on the tracked storm."""
@@ -99,9 +106,11 @@ def default_spec(run, F, t=0):
         layers.append(layer_defaults("contour", F, "winterp", 3.0))
     if "uinterp" in F:
         layers.append(dict(layer_defaults("vectors", F), on=False))
-    times = [min(nt - 1, t + 5 * k) for k in range(6)]
+    times = spread_times(nt, t, 6)
+    rows, cols = (1, len(times)) if len(times) <= 3 else (2, (len(times) + 1) // 2)
     return dict(
-        version=1, kind="plan", size=[8.0, 6.0], rows=2, cols=3, vary="time",
+        version=1, kind="plan", size=[8.0, 6.0 if rows > 1 else 3.2], size_auto=True,
+        rows=rows, cols=cols, vary="time",
         times=times, time=t, panel_fills=[], layers=layers,
         times_s=[float(run.times[k]) for k in times], time_s=float(run.times[t]),
         runs=[run_entry(run, "viewer")], run=0, runs_as="rows", panels=[],
@@ -143,16 +152,17 @@ def panel_ref(spec, i):
     panel), "grid" (runs x times: rows are runs when runs_as == "rows", else columns)
     or "custom" (spec["panels"]: a run and time per panel)."""
     vary, nr = spec["vary"], len(spec.get("runs") or [None])
-    if vary == "time":
+    if vary == "time":  # (a time of None: an empty grid cell)
         ts = spec["times_s"]
-        return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) else None
+        return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) and ts[i] is not None \
+            else None
     if vary == "field":
         return int(spec.get("run", 0)), float(spec["time_s"])
     if vary == "grid":
         r, c = divmod(i, int(spec["cols"]))
         k, j = (r, c) if spec.get("runs_as", "rows") == "rows" else (c, r)
         ts = spec["times_s"]
-        return (k, float(ts[j])) if k < nr and j < len(ts) else None
+        return (k, float(ts[j])) if k < nr and j < len(ts) and ts[j] is not None else None
     pans = spec.get("panels", [])
     if i < len(pans) and int(pans[i]["run"]) < nr:
         return int(pans[i]["run"]), float(pans[i]["time_s"])
@@ -171,7 +181,8 @@ def normalize(spec, run, track="viewer"):
     only run."""
     nt = len(run.times)
     if "times_s" not in spec:
-        spec["times_s"] = [float(run.times[min(int(t), nt - 1)]) for t in spec["times"]]
+        spec["times_s"] = [None if t is None else float(run.times[min(int(t), nt - 1)])
+                           for t in spec["times"]]
     if "time_s" not in spec:
         spec["time_s"] = float(run.times[min(int(spec["time"]), nt - 1)])
     if not spec.get("runs"):
@@ -645,11 +656,18 @@ def save_image(spec, data, path, dpi=None):
     path = _abs(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig = figdraw.draw(spec, data)
-    ex = spec.get("export", {})
-    fig.savefig(path, dpi=float(dpi or ex.get("dpi", 250)),
-                bbox_inches="tight" if ex.get("tight", True) else None,
-                facecolor=fig.get_facecolor())
+    figdraw.save(spec, fig, path, **save_kw(spec, dpi))
     return path
+
+
+def save_kw(spec, dpi=None):
+    """savefig arguments of the spec's export settings."""
+    ex = spec.get("export", {})
+    tight = ex.get("tight", True)
+    return dict(dpi=float(dpi or ex.get("dpi", 250)), bbox_inches="tight" if tight else None,
+                pad_inches=float(ex.get("pad", 0.05)) if tight else 0.1,
+                facecolor=spec.get("background", "white"),
+                transparent=spec.get("background") == "none")
 
 
 def bundle_paths(spec, base):
@@ -725,9 +743,10 @@ def script(spec, npz_name, out_name, run=None, note=""):
         "    fig = draw(SPEC, data)",
         f"    out = os.path.join(here, {out_name!r})",
         "    ex = SPEC.get('export', {})",
-        "    fig.savefig(out, dpi=ex.get('dpi', 250),",
-        "                bbox_inches='tight' if ex.get('tight', True) else None,",
-        "                facecolor=fig.get_facecolor())",
+        "    tight = ex.get('tight', True)",
+        "    save(SPEC, fig, out, dpi=ex.get('dpi', 250), bbox_inches='tight' if tight else None,",
+        "         pad_inches=ex.get('pad', 0.05) if tight else 0.1,",
+        "         facecolor=fig.get_facecolor(), transparent=SPEC.get('background') == 'none')",
         "    print('saved', out)",
         "",
     ]

@@ -234,7 +234,7 @@ def _bar(*groups):
 
 # the analysis tools down the left of the map: button -> (icon, label, tooltip)
 TOOLS = {
-    "Sounding": ("temperature", "Sounding", "Soundings: click the map (or drag a box for "
+    "Sounding": ("balloon", "Sounding", "Soundings: click the map (or drag a box for "
                                             "an area mean)"),
     "Cross-section": ("slice", "Section", "Vertical cross-section: click A, then B"),
     "Track": ("route", "Track", "Storm track: click a storm to follow it through time"),
@@ -257,6 +257,14 @@ RAIL_BTN = """
 :host(.cv-on) .bk-btn { background-color: rgba(34,211,238,.18) !important;
                         color: #a5f3fc !important; }
 .bk-btn .bk-TablerIcon { font-size: 20px; }
+"""
+
+
+# the time bar: a click anywhere near the track jumps there (noUiSlider's tap works only
+# on the few-pixel track itself, so a taller invisible strip catches the clicks)
+TIME_BAR = """
+.noUi-base::before { content: ""; position: absolute; left: 0; right: 0; top: -12px;
+                     bottom: -12px; cursor: pointer; }
 """
 
 
@@ -328,7 +336,8 @@ class Viewer:
         self._build_items()
         self._wire()
         # save folders from the settings (followed while the boxes still point there)
-        self._auto_dirs = {k: config.exports_dir(run.path, k) for k in ("tracks", "series")}
+        self._auto_dirs = {"series": config.exports_dir(run.path, "series")}
+        self._trk_auto = self.trk_path.value
         self._pd_allowed = pdecomp.writes_allowed()
         self.request_map()
 
@@ -384,7 +393,8 @@ class Viewer:
             pass
         self.tslider = pn.widgets.IntSlider(name="", start=0, end=len(run.times) - 1,
                                             value=t0, show_value=False, min_width=120,
-                                            sizing_mode="stretch_width", margin=(4, 12))
+                                            sizing_mode="stretch_width", margin=(4, 12),
+                                            align="center", stylesheets=[TIME_BAR])
         btn = dict(button_type="light", button_style="outline", width=34, height=32,
                    name="", icon_size="1.1em", margin=(4, 1))
         self.t_prev = pn.widgets.Button(icon="player-track-prev", **btn)
@@ -1628,11 +1638,14 @@ class Viewer:
     def _config_changed(self):
         """Settings were saved (in this page or another): save boxes still showing the
         old default move to the new folders; the write option follows the setting."""
-        for w, kind in ((self.trk_path, "tracks"), (self.ser_path, "series")):
-            new = config.exports_dir(self.run.path, kind)
-            if os.path.dirname(config.expand(w.value)) == self._auto_dirs[kind]:
-                w.value = os.path.join(new, os.path.basename(w.value))
-            self._auto_dirs[kind] = new
+        new = config.exports_dir(self.run.path, "series")
+        if os.path.dirname(config.expand(self.ser_path.value)) == self._auto_dirs["series"]:
+            self.ser_path.value = os.path.join(new, os.path.basename(self.ser_path.value))
+        self._auto_dirs["series"] = new
+        new = self._trk_default()
+        if config.expand(self.trk_path.value) == self._trk_auto:
+            self.trk_path.value = new
+        self._trk_auto = new
         self.figed.config_changed()
         self._track_found = ()  # track_dirs / track_patterns may have changed
         self._update_storm_btn()
@@ -3029,7 +3042,7 @@ class Viewer:
         return io.BytesIO(text.encode())
 
     def _trk_default(self):
-        return os.path.join(config.exports_dir(self.run.path, "tracks"), "meso_track.csv")
+        return config.track_save_path(self.run.path)
 
     def _on_save_track(self, ev):
         path = config.expand(self.trk_path.value.strip())
@@ -3044,6 +3057,7 @@ class Viewer:
                                       f'not save: {e}</div>')
             return
         self.trk_status.object = self._track_summary(f' · saved to <code>{path}</code>')
+        self._track_found = ()  # the chip may now find this file
 
     # ================================================================ time series
     def _ser_recipe(self):

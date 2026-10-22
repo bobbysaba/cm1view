@@ -233,24 +233,43 @@ come from the computed result without recomputing. *Auto limits* clears them. Th
 3D region box is offered as a region once one has been drawn.
 
 **Figure workspace** (Map | 3D | **Figure**). Publication figures, previewed at their
-final size. Start from the map view, the cross-section, the series, the soundings,
-or a default grid; *Panels show*:
-- *Plan views* / *Vertical cross-sections*: layers (fill, contours, shading, vectors or
-  streamlines, storm track, section line), panels in time, in field, as a runs × times
-  grid or each with its own run and time; centred on each run's tracked storm, a fixed
-  box or the whole domain.
-- *Time–height (series)*: a row per series and a column per run (as in
-  `pub_figs.ipynb`), one colorbar per row; a series can be plotted as its d/dz or d/dt.
-- *Time series*: series with the same panel number share a panel; series in other units
-  get their own y axis; one series from several runs is coloured by run.
-- *Soundings*: skew-T log-p with adiabats, parcel, barbs and a hodograph inset; several
-  soundings (runs, times, storm-relative spots) per panel.
+final size. *New figure from* the map view, the cross-section, the series, the
+soundings or a time grid; every change can be undone (↶ ↷ above the preview), and
+*Actual size* shows the figure as large as it prints, to judge the font sizes. Saving
+sits above the preview: *Save as* (folder/name), format, DPI, *Save*, *+ script & data*
+and *Download*. The editor has five tabs of folding sections:
 
-**Runs** lists the runs panels can come from (e.g. tornadic vs non-tornadic), each with
-its storm track (the Track tool, or `storm_tracks/<run>.csv`, found automatically; see
-`track_dirs` / `track_patterns`).
-**Annotate** adds a contour key (nested circles, as `funcs.circlelegend`) and text,
-markers, arrows, lines, boxes and circles. **Export** saves the image, and optionally a
+- **Panels**: what the panels show and the grid and size (size presets by width; the
+  height follows the panels until you type a size, *Fit height* makes it follow
+  again), the time of each panel (any cell can stay empty), the titles of the figure
+  and of each panel, the area or section, and the **Runs** the panels can come from.
+  *Panels show*:
+  - *Plan views* / *Vertical cross-sections*: panels in time, in field, as a
+    runs × times grid or each with its own run and time; centred on each run's
+    tracked storm, a fixed box or the whole domain.
+  - *Time–height (series)*: a row per series and a column per run (as in
+    `pub_figs.ipynb`), one colorbar per row; a series can be plotted as its d/dz or d/dt.
+  - *Time series*: series with the same panel number share a panel; series in other
+    units get their own y axis; one series from several runs is coloured by run.
+  - *Soundings*: skew-T log-p with adiabats, parcel, barbs and a hodograph inset;
+    several soundings (runs, times, storm-relative spots) per panel.
+- **Layers**: fill (colormap, range, steps, linear / log scale, opacity, blanking,
+  colorbar arrows and label), contours (levels, labels and their format), shading,
+  vectors or streamlines, storm track and section line; the series of time–height and
+  time-series figures; the soundings and skew-T settings.
+- **Style**: fonts (family, math / units font, sizes of tick labels, axis labels,
+  titles and legends), axes and ticks (labels, tick spacing and direction, minor ticks,
+  grid lines, frame width, equal scale), panel labels (letters, times and run names,
+  in a corner, on a white box or above the panel), colorbars (one for the figure, per
+  row, column or panel; where, length, thickness, label, ticks and their sizes),
+  the legend and the spacing between panels.
+- **Annotate**: text, markers, arrows, lines, boxes and circles, and a contour key
+  (nested circles, as `funcs.circlelegend`).
+- **Export**: trimming, margin and a transparent background; reopen a saved figure
+  (its image, script or `_spec.json`) to keep editing.
+
+Runs have their own storm track (the Track tool, or `storm_tracks/<run>.csv`, found
+automatically; see `track_dirs` / `track_patterns`). *+ script & data* also saves a
 stand-alone script with the plotted arrays and spec: the script redraws the identical
 image without the viewer. The image and script sit side by side, the arrays and spec in
 `_src/` next to them; the script finds them relative to itself, so the folder can be

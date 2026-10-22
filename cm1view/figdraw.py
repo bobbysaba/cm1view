@@ -31,11 +31,11 @@ import numpy as np
 import matplotlib
 from matplotlib.figure import Figure
 from matplotlib.colors import (BoundaryNorm, LinearSegmentedColormap, ListedColormap,
-                               Normalize)
+                               LogNorm, Normalize)
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredText
 from matplotlib.patches import Circle, Patch, Rectangle
-from matplotlib.ticker import NullFormatter
+from matplotlib.ticker import MultipleLocator, NullFormatter
 
 # NWS-style reflectivity steps (every 5 dBZ from 5 dBZ)
 NWS_REF = ["#04e9e7", "#019ff4", "#0300f4", "#02fd02", "#01c501", "#008e00", "#fdf802",
@@ -74,13 +74,27 @@ def colormap(name, reverse=False, white_first=False):
     return cm
 
 
-def _norm(lay, cm):
+def _bounds(lay):
+    """(min, max) of a fill; a log scale needs min > 0 (else max / 1000)."""
     lo, hi = float(lay["vmin"]), float(lay["vmax"])
+    if lay.get("scale") == "log":
+        hi = hi if hi > 0 else 1.0
+        lo = lo if 0 < lo < hi else hi * 1e-3
+    return lo, hi
+
+
+def _steps(lay, n):
+    lo, hi = _bounds(lay)
+    return np.geomspace(lo, hi, n + 1) if lay.get("scale") == "log" else \
+        np.linspace(lo, hi, n + 1)
+
+
+def _norm(lay, cm):
+    lo, hi = _bounds(lay)
     n = int(lay.get("nlevels") or 0)
     if n > 1:
-        return BoundaryNorm(np.linspace(lo, hi, n + 1), cm.N, extend=lay.get("extend",
-                                                                             "neither"))
-    return Normalize(lo, hi)
+        return BoundaryNorm(_steps(lay, n), cm.N, extend=lay.get("extend", "neither"))
+    return LogNorm(lo, hi) if lay.get("scale") == "log" else Normalize(lo, hi)
 
 
 def _levels(text):
@@ -103,13 +117,17 @@ def _fill(ax, x, y, a, lay):
     if lay.get("mask_below") is not None and lay["mask_below"] != "":
         a[a <= float(lay["mask_below"])] = np.nan
     cm = colormap(lay["cmap"], lay.get("reverse", False), lay.get("white_first", False))
+    alpha = float(lay.get("alpha", 1.0))
+    alpha = alpha if alpha < 1.0 else None  # (opaque: matplotlib's plain path)
     if lay.get("style") == "contourf":
         n = int(lay.get("nlevels") or 20)
-        lv = np.linspace(float(lay["vmin"]), float(lay["vmax"]), n + 1)
-        return ax.contourf(x, y, a, lv, cmap=cm, extend=lay.get("extend", "neither"))
+        lv = _steps(lay, n)
+        return ax.contourf(x, y, a, lv, cmap=cm, extend=lay.get("extend", "neither"),
+                           norm=LogNorm(lv[0], lv[-1]) if lay.get("scale") == "log" else None,
+                           alpha=alpha)
     # rasterized: a PDF / SVG keeps text and lines as vectors but the field as pixels
     return ax.pcolormesh(x, y, a, cmap=cm, norm=_norm(lay, cm), shading="nearest",
-                         rasterized=True)
+                         rasterized=True, alpha=alpha)
 
 
 def _contour(ax, x, y, a, lay):
@@ -120,7 +138,8 @@ def _contour(ax, x, y, a, lay):
     cs = ax.contour(x, y, a, lv, colors=lay.get("color", "k"),
                     linewidths=float(lay.get("lw", 1.0)), linestyles=ls)
     if lay.get("clabel"):
-        ax.clabel(cs, fmt="%g", fontsize=float(lay.get("clabel_size", 8)))
+        ax.clabel(cs, fmt=lay.get("clabel_fmt") or "%g",
+                  fontsize=float(lay.get("clabel_size") or 8))
     return cs
 
 
@@ -162,9 +181,22 @@ def _vectors(ax, d, j, lay, xsec):
 
 
 def _anchored(ax, text, opts, size):
-    ax.add_artist(AnchoredText(text, loc=opts.get("loc", "upper left"), frameon=False,
-                               prop={"weight": "bold" if opts.get("bold", True) else "normal",
-                                     "size": float(opts.get("size") or size)}))
+    """A panel label in a corner of the panel (on a white box with opts["box"]), or
+    above it (loc "above left" / "above right")."""
+    loc = opts.get("loc", "upper left")
+    prop = {"weight": "bold" if opts.get("bold", True) else "normal",
+            "size": float(opts.get("size") or size)}
+    if loc.startswith("above"):
+        ax.set_title(text, loc=loc.split()[-1], fontsize=prop["size"], fontweight=prop["weight"])
+        return
+    box = bool(opts.get("box"))
+    at = AnchoredText(text, loc=loc, frameon=box, prop=prop, pad=0.25 if box else 0.4,
+                      borderpad=0.5)
+    if box:
+        at.patch.set(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none",
+                     alpha=0.85)
+    at.set_in_layout(False)  # it sits in the panel: small panels must not shrink for it
+    ax.add_artist(at)
 
 
 def panel_letter(i, fmt):
@@ -180,15 +212,51 @@ def time_text(t_s, opts):
 
 
 def draw(spec, data):
-    """The matplotlib Figure of `spec` with arrays `data` (see the module notes)."""
-    font = spec.get("font", {})
+    """The matplotlib Figure of `spec` with arrays `data` (see the module notes).  Save
+    it with save(), which keeps the spec's fonts for what matplotlib draws late (tick
+    labels)."""
+    with matplotlib.rc_context(rc(spec)):
+        return _draw(spec, data, float(spec.get("font", {}).get("size", 10)))
+
+
+def save(spec, fig, fname, **kw):
+    """fig.savefig(fname, **kw) with the spec's fonts and ticks in effect."""
+    with matplotlib.rc_context(rc(spec)):
+        fig.savefig(fname, **kw)
+
+
+def rc(spec):
+    """matplotlib settings of the spec's fonts and axes."""
+    font, ax = spec.get("font", {}), spec.get("axes", {})
     fs = float(font.get("size", 10))
-    rc = {"font.size": fs, "font.family": font.get("family", "sans-serif"),
-          "axes.titlesize": fs * 1.1, "axes.labelsize": fs, "xtick.labelsize": fs * 0.9,
-          "ytick.labelsize": fs * 0.9, "pdf.fonttype": 42, "ps.fonttype": 42,
-          "svg.fonttype": "none"}
-    with matplotlib.rc_context(rc):
-        return _draw(spec, data, fs)
+    fam = font.get("family", "sans-serif")
+    rc = {"font.size": fs, "font.family": fam,
+          "axes.titlesize": font_size(spec, "title"), "axes.labelsize": font_size(spec, "label"),
+          "xtick.labelsize": font_size(spec, "tick"), "ytick.labelsize": font_size(spec, "tick"),
+          "xtick.direction": ax.get("tickdir", "out"), "ytick.direction": ax.get("tickdir", "out"),
+          "pdf.fonttype": 42, "ps.fonttype": 42, "svg.fonttype": "none"}
+    math = font.get("math", "dejavusans")
+    rc["mathtext.fontset"] = math
+    if math == "custom":  # math in the text font
+        base = {"sans-serif": "sans", "serif": "serif"}.get(fam, fam)
+        rc.update({"mathtext.rm": base, "mathtext.it": f"{base}:italic",
+                   "mathtext.bf": f"{base}:bold"})
+    if ax.get("frame_lw"):
+        lw = float(ax["frame_lw"])
+        rc.update({"axes.linewidth": lw, "xtick.major.width": lw, "ytick.major.width": lw,
+                   "xtick.minor.width": 0.6 * lw, "ytick.minor.width": 0.6 * lw})
+    return rc
+
+
+def font_size(spec, what):
+    """Font size (pt) of 'tick' labels, axis 'label's, panel 'title's, the 'suptitle'
+    or the 'legend': the spec's own, else a multiple of the base size."""
+    font = spec.get("font", {})
+    v = font.get(what)
+    if v not in (None, "", 0):
+        return float(v)
+    return float(font.get("size", 10)) * {"tick": 0.9, "label": 1.0, "title": 1.1,
+                                          "suptitle": 1.4, "legend": 0.85}[what]
 
 
 def _draw(spec, data, fs):
@@ -281,7 +349,7 @@ def _draw(spec, data, fs):
             ax.set_ylabel(ax_opts.get("ylabel", ""))
         if i < len(titles) and titles[i]:
             ax.set_title(titles[i], weight="bold" if ax_opts.get("title_bold", True)
-                         else "normal")
+                         else "normal", loc=ax_opts.get("title_loc", "center"))
         if labels.get("on", True):
             _anchored(ax, panel_letter(i, labels.get("fmt", "{a}")), labels, fs * 1.2)
         if tlab.get("on", True) and "time_s" in d:
@@ -289,18 +357,19 @@ def _draw(spec, data, fs):
         if rlab.get("on", True) and d.get("run_label"):
             _anchored(ax, str(d["run_label"]), rlab, fs * 1.2)
         _annotate(ax, i, spec.get("annotations", []), fs)
-    _ticks(axs[:npan], used, ax_opts, rows, cols)
+    _ticks(axs[:npan], used, ax_opts, rows, cols, kind)
     if legend:
         lg = spec.get("legend", {})
         where = used[min(int(lg.get("panel", 0)), len(used) - 1)] if used else None
         if where is not None:
             where.legend(list(legend.values()), list(legend.keys()),
-                         loc=lg.get("loc", "upper right"), fontsize=fs * 0.85,
+                         loc=lg.get("loc", "upper right"), fontsize=font_size(spec, "legend"),
+                         ncol=int(lg.get("ncol", 1) or 1),
                          frameon=lg.get("frame", True), framealpha=0.85)
     _colorbars(fig, cbar, mappables, used, spec)
     _contour_key(fig, spec, fs)
     if spec.get("suptitle"):
-        fig.suptitle(spec["suptitle"], weight="bold", fontsize=fs * 1.4)
+        fig.suptitle(spec["suptitle"], weight="bold", fontsize=font_size(spec, "suptitle"))
     return fig
 
 
@@ -337,14 +406,16 @@ def series_ref(spec, i):
 def spec_layers(spec, i):
     """Layers of panel i: the shared layers, with the per-panel fill of a 'field'
     figure replacing the first fill layer (time-height panels: the fill of the
-    panel's series)."""
+    panel's series).  A layer with a "panels" list is off in the other panels (so
+    layer j stays layer j everywhere)."""
     if spec.get("kind") == "th":
         ref = series_ref(spec, i)
         if ref is None:
             return []
         e = spec["series"][ref[1]]
         return [dict({k: e[k] for k in FILL_KEYS if k in e}, type="fill", on=True)]
-    layers = [dict(lay) for lay in spec["layers"]]
+    layers = [dict(lay) if not lay.get("panels") or i in lay["panels"] else
+              dict(lay, on=False) for lay in spec["layers"]]
     if spec.get("vary") == "field":
         pf = spec.get("panel_fills", [])
         if i < len(pf):
@@ -355,7 +426,7 @@ def spec_layers(spec, i):
     return layers
 
 
-def _ticks(axs, used, opts, rows, cols):
+def _ticks(axs, used, opts, rows, cols, kind="plan"):
     mode = opts.get("ticklabels", "all")  # all | outer | none
     lims = {(tuple(np.round(ax.get_xlim(), 6)), tuple(np.round(ax.get_ylim(), 6)))
             for ax in used}
@@ -382,6 +453,13 @@ def _ticks(axs, used, opts, rows, cols):
             ax.tick_params(left=False, bottom=False)
         if opts.get("minor"):
             ax.minorticks_on()
+        for step, axis, ok in ((opts.get("xstep"), ax.xaxis, True),
+                               (opts.get("ystep"), ax.yaxis, kind != "sounding")):
+            if ok and step not in (None, "") and float(step) > 0:
+                axis.set_major_locator(MultipleLocator(float(step)))
+        if opts.get("grid"):
+            ax.grid(True, color=opts.get("grid_color", "0.5"), lw=0.5,
+                    ls=opts.get("grid_ls", ":"), alpha=0.8)
 
 
 def _colorbars(fig, cb, mappables, used, spec):
@@ -389,35 +467,42 @@ def _colorbars(fig, cb, mappables, used, spec):
     if mode == "none" or not mappables:
         return
     orient = cb.get("orientation", "horizontal" if mode == "shared" else "vertical")
-    kw = dict(orientation=orient, shrink=float(cb.get("shrink", 0.8)),
+    loc = cb.get("location") or ("bottom" if orient == "horizontal" else "right")
+    kw = dict(location=loc, shrink=float(cb.get("shrink", 0.8)),
               fraction=float(cb.get("fraction", 0.05)), pad=float(cb.get("pad", 0.02)))
     if mode == "shared":
-        _, ax0, (m, lay) = mappables[0]
-        c = fig.colorbar(m, ax=used, extend=lay.get("extend", "neither"), **kw)
-        c.set_label(cb.get("label", "") or lay.get("units", ""))
-        _cbar_ticks(c, cb)
-        return
-    if mode in ("row", "col"):  # one colorbar per row (column) of panels
-        cols, groups = int(spec["cols"]), {}
+        groups = [(used, mappables[0][2])]
+    elif mode in ("row", "col"):  # one colorbar per row (column) of panels
+        cols, by = int(spec["cols"]), {}
         for i, ax, ml in mappables:
             r, c = divmod(i, cols)
-            groups.setdefault(r if mode == "row" else c, []).append((ax, ml))
-        for items in groups.values():
-            m, lay = items[0][1]
-            c = fig.colorbar(m, ax=[a for a, _ in items], extend=lay.get("extend", "neither"),
-                             **kw)
-            c.set_label(lay.get("cbar_label") or lay.get("units", ""))
-            _cbar_ticks(c, cb)
-        return
-    for i, ax, (m, lay) in mappables:
-        c = fig.colorbar(m, ax=ax, extend=lay.get("extend", "neither"), **kw)
-        c.set_label(lay.get("cbar_label") or lay.get("units", ""))
-        _cbar_ticks(c, cb)
+            by.setdefault(r if mode == "row" else c, []).append((ax, ml))
+        groups = [([a for a, _ in items], items[0][1]) for items in by.values()]
+    else:
+        groups = [(ax, ml) for _, ax, ml in mappables]
+    for axes, (m, lay) in groups:
+        c = fig.colorbar(m, ax=axes, extend=lay.get("extend", "neither"), **kw)
+        _cbar_style(c, cb, lay, loc)
 
 
-def _cbar_ticks(c, cb):
+def _cbar_style(c, cb, lay, loc):
+    """Label (the colorbar's own, else the layer's, else its units), ticks and fonts."""
+    c.set_label(cb.get("label") or lay.get("cbar_label") or lay.get("units", ""),
+                size=float(cb.get("label_size") or 0) or None,
+                weight="bold" if cb.get("label_bold") else "normal")
+    side = cb.get("label_side", "")
+    if side:
+        if loc in ("bottom", "top"):
+            c.ax.xaxis.set_label_position("top" if side == "first" else "bottom")
+        else:
+            c.ax.yaxis.set_label_position("left" if side == "first" else "right")
     if cb.get("ticks"):
         c.set_ticks(_levels(cb["ticks"]))
+    if cb.get("tick_fmt"):
+        c.formatter = matplotlib.ticker.FormatStrFormatter(cb["tick_fmt"])
+        c.update_ticks()
+    if cb.get("tick_size"):
+        c.ax.tick_params(labelsize=float(cb["tick_size"]))
 
 
 # ------------------------------------------------------------------ time series
@@ -460,11 +545,15 @@ def _lines(ax, d, spec, fs):
             a.yaxis.label.set_color(its[0][1])
             a.tick_params(axis="y", colors=its[0][1])
     ts = spec.get("ts", {})
+    lo, hi = ts.get("ymin"), ts.get("ymax")  # the left axis's range (blank: the data's)
+    if lo not in (None, "") or hi not in (None, ""):
+        ax.set_ylim(None if lo in (None, "") else float(lo), None if hi in (None, "") else float(hi))
     if ts.get("zero_line"):
         ax.axhline(0.0, color="0.6", lw=0.6, zorder=0)
     if ts.get("legend", True) and len(handles) > 1:
-        ax.legend(handles=handles, loc=ts.get("legend_loc", "best"), fontsize=fs * 0.8,
-                  frameon=False)
+        ax.legend(handles=handles, loc=ts.get("legend_loc", "best"),
+                  fontsize=font_size(spec, "legend"), frameon=False,
+                  ncol=int(spec.get("legend", {}).get("ncol", 1) or 1))
 
 
 # ------------------------------------------------------------------ soundings
@@ -553,8 +642,8 @@ def _skewt(ax, d, spec, fs):
     if o.get("hodo", True) and n:
         _hodo(ax, d, n, many, ents, o, fs)
     if many or o.get("legend", False):
-        ax.legend(handles=handles, loc=o.get("legend_loc", "upper left"), fontsize=fs * 0.75,
-                  frameon=True, framealpha=0.85)
+        ax.legend(handles=handles, loc=o.get("legend_loc", "upper left"),
+                  fontsize=font_size(spec, "legend"), frameon=True, framealpha=0.85)
 
 
 def _hodo(ax, d, n, many, ents, o, fs):

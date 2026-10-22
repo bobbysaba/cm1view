@@ -35,7 +35,8 @@ KEYS = [
         "Exported figures go to <this>/<parent>_<run>/ (image and script; data and "
         "spec in _src/).", kind="outdir"),
     Key("exports_dir", "paths", "~/cm1view/exports", "Saved data",
-        "Saved series and tracks go to <this>/<parent>_<run>/series and .../tracks.",
+        "Saved series go to <this>/<parent>_<run>/series; tracks go to .../tracks "
+        "when no track folder exists.",
         kind="outdir"),
     Key("cache_dir", "paths", "~/.cache/cm1view", "Cache",
         "Throwaway files cm1view can rebuild (computed series). Scratch is a good "
@@ -46,12 +47,14 @@ KEYS = [
     Key("track_dirs", "tracks", ["storm_tracks"], "Track folders",
         "Where storm track files are looked for. A plain name (storm_tracks) is a "
         "folder of that name in the run folder or up to 4 folders above it; a full "
-        "path is used as is.", kind="list"),
+        "path is used as is. New tracks are saved to the first of these that "
+        "exists (a full path is created).", kind="list"),
     Key("track_patterns", "tracks",
         ["{parent}_{name}.csv", "{parent}_{name}.txt", "{name}.csv", "{name}.txt"],
         "Track file names",
         "File names tried in each track folder: {name} = run folder, {parent} = the "
-        "folder above it. Wildcards (*) are allowed.", kind="list"),
+        "folder above it. Wildcards (*) are allowed; new tracks are named by the "
+        "first name without one.", kind="list"),
     Key("output_glob", "data", "cm1out_[0-9]*.nc", "Output file names",
         "Which files in a run folder are CM1 output (applies to runs opened after "
         "saving)."),
@@ -353,11 +356,8 @@ def pdecomp_script():
     return expand(get("pdecomp_script"))
 
 
-def find_track(path, levels=4):
-    """A storm track file for the run in `path` (see track_dirs / track_patterns)."""
-    import glob
-    path = os.path.abspath(path).rstrip("/")
-    name, parent = os.path.basename(path), os.path.basename(os.path.dirname(path))
+def _track_dirs(path, levels=4):
+    """The folders searched for track files, closest first (see track_dirs)."""
     dirs = []
     for d in get("track_dirs"):
         if os.path.isabs(os.path.expanduser(d)):
@@ -367,13 +367,42 @@ def find_track(path, levels=4):
             for _ in range(levels):
                 dirs.append(os.path.join(up, d))
                 up = os.path.dirname(up)
-    for tdir in dirs:
+    return dirs
+
+
+def _names(path):
+    path = os.path.abspath(path).rstrip("/")
+    return path, os.path.basename(path), os.path.basename(os.path.dirname(path))
+
+
+def find_track(path, levels=4):
+    """A storm track file for the run in `path` (see track_dirs / track_patterns)."""
+    import glob
+    path, name, parent = _names(path)
+    for tdir in _track_dirs(path, levels):
         for pat in get("track_patterns"):
             hits = sorted(glob.glob(os.path.join(tdir, pat.format(name=name,
                                                                   parent=parent))))
             if hits:
                 return hits[0]
     return None
+
+
+def track_save_path(path, levels=4):
+    """Where a new track for the run in `path` is saved: the first track folder that
+    exists (or is a full path), named by the first track file name without wildcards,
+    so find_track picks it up next time.  The exports folder if there is no such
+    folder or name."""
+    path, name, parent = _names(path)
+    pats = [p for p in get("track_patterns") if "*" not in p and "?" not in p]
+    fname = pats[0].format(name=name, parent=parent) if pats else "meso_track.csv"
+    for tdir in _track_dirs(path, levels):
+        if os.path.isdir(tdir) and pats:
+            return os.path.join(tdir, fname)
+    for d in get("track_dirs"):
+        if os.path.isabs(os.path.expanduser(d)) and pats:
+            return os.path.join(expand(d), fname)
+    return os.path.join(exports_dir(path, "tracks"), fname)
 
 
 def is_output(fname):
