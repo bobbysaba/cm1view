@@ -79,14 +79,26 @@ figures/                  the Figure workspace
     lines.py              time-series and distribution panels
     sounding.py           skew-T, hodograph, parameter table
     figure.py             draw(): blocks, panels, labels, annotations
-  editor.py               the Figure workspace editor (FigureEditor)
-  cards.py                its constants, widget helpers and cards
+  editor.py               the Figure workspace editor (FigureEditor): putting the
+                          widgets together, wiring, layer cards, rendering the preview
+  cards/                  its constants, widget helpers and cards (cards.<name> for any
+                          module's)
+    base.py               choices, constants and small widget helpers
+    layercard.py          LayerCard
+    seriescard.py         SeriesCard, SoundingCard
+    distcard.py           DistCard, AnnotationRow
+  widgets.py              editor mixin: the widgets of the Panels, Layers, Annotate and
+                          Export tabs
+  specio.py               editor mixin: spec <-> widgets (set_spec, collect), undo / redo
+  times.py                editor mixin: the panels' times and titles
+  panelopts.py            editor mixin: the Panels tab's reactions (fields, heights,
+                          layout, size, kind, area, automatic titles)
   runs.py                 editor mixin: runs
   sources.py              editor mixin: new figures from the viewer, series / sounding /
                           distribution lists
   export.py               editor mixin: saving and reopening figures
   anim.py, click.py,      editor mixins: animation, click-to-place, combining panels,
-  combo.py, style.py,     styles and templates, the figure tree
+  combo.py, style.py,     the Style tab, styles and templates, the figure tree
   tree.py
 
 tests/                    pytest suite

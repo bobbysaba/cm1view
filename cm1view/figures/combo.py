@@ -4,7 +4,7 @@ with its A–B line above the cross-section), and the parts are drawn side by si
 stacked as one figure (figdraw: kind "combo").  The editor shows one part at a time;
 the preview, saving and the download take the whole figure.
 
-A mixin of the FigureEditor (cm1view/figui.py)."""
+A mixin of the FigureEditor (figures/editor.py)."""
 
 import json
 

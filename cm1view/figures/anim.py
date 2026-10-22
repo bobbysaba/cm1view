@@ -2,7 +2,7 @@
 times (every panel steps forward together; storm-centred panels follow the storm) and
 saved as an animated GIF, optionally with each frame as a PNG.
 
-A mixin of the FigureEditor (cm1view/figui.py)."""
+A mixin of the FigureEditor (figures/editor.py)."""
 
 import io
 import os

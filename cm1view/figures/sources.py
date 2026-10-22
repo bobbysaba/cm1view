@@ -2,7 +2,7 @@
 soundings and the distributions, the series / sounding / distribution / annotation
 lists, and the series, sounding and distribution data of a figure.
 
-A mixin of the FigureEditor (cm1view/figui.py)."""
+A mixin of the FigureEditor (figures/editor.py)."""
 
 import json
 import time as _time

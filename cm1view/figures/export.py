@@ -1,7 +1,7 @@
 """Figure editor: saving (image, script and data), the download, and reopening a
 saved figure.
 
-A mixin of the FigureEditor (cm1view/figui.py)."""
+A mixin of the FigureEditor (figures/editor.py)."""
 
 import asyncio
 import io

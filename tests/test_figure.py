@@ -35,7 +35,7 @@ def test_round_trip_keeps_the_spec(ed):
 
 
 def test_panel_time_pickers_follow_the_grid(ed):
-    from cm1view.figures.editor import NONE
+    from cm1view.figures.cards import NONE
     ed.rows.value, ed.cols.value = 1, 2
     assert len(ed.tm_rows) == 2 and len(ed.title_ws) == 2
     ed.cols.value = 3  # a new panel continues the times

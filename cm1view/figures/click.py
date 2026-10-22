@@ -6,7 +6,7 @@ view).  Dragging does the two clicks of those in one go, moves an annotation (it
 text, marker or centre moves it all; an end moves that end), or sets the plan-view
 area to the box dragged.
 
-A mixin of the FigureEditor (cm1view/figui.py), and the clickable image."""
+A mixin of the FigureEditor (figures/editor.py), and the clickable image."""
 
 import math
 
