@@ -64,8 +64,21 @@ viewer/                   the interactive page (Panel / Bokeh)
   picker.py               run picker (header dialog and the page without a run)
 
 figures/                  the Figure workspace
-  spec.py                 figure spec, panel data, export (image, script, data, spec)
-  draw.py                 matplotlib drawing of a figure (copied into exported scripts)
+  spec/                   figure spec, panel data, export (fg.<name> for any module's)
+    base.py               the spec: defaults, panels, layer groups, times, animation
+    arrays.py             plan-view and cross-section panel arrays
+    panels.py             time-series, time-height, sounding and distribution panels
+    bundle.py             export: image, arrays, stand-alone script, spec
+    templates.py          templates, style presets, copying a layer's look
+  draw/                   matplotlib drawing of a figure; source() stitches its modules
+                          into exported scripts, so they import each other only with
+                          "from .<module> import ..." lines
+    base.py               colours, levels, fonts, text, saving
+    v2.py                 upgrade() to version 2, views of blocks and panels
+    layers.py             map layers and colorbars
+    lines.py              time-series and distribution panels
+    sounding.py           skew-T, hodograph, parameter table
+    figure.py             draw(): blocks, panels, labels, annotations
   editor.py               the Figure workspace editor (FigureEditor)
   cards.py                its constants, widget helpers and cards
   runs.py                 editor mixin: runs

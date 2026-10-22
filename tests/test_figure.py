@@ -312,6 +312,18 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
 
 
+def test_drawing_code_stitches_into_one_module():
+    """Exported scripts carry draw's modules as one: no imports between them, and
+    every name the package has (bar source and MODULES) defined there."""
+    from cm1view.figures import draw as figdraw
+    src = figdraw.source()
+    assert "from ." not in src and '"""Shared pieces' not in src
+    ns = {}
+    exec(compile(src, "script", "exec"), ns)
+    names = {k for m in figdraw.MODULES for k in vars(m) if not k.startswith("__")}
+    assert names - set(ns) == set()
+
+
 def test_animation_steps_every_panel(ed, tmp_path):
     from PIL import Image
     from cm1view.figures import spec as fg
