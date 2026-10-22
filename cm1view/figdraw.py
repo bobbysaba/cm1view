@@ -221,7 +221,7 @@ def _anchored(ax, text, opts, size, color=None):
         prop["color"] = color
     if loc.startswith("above"):
         ax.set_title(text, loc=loc.split()[-1], fontsize=prop["size"], fontweight=prop["weight"],
-                     color=color)
+                     **({} if color is None else {"color": color}))
         return
     box = bool(opts.get("box"))
     at = AnchoredText(text, loc=loc, frameon=box, prop=prop, pad=0.25 if box else 0.4,

@@ -504,7 +504,9 @@ def test_animation_of_figure_parts(ed, tmp_path):
     from cm1view import figure as fg
     ed.rows.value, ed.cols.value = 1, 1
     ed._add_part()
-    ed.from_soundings()  # part 2: a sounding at the same time
+    ed.from_soundings()  # part 2: a sounding at the plan view's time (the outputs are
+    # not evenly spaced: panels at other times may lack an output a step later)
+    ed.snd_cards[0].w["time"].value = ed.parts[0]["times_s"][0]
     spec = ed.collect_all()
     ed.an_n.value, ed.an_step.value = 3, 1
     offsets = ed._anim_offsets(spec)
@@ -546,9 +548,14 @@ def test_run_lists_without_other_runs_have_no_heading(ed):
 
 def test_runs_root_scan_feeds_the_run_lists(ed, coarse_run, monkeypatch):
     import os
-    from cm1view import config
+    from cm1view import config, registry
     root, real = os.path.dirname(coarse_run), config.get
     monkeypatch.setattr(config, "get", lambda k: [root] if k == "runs_root" else real(k))
+    # only the scan can find it (earlier tests made it a recent run)
+    monkeypatch.setattr(registry, "recent_runs", lambda *a, **k: [])
+    monkeypatch.setattr(registry, "sibling_runs", lambda *a, **k: [])
+    ed._scanned = []
+    ed._find_runs()
     assert coarse_run not in ed._other_runs().values()
     ed._scan_roots()  # in the background; no page: the next change of the runs shows it
     wait(lambda: ed._scan_new, 60, "the runs_root scan")
