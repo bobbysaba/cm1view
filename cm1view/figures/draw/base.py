@@ -2,6 +2,7 @@
 
 import os
 import string
+import threading
 
 import numpy as np
 import matplotlib
@@ -17,6 +18,9 @@ NWS_REF = ["#04e9e7", "#019ff4", "#0300f4", "#02fd02", "#01c501", "#008e00", "#f
 RUN_COLORS = ["k", "#d62728", "#1f77b4", "#2ca02c", "#9467bd", "#ff7f0e"]
 RUN_STYLES = ["-", "--", ":", "-."]
 SND_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "k"]
+# matplotlib.rc_context changes matplotlib's global settings: one figure at a time is
+# drawn or saved in this process (several viewer sessions share it)
+RC_LOCK = threading.RLock()
 STORM_NAMES = {"rm": "RM", "lm": "LM", "mean": "mean wind", "custom": "custom"}
 FILL_KEYS = ("cmap", "reverse", "white_first", "vmin", "vmax", "nlevels", "style",
              "mask_below", "extend", "units", "cbar_label")
@@ -189,7 +193,7 @@ def part_shares(spec):
 
 def save(spec, fig, fname, **kw):
     """fig.savefig(fname, **kw) with the spec's fonts and ticks in effect."""
-    with matplotlib.rc_context(rc(spec)):
+    with RC_LOCK, matplotlib.rc_context(rc(spec)):
         fig.savefig(fname, **kw)
 
 

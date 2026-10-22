@@ -5,8 +5,8 @@ import matplotlib
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 
-from .base import (_anchored, panel_letter, time_text, _new_fig, _fs, _cell, rc, font_size,
-                   run_code, run_color, layer_color)
+from .base import (RC_LOCK, _anchored, panel_letter, time_text, _new_fig, _fs, _cell, rc,
+                   font_size, run_code, run_color, layer_color)
 from .v2 import upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text
 from .layers import (_fill, _contour, _shade, _vectors, extend_of, _extends, _ticks,
                      _colorbars, _cbar_style, _contour_key)
@@ -18,7 +18,8 @@ def draw(spec, data):
     module notes).  Save it with save(), which keeps the spec's fonts for what
     matplotlib draws late (tick labels)."""
     spec, data = upgrade(spec, data)
-    return _draw2(spec, data)
+    with RC_LOCK:
+        return _draw2(spec, data)
 
 
 def _draw2(spec, data):
