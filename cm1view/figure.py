@@ -212,6 +212,54 @@ def merge_group(d, dd, js, layers):
     return d
 
 
+def minus_ref(spec, i, lay):
+    """(run index, time s) that fill layer `lay` of panel i subtracts: its "minus"
+    {run, time_s}, each None for the layer's own (itself the panel's when unset)."""
+    ref, m = panel_ref(spec, i), lay.get("minus") or {}
+    k = ref[0] if lay.get("run") is None else int(lay["run"])
+    ts = ref[1] if lay.get("time_s") is None else float(lay["time_s"])
+    return (k if m.get("run") is None else int(m["run"]),
+            ts if m.get("time_s") is None else float(m["time_s"]))
+
+
+def subtract(d, dd, j, grid="ask"):
+    """Panel arrays d with layer j minus the same layer read at another run or time
+    (dd): a difference.  When the two grids differ, grid "interp" interpolates dd onto
+    layer j's grid (blank outside it); "refuse" and "ask" leave the panel blank with a
+    note (ask: the user picks one in the layer's Difference settings)."""
+    if d.get("missing") or f"L{j}" not in d:
+        return d
+    if dd.get("missing"):
+        return dict(d, missing="difference: " + dd["missing"])
+    if f"L{j}" not in dd:
+        return d
+    a, b = d[f"L{j}"], dd[f"L{j}"]
+    ax, ay = d.get(f"L{j}_cx", d["x"]), d.get(f"L{j}_cy", d["y"])
+    bx, by = dd["x"], dd["y"]
+    if not (a.shape == b.shape and _same(ax, bx) and _same(ay, by)):
+        if grid != "interp":
+            return dict(d, missing="difference not drawn: the two grids differ" + (
+                "" if grid == "refuse" else " (choose Interpolate or Refuse under the "
+                                            "layer's Difference)"))
+        b = regrid(b, bx, by, ax, ay)
+    out = dict(d)
+    out[f"L{j}"] = np.asarray(a - b, dtype=np.float32)
+    return out
+
+
+def _same(u, v):
+    u, v = np.asarray(u, dtype=float), np.asarray(v, dtype=float)
+    return u.shape == v.shape and np.allclose(u, v, atol=1e-6)
+
+
+def regrid(a, x, y, xn, yn):
+    """2-D array a on the rectilinear grid (y, x) interpolated bilinearly onto (yn, xn)
+    (NaN outside a's grid)."""
+    a, x, y = np.asarray(a, dtype=float), np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    rows = np.array([np.interp(xn, x, r, left=np.nan, right=np.nan) for r in a])
+    return np.array([np.interp(yn, y, c, left=np.nan, right=np.nan) for c in rows.T]).T
+
+
 def tindex(run, time_s):
     """Output index of `run` at model time time_s (s), or None if it has none there."""
     k = int(np.argmin(np.abs(np.asarray(run.times) - time_s)))

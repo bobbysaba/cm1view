@@ -1,6 +1,9 @@
 """Figure editor pieces: choices and constants, small widget helpers, and the cards
 for layers, series, soundings, distributions and annotations."""
 
+import math
+from types import SimpleNamespace
+
 import panel as pn
 from matplotlib import font_manager
 from matplotlib.colors import to_hex
@@ -44,6 +47,8 @@ VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
               "track": "Storm track", "line": "Section line"}
+GRIDS = {"Say so (ask)": "ask", "Interpolate onto this layer's grid": "interp",
+         "Refuse": "refuse"}
 EXTEND = {"Auto (where the data pass the range)": "auto", "None": "neither",
           "Max end": "max", "Min end": "min", "Both ends": "both"}
 TICKDIR = {"Out": "out", "In": "in", "Across": "inout"}
@@ -199,7 +204,24 @@ class LayerCard:
             w["cbar_label"] = pn.widgets.TextInput(
                 name="Colorbar label (blank: units)", value=lay.get("cbar_label", "") or "",
                 placeholder=lay.get("units", ""))
+            m = lay.get("minus") or {}
+            w["minus_on"] = _chk("Difference: minus another run or time", bool(lay.get("minus")))
+            try:
+                runs = {"the layer's": -1} | ed._run_names()
+            except AttributeError:  # (no run list yet)
+                runs = {"the layer's": -1}
+            w["minus_run"] = pn.widgets.Select(
+                name="Minus run", options=runs,
+                value=int(m["run"]) if m.get("run") is not None and int(m["run"]) in
+                runs.values() else -1)
+            w["minus_time"] = pn.widgets.Select(name="Minus time", options={"the layer's": ""})
+            self._minus_times(m.get("time_s"))
+            w["minus_grid"] = pn.widgets.Select(name="If the grids differ", options=GRIDS,
+                                                value=m.get("grid", "ask"))
             w["field"].param.watch(self._on_fill_field, "value")
+            w["minus_on"].param.watch(self._on_minus, "value")
+            w["minus_run"].param.watch(lambda e: self._minus_times(w["minus_time"].value or None),
+                                       "value")
         if t == "contour":
             w["levels"] = pn.widgets.TextInput(name="Levels (e.g. 10, 20 or -6:6:2)",
                                                value=str(lay["levels"]))
@@ -258,7 +280,7 @@ class LayerCard:
             placeholder="e.g. a, c or 1-3",
             description="Draw this layer only in these panels (letters or numbers)")
         for k, x in w.items():
-            if k != "field" or t != "fill":
+            if k not in ("field", "minus_on") or t != "fill":
                 x.param.watch(lambda e: self._changed(), "value")
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self._set_title()
@@ -273,7 +295,9 @@ class LayerCard:
                           w["mask_below"]),
                     _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
-                          (w["cbar_label"], 3), (w["panels"], 3))]
+                          (w["cbar_label"], 3), (w["panels"], 3)),
+                    _grid((w["minus_on"], 2), w["minus_run"], w["minus_time"],
+                          w["minus_grid"])]
         if t == "contour":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], (w["levels"], 2),
                           w["color"],
@@ -324,6 +348,8 @@ class LayerCard:
             w["clabel_size"].visible = w["clabel_fmt"].visible = w["clabel"].value
         if t == "fill":
             w["white_first"].visible = True
+            for k in ("minus_run", "minus_time", "minus_grid"):
+                w[k].visible = w["minus_on"].value
 
     def _changed(self):
         self.show(self.ed.kind.value)
@@ -343,6 +369,8 @@ class LayerCard:
                 sub += {"height": " · the panel's height" if own else f" · {z:g} km",
                         "level": f" · k = {z:g}",
                         "colmax": " · column max", "colmin": " · column min"}.get(m, "")
+            if t == "fill" and w["minus_on"].value:
+                sub += " · difference"
         elif t == "vectors":
             sub = " · streamlines" if w["style"].value == "streamlines" else " · arrows"
         try:
@@ -366,15 +394,56 @@ class LayerCard:
             self.w["cbar_label"].placeholder = d["units"]
         finally:
             self.ed._hold = False
+        if self.w["minus_on"].value:  # (a difference: diverging, from the new range)
+            self._on_minus(SimpleNamespace(new=True))
+            return
+        self._changed()
+
+    def _minus_times(self, ts):
+        """The Minus time list: the times of the Minus run (else the first run), at the
+        time nearest ts ("" / None: the layer's)."""
+        w = self.w
+        k = w["minus_run"].value if w["minus_run"].value != -1 else 0
+        opts = {"the layer's": ""} | (getattr(self.ed, "_time_opts", lambda k: {})(k) or {})
+        vals = [v for v in opts.values() if v != ""]
+        w["minus_time"].options = opts
+        w["minus_time"].value = "" if ts in (None, "") or not vals else \
+            min(vals, key=lambda v: abs(v - float(ts)))
+
+    def _on_minus(self, ev):
+        """Difference on: a diverging colormap centred on 0, nothing blanked; off: the
+        field's own colours."""
+        w = self.w
+        d = fg.layer_defaults("fill", self.ed.fields, w["field"].value)
+        self.ed._hold = True
+        try:
+            if ev.new:
+                a = _nice(0.25 * (float(w["vmax"].value) - float(w["vmin"].value)))
+                vals = dict(cmap="RdBu", reverse=True, white_first=False, vmin=-a, vmax=a,
+                            scale="linear", mask_below="")
+            else:
+                vals = dict(cmap=d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis",
+                            reverse=False, vmin=d["vmin"], vmax=d["vmax"],
+                            mask_below="" if d["mask_below"] is None else f"{d['mask_below']:g}")
+            for k, v in vals.items():
+                w[k].value = v
+        finally:
+            self.ed._hold = False
         self._changed()
 
     def collect(self):
         w, lay = self.w, dict(self.lay)
         for k, x in w.items():
-            if k in ("outline_on",):
+            if k in ("outline_on",) or k.startswith("minus_"):
                 continue
             lay[k] = x.value
         if self.type == "fill":
+            lay.pop("minus", None)
+            if w["minus_on"].value:
+                r, ts = w["minus_run"].value, w["minus_time"].value
+                lay["minus"] = dict(run=None if r == -1 else int(r),
+                                    time_s=None if ts == "" else float(ts),
+                                    grid=w["minus_grid"].value)
             mb = str(w["mask_below"].value).strip()
             try:
                 lay["mask_below"] = float(mb) if mb else None
@@ -386,6 +455,13 @@ class LayerCard:
             lay["outline"] = w["outline"].value if w["outline_on"].value else ""
         lay["panels"] = _panels_parse(w["panels"].value)
         return lay
+
+
+def _nice(a):
+    """a rounded to 1, 2 or 5 times a power of ten (at least that large)."""
+    a = abs(float(a)) or 1.0
+    p = 10.0 ** math.floor(math.log10(a))
+    return float(next(m * p for m in (1, 2, 5, 10) if m * p >= a - 1e-9))
 
 
 def _panels_parse(text):

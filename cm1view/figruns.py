@@ -283,6 +283,11 @@ class FigureRuns:
                 v = [k for k in c.w["runs"].value if k in names.values()]
                 c.w["runs"].options = opts
                 c.w["runs"].value = v
+            for c in self.cards:  # (a difference's Minus run)
+                if "minus_run" in c.w:
+                    v = c.w["minus_run"].value
+                    c.w["minus_run"].options = {"the layer's": -1} | names
+                    c.w["minus_run"].value = v if v in names.values() else -1
         finally:
             self._hold = hold
         self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \

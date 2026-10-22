@@ -1042,7 +1042,10 @@ def _colorbars(fig, cb, mappables, used, cell):
 
 def _cbar_style(c, cb, lay, loc):
     """Label (the colorbar's own, else the layer's, else its units), ticks and fonts."""
-    c.set_label(cb.get("label") or lay.get("cbar_label") or lay.get("units", ""),
+    units = lay.get("units", "")
+    if lay.get("minus"):  # (a difference)
+        units = f"difference ({units})" if units else "difference"
+    c.set_label(cb.get("label") or lay.get("cbar_label") or units,
                 size=float(cb.get("label_size") or 0) or None,
                 weight="bold" if cb.get("label_bold") else "normal")
     side = cb.get("label_side", "")

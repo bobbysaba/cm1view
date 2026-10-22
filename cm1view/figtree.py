@@ -33,6 +33,7 @@ class _PanelEditor:
         self.vary = SimpleNamespace(value="custom")  # (its height is the layer's)
         self._hold = False
         self._changed = changed
+        self._run_names, self._time_opts = ed._run_names, ed._time_opts  # (Difference)
 
     def request(self):
         if not self._hold:

@@ -231,7 +231,11 @@ and *Download*. The editor has five tabs of folding sections:
   colorbar arrows and label), contours (levels, labels and their format), shading,
   vectors or streamlines, storm track and section line; the series of time–height and
   time-series figures; the soundings and skew-T settings; the distributions and how
-  they are drawn.
+  they are drawn. A fill can be a **difference**: *Difference: minus another run or
+  time* subtracts the same field at another run and/or time (blank: the layer's own)
+  and switches to a red–blue colormap centred on 0. When the two grids differ the
+  panel says so; pick *Interpolate onto this layer's grid* or *Refuse* under
+  *If the grids differ*. A fixed Minus time stays put in animations.
 - **Style**: fonts (family, math / units font, sizes of tick labels, axis labels,
   titles and legends), axes and ticks (labels, tick spacing and direction, minor ticks,
   grid lines, frame width, equal scale), panel labels (letters, times and run names,

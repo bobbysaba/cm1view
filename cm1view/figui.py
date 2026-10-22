@@ -1867,16 +1867,24 @@ class FigureEditor(FigureRuns, FigureSources, FigureExport, FigureAnimation, Fig
                 continue  # an empty cell of a run x time grid
             k, ts = ref
             groups = fg.layer_groups(spec, i)  # (layers of another run or time)
+            lays = figdraw.spec_layers(spec, i)
             if not groups:
                 d = read(spec, i, k, ts, n, i)
             else:
                 others = {j for js in groups.values() for j in js}
-                lays = figdraw.spec_layers(spec, i)
                 d = read(fg.group_spec(spec, i, ref, set(range(len(lays))) - others), 0,
                          k, ts, n, i)
                 for g, js in groups.items():
                     dd = read(fg.group_spec(spec, i, g, set(js)), 0, g[0], g[1], n, i)
                     d = fg.merge_group(d, dd, js, lays)
+            for j, lay in enumerate(lays):  # differences: minus another run or time
+                if lay["type"] == "fill" and lay.get("minus") and lay.get("on", True):
+                    g = fg.minus_ref(spec, i, lay)
+                    if g[0] >= len(spec["runs"]):
+                        d = dict(d, missing="difference: that run is no longer in the figure")
+                        continue
+                    dd = read(fg.group_spec(spec, i, g, {j}), 0, g[0], g[1], n, i)
+                    d = fg.subtract(d, dd, j, lay["minus"].get("grid", "ask"))
             entry = spec["runs"][k]
             data[i] = dict(d, run=k, **({"run_label": entry.get("label", "")} if multi
                                          else {}))

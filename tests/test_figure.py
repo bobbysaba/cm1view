@@ -278,13 +278,15 @@ def test_time_series_y_range(ed):
     assert fig.axes[0].get_ylim() == (0.0, 50.0)
 
 
-@pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists"])
+@pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists", "difference"])
 def test_script_redraws_the_identical_image(ed, tmp_path, start):
     import os
     import subprocess
     import sys
     import matplotlib.image as mi
-    if start == "series":
+    if start == "difference":
+        _difference(ed)
+    elif start == "series":
         ed.from_series()
         ed.panel_data(ed.collect())
         wait(lambda: not ed.series_pending(), 120, "the series")
@@ -1111,3 +1113,50 @@ def test_distribution_spec_upgrades_to_panels(ed):
     figdraw.draw(s, data)
     ed._tree_sync(force=True)
     assert ed.tree_list.objects[0].name.startswith("a  Distribution")
+
+
+def _difference(ed):
+    """The first fill as a difference: minus the run's first output."""
+    c = next(c for c in ed.cards if c.type == "fill")
+    c.w["minus_on"].value = True
+    c.w["minus_time"].value = next(v for v in c.w["minus_time"].options.values() if v != "")
+    return c
+
+
+def test_difference_layer(ed):
+    c = _difference(ed)
+    lay = c.collect()
+    assert lay["minus"] == dict(run=None, time_s=lay["minus"]["time_s"], grid="ask")
+    assert (lay["cmap"], lay["reverse"], lay["mask_below"]) == ("RdBu", True, None)
+    assert lay["vmin"] == -lay["vmax"] < 0  # (centred on 0)
+    spec, data, fig = render(ed)
+    j = next(j for j, x in enumerate(spec["layers"]) if x.get("minus"))
+    t0 = lay["minus"]["time_s"]
+    for d in data.values():  # (a panel at the subtracted time: zero)
+        if abs(d["time_s"] - t0) < 1:
+            assert np.nanmax(np.abs(d[f"L{j}"])) == 0.0
+    assert any(np.nanmax(np.abs(d[f"L{j}"])) > 0 for d in data.values())
+    assert any("difference" in a.get_ylabel() + a.get_xlabel() for a in fig.axes)
+    c.w["minus_on"].value = False
+    assert "minus" not in c.collect() and c.collect()["cmap"] != "RdBu"
+
+
+def test_difference_of_different_grids():
+    from cm1view import figure as fg
+    x, y = np.arange(4.0), np.arange(3.0)
+    a, b = np.ones((3, 4)), np.add.outer(y, x)
+    d = fg.subtract(dict(x=x, y=y, L0=a), dict(x=x, y=y, L0=b), 0)
+    assert np.array_equal(d["L0"], a - b)
+    moved = dict(x=x + 0.5, y=y, L0=b)
+    assert "choose" in fg.subtract(dict(x=x, y=y, L0=a), moved, 0)["missing"]
+    assert "choose" not in fg.subtract(dict(x=x, y=y, L0=a), moved, 0, "refuse")["missing"]
+    d = fg.subtract(dict(x=x, y=y, L0=a), moved, 0, "interp")
+    assert np.isnan(d["L0"][0, 0]) and d["L0"][1, 1] == 1.0 - 1.5
+    assert fg.subtract(dict(x=x, y=y, L0=a), dict(missing="no output"), 0)["missing"] == \
+        "difference: no output"
+    v1 = _edited_v1()
+    lay = dict(fg.figdraw.spec_layers(v1, 1)[0], minus=dict(run=1, time_s=None))
+    assert fg.minus_ref(v1, 1, lay) == (1, 60.0)  # (the layer's own time)
+    assert fg.minus_ref(v1, 0, dict(type="fill", minus=dict(time_s=30.0))) == (0, 30.0)
+    v2, _ = fg.figdraw.upgrade(dict(v1, layers=[dict(v1["layers"][0], minus=dict(run=1))]))
+    assert v2["panels"][0]["layers"][0]["minus"] == dict(run=1)
