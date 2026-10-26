@@ -12,7 +12,7 @@ edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 | `default_run` | none | run opened when no run is given |
 | `figures_dir` | `~/cm1view/figures` | figures go to `<this>/<parent>_<run>/` |
 | `exports_dir` | `~/cm1view/exports` | saved series / tracks go to `<this>/<parent>_<run>/series`, `/tracks` |
-| `cache_dir` | `~/.cache/cm1view` | throwaway files (computed series) |
+| `cache_dir` | `~/.cache/cm1view` | throwaway files (computed series and time-window swaths) |
 | `pdecomp_script` | none | your own pressure-decomposition script instead of cm1view's solver |
 | `track_dirs` | `storm_tracks` | where storm track files are found (a plain name: that folder in the run folder or up to 4 above it) |
 | `track_patterns` | `{parent}_{name}.csv`, `{name}.csv`, … | track file names tried in each folder |

@@ -40,6 +40,24 @@ nav:
   - Home: index.md
   - Installing: install.md
   - Running on a cluster: hpc.md
-  - Using cm1view: guide.md
+  - Using cm1view:
+      - Basics: guide/index.md
+      - The map: guide/map.md
+      - Soundings: guide/soundings.md
+      - Storm tracking: guide/tracking.md
+      - Cross-sections: guide/cross-sections.md
+      - 3D: guide/3d.md
+      - Series and distributions: guide/series.md
+      - Figures: guide/figures.md
+      - Figure panels: guide/figures-panels.md
+      - Figure layers: guide/figures-layers.md
+      - Style and annotations: guide/figures-style.md
+      - Export and animations: guide/figures-export.md
+      - Notes on the fields: guide/fields.md
+      - Worked examples: guide/recipes.md
+      - Mouse and keyboard: guide/shortcuts.md
+      - Troubleshooting: guide/troubleshooting.md
+      - Glossary: guide/glossary.md
   - Settings: settings.md
   - Developing: developing.md
+  - Changes: changelog.md
