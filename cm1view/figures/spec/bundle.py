@@ -49,8 +49,8 @@ def save_kw(spec, dpi=None):
 
 
 def bundle_paths(spec, base):
-    """{image, script, data, spec} for a bundle saved as `base`: the image and script
-    side by side, the arrays and spec in _src/ next to them."""
+    """{image, script, data, spec, draw} for a bundle saved as `base`: the image and
+    script side by side, the arrays, spec and drawing code in _src/ next to them."""
     base = _abs(base)
     root, ext = os.path.splitext(base)
     if ext.lower() in (".png", ".pdf", ".svg", ".eps", ".tif", ".tiff", ".jpg"):
@@ -59,7 +59,8 @@ def bundle_paths(spec, base):
     src, name = os.path.join(os.path.dirname(base), "_src"), os.path.basename(base)
     return dict(image=f"{base}.{fmt}", script=f"{base}.py",
                 data=os.path.join(src, f"{name}_data.npz"),
-                spec=os.path.join(src, f"{name}_spec.json"))
+                spec=os.path.join(src, f"{name}_spec.json"),
+                draw=os.path.join(src, f"{name}_draw.py"))
 
 
 _PROVENANCE = None
@@ -113,10 +114,10 @@ def made_with(spec):
 
 
 def save_bundle(spec, data, base, run=None, note=""):
-    """Image + script side by side, data + spec in _src/ (see bundle_paths).
-    Returns the paths.  The spec is saved as version 2 (every panel written out) with
-    the editor's settings that made it under "form" (load_spec opens those); the
-    script draws the version-2 spec."""
+    """Image + script side by side, data, spec and drawing code in _src/ (see
+    bundle_paths).  Returns the paths.  The spec is saved as version 2 (every panel
+    written out) with the editor's settings that made it under "form" (load_spec opens
+    those); the script draws the version-2 spec with the drawing code."""
     out = bundle_paths(spec, base)
     form = dict(spec, made_with=made_with(spec))
     v2, data = figdraw.upgrade(form, data)
@@ -125,14 +126,47 @@ def save_bundle(spec, data, base, run=None, note=""):
     np.savez_compressed(out["data"], **flatten(data))
     with open(out["spec"], "w") as f:
         json.dump(dict(v2, form=form), f, indent=1, default=float)
+    with open(out["draw"], "w") as f:
+        f.write(drawing_code())
     with open(out["script"], "w") as f:
         f.write(script(v2, "_src/" + os.path.basename(out["data"]),
-                       os.path.basename(out["image"]), run, note))
+                       os.path.basename(out["image"]), run, note,
+                       "_src/" + os.path.basename(out["draw"])))
     return out
 
 
-def script(spec, npz_name, out_name, run=None, note=""):
-    """A stand-alone script that redraws the figure from the saved arrays."""
+def drawing_code():
+    """The module saved in _src/ that a bundle's script draws with: draw's modules as
+    one (figdraw.source()), and load_data."""
+    return "\n".join([
+        '"""cm1view\'s drawing code, saved with a figure: its script imports draw, save and',
+        "load_data from here.  Needs only numpy and matplotlib (cmweather or pyart, if",
+        "installed, for their colormaps).  The figure's own settings are SPEC in its script;",
+        "change this code only for what SPEC cannot do.",
+        "",
+        figdraw.__doc__.strip(),
+        '"""',
+        "",
+        figdraw.source(),
+        "",
+        "",
+        "def load_data(path):",
+        "    \"\"\"The arrays saved with the figure: {panel: {name: array}}.\"\"\"",
+        "    data = {}",
+        "    with np.load(path, allow_pickle=False) as z:",
+        "        for key in z.files:",
+        "            p, name = key.split('__', 1)",
+        "            v = z[key]",
+        "            data.setdefault(int(p[1:]), {})[name] = v.item() if v.ndim == 0 else v",
+        "    return data",
+        "",
+    ])
+
+
+def script(spec, npz_name, out_name, run=None, note="", draw_name="_src/draw.py"):
+    """A short stand-alone script that redraws the figure from the saved arrays: SPEC,
+    my_changes (the user's own matplotlib) and the drawing code imported from
+    draw_name (drawing_code())."""
     made = provenance()
     nml = {r["path"]: r.get("namelist_sha256", "")
            for r in (spec.get("made_with") or {}).get("runs", [])}
@@ -150,44 +184,59 @@ def script(spec, npz_name, out_name, run=None, note=""):
           [f"run: {run.path}{tag(run.path)}" if run is not None else ""]),
         note,
         "Redraw:  python this_script.py   (needs numpy and matplotlib; cmweather or pyart",
-        "for their colormaps).  Change SPEC below to restyle (colours, ranges, labels, size, ...);",
-        f"the plotted arrays are in {npz_name}.",
+        "for their colormaps).  To change the figure:",
+        "  - SPEC below: its settings (colours, ranges, labels, size, ...), as in the editor;",
+        "  - my_changes() below: anything else, in plain matplotlib, after it is drawn.",
+        f"The plotted arrays are in {npz_name}, the drawing code in {draw_name}.",
         '"""',
     ]
     body = [
+        "import importlib.util",
+        "import os",
+        "",
+        "import numpy as np",
+        "",
+        "HERE = os.path.dirname(os.path.abspath(__file__))",
         "",
         "# ----------------------------------------------------------------- figure spec",
         "SPEC = " + pprint.pformat(_plain(spec), width=92, sort_dicts=False),
         "",
         "",
-        "# ----------------------------------------------------------------- drawing code",
-        figdraw.source(),
+        "# ----------------------------------------------------------------- your changes",
+        "def my_changes(fig, axs, data, spec):",
+        '    """Run after the figure is drawn: fig the matplotlib Figure, axs the panels\' axes',
+        "    (axs[0] the first panel; colorbars and a skew-T's hodograph are in fig.axes), data",
+        "    the plotted arrays of each panel (data[0][\"x\"], ...; listed at the top of the",
+        "    drawing code), spec SPEC.  The editor's \"Your own code\" works here too.",
+        "    For example:",
+        "        axs[0].set_xlim(-20, 20)",
+        "        axs[0].plot(5.0, 3.0, \"k*\", ms=12)",
+        "        axs[0].set_title(\"my title\")",
+        '    """',
         "",
         "",
-        "def load_data(path):",
-        "    \"\"\"The arrays saved with the figure: {panel: {name: array}}.\"\"\"",
-        "    data = {}",
-        "    with np.load(path, allow_pickle=False) as z:",
-        "        for key in z.files:",
-        "            p, name = key.split('__', 1)",
-        "            v = z[key]",
-        "            data.setdefault(int(p[1:]), {})[name] = v.item() if v.ndim == 0 else v",
-        "    return data",
+        "# ----------------------------------------------------------------- redraw",
+        "def drawing_code(path):",
+        '    """cm1view\'s drawing code saved with the figure (draw, save, load_data)."""',
+        "    s = importlib.util.spec_from_file_location(\"cm1view_draw\", path)",
+        "    code = importlib.util.module_from_spec(s)",
+        "    s.loader.exec_module(code)",
+        "    return code",
         "",
         "",
         'if __name__ == "__main__":',
-        "    import os",
-        "    here = os.path.dirname(os.path.abspath(__file__))",
-        f"    data = load_data(os.path.join(here, *{npz_name!r}.split('/')))",
-        "    fig = draw(SPEC, data)",
+        f"    cv = drawing_code(os.path.join(HERE, *{draw_name!r}.split('/')))",
+        f"    data = cv.load_data(os.path.join(HERE, *{npz_name!r}.split('/')))",
+        "    fig = cv.draw(SPEC, data)",
         "    if getattr(fig, '_cv_code_error', None):",
         "        print('the figure code stopped at', fig._cv_code_error)",
-        f"    out = os.path.join(here, {out_name!r})",
+        "    my_changes(fig, [fig._cv_axes[i] for i in sorted(fig._cv_axes)], data, SPEC)",
+        f"    out = os.path.join(HERE, {out_name!r})",
         "    ex = SPEC.get('export', {})",
         "    tight = ex.get('tight', True)",
-        "    save(SPEC, fig, out, dpi=ex.get('dpi', 250), bbox_inches='tight' if tight else None,",
-        "         pad_inches=ex.get('pad', 0.05) if tight else 0.1,",
-        "         facecolor=fig.get_facecolor(), transparent=SPEC.get('background') == 'none')",
+        "    cv.save(SPEC, fig, out, dpi=ex.get('dpi', 250), bbox_inches='tight' if tight else None,",
+        "            pad_inches=ex.get('pad', 0.05) if tight else 0.1,",
+        "            facecolor=fig.get_facecolor(), transparent=SPEC.get('background') == 'none')",
         "    print('saved', out)",
         "",
     ]

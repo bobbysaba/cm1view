@@ -105,16 +105,11 @@ class FigureTimes:
 
     # ------------------------------------------------------------ panel times and titles
     def _slots(self):
-        """How many times to choose: one per panel (panels in time), one per column
-        (row) of a run x time grid, else none."""
+        """How many times to choose: one per panel (panels in time), else none."""
         if self.kind.value not in ("plan", "xsec"):
             return 0
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
-        if self.vary.value == "time":
-            return r * c
-        if self.vary.value == "grid":
-            return c if self.runs_as.value == "rows" else r
-        return 0
+        return r * c if self.vary.value == "time" else 0
 
     def _time_values(self):
         """Model time (s) of each time picker (NONE: an empty panel)."""
@@ -131,32 +126,16 @@ class FigureTimes:
         except Exception:  # noqa: BLE001
             return self.run
 
-    def _panel_times(self, grid=None):
+    def _panel_times(self):
         """(model times in s, those some runs lack) the time pickers offer: the outputs
-        of the panels' run, or of every run in a run x time grid."""
-        if grid is None:
-            grid = self.vary.value == "grid"
-        if not grid:
-            return [float(t) for t in self._sel_run().times], set()
-        lists = []
-        for r in self.run_rows:
-            try:
-                lists.append([float(t) for t in self.open_run(r["path"])[0].times])
-            except Exception:  # noqa: BLE001
-                pass
-        lists = lists or [[float(t) for t in self.run.times]]
-        out = []
-        for t in sorted(t for ts in lists for t in ts):
-            if not out or t - out[-1] > 1.0:  # (the same output time in several runs)
-                out.append(t)
-        some = {t for t in out if any(_match(ts, t) is None for ts in lists)}
-        return out, some
+        of the panels' run."""
+        return [float(t) for t in self._sel_run().times], set()
 
-    def _topts(self, values=(), grid=None):
+    def _topts(self, values=()):
         """Time picker options: the outputs, plus any chosen time that has none (a
         figure opened from another run keeps its times; the panel says it has no
         output there)."""
-        tl, some = self._panel_times(grid)
+        tl, some = self._panel_times()
         opts = {_tlabel(t) + (" · not in every run" if t in some else ""): t for t in tl}
         for v in values:
             if v not in (None, NONE) and _match(tl, v) is None:
@@ -164,15 +143,9 @@ class FigureTimes:
         return opts
 
     def _index_of(self, ts, one=False):
-        """Output index of time ts (s) in the panels' run (the first run of a grid that
-        has it), for older readers of the spec."""
+        """Output index of time ts (s) in the panels' run, for older readers of the
+        spec."""
         runs = [self._sel_run()]
-        if self.vary.value == "grid" and not one:
-            for r in self.run_rows:
-                try:
-                    runs.append(self.open_run(r["path"])[0])
-                except Exception:  # noqa: BLE001
-                    pass
         for run in runs:
             k = fg.tindex(run, ts)
             if k is not None:
@@ -181,9 +154,9 @@ class FigureTimes:
         return min(range(len(ts0)), key=lambda k: abs(ts0[k] - ts))
 
     def _build_times(self, values=None, extend=True, snap=True):
-        """A time picker per panel (per column / row of a run x time grid), keeping the
-        chosen times (snap: moved to the nearest output the pickers offer).  Pickers
-        added to a grid continue every `tstep` outputs (extend), or start empty."""
+        """A time picker per panel, keeping the chosen times (snap: moved to the nearest
+        output the pickers offer).  Pickers added continue every `tstep` outputs
+        (extend), or start empty."""
         vals = list(self._time_values() if values is None else values)
         tl, _ = self._panel_times()
         step = int(self.tstep.value or 1)
@@ -211,11 +184,9 @@ class FigureTimes:
             q = tl.index(_nearest_t(tl, last)) + step
             vals.append(tl[q] if q < len(tl) else NONE)
         opts = {"— empty —": NONE} | self._topts(vals)
-        grid = self.vary.value == "grid"
         rows = []
         for i in range(n):
-            name = (f"{'Column' if self.runs_as.value == 'rows' else 'Row'} {i + 1}" if grid
-                    else f"Panel {figdraw.panel_letter(i, '{a}')}")
+            name = f"Panel {figdraw.panel_letter(i, '{a}')}"
             v = vals[i] if vals[i] in opts.values() else NONE
             w = pn.widgets.Select(name=name, options=opts, value=v)
             w.param.watch(lambda e: self.request(), "value")
@@ -227,10 +198,10 @@ class FigureTimes:
     def _refresh_time1(self, value=None, snap=True):
         """The one time of a figure in fields: the outputs of the panels' run."""
         v = self.time1.value if value is None else value
-        tl, _ = self._panel_times(grid=False)
+        tl, _ = self._panel_times()
         if v is not None and tl:
             v = _place(tl, v, snap)
-        opts = self._topts([v], grid=False)
+        opts = self._topts([v])
         hold, self._hold = self._hold, True
         try:
             self.time1.options = opts
@@ -246,6 +217,49 @@ class FigureTimes:
             return
         self._build_times()  # (the new run's outputs)
         self.request()
+
+    def _on_gg_runs(self, ev):
+        """A run not in the figure picked in Fill a grid (its path): add it, keep it
+        picked."""
+        new = [v for v in ev.new if isinstance(v, str)]
+        if self._hold or not new:
+            return
+        keep = [v for v in ev.new if not isinstance(v, str)]
+        for p in new:
+            k = self._add_run(p)
+            if k is not None:
+                keep.append(k)
+        hold, self._hold = self._hold, True
+        try:
+            self.gg_runs.value = sorted(set(keep))
+        finally:
+            self._hold = hold
+
+    def _fill_grid(self):
+        """Panels of runs x times: the chosen runs (rows or columns) and `Times` times
+        from the shown time, every `Every … outputs` outputs of the first run; each
+        panel takes the nearest output of its own run."""
+        ks = sorted(k for k in self.gg_runs.value if isinstance(k, int)
+                    and k < len(self.run_rows)) or [0]
+        runs = [self.open_run(self.run_rows[k]["path"])[0] for k in ks]
+        base = [float(t) for t in runs[0].times]
+        step, p0 = int(self.gg_step.value or 1), base.index(_nearest_t(base, self._shown_s()))
+        times = [base[q] for q in range(p0, len(base), step)][:int(self.gg_n.value or 1)]
+        by_rows = self.gg_as.value == "rows"
+        nr, nc = (len(ks), len(times)) if by_rows else (len(times), len(ks))
+        panels = []
+        for r in range(nr):
+            for c in range(nc):
+                k, j = (r, c) if by_rows else (c, r)
+                panels.append(dict(run=ks[k], time_s=_nearest_t(
+                    [float(t) for t in runs[k].times], times[j])))
+        self._hold = True
+        try:
+            self.vary.value = "custom"
+            self.rows.value, self.cols.value = nr, nc
+        finally:
+            self._hold = False
+        self._on_layout(panels)
 
     def _fill_times(self):
         """The time pickers from the shown time, every `tstep` outputs."""

@@ -40,13 +40,32 @@ def _reflectivity(n):
     return out
 
 
-def palette(name, n=256, reverse=False):
+# colormaps with a neutral (white) middle: kept on 0 when the range has both signs
+DIVERGING = {"BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "bwr",
+             "coolwarm", "seismic", "cmo.balance", "cmo.curl", "cmo.delta", "cmo.diff",
+             "cmo.tarn"}
+
+
+def zero_window(name, lo=None, hi=None):
+    """(start, stop) of the part of colormap `name` that keeps its middle on 0 over
+    lo..hi: -2..6 on RdBu uses 0.33..1 (the colours of -6..6, cut at -2).  (0, 1) when
+    the map is not diverging or lo..hi does not cross 0."""
+    base = name[:-2] if name.endswith("_r") else name
+    if base not in DIVERGING or lo is None or hi is None or not lo < 0 < hi:
+        return 0.0, 1.0
+    m = 2.0 * max(-lo, hi)
+    return 0.5 + lo / m, 0.5 + hi / m
+
+
+def palette(name, n=256, reverse=False, lo=None, hi=None):
+    """n colours of colormap `name`; given lo / hi, a diverging map stays white at 0."""
     if name == "reflectivity":
         pal = _reflectivity(n)
-    else:
-        cmap = matplotlib.colormaps[name]
-        pal = [mcolors.to_hex(c) for c in cmap(np.linspace(0, 1, n))]
-    return pal[::-1] if reverse else pal
+        return pal[::-1] if reverse else pal
+    a, b = zero_window(name, lo, hi)
+    p = np.linspace(a, b, n)
+    cmap = matplotlib.colormaps[name]
+    return [mcolors.to_hex(c) for c in cmap(1.0 - p if reverse else p)]
 
 
 def mpl_cmap(name, reverse=False):
@@ -208,6 +227,17 @@ def _make_fields(avail):
     D.append(FieldDef("buoy", "Buoyancy (θρ′, with loading)", "m/s²", "Thermodynamics",
                       cmap="RdBu_r", vrange=(-0.3, 0.3), diverging=True,
                       deps=("th", "qv", "th0", "qv0", *hyd), func=buoy))
+    # baroclinic generation of horizontal vorticity, ∇ × (B k) = (∂B/∂y, −∂B/∂x): the
+    # components of the "Baroclinic generation" vector (core/vectors.py)
+    bdeps = ("th", "qv", "th0", "qv0", *hyd)
+    D.append(FieldDef("bgen_x", "Baroclinic x-vorticity generation (∂B/∂y)", "10⁻⁴ s⁻²",
+                      "Kinematics", cmap="RdBu_r", vrange=(-2, 2), diverging=True, deps=bdeps,
+                      func=lambda f, c: 1.0e4 * np.gradient(buoy(f, c), c["dy"], axis=-2),
+                      pointwise=False))
+    D.append(FieldDef("bgen_y", "Baroclinic y-vorticity generation (−∂B/∂x)", "10⁻⁴ s⁻²",
+                      "Kinematics", cmap="RdBu_r", vrange=(-2, 2), diverging=True, deps=bdeps,
+                      func=lambda f, c: -1.0e4 * np.gradient(buoy(f, c), c["dx"], axis=-1),
+                      pointwise=False))
     # density potential temperature (θ including the vapour and condensate loading)
     def thrho(f, c):
         load = sum(f(n) for n in hyd) if hyd else 0.0

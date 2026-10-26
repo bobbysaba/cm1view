@@ -86,6 +86,7 @@ class FigureRuns:
 
     def _build_runs(self, runs):
         self.run_rows = [self._run_row(e, k) for k, e in enumerate(runs)]
+        self._ref_paths = set()  # (the runs something used; see _prune_runs)
         self._show_runs()
 
     def _run_row(self, e, k=0):
@@ -162,6 +163,12 @@ class FigureRuns:
                 tnote += f" ({run.times[ts[0]] / 60:g}–{run.times[ts[-1]] / 60:g} min)"
         else:
             tnote = "no track (storm-centred panels stay empty)"
+        try:
+            unused = k < len(self.run_rows) and k not in self._runs_used()
+        except AttributeError:  # (the editor is still being built)
+            unused = False
+        if unused:
+            tnote += " · <b>not used yet</b>: pick it in a Run list"
         r["info"].object = (
             f'<div class="cv-hint">{len(run.times)} outputs, {run.times[0] / 60:g}–'
             f'{run.times[-1] / 60:g} min · {run.ni}×{run.nj}×{run.nk}, dx {run.dx:g} m · '
@@ -184,6 +191,7 @@ class FigureRuns:
 
     # ------------------------------------------------------------ runs to add
     _scanned, _scan_complete, _scan_new, _cands = [], True, False, []
+    _unused = set()
 
     def _scan_roots(self):
         """Look for the runs under the runs_root setting in the background (as the Open
@@ -243,6 +251,15 @@ class FigureRuns:
         return dict(options={}, groups={"In this figure": names,
                                         "Other runs (adds it)": others})
 
+    def _layer_run_choices(self, names=None):
+        """A layer's run choices: "the panel's run" (-1), then _run_choices."""
+        names = names or self._run_names()
+        ch = self._run_choices(names)
+        first = {"the panel's run": -1}
+        if ch["groups"]:
+            return dict(options={}, groups={"": first} | ch["groups"])
+        return dict(groups=None, options=first | names)
+
     def _set_runs_of(self, w, value):
         """A run list's choices, keeping its run (else the first)."""
         names = self._run_names()
@@ -281,10 +298,18 @@ class FigureRuns:
                     [c.w["run"] for c in self.snd_cards + self.dist_cards]:
                 self._set_runs_of(w, w.value)
             opts = self._series_run_opts(names)
+            v = [k for k in self.gg_runs.value if k in names.values()] or [0]
+            self.gg_runs.options = opts
+            self.gg_runs.value = v
             for c in self.ser_cards:
                 v = [k for k in c.w["runs"].value if k in names.values()]
                 c.w["runs"].options = opts
                 c.w["runs"].value = v
+            for c in self.cards:  # (a layer's run)
+                if "run" in c.w:
+                    v = c.w["run"].value
+                    c.w["run"].param.update(**self._layer_run_choices(names))
+                    c.w["run"].value = v if v in names.values() else -1
             for c in self.cards:  # (a difference's Minus run)
                 if "minus_run" in c.w:
                     v = c.w["minus_run"].value
@@ -316,10 +341,10 @@ class FigureRuns:
         finally:
             self._hold = hold
 
-    def _add_run(self, path=None, grid=True):
+    def _add_run(self, path=None, grid=False):
         """Add the run in `path` (default: the box) with its storm track (a
-        storm_tracks file found for it).  grid: a second run turns panels in time into
-        a run x time grid.  Returns its index, or None."""
+        storm_tracks file found for it).  Returns its index, or None.  (`grid` is
+        kept for older callers: a grid of runs is made by Panels -> Fill a grid.)"""
         path = config.expand((path or self.add_path.value).strip())
         if not registry.is_run(path):
             self._runs_msg(f"No cm1out_*.nc files in <code>{path}</code>", True)
@@ -337,13 +362,58 @@ class FigureRuns:
         self._show_runs()
         self.add_pick.clear()
         self._runs_msg(f"Added <code>{path}</code>")
-        if not grid:
-            pass
-        elif self.vary.value == "time":  # a second run: compare them side by side
-            self.vary.value = "grid"
-        else:
-            self._on_vary()
         return len(self.run_rows) - 1
+
+    def _edit_runs(self):
+        """The dicts of the panel tree's edits that name a run (a panel's, a layer's)."""
+        out = []
+        for e in self.edits.values():
+            out.append(e)
+            out += [lay for lay in list((e.get("layers") or {}).values())
+                    + list(e.get("extra") or []) if isinstance(lay, dict)]
+        return [e for e in out if e.get("run") is not None]
+
+    def _runs_used(self):
+        """Indices of the runs something in the figure draws from: the panels' run
+        (or each panel's own), layers, difference runs, soundings, distributions,
+        series (blank: every run) and the panel tree's edits."""
+        n = len(self.run_rows)
+        used, maps = set(), self.kind.value in ("plan", "xsec")
+        if maps and self.vary.value == "custom":
+            used |= {r["run"].value for r in self.pc_rows}
+        elif maps:
+            used.add(self.run_sel.value or 0)
+        for c in self.cards:
+            for key in ("run", "minus_run"):
+                v = c.w[key].value if key in c.w else None
+                if isinstance(v, int) and v >= 0:
+                    used.add(v)
+        for c in self.snd_cards + self.dist_cards:
+            used.add(c.w["run"].value or 0)
+        for c in self.ser_cards:
+            ks = [int(k) for k in c.w["runs"].value if not isinstance(k, str)]
+            used |= set(ks) if ks else set(range(n))
+        used |= {int(e["run"]) for e in self._edit_runs()}
+        return {k for k in used if isinstance(k, int) and 0 <= k < n}
+
+    def _prune_runs(self):
+        """Drop the runs nothing uses any more (they were used, and a Run list now
+        picks another): the run list is built by picking runs where they are used."""
+        used = {self.run_rows[k]["path"] for k in self._runs_used()}
+        if not used:
+            return
+        gone = [r for r in self.run_rows if r["path"] in self._ref_paths
+                and r["path"] not in used]
+        self._ref_paths = used
+        unused = {r["path"] for r in self.run_rows} - used
+        if unused != self._unused:  # (the runs' "not used yet" notes)
+            self._unused = unused
+            for r in self.run_rows:
+                self._run_info(r)
+        for r in gone:
+            if len(self.run_rows) > 1 and r in self.run_rows:
+                self._remove_run(r)
+                self._runs_msg(f"Dropped <code>{r['path']}</code>: nothing uses it now.")
 
     def _remove_run(self, r):
         """Remove run k: panels, soundings, distributions and series of it go, and those
@@ -363,6 +433,16 @@ class FigureRuns:
                         p["run"].value -= 1
                     keep.append(p)
             self.pc_rows = keep
+            for c in self.cards:  # (layers: the removed run's go back to the panel's)
+                for key in ("run", "minus_run"):
+                    if key in c.w and c.w[key].value is not None and c.w[key].value >= k:
+                        c.w[key].value = -1 if c.w[key].value == k else c.w[key].value - 1
+            for e in self._edit_runs():
+                if int(e["run"]) >= k:
+                    if int(e["run"]) == k:
+                        del e["run"]
+                    else:
+                        e["run"] = int(e["run"]) - 1
             for what in ("sounding", "distribution"):
                 keep = []
                 cards = self.snd_cards if what == "sounding" else self.dist_cards

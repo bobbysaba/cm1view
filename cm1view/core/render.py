@@ -10,6 +10,7 @@ import numpy as np
 import contourpy
 from scipy.ndimage import map_coordinates
 
+from . import vectors as vectors_mod
 from .fields import palette
 
 
@@ -75,14 +76,14 @@ def contour_lines(x, y, a, levels):
     return dict(xs=xs, ys=ys)
 
 
-def contour_fill(x, y, a, levels):
-    """Filled bands as Bokeh multi_polygons rows (one row per band)."""
+def contour_fill(x, y, a, levels, open_ends=True):
+    """Filled bands as Bokeh multi_polygons rows (one row per band).  open_ends: the
+    first / last band takes in the values below / above the levels too."""
     xs, ys, val = [], [], []
     gen = contourpy.contour_generator(x, y, _masked(a), fill_type="OuterOffset")
     lv = np.asarray(levels, dtype=float)
-    # open-ended first/last bands so out-of-range values still get colour
-    lo_edges = np.concatenate(([-1e30], lv[1:-1]))
-    hi_edges = np.concatenate((lv[1:-1], [1e30]))
+    lo_edges = np.concatenate(([-1e30] if open_ends else lv[:1], lv[1:-1]))
+    hi_edges = np.concatenate((lv[1:-1], [1e30] if open_ends else lv[-1:]))
     for k, (lo, hi) in enumerate(zip(lo_edges, hi_edges)):
         pts, offs = gen.filled(lo, hi)
         if not pts:
@@ -98,14 +99,15 @@ def contour_fill(x, y, a, levels):
 
 
 def vectors(x, y, u, v, n_across, ref_speed=20.0):
-    """Arrow segments (data units) ~n_across arrows across the window."""
+    """Arrow segments (data units) ~n_across arrows across the window; ref_speed (any
+    vector's units) is drawn 0.9 arrow spacings long."""
     nx = x.size
     s = max(1, nx // max(n_across, 1))
     xs, ys = np.meshgrid(x[s // 2::s], y[s // 2::s])
     uu, vv = u[s // 2::s, s // 2::s], v[s // 2::s, s // 2::s]
     spacing = (x[-1] - x[0]) / max(n_across, 1)
     k = 0.9 * spacing / ref_speed
-    good = np.isfinite(uu) & np.isfinite(vv) & (np.hypot(uu, vv) > 0.2)
+    good = np.isfinite(uu) & np.isfinite(vv) & (np.hypot(uu, vv) > 0.01 * ref_speed)
     x0, y0 = xs[good], ys[good]
     x1, y1 = x0 + uu[good] * k, y0 + vv[good] * k
     ang = np.arctan2(vv[good], uu[good]) - np.pi / 2
@@ -145,9 +147,44 @@ def streamlines(x, y, u, v, density=1.2):
 def fill_palette(spec):
     if spec["style"] == "contourf":
         n = max(len(spec["levels"]) - 1, 1)
-        full = palette(spec["cmap"], 256, spec["rev"])
+        full = palette(spec["cmap"], 256, spec["rev"], spec["lo"], spec["hi"])
         return [full[min(255, int((i + 0.5) * 256 / n))] for i in range(n)]  # band midpoints
-    return palette(spec["cmap"], 256, spec["rev"])
+    return palette(spec["cmap"], 256, spec["rev"], spec["lo"], spec["hi"])
+
+
+def _map_fill(F, f, t, win, fstorm):
+    a = F.plane(f["var"], t, f["mode"], f["level"], storm=fstorm)
+    lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
+    if hi <= lo:
+        hi = lo + 1e-6
+    x, y, ac = _crop(F.run, a, win)
+    return fill_bands(x, y, ac, lo, hi, f)
+
+
+def fill_bands(x, y, a, lo, hi, f):
+    """A fill (map or cross-section) as an image or filled-contour bands from lo to hi.
+    f: style, nlev, cmap, rev, clip (values outside lo..hi left uncoloured)."""
+    clip = f.get("clip", False)
+    fill = dict(style=f["style"], lo=lo, hi=hi, cmap=f["cmap"], rev=f["rev"])
+    if f["style"] == "contourf":
+        levels = np.linspace(lo, hi, max(int(f["nlev"]), 2) + 1)
+        fill.update(levels=levels, poly=contour_fill(x, y, a, levels, open_ends=not clip))
+    else:
+        if clip:
+            a = np.where((a >= lo) & (a <= hi), a, np.nan)
+        fill.update(image=image_data(x, y, a))
+    fill["palette"] = fill_palette(fill)
+    return fill
+
+
+def _map_vectors(F, o, t, win, storm):
+    """{"vec": arrows} or {"stream": (lines, heads)} of map vector layer o."""
+    u, v = vectors_mod.plane(F, o["q"], t, "height", o["level"], o["frame"], storm)
+    x, y, uc = _crop(F.run, u, win)
+    _, _, vc = _crop(F.run, v, win)
+    if o["style"] == "streamlines":
+        return dict(stream=streamlines(x, y, uc, vc, o["density"] / 20.0))
+    return dict(vec=vectors(x, y, uc, vc, o["density"], o["ref"])[0])
 
 
 def compute_map(F, spec):
@@ -155,21 +192,11 @@ def compute_map(F, spec):
     win = view_window(run, spec["view"], spec["maxpix"])
     out = dict(win=win)
 
-    f = spec["fill"]
-    if f["var"]:
-        a = F.plane(f["var"], t, f["mode"], f["level"], storm=spec.get("fstorm"))
-        lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
-        if hi <= lo:
-            hi = lo + 1e-6
-        x, y, ac = _crop(run, a, win)
-        fill = dict(style=f["style"], lo=lo, hi=hi, cmap=f["cmap"], rev=f["rev"])
-        if f["style"] == "contourf":
-            levels = np.linspace(lo, hi, max(int(f["nlev"]), 2) + 1)
-            fill.update(levels=levels, poly=contour_fill(x, y, ac, levels))
-        else:
-            fill.update(image=image_data(x, y, ac))
-        fill["palette"] = fill_palette(fill)
-        out["fill"] = fill
+    if spec["fill"]["var"]:
+        out["fill"] = _map_fill(F, spec["fill"], t, win, spec.get("fstorm"))
+    # more fills drawn over the first; clip: clear outside their range
+    out["fills"] = [_map_fill(F, f, t, win, spec.get("fstorm"))
+                    if f["on"] and f["var"] else None for f in spec.get("fills", [])]
 
     out["ov"] = []
     for o in spec["ov"]:
@@ -183,22 +210,9 @@ def compute_map(F, spec):
         out["ov"].append(dict(pos=contour_lines(x, y, ac, levels[levels >= 0]),
                               neg=contour_lines(x, y, ac, levels[levels < 0])))
 
-    vsp = spec["vec"]
-    out["vec"] = None
-    if vsp["on"]:
-        u = F.plane("uinterp", t, "height", vsp["level"])
-        v = F.plane("vinterp", t, "height", vsp["level"])
-        if vsp["frame"] == "ground":
-            u, v = u + run.umove, v + run.vmove
-        elif vsp["frame"] == "storm":
-            cu, cv = spec["storm"]
-            u, v = u + run.umove - cu, v + run.vmove - cv
-        x, y, uc = _crop(run, u, win)
-        _, _, vc = _crop(run, v, win)
-        if vsp.get("style") == "streamlines":
-            out["stream"] = streamlines(x, y, uc, vc, vsp["density"] / 20.0)
-        else:
-            out["vec"], _ = vectors(x, y, uc, vc, vsp["density"], vsp["ref"])
+    # vector layers: arrows or streamlines each
+    out["vecs"] = [_map_vectors(F, o, t, win, spec["storm"]) if o["on"] else None
+                   for o in spec["vecs"]]
     return out
 
 
@@ -235,7 +249,7 @@ def section_vectors(s, zq, upar, w, n_across=28, aspect=1.0, ref_speed=20.0):
     U, W = upar[zi // 2::zi, si // 2::si], w[zi // 2::zi, si // 2::si]
     spacing = (s[-1] - s[0]) / n_across
     k = 0.9 * spacing / ref_speed
-    good = np.isfinite(U) & np.isfinite(W) & (np.hypot(U, W) > 0.3)
+    good = np.isfinite(U) & np.isfinite(W) & (np.hypot(U, W) > 0.015 * ref_speed)
     x0, y0 = S[good], Z[good]
     # aspect converts so the arrow's on-screen direction is the true (u, w)
     x1, y1 = x0 + U[good] * k, y0 + W[good] * k * aspect

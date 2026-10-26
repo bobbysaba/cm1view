@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from cm1view.core import render
+from cm1view.core import render, vectors, volume3d
 from conftest import tap, wait
 
 
@@ -19,19 +19,21 @@ def test_map_streamlines_follow_the_wind(viewer, reg):
     v = viewer
     run, F = reg.get()
     v.tslider.value = 4
-    v.vec_on.value = True
-    v.vec_style.value = "streamlines"
-    assert v.vec_density.name == "Streamline density" and not v.vec_ref.visible
+    o = v.vecs[0]
+    o["on"].value = True
+    o["style"].value = "streamlines"
+    assert o["density"].name == "Streamline density" and not o["ref"].visible
     spec = v._map_spec()
     res = render.compute_map(F, spec)
-    sl, heads = res["stream"]
-    assert len(sl["xs"]) > 20 and len(heads["x"]) == len(sl["xs"]) and res["vec"] is None
+    sl, heads = res["vecs"][0]["stream"]
+    assert len(sl["xs"]) > 20 and len(heads["x"]) == len(sl["xs"]) and "vec" not in res["vecs"][0]
     v._apply_map(res, spec, v.gen["map"])
-    assert len(v.sl2_src.data["xs"]) == len(sl["xs"]) and len(v.vec_src.data["x0"]) == 0
+    g = v.vec_r[0]
+    assert len(g["sl_src"].data["xs"]) == len(sl["xs"]) and len(g["src"].data["x0"]) == 0
     # a streamline's direction matches (u, v) where it starts
-    lvl = spec["vec"]["level"]
+    lvl = spec["vecs"][0]["level"]
     u, vv = F.plane("uinterp", 4, "height", lvl), F.plane("vinterp", 4, "height", lvl)
-    if spec["vec"]["frame"] == "ground":
+    if spec["vecs"][0]["frame"] == "ground":
         u, vv = u + run.umove, vv + run.vmove
     x, y = sl["xs"][0], sl["ys"][0]
     i, j = run.ij(x[1], y[1])
@@ -39,22 +41,54 @@ def test_map_streamlines_follow_the_wind(viewer, reg):
     w = np.array([u[j, i], vv[j, i]])
     assert d @ w / (np.linalg.norm(d) * np.linalg.norm(w) + 1e-12) > 0.9
     # back to arrows
-    v.vec_style.value = "arrows"
+    o["style"].value = "arrows"
     res = render.compute_map(F, v._map_spec())
     v._apply_map(res, v._map_spec(), v.gen["map"])
-    assert res.get("stream") is None and len(v.sl2_src.data["xs"]) == 0
-    assert len(v.vec_src.data["x0"]) > 0
+    assert "stream" not in res["vecs"][0] and len(g["sl_src"].data["xs"]) == 0
+    assert len(g["src"].data["x0"]) > 0
+
+
+def test_map_wind_and_vorticity_vectors_together(viewer, reg):
+    """A second vector row: the horizontal vorticity (its own reference arrow, no
+    frame), drawn with the wind; ✕ takes its arrows off the map."""
+    v = viewer
+    run, F = reg.get()
+    v.tslider.value = 4
+    v.vecs[0]["on"].value = True
+    v._add_vec()
+    o = v.vecs[1]
+    assert o["q"].value == "hvort" and not o["frame"].visible
+    assert o["ref"].value == vectors.VECTORS["hvort"].ref and "1/s" in o["ref"].name
+    o["q"].value = "wind"
+    assert o["frame"].visible and o["ref"].value == 20.0
+    o["q"].value = "hvort"
+    spec = v._map_spec()
+    res = render.compute_map(F, spec)
+    v._apply_map(res, spec, v.gen["map"])
+    assert [len(g["src"].data["x0"]) > 0 for g in v.vec_r] == [True, True]
+    assert v.map_drawer.items["vec"][0].name.startswith("Vectors · 2")
+    # the arrows are (ξ, η) scaled by the reference
+    a = res["vecs"][1]["vec"]
+    xi = F.plane("xvort", 4, "height", spec["vecs"][1]["level"])
+    i, j = run.ij(a["x0"][0], a["y0"][0])
+    assert np.sign(a["x1"][0] - a["x0"][0]) == np.sign(xi[j, i]) or abs(xi[j, i]) < 1e-6
+    n = len(v.fig.renderers)
+    v._drop_vec(o)
+    assert len(v.vecs) == len(v.vec_r) == 1 and len(v.fig.renderers) == n - 4
 
 
 def test_cross_section_marks_and_style(viewer):
     v = viewer
     v.mode.set("Cross-section")
-    v.xs_ccolor.value, v.xs_negdash.value, v.xs_cmap.value = "#fbbf24", False, "viridis"
+    o = v.xs_ovs[0]
+    o["color"].value, o["negdash"].value, v.xs_cmap.value = "#fbbf24", False, "viridis"
     tap(v, -15.0, -6.0)
     tap(v, 15.0, -1.0)
     wait(lambda: "long" in (v.xs_status.object or ""), msg="section")
     assert [a.text for a in v.xs_lab] == ["A", "B"] and all(a.visible for a in v.xs_lab)
-    assert v.xs_pos_r.glyph.line_color == "#fbbf24" and v.xs_neg_r.glyph.line_dash in ("solid", [])
+    _, _, pr, nr = v.xs_ov_r[0]
+    assert pr.glyph.line_color == "#fbbf24" and nr.glyph.line_dash in ("solid", [])
+    assert len(v.xs_vec_r[0]["src"].data["x0"]) > 0  # the wind, on by default
     v.xs_auto.value = False
     assert v.xs_min.value < v.xs_max.value
     # plot style: limits set the view (and the reset tool's view), clamped to the data
@@ -70,6 +104,42 @@ def test_cross_section_marks_and_style(viewer):
     assert v.xs_fig.xaxis[0].axis_label_text_font_size == "16px"
     v._on_xs_style_reset(None)
     assert (xr.start, xr.end, yr.start) == (0.0, L, 0.0) and all(a.visible for a in v.xs_lab)
+
+
+def test_cross_section_layers_as_on_the_map(viewer):
+    """More fills, several contours and several vectors, each a row added and removed
+    as on the map; drawn in that order over the fill, and carried into a figure."""
+    v = viewer
+    v.mode.set("Cross-section")
+    tap(v, -15.0, -6.0)
+    tap(v, 15.0, -1.0)
+    wait(lambda: "long" in (v.xs_status.object or ""), msg="section")
+    n = len(v.xs_fig.renderers)
+    v._xs_add_fill()
+    v._xs_add_contour()
+    v._xs_add_vec()
+    assert len(v.xs_fig.renderers) == n + 6
+    assert len(v.xs_fills) == 1 and len(v.xs_ovs) == 2 and len(v.xs_vecs) == 2
+    assert v.xs_vecs[1]["q"].value != "wind" and "level" not in v.xs_vecs[1]
+    rs = v.xs_fig.renderers
+    order = [rs.index(r) for r in (v.xs_poly_r, v.xs_fill_r[0]["img"], v.xs_ov_r[0][2],
+                                   v.xs_ov_r[1][2], v.xs_vec_r[0]["seg"],
+                                   v.xs_vec_r[1]["seg"])]
+    assert order == sorted(order)
+    spec = v.xs_spec()  # (each add redrew the section)
+    wait(lambda: v.xs_fill_r[0]["cbar"].visible, msg="more fills")
+    f = v.xs_fill_r[0]
+    assert f["img"].visible and f["cbar"].title == v.F[spec["fills"][0]["var"]].name
+    assert v.xs_drawer.items["vec"][0].name.startswith("Vectors · 2")
+    # Filled contours, for the first fill too
+    v.xs_fill_style.value = "contourf"
+    wait(lambda: v.xs_poly_r.visible and len(v.xs_poly.data["xs"]) > 0, msg="bands")
+    assert not v.xs_img_r.visible
+    v._xs_drop_vec(v.xs_vecs[1])
+    v._xs_drop_contour(v.xs_ovs[1])
+    v._xs_drop_fill(v.xs_fills[0])
+    assert len(v.xs_fig.renderers) == n and not v.xs_fill_r and len(v.xs_ov_r) == 1
+    assert f["cbar"] not in v.xs_fig.right
 
 
 def test_3d_floor_field(viewer, reg):
@@ -122,6 +192,15 @@ def test_3d_streamline_pick_and_sample(viewer, reg):
     _, hl = v._trace("selected")
     assert len(hl.x) == b - a
     assert np.isfinite(np.nanmax(v.sl_src.data["v"]))
+    # the others go grey and faint by their colour scale and opacity (no colours resent)
+    _, base = v._trace("stream")
+    assert base.line.colorscale[0][1] == volume3d.DIM and len(base.line.color) == len(base.x)
+    assert base.opacity == volume3d.DIM_OPACITY
+    # the card's pointer (snapped in the browser into sl_at) moves the 3D cursor
+    v.sl_at.location = 0.0
+    assert len(v._trace("cursor")[1].x) == 1
+    v.sl_at.location = None
+    assert len(v._trace("cursor")[1].x) == 0
     for name in ("_ws", "thpert"):
         n0 = v.gen["sl"]
         v.sl_field.value = name
@@ -146,6 +225,8 @@ def test_3d_streamline_pick_and_sample(viewer, reg):
     _, pl = v._trace("pinned")
     _, ps = v._trace("pinseeds")
     assert len(ps.x) == 3 and len(pl.x) == len(pl.line.color) == len(v._pin_of)
+    assert ({volume3d.PIN_COLORS[int(c)] for c in pl.line.color}
+            == {p["color"] for p in v._sl_pins})
     assert "3 streamlines" in v.sl_info.object
     # clicking a pinned line selects it; the pin button then unpins it
     k = v._pin_of.index(1) + 1
@@ -166,6 +247,8 @@ def test_3d_streamline_pick_and_sample(viewer, reg):
     v._clear_lines()
     assert not v.sl_card.visible and v._sl_seed is None and not v._sl_pins
     assert len(v._trace("pinseeds")[1].x) == 0
+    assert v._trace("stream")[1].line.colorscale[0][1] != volume3d.DIM
+    assert v._trace("stream")[1].opacity == 1.0
     v._on_clear_points(None)
     assert v.workspace.value == "Map"
 

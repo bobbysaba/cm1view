@@ -5,9 +5,10 @@ from types import SimpleNamespace
 import panel as pn
 
 from .. import draw as figdraw, spec as fg
+from ...core import vectors
 from .base import (
     FIG_CMAPS, LEVEL_MODES, FRAMES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, _hex, _f, _grid,
-    _fold, _near, _nice, _panels_parse, _panels_text, _chk,
+    _checks, _fold, _near, _nice, _panels_parse, _panels_text, _chk,
 )
 
 
@@ -73,6 +74,9 @@ class LayerCard:
             w["cbar_label"] = pn.widgets.TextInput(
                 name="Colorbar label (blank: units)", value=lay.get("cbar_label", "") or "",
                 placeholder=lay.get("units", ""))
+            w["cbar_ticks"] = pn.widgets.TextInput(
+                name="Colorbar ticks (blank: auto)", value=lay.get("cbar_ticks", "") or "",
+                placeholder="0:60:10")
             m = lay.get("minus") or {}
             w["minus_on"] = _chk("Difference: minus another run or time", bool(lay.get("minus")))
             try:
@@ -112,10 +116,14 @@ class LayerCard:
             w["outline"] = pn.widgets.ColorPicker(name="Outline color",
                                                   value=_hex(lay.get("outline") or "magenta"))
         if t == "vectors":
+            opts = vectors.options(F)
+            q = lay.get("vector", "wind")
+            w["vector"] = pn.widgets.Select(name="Vector", options=opts,
+                                            value=q if q in opts.values() else "wind")
             w["style"] = pn.widgets.Select(name="Draw as", options={
                 "Arrows": "arrows", "Streamlines": "streamlines"},
                 value=lay.get("style", "arrows"))
-            w["frame"] = pn.widgets.Select(name="Winds", options=FRAMES,
+            w["frame"] = pn.widgets.Select(name="Frame", options=FRAMES,
                                            value=lay.get("frame", "ground"))
             w["z"] = _f("Height (km)", lay.get("z", 0.0), step=0.25)
             w["spacing"] = _f("Spacing (km)", lay.get("spacing", 2.0), step=0.25)
@@ -144,12 +152,20 @@ class LayerCard:
             w["legend"] = pn.widgets.TextInput(name="Legend entry (blank: none)",
                                                value=lay.get("legend", ""),
                                                placeholder="e.g. w = 10, 20 m s⁻¹")
+        names = ed._run_names()
+        k = lay.get("run")
+        w["run"] = pn.widgets.Select(
+            name="Run", value=int(k) if k is not None and int(k) in names.values() else -1,
+            width=170, **ed._layer_run_choices(names))
         w["panels"] = pn.widgets.TextInput(
             name="In panels (blank: all)", value=_panels_text(lay.get("panels")),
             placeholder="e.g. a, c or 1-3",
             description="Draw this layer only in these panels (letters or numbers)")
+        if t == "vectors":
+            w["vector"].param.watch(self._on_vector, "value")
+        w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
-            if k not in ("field", "minus_on") or t != "fill":
+            if k != "run" and (k not in ("field", "minus_on") or t != "fill"):
                 x.param.watch(lambda e: self._changed(), "value")
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self._set_title()
@@ -158,21 +174,43 @@ class LayerCard:
         self.show(ed.kind.value)
 
     def _layout(self):
+        return [_grid(self.w["run"])] + self._rows()
+
+    def _on_run(self, ev):
+        if self.ed._hold:
+            return
+        if isinstance(ev.new, str):  # a run not in the figure yet
+            self.ed._pick_other(self.w["run"], ev.old)
+            return
+        w = self.w
+        if "reduce_t0" in w:  # (the window's times are the layer's run's)
+            topts = self.ed._time_opts(ev.new if ev.new != -1 else 0) or {}
+            self.ed._hold = True
+            try:
+                for k, first in (("reduce_t0", "the run's first output"),
+                                 ("reduce_t1", "the panel's time")):
+                    cur = w[k].value
+                    w[k].options = {first: ""} | topts
+                    w[k].value = "" if cur == "" else _near(topts, cur)
+            finally:
+                self.ed._hold = False
+        self._changed()
+
+    def _rows(self):
         w, t = self.w, self.type
         if t == "fill":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["style"],
                           w["mask_below"]),
                     _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
-                          (w["cbar_label"], 3), (w["panels"], 3)),
+                          (w["cbar_label"], 2), w["cbar_ticks"], (w["panels"], 3)),
                     _grid((w["minus_on"], 2), w["minus_run"], w["minus_time"],
                           w["minus_grid"]), self._reduce_row()]
         if t == "contour":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], (w["levels"], 2),
-                          w["color"],
-                          w["lw"], w["neg_dashed"], w["clabel"], w["clabel_size"],
-                          w["clabel_fmt"], (w["legend"], 3), (w["panels"], 3)),
-                    self._reduce_row()]
+                          w["color"], w["lw"], w["clabel_size"], w["clabel_fmt"],
+                          (w["legend"], 3), (w["panels"], 3)),
+                    self._reduce_row(), _checks(w["clabel"], w["neg_dashed"], title="Options")]
         if t == "shade":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["threshold"],
                           w["above"],
@@ -180,12 +218,13 @@ class LayerCard:
                           (w["legend"], 3), (w["panels"], 3)),
                     self._reduce_row()]
         if t == "vectors":
-            return [_grid(w["style"], w["frame"], w["color"], w["z"], w["z_fixed"], w["spacing"],
+            return [_grid((w["vector"], 2), w["style"], w["frame"], w["color"], w["z"],
+                          w["z_fixed"], w["spacing"],
                           w["zspacing"], w["scale"], w["width"], w["key"], w["density"],
                           w["slw"], w["arrowsize"], (w["panels"], 3))]
         if t == "track":
-            return [_grid(w["run_color"], w["color"], w["lw"], w["ls"], w["marker"],
-                          (w["legend"], 3), (w["panels"], 3))]
+            return [_grid(w["run_color"], w["color"], w["lw"], w["ls"],
+                          (w["legend"], 3), (w["panels"], 3)), _checks(w["marker"])]
         return [_grid(w["color"], w["lw"], w["labels"], (w["legend"], 3), (w["panels"], 3))]
 
     def _reduce_row(self):
@@ -218,9 +257,11 @@ class LayerCard:
             w["spacing"].visible = not st
             w["spacing"].name = "Spacing along (km)" if xs else "Spacing (km)"
             w["zspacing"].visible = xs and not st
+            w["frame"].visible = vectors.VECTORS[w["vector"].value].framed
+            w["key"].name = f'Key arrow ({vectors.VECTORS[w["vector"].value].units}, 0: none)'
         if t == "shade":
             w["outline"].visible = w["lw"].visible = w["outline_on"].value
-        if t == "track":  # (each panel's run's colour: Panels → Runs)
+        if t == "track":  # (each panel's run's colour: Layers → Runs used)
             w["color"].visible = not w["run_color"].value
         if t == "contour":
             w["clabel_size"].visible = w["clabel_fmt"].visible = w["clabel"].value
@@ -229,9 +270,19 @@ class LayerCard:
             for k in ("minus_run", "minus_time", "minus_grid"):
                 w[k].visible = w["minus_on"].value
 
+    def _on_vector(self, ev):
+        """Another vector: arrows scaled for its magnitudes (a key arrow of its typical
+        one, when there is a key)."""
+        d, w = vectors.VECTORS[ev.new], self.w
+        w["scale"].value = vectors.FIG_SCALE * d.ref
+        if w["key"].value:
+            w["key"].value = d.ref
+
     def _changed(self):
         self.show(self.ed.kind.value)
         self._set_title()
+        if self.type == "line":
+            self.ed._show_region()  # (the section settings show while a line is on)
         self.ed.request()
 
     def _set_title(self):
@@ -253,7 +304,8 @@ class LayerCard:
             if t == "fill" and w["minus_on"].value:
                 sub += " · difference"
         elif t == "vectors":
-            sub = " · streamlines" if w["style"].value == "streamlines" else " · arrows"
+            sub = (f' · {vectors.VECTORS[w["vector"].value].label}'
+                   + (" · streamlines" if w["style"].value == "streamlines" else " · arrows"))
         try:
             only = _panels_parse(w["panels"].value)
         except ValueError:  # (collect() reports it)
@@ -318,6 +370,9 @@ class LayerCard:
             if k in ("outline_on",) or k.startswith(("minus_", "reduce_")):
                 continue
             lay[k] = x.value
+        lay.pop("run", None)
+        if w["run"].value != -1:
+            lay["run"] = int(w["run"].value)
         if "reduce_op" in w:
             lay.pop("reduce", None)
             if w["reduce_op"].value:

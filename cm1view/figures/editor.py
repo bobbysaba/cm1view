@@ -12,8 +12,8 @@ and rendering the preview); the rest are mixins, one module each: the widgets
 (widgets), spec <-> widgets and undo (specio), the panels' times and titles (times),
 the Panels tab's reactions (panelopts), runs (runs), sources and lists (sources),
 export (export), animations (anim), figures of several parts (combo), placing by
-clicking the preview (click), the panel tree (tree) and style (style).  Constants,
-helpers and cards are in the cards package."""
+clicking the preview (click), the panel tree (tree), style (style) and the quick start
+(quick).  Constants, helpers and cards are in the cards package."""
 
 import base64
 import html
@@ -30,7 +30,7 @@ import panel as pn
 from . import draw as figdraw, spec as fg
 from ..core import series as ser
 from ..theme import GRID
-from .cards import LayerCard, _hint, _row
+from .cards import LayerCard
 from .anim import FigureAnimation
 from .click import ClickImage, FigureClick, place_map, watch_tight
 from .combo import FigureCombo, panel_name
@@ -39,6 +39,7 @@ from .runs import AllFields, FigureRuns
 from .sources import FigureSources
 from .style import FigureStyle
 from .panelopts import FigurePanelOpts
+from .quick import FigureQuick
 from .specio import FigureSpecIO
 from .times import FigureTimes
 from .tree import FigureTree
@@ -47,7 +48,7 @@ from .widgets import FigureWidgets
 
 class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, FigureRuns,
                    FigureSources, FigureExport, FigureAnimation, FigureCombo, FigureClick,
-                   FigureTree, FigureStyle):
+                   FigureTree, FigureStyle, FigureQuick):
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
@@ -59,6 +60,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._hold = False  # widgets being set from a spec: no re-render per widget
         self._req = 0
         self.cards = []
+        self._pf_base = None  # a 'field' figure's fill (Panels → Time and fields), not a card
         self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
         self.tm_rows, self.title_ws = [], []
         self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
@@ -77,35 +79,16 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         viewer.gen["figser"] = 0
         self._build()
         self.set_spec(self._default())
+        self._started = False  # (the example: the quick start opens over it)
         self._scan_roots()
 
     # ------------------------------------------------------------ widgets
     def _build(self):
-        # new figure from ...
-        nb = dict(button_type="light", button_style="outline", height=30, margin=(2, 3))
-        self.start_map = pn.widgets.Button(
-            name="Map view", description="One panel of what the map shows now: its field, "
-                                         "contours, winds and view", **nb)
-        self.start_xs = pn.widgets.Button(
-            name="Cross-section", description="One panel of the map's cross-section (draw "
-                                              "one with the Section tool first)", **nb)
-        self.start_ser = pn.widgets.Button(
-            name="Series", description="Time–height panels (layer series) or time series of "
-                                       "the series computed with the Series tool, for every "
-                                       "run of the figure", **nb)
-        self.start_snd = pn.widgets.Button(
-            name="Soundings", description="Skew-T panels of the map's soundings (or the "
-                                          "storm's inflow at the shown time)", **nb)
-        self.start_dist = pn.widgets.Button(
-            name="Distributions", description="Histogram, box, violin or cumulative "
-                                              "distribution of the Distribution tool's "
-                                              "samples (or w over the whole domain)", **nb)
-        self.start_def = pn.widgets.Button(
-            name="Time grid", description="Plan views centred on the storm at several times "
-                                          "from the shown time", **nb)
         ib = dict(name="", button_type="light", button_style="outline", width=36, height=32,
                   margin=(4, 2))
-        self.start_hint = _hint("New figure from", margin=(6, 4, 0, 4))
+        self.new_btn = pn.widgets.Button(
+            icon="file-plus", description="New figure: what the panels show, the grid, "
+                                          "field and width (Undo takes it back)", **ib)
         self.undo_btn = pn.widgets.Button(icon="arrow-back-up", description="Undo", **ib)
         self.redo_btn = pn.widgets.Button(icon="arrow-forward-up", description="Redo", **ib)
         self._build_panel_widgets()
@@ -114,6 +97,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._build_more()
         self._build_anim()
         self._build_style()
+        self._build_quick()
         self.plan_layers.append(self.look_row)
         # ---- preview
         self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(12, 8, 0, 8))
@@ -130,6 +114,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
 
         panels_tab = self._panels_tab()
         layers_tab = pn.Column(self.plan_layers, self.series_col, self.snd_col, self.dist_col,
+                               self.ext_sec, self.runs_sec,
                                sizing_mode="stretch_width")
         style_tab = self._style_tab()
         annotate_tab, export_tab = self._more_tabs()
@@ -139,9 +124,6 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                             dynamic=False, sizing_mode="stretch_width")
         self.tabs.param.watch(lambda e: self._tree_sync() if e.new == 2 else None, "active")
         self.editor = pn.Column(
-            self.start_hint,
-            _row(self.start_map, self.start_xs, self.start_ser, self.start_snd, self.start_dist,
-                 self.start_def),
             self.tabs, scroll="y-auto", sizing_mode="stretch_height", width=580,
             styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
                     "overflow-x": "hidden"})
@@ -149,10 +131,12 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         save_bar = pn.FlexBox(self.path, self.fmt, self.dpi, self.save_img, self.save_all,
                               self.dl, flex_wrap="wrap", align_items="flex-end", gap="0 2px",
                               sizing_mode="stretch_width")
-        view_bar = pn.Row(self.update, self.auto, self.undo_btn, self.redo_btn, self.zoom,
-                          self.place_mode, self.status, margin=0, sizing_mode="stretch_width")
+        view_bar = pn.Row(self.update, self.auto, self.new_btn, self.undo_btn, self.redo_btn,
+                          self.zoom, self.place_mode, self.status, margin=0,
+                          sizing_mode="stretch_width")
         self.preview = pn.Column(
-            save_bar, self.msg, view_bar, self.place_hint, self.image, scroll="y-auto",
+            save_bar, self.msg, view_bar, self.place_hint, self.image, self.quick,
+            scroll="y-auto",
             sizing_mode="stretch_both", styles={"min-width": "0"})
         self.panel = pn.Row(self.preview, self.editor, sizing_mode="stretch_both", margin=0)
         self._wire()
@@ -163,7 +147,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                   self.half, self.coords, self.xs_mode, self.xs_angle,
                   self.xs_half, self.xs_offx, self.xs_offy, self.xs_top, self.font, self.math,
                   self.fsize, self.fs_tick, self.fs_label, self.fs_title, self.fs_sup,
-                  self.fs_legend, self.xlabel, self.ylabel, self.ticklabels, self.tickdir,
+                  self.fs_legend, self.xlabel, self.ylabel, self.ticklabels, self.share, self.tickdir,
                   self.ticks, self.minor, self.xstep, self.ystep, self.frame_lw, self.grid,
                   self.grid_ls, self.equal, self.title_loc, self.title_bold,
                   self.let_on, self.let_fmt, self.let_loc, self.let_size, self.let_bold,
@@ -174,12 +158,13 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                   self.cb_mode, self.cb_loc,
                   self.cb_label, self.cb_ticks, self.cb_shrink, self.cb_fraction, self.cb_pad,
                   self.cb_lsize, self.cb_tsize, self.cb_lbold, self.cb_lside, self.cb_fmt,
-                  self.lg_loc, self.lg_panel, self.lg_ncol,
+                  self.lg_where, self.lg_loc, self.lg_panel, self.lg_from, self.lg_title, self.lg_ncol,
                   self.lg_frame, self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad,
                   self.bg, self.mplstyle, self.tight, self.pad):
             w.param.watch(rq, "value")
         self.run_sel.param.watch(self._on_run_sel, "value")
         self.cb_mode.param.watch(lambda e: self._show_cbar(), "value")
+        self.lg_where.param.watch(lambda e: self._show_legend(), "value")
         for w in (self.rows, self.cols):
             w.param.watch(lambda e: self._on_layout(), "value")
         self.vary.param.watch(lambda e: self._on_vary(), "value")
@@ -187,32 +172,33 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.pz_mode.param.watch(lambda e: self._on_zmode(), "value")
         self.sk["storm"].param.watch(lambda e: self._show_storm(), "value")
         self.sk["layout"].param.watch(lambda e: self._show_storm(), "value")
+        self.sk["inset_loc"].param.watch(lambda e: self._show_storm(), "value")
+        self.sk["hodo_center"].param.watch(lambda e: self._show_storm(), "value")
         self.code_plain.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code_box.param.watch(lambda e: self._show_code(True), "value")
         self.runs_as.param.watch(lambda e: self._on_vary(), "value")
+        self.gg_go.on_click(lambda e: self._fill_grid())
+        self.gg_runs.param.watch(self._on_gg_runs, "value")
         self.size_preset.param.watch(self._on_preset, "value")
         self.fit_btn.on_click(lambda e: self._refit())
         self.kind.param.watch(lambda e: self._on_kind(), "value")
         self.dom.param.watch(self._on_dom, "value")
-        self.box_btn.on_click(lambda e: self._use_view())
+        for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
+            w.param.watch(lambda e: self._on_box(), "value")
         self.xs_ab.on_click(lambda e: self._use_ab())
         self.tfill.on_click(lambda e: self._fill_times())
         self.auto_titles.on_click(lambda e: self._auto_titles())
         self.clear_titles.on_click(lambda e: self._set_titles([]))
         for k, b in self.add_btns.items():
             b.on_click(partial(self._add_layer, k))
-        self.start_map.on_click(lambda e: self.from_map())
-        self.start_xs.on_click(lambda e: self.from_xsec())
-        self.start_def.on_click(lambda e: self.set_spec(self._default()))
-        self.start_ser.on_click(lambda e: self.from_series())
+        self.new_btn.on_click(lambda e: self.open_quick())
         for w in (self.width, self.height):
             w.param.watch(lambda e: self._size_by_hand(), "value")
-        self.start_snd.on_click(lambda e: self.from_soundings())
-        self.start_dist.on_click(lambda e: self.from_dists())
         self.dist_tab.on_click(lambda e: self._add_tab_dists())
         self.dist_new.on_click(lambda e: self._add_dist())
-        self.ds["plot"].param.watch(lambda e: self._show_dist_opts(), "value")
+        for k in ("plot", "stats_at"):
+            self.ds[k].param.watch(lambda e: self._show_dist_opts(), "value")
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
         self.snd_tab.on_click(lambda e: self._add_tab_soundings())
@@ -222,7 +208,10 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.ann_add.on_click(lambda e: self._add_annotation())
         for w in (*self.sk.values(), *self.ds.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
                   self.ts_ymin, self.ts_ymax,
-                  self.ts_legend, self.ts_legloc, self.ts_zero, self.ck_on, self.ck_layer,
+                  self.ts_legend, self.ts_legloc, self.ts_legncol, self.ts_legframe, self.ts_zero,
+                  self.ts_mark,
+                  self.ts_mark_legend, self.ex_on, self.ex_layer, self.ex_what, self.ex_loc,
+                  self.ex_marker, self.ex_box, self.ck_on, self.ck_layer,
                   self.ck_label, self.ck_x, self.ck_y, self.ck_size, self.ck_fs,
                   self.ck_frame, self.code_on, self.code):
             w.param.watch(rq, "value")
@@ -262,11 +251,15 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         opts = {"First contours": -1} | {
             f"{j + 1}. {self.fields[c.w['field'].value].label}": j
             for j, c in enumerate(self.cards) if c.type == "contour"}
-        v = self.ck_layer.value
+        ex_opts = {"First fill": -1} | {
+            f"{j + 1}. {self.fields[c.w['field'].value].label}": j
+            for j, c in enumerate(self.cards) if c.type in figdraw.EXTREME_TYPES}
         hold, self._hold = self._hold, True
         try:
-            self.ck_layer.options = opts
-            self.ck_layer.value = v if v in opts.values() else -1
+            for w, o in ((self.ck_layer, opts), (self.ex_layer, ex_opts)):
+                v = w.value
+                w.options = o
+                w.value = v if v in o.values() else -1
         finally:
             self._hold = hold
 
@@ -313,6 +306,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         if n != self._req:
             return
         try:
+            self._prune_runs()
             self._follow_size()
             spec = self.collect_all()  # (several parts: the figure of them)
         except Exception as e:  # noqa: BLE001
@@ -320,9 +314,11 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             return
         self._tree_sync()
         self._remember(spec)
+        self._anim_refresh(spec)  # (the frames follow the panels' times)
         self.v.gen["fig"] += 1
         g = self.v.gen["fig"]
         self._status('<span class="busy">● Rendering…</span>')
+        self._preview_waiting = True  # (a GIF being saved lets it in after a frame)
         self.v.pools["fig"].submit(self._job, g, spec)
 
     def panel_data(self, spec, progress=None, cancelled=None):
@@ -415,6 +411,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
 
     def _job(self, g, spec):
         t0 = _time.time()
+        self._preview_waiting = False
 
         def cancelled():
             return g != self.v.gen["fig"]

@@ -7,6 +7,7 @@ from functools import partial
 
 import numpy as np
 import panel as pn
+import param
 from bokeh.models import FixedTicker, LinearAxis
 
 from ..theme import BG, CSS, FIGURE, GRID, MUTED, PANEL, TEXT, TOOLBAR
@@ -48,6 +49,24 @@ def _bokeh(fig, **kw):
     """A Bokeh figure in a pane, with the figure styles (Panel replaces the figure's
     own stylesheets with the pane's)."""
     return pn.pane.Bokeh(fig, stylesheets=[FIGURE], **kw)
+
+
+class Plotly3D(pn.pane.Plotly):
+    """Plotly pane that does not take the browser's echo of a restyle back into the
+    figure. Each trace update is sent as a Plotly.restyle, and the browser answers with
+    the same data (plotly_restyle); arriving after a newer update (the streamline cursor
+    pushes ~12 times a second) the stock pane writes the old data back into the figure
+    and sends it again, so the highlights jump back and forth. Only a legend click's
+    show/hide is kept."""
+
+    @param.depends("restyle_data", watch=True)
+    def _update_figure_style(self):
+        if self._figure is None or not self.restyle_data:
+            return
+        data, *traces = self.restyle_data
+        if isinstance(data, dict) and "visible" in data:
+            self._figure.plotly_restyle({"visible": data["visible"]}, *traces,
+                                        source_view_id="browser")
 
 
 def _svg(fig):
@@ -222,7 +241,7 @@ TOOLS = {
     "3D region": ("cube", "3D box", "Drag a box on the map to view it in 3D"),
 }
 # click mode -> its tool button (both kinds of sounding are the Sounding tool)
-TOOL_OF = {"Area sounding": "Sounding"}
+TOOL_OF = {"Area sounding": "Sounding", "Seed box": "3D region"}
 # click mode -> its panel (tab of the analysis panel); 3D region has none
 PANELS = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2, "Series": 3,
           "Distribution": 4}

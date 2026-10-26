@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pytest
 
+from cm1view.figures import spec as fg
 from conftest import txt, wait, render, difference_layer, swath_layer
 
 
@@ -20,8 +21,7 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
     elif start == "swath":
         swath_layer(ed)
     elif start == "dark":  # (a matplotlib style in the spec)
-        ed.preset.value = "dark"
-        ed._apply_preset()
+        ed.set_spec(fg.apply_style(ed.collect(), "dark"))
     elif start == "series":
         ed.from_series()
         ed.panel_data(ed.collect())
@@ -36,6 +36,9 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
     ed._save_job(ed.collect(), True, base)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     os.rename(base + ".png", base + "_viewer.png")
+    with open(base + ".py") as f:  # (short: the drawing code is in _src/)
+        assert "def _draw2" not in f.read()
+    assert os.path.isfile(str(tmp_path / "_src" / f"{start}_draw.py"))
     r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
@@ -61,10 +64,18 @@ def test_animation_steps_every_panel(ed, tmp_path):
     ts = ed.run.times  # (the pickers hold model times in s)
     ed.tm_rows[0].value, ed.tm_rows[1].value = float(ts[1]), float(ts[2])
     spec = ed.collect()
-    ed.an_n.value, ed.an_step.value = 4, 2
-    offsets = ed._anim_offsets(spec)
     ts = ed.run.times  # not evenly spaced: offsets follow the first panel's outputs
+    ed.an_step.value, ed.an_end.value = 2, None
+    full = ed._anim_offsets(spec)  # through the end of the run (the second panel's)
+    assert full == [float(ts[i] - ts[1]) for i in range(1, len(full) * 2, 2)]
+    assert len(full) > 4 and spec["times_s"][1] + full[-1] <= ts[-1]
+    ed.anim_sec.collapsed = False  # the End time choices: the frames' times
+    assert list(ed.an_end.options.values())[1:] == [float(ts[i])
+                                                     for i in range(3, len(full) * 2, 2)]
+    ed.an_end.value = float(ts[7])
+    offsets = ed._anim_offsets(spec)
     assert offsets == [float(ts[i] - ts[1]) for i in (1, 3, 5, 7)]
+    assert "→ 4 frames" in txt(ed.an_count.object), ed.an_count.object
     last = max(t for t in spec["times_s"] if t is not None)
     assert last + offsets[-1] <= ed.run.times[-1]
     s = fg.shift_times(spec, offsets[1])
@@ -76,6 +87,21 @@ def test_animation_steps_every_panel(ed, tmp_path):
     gif = Image.open(base + ".gif")
     assert gif.n_frames == len(offsets) and gif.info.get("loop") == 0
     assert len(list((tmp_path / "loop_frames").glob("loop_*.png"))) == len(offsets)
+
+
+def test_animation_saves_at_gif_path_or_save_as(ed, tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr(ed.v.confirm, "ask", lambda paths, go: asked.append(paths))
+    ed.rows.value, ed.cols.value = 1, 1
+    ed.tm_rows[0].value = float(ed.run.times[1])
+    ed.path.value, ed.an_frames.value = str(tmp_path / "fig.png"), True
+    ed.an_path.value = str(tmp_path / "loops" / "storm.gif")
+    ed._on_anim()
+    assert asked[-1] == [str(tmp_path / "loops" / "storm.gif"),
+                         str(tmp_path / "loops" / "storm_frames")]
+    ed.an_path.value = ""  # blank: next to Save as
+    ed._on_anim()
+    assert asked[-1] == [str(tmp_path / "fig.gif"), str(tmp_path / "fig_frames")]
 
 
 def test_animation_needs_plan_or_section(ed):
@@ -142,6 +168,9 @@ def test_figure_of_parts(ed, tmp_path):
     ed._save_job(ed.collect_all(), True, base)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     os.rename(base + ".png", base + "_viewer.png")
+    with open(base + ".py") as f:  # (short: the drawing code is in _src/)
+        assert "def _draw2" not in f.read()
+    assert os.path.isfile(str(tmp_path / "_src" / f"{start}_draw.py"))
     r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
@@ -181,7 +210,9 @@ def test_animation_of_figure_parts(ed, tmp_path):
     # not evenly spaced: panels at other times may lack an output a step later)
     ed.snd_cards[0].w["time"].value = ed.parts[0]["times_s"][0]
     spec = ed.collect_all()
-    ed.an_n.value, ed.an_step.value = 3, 1
+    ed.an_step.value = 1
+    ed.anim_sec.collapsed = False
+    ed.an_end.value = list(ed.an_end.options.values())[2]
     offsets = ed._anim_offsets(spec)
     assert len(offsets) == 3
     s = fg.shift_times(spec, offsets[1])
@@ -244,6 +275,9 @@ def test_figure_of_parts_with_a_series_part(ed, tmp_path):
     ed._save_job(spec, True, base)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     os.rename(base + ".png", base + "_viewer.png")
+    with open(base + ".py") as f:  # (short: the drawing code is in _src/)
+        assert "def _draw2" not in f.read()
+    assert os.path.isfile(str(tmp_path / "_src" / f"{start}_draw.py"))
     r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]

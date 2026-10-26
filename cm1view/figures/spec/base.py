@@ -29,7 +29,7 @@ def layer_defaults(kind, F, field=None, z=1.0):
                     above=True,
                     color="magenta", alpha=0.6, outline="", lw=1.0, legend="")
     if kind == "vectors":
-        return dict(type="vectors", on=True, z=0.0, spacing=2.0, zspacing=0.5,
+        return dict(type="vectors", on=True, vector="wind", z=0.0, spacing=2.0, zspacing=0.5,
                     frame="ground", scale=250.0, width=0.002, color="k", key=0.0,
                     style="arrows", density=1.5, slw=0.8, arrowsize=1.0)
     if kind == "track":  # (in its run's colour, run_color)
@@ -105,20 +105,30 @@ def default_spec(run, F, t=0):
         titles=[], suptitle="",
         colorbar=dict(mode="shared", orientation="horizontal", label="", shrink=0.7,
                       fraction=0.05, pad=0.02, ticks=""),
-        legend=dict(panel=0, loc="upper right", frame=True),
+        legend=dict(where="panel", panel=0, panels=[], loc="upper right", ncol=1, frame=True,
+                    title=""),
         series=[], ts=dict(tmin=None, tmax=None, zmin=0.0, zmax=10.0, legend=True,
-                           legend_loc="best", zero_line=False),
+                           legend_loc="best", legend_ncol=1, legend_frame=False,
+                           zero_line=False, mark="", mark_legend=False),
+        extremes=dict(on=False, layer=-1, what="both", marker=True, loc="upper center",
+                      box=True),
         soundings=[], skewt=dict(pmax=1000.0, pmin=100.0, tmin=-40.0, tmax=50.0, skew=35.0,
                                  parcel="ml", guides=True, barbs=True, layout="inset",
                                  hodo_max=40.0, hodo_top=9.0, lw=1.8, legend=False,
-                                 legend_loc="upper left", params=True, hodo_kin=True,
-                                 hodo_labels=True, hodo_key=True, srh="", table=[],
+                                 legend_loc="upper left", legend_ncol=1,
+                                 legend_frame=True, params=True, hodo_rm=True,
+                                 hodo_lm=True, hodo_mean=True, hodo_labels=True,
+                                 hodo_key=True, srh="", table=[],
                                  storm="rm", storm_u=0.0, storm_v=0.0, hodo_storm=True,
-                                 inset_loc="auto"),
+                                 inset_loc="auto", inset_size=0.37, inset_x=0.62,
+                                 inset_y=0.6, hodo_center="origin", hodo_cu=0.0,
+                                 hodo_cv=0.0),
         dists=[], dist=dict(plot="hist", norm="count", bins=50, width=None, xmin=None,
                             xmax=None, ymin=None, ymax=None, logy=False, hstyle="stepfilled",
                             alpha=0.35, lw=1.5, cum="below", whis="tukey", means=True,
-                            horizontal=False, legend=True, legend_loc="best", stats=False,
+                            horizontal=False, legend=True, legend_loc="best", legend_ncol=1,
+                            legend_frame=False, stats=[],
+                            stats_at="legend", stats_loc="upper right", bar_labels="",
                             zero_line=False),
         contour_key=dict(on=False, layer=-1, label="w", x=0.01, y=0.01, size=0.1, fs=10.0,
                          r0=0.35, step=0.15, yoffset=0.06, frame=True),
@@ -252,6 +262,12 @@ def normalize(spec, run, track="viewer"):
         spec["time_s"] = float(run.times[min(int(spec["time"]), nt - 1)])
     if not spec.get("runs"):
         spec["runs"] = [run_entry(run, track)]
+    if spec.get("vary") == "grid":  # (a run x time grid is panels with their own run & time)
+        spec["panels"] = [
+            dict(run=ref[0], time_s=ref[1]) if ref else
+            dict(run=0, time_s=float(spec["time_s"]))
+            for ref in (panel_ref(spec, i) for i in range(npanels(spec)))]
+        spec["vary"] = "custom"
     return spec
 
 
@@ -318,10 +334,11 @@ def time_refs(spec):
     return out
 
 
-def frame_offsets(spec, runs, n, step=1):
-    """Time offsets (s) of up to n animation frames, every `step` outputs of the first
-    panel's run from the figure's own times, while every panel has an output at its
-    shifted time.  runs: {run path: CM1Run} of the panels' runs (time_refs)."""
+def frame_offsets(spec, runs, step=1, end_s=None, limit=None):
+    """Time offsets (s) of the animation frames, every `step` outputs of the first
+    panel's run from the figure's own times up to that run's model time end_s (None:
+    its end), while every panel has an output at its shifted time; at most `limit`
+    frames.  runs: {run path: CM1Run} of the panels' runs (time_refs)."""
     refs = time_refs(spec)
     if not refs:
         return []
@@ -331,14 +348,15 @@ def frame_offsets(spec, runs, n, step=1):
     if i0 is None:
         return []
     out = []
-    for j in range(int(n)):
-        i = i0 + j * int(step)
-        if not 0 <= i < len(run0.times):
+    for i in range(i0, len(run0.times), max(int(step), 1)):
+        if end_s is not None and run0.times[i] > end_s + 1.0:
             break
         dt = float(run0.times[i] - run0.times[i0])
         if any(tindex(runs[p], ts + dt) is None for p, ts in refs):
             break
         out.append(dt)
+        if limit is not None and len(out) >= limit:
+            break
     return out
 
 

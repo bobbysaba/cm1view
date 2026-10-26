@@ -7,15 +7,81 @@ import numpy as np
 from conftest import txt, wait, render
 
 
-def test_two_runs_make_a_grid(ed, demo_root):
+def test_fill_a_grid_of_runs_and_times(ed, demo_root):
     import os
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
     ed._add_run()
-    assert len(ed.run_rows) == 2 and ed.vary.value == "grid"
-    assert ed.rows.value == 2 and len(ed.tm_rows) == ed.cols.value
-    assert ed.times_sec.title == "Times (one per column)"
+    assert len(ed.run_rows) == 2 and ed.vary.value == "time"  # (adding a run keeps the panels)
+    ed.gg_runs.value, ed.gg_n.value, ed.gg_step.value = [0, 1], 3, 1
+    ed._fill_grid()
+    assert ed.vary.value == "custom" and ed.rows.value == 2 and ed.cols.value == 3
+    assert [r["run"].value for r in ed.pc_rows] == [0, 0, 0, 1, 1, 1]
+    assert ed.pc_rows[0]["time"].value < ed.pc_rows[1]["time"].value
+    s = ed.collect()
+    assert s["vary"] == "custom" and [p["run"] for p in s["panels"]] == [0, 0, 0, 1, 1, 1]
     spec, data, fig = render(ed)
     assert {d.get("run_label") for d in data.values()} == {"supercell", "supercell_weak"}
+    ed.gg_as.value = "cols"  # runs as columns: a row per time
+    ed._fill_grid()
+    assert ed.rows.value == 3 and ed.cols.value == 2
+    assert [r["run"].value for r in ed.pc_rows] == [0, 1, 0, 1, 0, 1]
+
+
+def test_an_older_run_by_time_grid_opens_as_panels_with_their_own_run(ed, demo_root):
+    import os
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    s = ed.collect()
+    t0, t1 = float(ed.run.times[0]), float(ed.run.times[1])
+    s.update(vary="grid", runs_as="rows", rows=2, cols=2, times_s=[t0, t1], panels=[])
+    old = render_spec(ed, s)
+    ed.set_spec(json.loads(json.dumps(s)))
+    got = ed.collect()
+    assert got["vary"] == "custom" and [p["run"] for p in got["panels"]] == [0, 0, 1, 1]
+    assert [p["time_s"] for p in got["panels"][:2]] == [t0, t1]
+    assert old == render_spec(ed, got)
+
+
+def render_spec(ed, spec):
+    """The preview's arrays of `spec` as the sets of (panel, run, time)."""
+    from cm1view.figures import spec as fg
+    return [fg.panel_ref(spec, i) for i in range(fg.npanels(spec))]
+
+
+def test_a_run_nothing_uses_any_more_is_dropped(ed, demo_root):
+    import os
+    weak = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._prune_runs()  # (notes that the viewer's run is used)
+    ed.run_sel.value = weak  # picking a run adds it, and the panels use it
+    assert len(ed.run_rows) == 2 and ed.run_sel.value == 1
+    ed._prune_runs()  # the viewer's run was used and is not now
+    assert [r["path"] for r in ed.run_rows] == [weak] and ed.run_sel.value == 0
+    assert "Dropped" in txt(ed.runs_msg.object)
+    spec, data, fig = render(ed)
+    assert spec["runs"][0]["path"] == weak and not any(d.get("missing") for d in data.values())
+
+
+def test_a_run_added_by_hand_stays_until_it_has_been_used(ed, demo_root):
+    import os
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    ed._prune_runs()
+    ed._prune_runs()
+    assert len(ed.run_rows) == 2
+    assert "not used yet" in ed.run_rows[1]["info"].object
+
+
+def test_removing_a_run_moves_the_layers_that_pick_runs(ed, demo_root, coarse_run):
+    import os
+    for p in (os.path.join(demo_root, "demo", "supercell_weak"), coarse_run):
+        ed.add_path.value = p
+        ed._add_run()
+    c = ed.cards[0]
+    c.w["run"].value = 2
+    ed._remove_run(ed.run_rows[1])
+    assert c.w["run"].value == 1 and [r["path"] for r in ed.run_rows][-1] == coarse_run
+    ed._remove_run(ed.run_rows[1])  # the run the layer picked: back to the panel's
+    assert c.w["run"].value == -1
 
 
 def test_removing_a_run_keeps_soundings_and_series_on_their_runs(ed, demo_root, coarse_run):
@@ -50,8 +116,9 @@ def test_panel_times_come_from_the_panels_run(ed, coarse_run):
     assert not any(d.get("missing") for d in data.values())
     ed.vary.value = "field"
     assert ed.time1.value in list(crun.times)
-    ed.vary.value = "grid"  # every run's times, marked where a run has none
-    assert any("not in every run" in o for o in ed.tm_rows[0].options)
+    ed.gg_runs.value, ed.gg_n.value = [0, 1], 2  # a grid: each panel's own run's outputs
+    ed._fill_grid()
+    assert all(r["time"].value in list(crun.times) for r in ed.pc_rows[2:])
 
 
 def test_reopened_spec_keeps_times_of_another_run(ed, coarse_run):
@@ -170,7 +237,9 @@ def test_run_colours_are_the_default(ed, demo_root):
     import os
     from matplotlib.colors import to_hex
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
-    ed._add_run()  # a run x time grid
+    ed._add_run()
+    ed.gg_runs.value = [0, 1]  # a grid of the two runs
+    ed._fill_grid()
     ed.run_rows[1]["color"].value = "#00aa00"
     ed._add_layer("track")  # a new track layer: each panel's run's colour
     spec, data, fig = render(ed)
@@ -219,3 +288,31 @@ def test_templates_apply_to_another_run(ed, coarse_run):
     got = ed.collect()
     assert got["layers"] == spec["layers"] and got["runs"][0]["path"] == ed.run.path
     render(ed)
+
+
+def test_a_run_keeps_its_colour_in_every_panel():
+    from matplotlib.colors import to_hex
+    from matplotlib.figure import Figure
+    from cm1view.figures.draw.lines import _lines, dist_colors
+    from cm1view.figures.draw.sounding import sounding_colors
+    runs = [dict(color="#00aa00"), dict(color="#aa0000")]
+    one = dict(nsnd=1, N0_e=0)  # a panel with one sounding (distribution) of run 1
+    assert sounding_colors(dict(runs=runs, soundings=[dict(run=1)]), one) == ["#aa0000"]
+    assert dist_colors(dict(runs=runs, dists=[dict(run=1)]), dict(ndist=1, D0_e=0)) == \
+        ["#aa0000"]
+    alone = sounding_colors(dict(runs=runs[:1], soundings=[dict(run=0)]), one)
+    assert alone != ["#00aa00"]  # one run in the figure: the sounding colours as before
+    same = sounding_colors(dict(runs=runs, soundings=[dict(run=1), dict(run=1)]),
+                           dict(nsnd=2, N0_e=0, N1_e=1))
+    assert len(set(same)) == 2  # two of one run: told apart by colour, not the run's
+    t = np.arange(3.0)
+    ax = Figure().subplots()
+    _lines(ax, dict(nlines=1, S0_e=0, S0_r=1, S0_t=t, S0_v=t, S0_label="w"),
+           dict(runs=runs, series=[dict(color="#0000ff")]), 10)
+    assert to_hex(ax.lines[0].get_color()) == "#aa0000"
+    ax = Figure().subplots()  # two series of run 1: the series' colours, run 1's line style
+    _lines(ax, dict(nlines=2, S0_e=0, S0_r=1, S0_t=t, S0_v=t, S0_label="a",
+                    S1_e=1, S1_r=1, S1_t=t, S1_v=t, S1_label="b"),
+           dict(runs=runs, series=[dict(color="#0000ff"), dict(color="#ff00ff")]), 10)
+    assert [to_hex(ln.get_color()) for ln in ax.lines] == ["#0000ff", "#ff00ff"]
+    assert {ln.get_linestyle() for ln in ax.lines} == {"--"}

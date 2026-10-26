@@ -136,6 +136,7 @@ class ItemsTray:
     def _remove_box(self):
         self.box = None
         self.box_src.data = dict(left=[], right=[], bottom=[], top=[])
+        self._clear_seed_box()
         self._update_region_html()
 
     def _open_3d(self):

@@ -9,9 +9,16 @@ from ..theme import BG, GRID, MUTED, TEXT
 
 MAX_FACES = 700_000
 SELECTED = "#fde047"  # highlighted streamline
+DIM = "#475569"  # the other streamlines while one is selected or pinned
+DIM_OPACITY = 0.2  # and how opaque they are meanwhile
 # pinned streamlines, in pin order (cycled); none of them is the selection's yellow
 PIN_COLORS = ["#38bdf8", "#f472b6", "#a3e635", "#fb923c", "#c084fc", "#2dd4bf", "#f87171",
               "#e2e8f0"]
+# the pinned trace's colour is a pin's index in PIN_COLORS (numbers, not a string per
+# point) on this stepped scale; DIM_SCALE greys the streamlines without resending colours
+PIN_SCALE = [[f, c] for k, c in enumerate(PIN_COLORS)
+             for f in (k / len(PIN_COLORS), (k + 1) / len(PIN_COLORS))]
+DIM_SCALE = [[0.0, DIM], [1.0, DIM]]
 
 
 def box_indices(run, box):
@@ -54,16 +61,16 @@ def isosurface(run, vol, box, value, stride, smooth, zmax):
 
 def surface_vectors(run, u, v, box, n_across=20, ref_speed=20.0):
     """Horizontal arrows (shaft + V head) as NaN-separated x/y polylines, in km.
-    u, v: (nj, ni) planes in the wanted frame."""
+    u, v: (nj, ni) planes in the wanted frame (any vector: ref_speed in its units)."""
     i0, i1, j0, j1 = box_indices(run, box)
     s = max(1, (i1 - i0) // max(n_across, 1))
     jj, ii = np.mgrid[j0 + s // 2:j1:s, i0 + s // 2:i1:s]
     uu, vv = u[jj, ii].ravel(), v[jj, ii].ravel()
     x, y = run.xh[ii].ravel(), run.yh[jj].ravel()
     spd = np.hypot(uu, vv)
-    good = np.isfinite(spd) & (spd > 0.2)
+    good = np.isfinite(spd) & (spd > 0.01 * ref_speed)
     x, y, uu, vv, spd = x[good], y[good], uu[good], vv[good], spd[good]
-    k = 0.9 * s * run.dx / 1000.0 / ref_speed  # km per (m/s)
+    k = 0.9 * s * run.dx / 1000.0 / ref_speed  # km per unit
     x1, y1 = x + uu * k, y + vv * k
     hl = np.minimum(0.35 * spd * k, 0.3 * s * run.dx / 1000.0)  # head length (km)
     ang = np.arctan2(vv, uu)
@@ -77,20 +84,29 @@ def surface_vectors(run, u, v, box, n_across=20, ref_speed=20.0):
 
 
 def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
-                direction="forward", offset=(0.0, 0.0)):
+                direction="forward", offset=(0.0, 0.0), seed_box=None):
     """Instantaneous 3D streamlines of (U - offset[0], V - offset[1], W).
 
     U, V, W are full (nk, nj, ni) volumes in m/s.  Seeds form an n_seed x n_seed grid
-    inside `box` at height seed_z (km).  Integration is RK2 with a fixed arc-length
-    step, so lines are evenly sampled whatever the speed.
+    inside `seed_box` (default `box`) at height seed_z (km); lines run until they
+    leave `box` (ending on its edge), reach `length` km ("both": length / 2 each way),
+    or stall: speed under 0.3 m/s, or the flow turning back within a step (a stagnation
+    point, where a direction-only tracer would zig-zag).  Lines that reach the lowest
+    level slide along it.  Integration is RK2 on the flow's direction with a step of
+    0.6 dx, shortened so it climbs at most 0.8 of the local level spacing.
     Returns x, y, z (km), w (m/s) as NaN-separated arrays, plus `segs`: per line
     (first, end, seed) indices into those arrays, or None."""
     x0, x1, y0, y1 = box
     dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
+    if direction == "both":
+        length = 0.5 * length
     ds = max(0.6 * dxk, length / 500.0)  # km per step
-    nstep = int(np.ceil(length / ds))
+    nstep = 4 * int(np.ceil(length / ds))  # room for the shortened (steep) steps
     zlo = float(run.z[0])
     kidx = np.arange(run.nk, dtype=np.float64)
+    dz = np.gradient(np.asarray(run.z, np.float64)) if run.nk > 1 else np.array([ds])
+    lo = np.array([x0, y0, -np.inf])
+    hi = np.array([x1, y1, ztop])
     cu, cv = offset
 
     def vel(p):
@@ -107,26 +123,39 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
         sp = np.linalg.norm(vv, axis=1, keepdims=True)
         return vv / np.maximum(sp, 1e-6), sp[:, 0]
 
-    mx, my = 0.04 * (x1 - x0), 0.04 * (y1 - y0)
-    gx, gy = np.meshgrid(np.linspace(x0 + mx, x1 - mx, n_seed),
-                         np.linspace(y0 + my, y1 - my, n_seed))
+    s0, s1, t0, t1 = seed_box or box
+    mx, my = 0.04 * (s1 - s0), 0.04 * (t1 - t0)
+    gx, gy = np.meshgrid(np.linspace(s0 + mx, s1 - mx, n_seed),
+                         np.linspace(t0 + my, t1 - my, n_seed))
     seeds = np.stack([gx.ravel(), gy.ravel(), np.full(gx.size, max(seed_z, zlo))], axis=1)
 
     lines, seed_col = [], 0
     for sign in {"forward": (1,), "backward": (-1,), "both": (-1, 1)}[direction]:
         p = seeds.copy()
         alive = np.ones(len(p), bool)
+        done = np.zeros(len(p))  # km travelled
         track = [p.copy()]
         for _ in range(nstep):
             d1, sp = unit(vel(p))
-            mid = p + sign * 0.5 * ds * d1
+            dzl = np.interp(p[:, 2], run.z, dz)
+            h = np.minimum(ds, 0.8 * dzl / np.maximum(np.abs(d1[:, 2]), 1e-6))
+            h = np.minimum(h, length - done)[:, None]
+            mid = p + sign * 0.5 * h * d1
             mid[:, 2] = np.maximum(mid[:, 2], zlo)
             d2, _ = unit(vel(mid))
-            q = p + sign * ds * d2
+            q = p + sign * h * d2
             q[:, 2] = np.maximum(q[:, 2], zlo)  # slide along the lowest level
-            alive &= ((sp > 0.3) & (q[:, 0] >= x0) & (q[:, 0] <= x1) & (q[:, 1] >= y0)
-                      & (q[:, 1] <= y1) & (q[:, 2] <= ztop))
+            alive &= (sp > 0.3) & (np.einsum("ij,ij->i", d1, d2) > 0.0)
+            # a step that leaves the region ends the line on the region's edge
+            dq = q - p
+            with np.errstate(divide="ignore", invalid="ignore"):
+                f = np.where(q > hi, (hi - p) / dq, np.where(q < lo, (lo - p) / dq, 1.0))
+            f = np.clip(np.nan_to_num(f.min(axis=1), nan=1.0), 0.0, 1.0)
+            out = f < 1.0
+            q = p + f[:, None] * dq
+            done += f * h[:, 0]
             q[~alive] = np.nan
+            alive &= ~out & (done < length - 1e-9)
             p = np.where(alive[:, None], q, p)
             track.append(q)
             if not alive.any():
@@ -216,6 +245,12 @@ CAMERAS = {  # eye positions (scene units), plotly convention
 }
 
 
+def stream_color(stream):
+    """The streamlines' colour per point: w or height, by stream["color_by"]."""
+    c = stream["w"] if stream["color_by"] == "w" else stream["z"]
+    return np.nan_to_num(c, nan=0.0)
+
+
 def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream=None,
                  camera="oblique", revision="keep", dragmode="turntable"):
     import plotly.graph_objects as go
@@ -243,16 +278,14 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
             lighting=dict(ambient=0.35, diffuse=0.85, specular=0.35, roughness=0.5,
                           fresnel=0.15),
             lightposition=dict(x=2000, y=-1000, z=4000)))
-    if vectors is not None:
+    for vec in vectors or []:  # [dict(x, y, z, color, name)]: arrows at a height each
         fig.add_trace(go.Scatter3d(
-            x=vectors["x"], y=vectors["y"], z=np.full_like(vectors["x"], vectors["z"]),
-            mode="lines", line=dict(color=vectors["color"], width=4),
-            name=vectors["name"], hoverinfo="skip", showlegend=True))
+            x=vec["x"], y=vec["y"], z=np.full_like(vec["x"], vec["z"]),
+            mode="lines", line=dict(color=vec["color"], width=4),
+            name=vec["name"], hoverinfo="skip", showlegend=True))
     if stream is not None:
-        by = stream["color_by"]
-        c = stream["w"] if by == "w" else stream["z"]
-        c = np.nan_to_num(c, nan=0.0)
-        if by == "w":
+        c = stream_color(stream)
+        if stream["color_by"] == "w":
             m = float(max(np.percentile(np.abs(c), 99), 1.0))
             cs, lo, hi, ttl = "RdBu_r", -m, m, "w (m/s)"
         else:
@@ -268,10 +301,13 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
             hovertemplate="z %{z:.2f} km · w %{customdata:.1f} m/s"
                           "<extra>click: select</extra>",
             name=stream["name"], showlegend=True))
-        # pinned streamlines (NaN-separated, a colour per point) and their seeds, then
-        # the selected streamline and its seed: all filled in by the app on a click
+        # pinned streamlines (NaN-separated, a PIN_COLORS index per point) and their
+        # seeds, then the selected streamline and its seed: all filled in by the app on a
+        # click
         fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="lines", meta="pinned",
-                                   line=dict(color=[], width=7), connectgaps=False,
+                                   line=dict(color=[], colorscale=PIN_SCALE, cmin=-0.5,
+                                             cmax=len(PIN_COLORS) - 0.5, width=7),
+                                   connectgaps=False,
                                    hovertemplate="pinned streamline<extra>click: select"
                                                  "</extra>",
                                    name="Pinned streamlines", showlegend=False))
@@ -286,6 +322,18 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
                                    marker=dict(color=SELECTED, size=6, symbol="diamond",
                                                line=dict(color=BG, width=1)),
                                    hoverinfo="skip", name="Seed", showlegend=False))
+        # where the pointer is on the streamline card's plot, one marker per line
+        fig.add_trace(go.Scatter3d(x=[], y=[], z=[], mode="markers", meta="cursor",
+                                   marker=dict(color=[], size=7, symbol="circle",
+                                               line=dict(color=BG, width=2)),
+                                   hoverinfo="skip", name="Cursor", showlegend=False))
+        if stream.get("seed_box") is not None:  # outline of the seed box at seed height
+            s0, s1, t0, t1 = stream["seed_box"]
+            fig.add_trace(go.Scatter3d(
+                x=[s0, s1, s1, s0, s0], y=[t0, t0, t1, t1, t0],
+                z=[stream["seed_z"]] * 5, mode="lines", hoverinfo="skip",
+                line=dict(color=MUTED, width=2, dash="dash"), name="Seed box",
+                showlegend=True))
     x0, x1, y0, y1 = box
     lx, ly = abs(x1 - x0), abs(y1 - y0)
     ax = dict(backgroundcolor=BG, gridcolor=GRID, zerolinecolor=GRID, color=MUTED,

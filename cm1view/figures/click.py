@@ -15,6 +15,7 @@ import param
 from panel.reactive import ReactiveHTML
 
 from .cards import ANN_FIELDS, _hint
+from .draw.base import ann_on
 
 PLACE = {"Click: nothing": "", "Click to add text": "text",
          "Click to add a marker": "marker", "Click twice: arrow (text, then tip)": "arrow",
@@ -33,7 +34,9 @@ GRAB = 0.06  # how near (a fraction of the panel) a drag must start to grab a po
 class ClickImage(ReactiveHTML):
     """An image that reports where it is clicked or dragged, as fractions of its width
     and height from the upper left: click = [x, y, n], drag = [x0, y0, x1, y1, n] (n: a
-    count, so the same spot twice is a new event).  band: show the box being dragged."""
+    count, so the same spot twice is a new event).  band: show the box being dragged.
+    src and css are set on the image by scripts, not in the template: a template that
+    changes is rendered again, which could leave a second image (a stale preview)."""
 
     src = param.String(default="")
     css = param.String(default="")
@@ -43,12 +46,15 @@ class ClickImage(ReactiveHTML):
 
     _template = (
         '<div id="wrap" style="position:relative;line-height:0">'
-        '<img id="img" src="${src}" style="${css}" draggable="false" '
+        '<img id="img" draggable="false" '
         'onmousedown="${script(\'down\')}" onmousemove="${script(\'move\')}" '
-        'onmouseup="${script(\'up\')}" onmouseleave="${script(\'leave\')}"></img>'
+        'onmouseup="${script(\'up\')}" onmouseleave="${script(\'leave\')}"/>'
         '<div id="box" style="position:absolute;display:none;pointer-events:none;'
         'border:1px dashed #f59e0b;background:rgba(245,158,11,0.12)"></div></div>')
     _scripts = {
+        "render": "if (data.src) img.src = data.src; img.style.cssText = data.css;",
+        "src": "if (data.src) img.src = data.src;",
+        "css": "img.style.cssText = data.css;",
         "down": """
             const e = state.event;
             if (e.button !== 0) return;
@@ -282,10 +288,10 @@ class FigureClick:
             self.xs_mode.value = "fixed"
         finally:
             self._hold = hold
-        if not any(c.type == "line" and c.w["on"].value for c in self.cards):
-            self._add_layer("line")  # (shows the line, and the section settings)
         self._show_region()
-        self._status(f"Section A ({a[0]:g}, {a[1]:g}) → B ({b[0]:g}, {b[1]:g}) km.")
+        line = any(c.type == "line" and c.w["on"].value for c in self.cards)
+        self._status(f"Section A ({a[0]:g}, {a[1]:g}) → B ({b[0]:g}, {b[1]:g}) km."
+                     + ("" if line else " Add a <b>Section line</b> layer to draw it here."))
         self.request()
 
     def _place_area(self, j, p1, p2):
@@ -296,8 +302,8 @@ class FigureClick:
         d = self._place_origin.get(j, (0.0, 0.0))
         xs = sorted((p1[0] + d[0], p2[0] + d[0]))
         ys = sorted((p1[1] + d[1], p2[1] + d[1]))
-        box = [round(v, 2) for v in (*xs, *ys)]
-        self.spec["domain"] = dict(self.spec["domain"], box=box)
+        self._set_box([*xs, *ys])
+        box = self.spec["domain"]["box"]
         hold, self._hold = self._hold, True
         try:
             self.dom.value = "box"
@@ -313,7 +319,7 @@ class FigureClick:
         best = None
         for r in self.ann_rows:
             a = r.collect()
-            if int(a.get("panel", -1)) not in (-1, j):
+            if not ann_on(a, j):
                 continue
             for grip, (u, w) in _grips(a, b, start).items():
                 dist = math.hypot(u - start[0], w - start[1])

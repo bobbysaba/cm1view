@@ -28,7 +28,7 @@ class FigureCombo:
         self.part_add = pn.widgets.Button(
             name="+ Add a part", button_type="primary", button_style="outline", height=32,
             description="A copy of this part, to change into another kind of panels "
-                        "(e.g. with “New figure from …” above)")
+                        "(Panels show, in the Panels tab)")
         self.part_rm = pn.widgets.Button(name="Remove this part", button_type="light",
                                          button_style="outline", height=32)
         self.part_arr = pn.widgets.Select(name="Parts are", options={
@@ -61,7 +61,7 @@ class FigureCombo:
                 "size (the parts then keep their shares of it). Panel letters run on from "
                 "part to part."),
             self.part_sel, _grid(self.part_add, self.part_rm, self.part_arr),
-            self.part_title, self.part_size, self.part_note, collapsed=True)
+            self.part_title, self.part_size, self.part_note)
         self._show_parts()
 
     # ------------------------------------------------------------ the parts
@@ -84,8 +84,6 @@ class FigureCombo:
             self.part_title.visible = self.part_size.visible = multi
         self.parts_sec.title = (f"Figure parts ({len(self.parts)}: editing part "
                                 f"{self.part_i + 1})" if multi else "Figure parts")
-        self.start_hint.object = ('<div class="cv-hint">This part from</div>' if multi else
-                                  '<div class="cv-hint">New figure from</div>')
 
     def _switch_part(self, k):
         if self._hold or not self._multi_part() or k == self.part_i:

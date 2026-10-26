@@ -81,7 +81,8 @@ def test_upgrade_of_parts_keeps_each_parts_settings():
     from cm1view.figures import draw as figdraw
     part = dict(version=1, kind="plan", rows=2, cols=1, vary="time", times_s=[0.0, 60.0],
                 run=0, layers=[], runs=[dict(path="/b")], size=[4, 6], share=0.4,
-                font=dict(size=8), annotations=[dict(panel=1), dict(panel=-1)])
+                font=dict(size=8), annotations=[dict(panel=1), dict(panel=-1),
+                                                 dict(panel=[0, 1])])
     combo = dict(version=1, kind="combo", arrange="row", parts=[dict(part, share=None), part],
                  size=[8, 6], colorbar=dict(mode="parts"), runs=[dict(path="/b")])
     v2, _ = figdraw.upgrade(combo)
@@ -89,7 +90,7 @@ def test_upgrade_of_parts_keeps_each_parts_settings():
     assert [p["letter"] for p in v2["panels"]] == [0, 1, 2, 3]
     b = v2["blocks"][1]
     assert (b["rows"], b["cols"], b["share"]) == (2, 1, 0.4)
-    assert [a["panel"] for a in b["opts"]["annotations"]] == [1001, -1]
+    assert [a["panel"] for a in b["opts"]["annotations"]] == [1001, -1, [1000, 1001]]
     assert figdraw.block_view(v2, 1)["font"] == dict(size=8)
     assert figdraw.block_shares(v2) == pytest.approx([0.6, 0.4])
 
@@ -146,6 +147,21 @@ def test_version_2_panels_span_cells_and_share_colorbar_ends():
     assert figdraw._extends(spec, data) == {0: "both", 1: "both", 2: "neither"}
     fig = figdraw.draw(spec, data)
     assert len([a for a in fig.axes if a not in fig._cv_axes.values()]) == 2
+
+
+def test_animation_colorbar_ends_are_those_of_all_frames():
+    from cm1view.figures import draw as figdraw
+    spec, data = _v2_plan("none")
+    calm = {i: dict(d, L0=np.full((11, 11), 5.0)) for i, d in data.items()}
+    ends = figdraw.fill_ends(spec, calm)
+    assert ends == {(0, 0): "neither", (1, 0): "neither", (2, 0): "neither"}
+    ends = figdraw.fill_ends(spec, data, ends)  # a later frame past vmin / vmax
+    assert ends == {(0, 0): "max", (1, 0): "min", (2, 0): "neither"}
+    assert figdraw.fill_ends(spec, calm, ends) == ends  # (ends only grow)
+    fig = figdraw.draw(spec, calm, ends)  # the calm frame keeps panel 0's arrow
+    assert [fig._cv_axes[i].collections[0].norm.extend for i in (0, 1, 2)] == \
+        ["max", "min", "neither"]
+    assert spec["panels"][0]["layers"][0]["extend"] == "auto"  # (the spec untouched)
 
 
 def test_layers_take_the_panels_run_time_and_height():
@@ -266,3 +282,14 @@ def test_saved_spec_is_version_2_and_reopens_with_its_edits(ed, tmp_path):
     ed.spec_path.value = base + ".png"
     ed._load_spec()
     assert ed.collect()["edits"] == {"1": {"title": "edited"}}
+
+
+def test_annotation_in_several_panels():
+    from cm1view.figures.cards.distcard import parse_panels, panels_text
+    from cm1view.figures.draw.base import ann_on
+    assert [parse_panels(t) for t in ("", "all", "0", "2", "1, 3-4")] == \
+        [-1, -1, -1, 1, [0, 2, 3]]
+    assert panels_text([0, 2, 3]) == "1, 3-4" and panels_text(-1) == "" and panels_text(1) == "2"
+    a = dict(kind="text", panel=[0, 2])
+    assert [ann_on(a, i) for i in range(4)] == [True, False, True, False]
+    assert all(ann_on(dict(panel=-1), i) for i in range(4))

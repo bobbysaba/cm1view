@@ -50,6 +50,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         # where may carry a box size, (x, y, width, height) km, for area means;
         # tpin = None follows the time slider, otherwise a pinned time index
         self.points, self.results, self.xs_pts, self.box = [], [], [], None
+        self.seed_box = None  # where 3D streamlines start (None: the whole 3D region)
         self.fixes, self.trk_spec = {}, None  # meso track: {t: fix}, settings used
         self._hold = False
         self._drag_shift = False  # Shift held when the last map drag started
@@ -89,27 +90,18 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.mode.watch(self._on_mode)
         self.fill_var.param.watch(self._on_fill_var, "value")
         for w in (self.fill_mode, self.fill_style, self.fill_cmap, self.fill_rev,
-                  self.fill_nlev, self.vec_on, self.vec_frame, self.vec_color, self.vec_ref,
-                  self.vec_style):
+                  self.fill_nlev):
             w.param.watch(rm, "value")
-
-        def vec_vis(*e):
-            st = self.vec_style.value == "streamlines"
-            self.vec_density.name = "Streamline density" if st else "Arrows across view"
-            self.vec_ref.visible = not st
-
-        self.vec_style.param.watch(vec_vis, "value")
-        for w in (self.fill_lvl, self.fill_alpha, self.vec_lvl, self.vec_density):
+        for w in (self.fill_lvl, self.fill_alpha):
             w.param.watch(rm, "value_throttled")
         self.fill_auto.param.watch(self._on_fill_auto, "value")
         for w in (self.fill_min, self.fill_max):
             w.param.watch(lambda e: None if self.fill_auto.value else self.request_map(),
                           "value")
         for o in self.ovs:
-            for k in ("on", "var", "mode", "levels", "color", "negdash"):
-                o[k].param.watch(rm, "value")
-            for k in ("level", "width"):
-                o[k].param.watch(rm, "value_throttled")
+            self._wire_overlay(o)
+        for o in self.vecs:
+            self._wire_vec(o)
         self.storm.param.watch(self._on_storm, "value")
         rs = lambda *e: self.request_soundings()  # noqa: E731
         self.mean_btn.on_click(lambda e: self._add_mean())
@@ -139,12 +131,16 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.wunits.param.watch(unzoom("hodo", "prof_x"), "value")
         self.prof_top.param.watch(unzoom("prof_z", "prof_x"), "value")
         rx = lambda *e: self.request_xsec()  # noqa: E731
-        for w in (self.xs_cont, self.xs_levels, self.xs_vecs, self.xs_cmap, self.xs_rev,
-                  self.xs_ccolor, self.xs_negdash, self.xs_vframe, self.xs_vref,
-                  self.xs_vcolor):
+        for w in (self.xs_cmap, self.xs_rev, self.xs_fill_style):
             w.param.watch(rx, "value")
-        for w in (self.xs_cwidth, self.xs_vdensity):
-            w.param.watch(rx, "value_throttled")
+        self.xs_nlev.param.watch(rx, "value_throttled")
+        for o in self.xs_fills:
+            self._wire_fill(o, xs=True)
+        for o in self.xs_ovs:
+            self._wire_overlay(o, xs=True)
+        for o in self.xs_vecs:
+            self._wire_vec(o, xs=True)
+        self._xs_wired = True
         for w in (self.xs_min, self.xs_max):
             w.param.watch(lambda e: None if self.xs_auto.value else self.request_xsec(),
                           "value")
@@ -154,6 +150,8 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.v3_view.on_click(self._on_use_view)
         self.v3_render.on_click(lambda e: self.request_3d())
         self.v3_pick.on_click(self._on_pick_region)
+        self.st_seed_pick.on_click(self._on_pick_seeds)
+        self.st_seed_clear.on_click(self._clear_seed_box)
         self.workspace.param.watch(self._on_workspace, "value")
         self.panel_btn.on_click(lambda e: self._show_panel(False))
         self.mode.reclick = self._on_tool_reclick
@@ -166,8 +164,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         r3 = lambda *e: self.request_3d() if self.gen["3d"] else None  # noqa: E731
         w3 = [self.v3_ground, self.v3_floor, self.v3_floor_cmap, self.v3_floor_rev,
               self.v3_floor_range, self.v3_floor_min, self.v3_floor_max,
-              self.v3_res, self.sv_on, self.sv_frame, self.sv_ref,
-              self.sv_color, self.st_on, self.st_dir, self.st_frame, self.st_color]
+              self.v3_res, self.st_on, self.st_dir, self.st_frame, self.st_color]
         for o in self.isos:
             w3 += [o["on"], o["var"], o["val"], o["color"]]
         for w in w3:
@@ -175,8 +172,11 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.v3_floor.param.watch(self._floor_widgets, "value")
         self.v3_floor_range.param.watch(self._floor_widgets, "value")
         self._floor_widgets()
-        for w in [self.v3_ztop, self.v3_exag, self.v3_smooth, self.v3_floor_z, self.sv_lvl,
-                  self.sv_density, self.st_z, self.st_n, self.st_len] + \
+        for o in self.svs:
+            self._wire_sv(o)
+        self._sv_wired = True
+        for w in [self.v3_ztop, self.v3_exag, self.v3_smooth, self.v3_floor_z,
+                  self.st_z, self.st_n, self.st_len] + \
                 [o["op"] for o in self.isos]:
             w.param.watch(r3, "value_throttled")
         for o in self.isos:
@@ -206,6 +206,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self._update_track_view()
         self._update_3d_labels()
         self._update_region_html()
+        self._update_seed_box()
         self.clear_btn.on_click(self._on_clear_cache)
         self.pd_btn.on_click(self._on_pd_compute)
         self.pd_write.param.watch(lambda e: self.request_map(), "value")  # relabel
@@ -218,6 +219,80 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         if self.doc is not None:
             pn.state.add_periodic_callback(self._update_cache_html, period=3000)
         self._update_cache_html()
+
+    def _layer_request(self, xs):
+        """What a layer row's change redraws: the map, or (xs) the cross-section."""
+        return (lambda *e: self.request_xsec()) if xs else (lambda *e: self.request_map())
+
+    def _wire_fill(self, o, xs=False):
+        rq = self._layer_request(xs)
+        hold = "_hold_xs" if xs else "_hold"
+
+        def on_var(ev):  # the field's own colormap and range
+            d = self.F[ev.new]
+            setattr(self, hold, True)
+            try:
+                o["cmap"].value, o["rev"].value = d.cmap, False
+                if d.vrange:
+                    o["vmin"].value, o["vmax"].value = d.vrange
+                if "mode" in o:
+                    o["mode"].disabled = o["level"].disabled = d.ndim == 2
+            finally:
+                setattr(self, hold, False)
+            rq()
+
+        def on_auto(ev):
+            o["vmin"].disabled = o["vmax"].disabled = ev.new
+            if not ev.new and o["last"] is not None:
+                setattr(self, hold, True)
+                o["vmin"].value, o["vmax"].value = [round(v, 4) for v in o["last"]]
+                setattr(self, hold, False)
+            rq()
+
+        o["var"].param.watch(on_var, "value")
+        o["auto"].param.watch(on_auto, "value")
+        for k in ("on", "mode", "style", "cmap", "rev", "clip"):
+            if k in o:
+                o[k].param.watch(rq, "value")
+        for k in ("vmin", "vmax"):
+            o[k].param.watch(lambda e: None if o["auto"].value else rq(), "value")
+        for k in ("level", "alpha"):
+            if k in o:
+                o[k].param.watch(rq, "value_throttled")
+
+    def _wire_overlay(self, o, xs=False):
+        rq = self._layer_request(xs)
+        for k in ("on", "var", "mode", "levels", "color", "negdash"):
+            if k in o:
+                o[k].param.watch(rq, "value")
+        for k in ("level", "width"):
+            if k in o:
+                o[k].param.watch(rq, "value_throttled")
+
+    def _wire_vec(self, o, xs=False):
+        """A map (or xs: cross-section) vector layer's widgets redraw it (a new vector:
+        its reference arrow first, then one redraw)."""
+        rq = self._layer_request(xs)
+        for k in ("q", "style"):
+            if k in o:
+                o[k].param.watch(lambda e: self._vec_vis(o, e), "value")
+        for k in ("on", "q", "frame", "style", "ref", "color"):
+            if k in o:
+                o[k].param.watch(rq, "value")
+        for k in ("level", "density"):
+            if k in o:
+                o[k].param.watch(rq, "value_throttled")
+
+    def _wire_sv(self, o):
+        """A 3D vector layer's widgets re-render a scene shown or being rendered."""
+        r3 = lambda *e: self.request_3d() if self.gen["3d"] else None  # noqa: E731
+        o["q"].param.watch(lambda e: self._vec_vis(o, e), "value")
+        for k in ("on", "q", "frame", "ref", "color"):
+            o[k].param.watch(r3, "value")
+        for k in ("level", "density"):
+            o[k].param.watch(r3, "value_throttled")
+        for k in ("on", "q"):
+            o[k].param.watch(lambda e: self._update_3d_labels(), "value")
 
     def close(self):
         """The browser session ended: stop its jobs and free its threads and data
@@ -252,9 +327,8 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         if allowed != self._pd_allowed:
             self.pd_write.value = self._pd_allowed = allowed
         self.pd_write.disabled = not allowed
-        self._pd_button(self.pd_btn, [self.fill_var.value] +
-                        [o["var"].value for o in self.ovs if o["on"].value], self.t)
-        self._pd_button(self.xs_pd_btn, [self.xs_fill.value, self.xs_cont.value], self.t)
+        self._pd_button(self.pd_btn, self._shown_names(), self.t)
+        self._pd_button(self.xs_pd_btn, self._xs_names(), self.t)
 
     def _schedule(self, fn):
         if self._closed:  # session gone: late results are dropped

@@ -16,6 +16,7 @@ from bokeh.plotting import figure
 from .. import config
 from ..core import track as trk
 from ..theme import ACCENT
+from .numinput import FloatInput
 from .ui import _bokeh, _html, pd_empty, style_fig
 
 
@@ -27,7 +28,7 @@ class TrackPanel:
         metrics = trk.metrics(run)
         self.trk_metric = pn.widgets.Select(name="Track on", options=metrics,
                                             value=next(iter(metrics.values())), width=200)
-        self.trk_z = pn.widgets.FloatInput(name="Height (km)", value=1.0, step=0.25,
+        self.trk_z = FloatInput(name="Height (km)", value=1.0, step=0.25,
                                            start=0.0, end=float(run.z[-1]), width=90,
                                            visible=self.trk_metric.value != "uh")
         groups = self.F.groups()
@@ -43,15 +44,15 @@ class TrackPanel:
             width=110,
             description="Peak: the strongest point.  Centroid: the field-weighted centre "
                         "of the area around it beyond the cutoff (a smoother track)")
-        self.trk_cut = pn.widgets.FloatInput(
+        self.trk_cut = FloatInput(
             name="Centroid cutoff (%)", value=50.0, step=5.0, start=1.0, end=99.0,
             width=130, visible=False,
             description="The centroid area: where the smoothed field is beyond this "
                         "percentage of the way from the background (0) to the peak")
-        self.trk_radius = pn.widgets.FloatInput(
+        self.trk_radius = FloatInput(
             name="Search radius (km)", value=5.0, step=0.5, start=0.5, width=120,
             description="How far from the expected position to look at the next time")
-        self.trk_smooth = pn.widgets.FloatInput(
+        self.trk_smooth = FloatInput(
             name="Smoothing (km)", value=1.0, step=0.125, start=0.0, width=110,
             description="Smooth the field before picking the maximum, so the fix follows "
                         "the storm rather than single-grid-point noise (Gaussian: σ; "
@@ -61,7 +62,7 @@ class TrackPanel:
             value="gauss", width=110)
         self.trk_whole = pn.widgets.Checkbox(  # storm_tracking.ipynb: no search radius
             name="Search whole domain each time", value=False, margin=(5, 10, 14, 10))
-        self.trk_stop = pn.widgets.FloatInput(
+        self.trk_stop = FloatInput(
             name="Stop below", value=trk.METRIC_STOP[self.trk_metric.value], width=100,
             description="Tracking ends when the extreme in the search disc is no longer "
                         "beyond this (meso lost); empty: never")

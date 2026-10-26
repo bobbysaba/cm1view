@@ -4,13 +4,13 @@ import json
 
 import numpy as np
 
-from ...core import render, series as ser, swath
+from ...core import render, series as ser, swath, vectors
 from .. import draw as figdraw
 from ...core.run import FileBusy, MissingAtTime
 from .base import panel_ref, tindex, storm_motion
 
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame",  # -> data
-             "style", "reduce")
+             "style", "reduce", "vector")
 
 
 def section_ends(run, spec, t, center):
@@ -115,10 +115,10 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
             out[f"L{j}"] = np.asarray(a[j0:j1, i0:i1], dtype=np.float32)
         elif lay["type"] == "vectors":  # (at a height, or a model level: panels by level)
             mode = "level" if lay.get("mode") == "level" else "height"
-            u = F.plane("uinterp", t, mode, float(lay["z"]))[j0:j1, i0:i1]
-            v = F.plane("vinterp", t, mode, float(lay["z"]))[j0:j1, i0:i1]
-            u, v = _frame(run, u, v, lay["frame"], storm)
-            if lay.get("style") == "streamlines":  # the winds on a (thinned) grid
+            u, v = vectors.plane(F, lay.get("vector", "wind"), t, mode, float(lay["z"]),
+                                 lay["frame"], storm)
+            u, v = u[j0:j1, i0:i1], v[j0:j1, i0:i1]
+            if lay.get("style") == "streamlines":  # the vectors on a (thinned) grid
                 g = max(1, int(np.ceil(max(u.shape) / 300.0)))
                 out[f"L{j}_gx"], out[f"L{j}_gy"] = out["x"][::g], out["y"][::g]
                 out[f"L{j}_gu"] = np.asarray(u[::g, ::g], dtype=np.float32)
@@ -151,16 +151,6 @@ def reduce_layer(run, F, lay, t, fixes=None, progress=None):
     return swath.reduce(run, F, lay, t, centers, storm, progress)
 
 
-def _frame(run, u, v, frame, storm):
-    """Grid-relative winds -> the chosen frame."""
-    if frame == "ground":
-        return u + run.umove, v + run.vmove
-    if frame == "storm":
-        su, sv = storm if storm is not None else (run.umove, run.vmove)
-        return u + run.umove - su, v + run.vmove - sv
-    return u, v
-
-
 def _extract_xsec(run, F, spec, i, t, center, storm, out, progress):
     ends = section_ends(run, spec, t, center)
     if ends is None:
@@ -176,7 +166,7 @@ def _extract_xsec(run, F, spec, i, t, center, storm, out, progress):
         if lay["type"] in ("fill", "contour", "shade"):
             names += F.native_deps(lay["field"])
         elif lay["type"] == "vectors":
-            names += ["uinterp", "vinterp", "winterp"]
+            names += vectors.deps(F, lay.get("vector", "wind"))
     run.load_volumes([n for n in names if n in run.vars], t, progress=progress)
     s, fi, fj, (ex, ey) = render.section_coords(run, *ends)
     ztop, dz = float(xs["ztop"]), float(xs.get("dz", 0.025))
@@ -191,10 +181,12 @@ def _extract_xsec(run, F, spec, i, t, center, storm, out, progress):
             out[f"L{j}"] = render.sample_section(run, F.volume(lay["field"], t, storm),
                                                  fi, fj, zq)
         elif lay["type"] == "vectors":
-            u = render.sample_section(run, run.volume("uinterp", t), fi, fj, zq)
-            v = render.sample_section(run, run.volume("vinterp", t), fi, fj, zq)
-            w = render.sample_section(run, run.volume("winterp", t), fi, fj, zq)
-            u, v = _frame(run, u, v, lay["frame"], storm)
+            q = lay.get("vector", "wind")  # in the plane: along-section and vertical
+            u, v, w = (np.zeros((zq.size, s.size), np.float32) if a is None else
+                       render.sample_section(run, a, fi, fj, zq)
+                       for a in vectors.volumes(F, q, t))
+            if vectors.VECTORS[q].framed:
+                u, v = vectors.to_frame(run, u, v, lay["frame"], storm)
             if lay.get("style") == "streamlines":
                 gs, gz = max(1, int(np.ceil(s.size / 300.0))), max(1, int(np.ceil(zq.size / 200.0)))
                 out[f"L{j}_gx"], out[f"L{j}_gy"] = out["x"][::gs], zq[::gz]

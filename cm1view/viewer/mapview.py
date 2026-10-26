@@ -16,7 +16,7 @@ from bokeh.plotting import figure
 from bokeh.transform import transform
 
 from .. import pdecomp
-from ..core import render, track as trk
+from ..core import render, track as trk, vectors
 from ..core.run import FileBusy, MissingAtTime
 from ..core.fields import palette
 from ..theme import ACCENT, BG, GRID, MUTED
@@ -60,29 +60,21 @@ class MapView:
         self.poly_r = fig.multi_polygons(xs="xs", ys="ys", source=self.poly_src,
                                          fill_color=transform("val", self.mapper),
                                          line_color=None, visible=False)
+        self.fill_r = []  # the more fills' glyphs (Widgets._add_fill)
         self.ov_r = []
         for _ in self.ovs:
-            ps, ns = ColumnDataSource(dict(EMPTY_LINES)), ColumnDataSource(dict(EMPTY_LINES))
-            pr = fig.multi_line("xs", "ys", source=ps, line_color="#ffffff", line_width=1.4)
-            nr = fig.multi_line("xs", "ys", source=ns, line_color="#ffffff", line_width=1.4,
-                                line_dash="dashed")
-            self.ov_r.append((ps, ns, pr, nr))
-        self.vec_src = ColumnDataSource(dict(EMPTY_VEC))
-        self.vec_seg = fig.segment("x0", "y0", "x1", "y1", source=self.vec_src,
-                                   line_color="#e5e7eb", line_width=1.2)
-        self.vec_head = fig.scatter("x1", "y1", source=self.vec_src, marker="triangle",
-                                    angle="angle", size=6, color="#e5e7eb")
-        self.sl2_src = ColumnDataSource(dict(EMPTY_LINES))
-        self.sl2_line = fig.multi_line("xs", "ys", source=self.sl2_src, line_color="#e5e7eb",
-                                       line_width=1.1)
-        self.sl2_head_src = ColumnDataSource(dict(x=[], y=[], angle=[]))
-        self.sl2_head = fig.scatter("x", "y", source=self.sl2_head_src, marker="triangle",
-                                    angle="angle", size=7, color="#e5e7eb")
+            self._ov_glyphs(fig)
+        self.vec_r = []  # each vector layer's glyphs (Widgets._add_vec)
+        for _ in self.vecs:
+            self._vec_glyphs(fig)
 
         self.box_src = ColumnDataSource(dict(left=[], right=[], bottom=[], top=[]))
         fig.quad(left="left", right="right", bottom="bottom", top="top", source=self.box_src,
                  fill_color=ACCENT, fill_alpha=0.06, line_color=ACCENT, line_dash="dashed",
                  line_width=1.5)
+        self.seed_src = ColumnDataSource(dict(left=[], right=[], bottom=[], top=[]))
+        fig.quad(left="left", right="right", bottom="bottom", top="top", source=self.seed_src,
+                 fill_alpha=0, line_color="#e5e7eb", line_dash="dotted", line_width=1.5)
         self.xs_line_src = ColumnDataSource(dict(x=[], y=[]))
         fig.line("x", "y", source=self.xs_line_src, line_color=ACCENT, line_width=2.5)
         self.xs_pt_src = ColumnDataSource(dict(x=[], y=[], label=[]))
@@ -147,14 +139,97 @@ class MapView:
                 f"relative to the domain motion (umove, vmove) = ({run.umove:g}, "
                 f"{run.vmove:g}) m/s{why}")
 
+    def _fill_top(self):
+        """The top fill renderer: what the next fill, or the first contours, go above."""
+        return self.fill_r[-1]["poly"] if self.fill_r else self.poly_r
+
+    def _fill_glyphs(self):
+        """Image, bands and colorbar for one more fill, above the other fills and
+        under the contours."""
+        fig = self.fig
+        mapper = LinearColorMapper(palette=palette("viridis"), low=0, high=1,
+                                   nan_color="#00000000")
+        src = ColumnDataSource(dict(image=[np.full((2, 2), np.nan, np.float32)],
+                                    **{k: self.img_src.data[k] for k in ("x", "y", "dw", "dh")}))
+        poly_src = ColumnDataSource(dict(xs=[], ys=[], val=[]))
+        img = fig.image(image="image", x="x", y="y", dw="dw", dh="dh", source=src,
+                        color_mapper=mapper)
+        poly = fig.multi_polygons(xs="xs", ys="ys", source=poly_src,
+                                  fill_color=transform("val", mapper), line_color=None,
+                                  visible=False)
+        prev = self._fill_top()
+        rs = [r for r in fig.renderers if r is not img and r is not poly]
+        i = rs.index(prev) + 1
+        fig.renderers = rs[:i] + [img, poly] + rs[i:]
+        cbar = ColorBar(color_mapper=mapper, width=12, padding=6, title="",
+                        title_text_color=MUTED, title_text_font_size="11px",
+                        title_text_font_style="normal", background_fill_color=BG,
+                        major_label_text_color=MUTED, major_tick_line_color=None,
+                        bar_line_color=None)
+        fig.add_layout(cbar, "right")
+        self.fill_r.append(dict(mapper=mapper, src=src, poly_src=poly_src, img=img,
+                                poly=poly, cbar=cbar))
+
+    def _ov_glyphs(self, fig=None):
+        """Lines (and dashed negatives) for one more contour overlay, drawn above the
+        fill and the other overlays but under the vectors and markers."""
+        fig = fig or self.fig
+        ps, ns = ColumnDataSource(dict(EMPTY_LINES)), ColumnDataSource(dict(EMPTY_LINES))
+        prev = self.ov_r[-1][3] if self.ov_r else self._fill_top()
+        pr = fig.multi_line("xs", "ys", source=ps, line_color="#ffffff", line_width=1.4)
+        nr = fig.multi_line("xs", "ys", source=ns, line_color="#ffffff", line_width=1.4,
+                            line_dash="dashed")
+        rs = [r for r in fig.renderers if r is not pr and r is not nr]
+        i = rs.index(prev) + 1
+        fig.renderers = rs[:i] + [pr, nr] + rs[i:]
+        self.ov_r.append((ps, ns, pr, nr))
+
+    def _vec_glyphs(self, fig=None):
+        """Arrows (shafts and heads) and streamlines (lines and heads) for one more
+        vector layer, above the contours and the other vectors."""
+        fig = fig or self.fig
+        src, sl_src = ColumnDataSource(dict(EMPTY_VEC)), ColumnDataSource(dict(EMPTY_LINES))
+        sh_src = ColumnDataSource(dict(x=[], y=[], angle=[]))
+        g = dict(src=src, sl_src=sl_src, sh_src=sh_src)
+        g["seg"] = fig.segment("x0", "y0", "x1", "y1", source=src, line_color="#e5e7eb",
+                               line_width=1.2)
+        g["head"] = fig.scatter("x1", "y1", source=src, marker="triangle", angle="angle",
+                                size=6, color="#e5e7eb")
+        g["sl"] = fig.multi_line("xs", "ys", source=sl_src, line_color="#e5e7eb",
+                                 line_width=1.1)
+        g["sh"] = fig.scatter("x", "y", source=sh_src, marker="triangle", angle="angle",
+                              size=7, color="#e5e7eb")
+        g["rs"] = [g["seg"], g["head"], g["sl"], g["sh"]]
+        prev = (self.vec_r[-1]["rs"][-1] if self.vec_r else
+                self.ov_r[-1][3] if self.ov_r else self._fill_top())
+        rs = [r for r in fig.renderers if r not in g["rs"]]
+        i = rs.index(prev) + 1
+        fig.renderers = rs[:i] + g["rs"] + rs[i:]
+        self.vec_r.append(g)
+
+    def _storm_vecs(self):
+        """Is a storm-relative wind shown on the map?"""
+        return any(o["on"].value and o["q"].value == "wind" and o["frame"].value == "storm"
+                   for o in self.vecs)
+
     def _storm_note(self, names, t):
         """'' or the storm-motion note when any of `names` is storm-relative."""
         if any(n and n in self.F and self.F[n].storm for n in names):
             return self._field_storm(t)
         return None
 
+    @staticmethod
+    def _spec_names(spec):
+        """The fields a map spec draws."""
+        return [spec["fill"]["var"]] + [o["var"] for o in spec.get("fills", []) + spec["ov"]
+                                        if o["on"]]
+
+    def _shown_names(self):
+        return [self.fill_var.value] + [o["var"].value for o in self.fills + self.ovs
+                                        if o["on"].value]
+
     def _storm_fields_shown(self):
-        names = [self.fill_var.value] + [o["var"].value for o in self.ovs if o["on"].value]
+        names = self._shown_names()
         return any(self.F[n].storm for n in names if n in self.F)
 
     def _storm_motion(self):
@@ -178,14 +253,20 @@ class MapView:
                       auto=self.fill_auto.value, vmin=self.fill_min.value or 0.0,
                       vmax=self.fill_max.value or 0.0, nlev=self.fill_nlev.value,
                       alpha=self.fill_alpha.value),
+            fills=[dict(on=o["on"].value, var=o["var"].value, mode=o["mode"].value,
+                        level=float(o["level"].value), style=o["style"].value,
+                        cmap=o["cmap"].value, rev=o["rev"].value, auto=o["auto"].value,
+                        vmin=o["vmin"].value or 0.0, vmax=o["vmax"].value or 0.0, nlev=15,
+                        alpha=o["alpha"].value, clip=o["clip"].value) for o in self.fills],
             ov=[dict(on=o["on"].value, var=o["var"].value, mode=o["mode"].value,
                      level=float(o["level"].value), levels=o["levels"].value,
                      color=o["color"].value, width=o["width"].value,
                      negdash=o["negdash"].value) for o in self.ovs],
-            vec=dict(on=self.vec_on.value, level=self.vec_lvl.value, frame=self.vec_frame.value,
-                     style=self.vec_style.value,
-                     density=self.vec_density.value, ref=self.vec_ref.value or 20.0,
-                     color=self.vec_color.value),
+            vecs=[dict(on=o["on"].value, q=o["q"].value, level=float(o["level"].value),
+                       frame=o["frame"].value, style=o["style"].value,
+                       density=int(o["density"].value),
+                       ref=o["ref"].value or vectors.VECTORS[o["q"].value].ref,
+                       color=o["color"].value) for o in self.vecs],
         )
 
     def request_map(self):
@@ -200,7 +281,7 @@ class MapView:
             return
         try:
             if any(pdecomp.is_pdecomp(self.F, n) for n in
-                   [spec["fill"]["var"]] + [o["var"] for o in spec["ov"] if o["on"]]):
+                   self._spec_names(spec)):
                 pdecomp.source(self.run, spec["t"])  # file version tag, off the page thread
             res = render.compute_map(self.F, spec)
         except (MissingAtTime, FileBusy) as e:  # fields at other times only / being written
@@ -214,7 +295,7 @@ class MapView:
     def _apply_map(self, res, spec, g):
         if g != self.gen["map"]:
             return
-        names = [spec["fill"]["var"]] + [o["var"] for o in spec["ov"] if o["on"]]
+        names = self._spec_names(spec)
         self._pd_button(self.pd_btn, names, spec["t"])
         if isinstance(res, Exception):
             if isinstance(res, FileBusy):
@@ -243,6 +324,24 @@ class MapView:
                 self.poly_r.glyph.fill_alpha = fs["alpha"]
             note = self._storm_note([fs["var"]], spec["t"])
             self.cbar_label.axis_label = F[fs["var"]].title + (f" · {note[1]}" if note else "")
+        for f, fres, g in zip(spec["fills"], res["fills"], self.fill_r):
+            g["cbar"].visible = fres is not None
+            if fres is None:
+                g["img"].visible = g["poly"].visible = False
+                continue
+            g["mapper"].update(palette=fres["palette"], low=fres["lo"], high=fres["hi"])
+            g["cbar"].title = F[f["var"]].name
+            image = fres["style"] == "image"
+            if image:
+                g["src"].data = fres["image"]
+                g["img"].glyph.global_alpha = f["alpha"]
+            else:
+                g["poly_src"].data = fres["poly"]
+                g["poly"].glyph.fill_alpha = f["alpha"]
+            g["img"].visible, g["poly"].visible = image, not image
+        for o, f, fres in zip(self.fills, spec["fills"], res["fills"]):
+            if fres is not None and o["var"].value == f["var"]:
+                o["last"] = (fres["lo"], fres["hi"])  # (Auto range off starts from it)
         for o, ores, (ps, ns, pr, nr) in zip(spec["ov"], res["ov"], self.ov_r):
             if ores is None:
                 ps.data, ns.data = dict(EMPTY_LINES), dict(EMPTY_LINES)
@@ -252,21 +351,14 @@ class MapView:
                 r.glyph.line_color = o["color"]
                 r.glyph.line_width = o["width"]
             nr.glyph.line_dash = "dashed" if o["negdash"] else "solid"
-        if res["vec"] is not None:
-            self.vec_src.data = res["vec"]
-            self.vec_seg.glyph.line_color = spec["vec"]["color"]
-            self.vec_head.glyph.fill_color = self.vec_head.glyph.line_color = spec["vec"]["color"]
-        else:
-            self.vec_src.data = dict(EMPTY_VEC)
-        if res.get("stream") is not None:
-            self.sl2_src.data, self.sl2_head_src.data = res["stream"]
-            col = spec["vec"]["color"]
-            self.sl2_line.glyph.line_color = col
-            self.sl2_head.glyph.fill_color = self.sl2_head.glyph.line_color = col
-        else:
-            self.sl2_src.data = dict(EMPTY_LINES)
-            self.sl2_head_src.data = dict(x=[], y=[], angle=[])
-
+        for o, vres, g in zip(spec["vecs"], res["vecs"], self.vec_r):
+            vres = vres or {}
+            g["src"].data = vres.get("vec") or dict(EMPTY_VEC)
+            g["sl_src"].data, g["sh_src"].data = vres.get("stream") or (
+                dict(EMPTY_LINES), dict(x=[], y=[], angle=[]))
+            for r in g["rs"]:
+                r.glyph.line_color = o["color"]
+            g["head"].glyph.fill_color = g["sh"].glyph.fill_color = o["color"]
         def lvl_txt(mode, level, name):
             if F[name].ndim == 2:
                 return ""
@@ -277,13 +369,16 @@ class MapView:
             return " column max" if mode == "colmax" else " column min"
 
         parts = [f'<b>{F[fs["var"]].label}</b>{lvl_txt(fs["mode"], fs["level"], fs["var"])}']
+        for f in spec["fills"]:
+            if f["on"]:
+                parts.append(f'+ <b>{F[f["var"]].label}</b>'
+                             f'{lvl_txt(f["mode"], f["level"], f["var"])}')
         for n, o in enumerate(spec["ov"]):
             if o["on"]:
                 parts.append(f'<span style="color:{o["color"]}">— {F[o["var"]].label}'
                              f'{lvl_txt(o["mode"], o["level"], o["var"])}</span>')
         self._update_map_labels(spec, lvl_txt)
-        note = self._storm_note([fs["var"]] + [o["var"] for o in spec["ov"] if o["on"]],
-                                spec["t"])
+        note = self._storm_note(self._spec_names(spec), spec["t"])
         if note:
             parts.append(f'<span>storm-relative vorticity {note[2]}</span>')
         if any(pdecomp.is_pdecomp(F, n) for n in names):
@@ -298,9 +393,18 @@ class MapView:
 
     def _update_map_labels(self, spec, lvl_txt):
         F, d = self.F, self.map_drawer
-        for n, o in enumerate(spec["ov"]):
-            what = f' · {F[o["var"]].name}{lvl_txt(o["mode"], o["level"], o["var"])}' \
-                if o["on"] else ""
-            d.label(f"ov{n}", f"Contours {'AB'[n]}{what.replace(' @ ', ' ')}")
-        v = spec["vec"]
-        d.label("vec", f'Winds · {v["level"]:g} km' if v["on"] else "Winds")
+        for key, name, layers in (("fills", "More fills", spec["fills"]),
+                                  ("ov", "Contours", spec["ov"])):
+            on = [o for o in layers if o["on"]]
+            if len(on) == 1:
+                o = on[0]
+                what = f'{F[o["var"]].name}{lvl_txt(o["mode"], o["level"], o["var"])}'
+                d.label(key, f"{name} · {what.replace(' @ ', ' ')}")
+            else:
+                d.label(key, f"{name} · {len(on)}" if on else name)
+        on = [o for o in spec["vecs"] if o["on"]]
+        if len(on) == 1:
+            d.label("vec", f'Vectors · {vectors.VECTORS[on[0]["q"]].label} '
+                           f'{on[0]["level"]:g} km')
+        else:
+            d.label("vec", f"Vectors · {len(on)}" if on else "Vectors")

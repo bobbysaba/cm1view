@@ -9,14 +9,48 @@ from functools import partial
 
 import numpy as np
 import panel as pn
-from bokeh.models import ColumnDataSource, HoverTool, LinearAxis, Range1d, Span
+from bokeh.events import MouseLeave, MouseMove
+from bokeh.models import ColumnDataSource, CustomJS, HoverTool, LinearAxis, Range1d, Span
 from bokeh.plotting import figure
 
 from .. import pdecomp
-from ..core import volume3d
+from ..core import vectors, volume3d
 from ..core.run import FileBusy, MissingAtTime
 from ..theme import GRID, MUTED
 from .ui import FRAME_SHORT, _bokeh, _html, style_fig
+
+# The pointer on the streamline card's plot, in the browser: snap it to the nearest
+# sample of each line and put it in the `at` Span (synced to the server, which moves the
+# 3D cursor) only when a sample under it changes, at most every 150 ms. Each move of the
+# 3D cursor makes plotly.js recompute and redraw the whole scene, meshes and all.
+CURSOR_JS = """
+const st = at._cv ?? (at._cv = {sent: undefined, timer: null, last: 0, x: null, key: ""})
+const x = cb_obj.event_name === "mouseleave" ? null : cb_obj.x
+if (at.location == null && x != null) st.sent = undefined  // cleared by the server
+let key = ""
+if (x != null) {
+  for (const s of [sel.data.s, ...pins.data.xs]) {
+    const n = s ? s.length : 0
+    if (!n || x < s[0] || x > s[n - 1]) { key += n + ":-,"; continue }
+    let lo = 0, hi = n - 1
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (s[m] <= x) lo = m; else hi = m }
+    key += n + ":" + (x - s[lo] <= s[hi] - x ? lo : hi) + ","
+  }
+}
+st.x = x
+st.key = key
+const send = () => {
+  st.timer = null
+  if (st.key === st.sent) return
+  st.sent = st.key
+  st.last = Date.now()
+  at.location = st.x
+}
+if (st.timer == null && key !== st.sent) {
+  const wait = 150 - (Date.now() - st.last)
+  if (wait <= 0) send(); else st.timer = setTimeout(send, wait)
+}
+"""
 
 
 class View3DPanel:
@@ -77,6 +111,15 @@ class View3DPanel:
         fig.add_tools(HoverTool(renderers=[r], mode="vline",
                                 tooltips=[("s", "@s{0.00} km"), ("value", "@v{0.000}"),
                                           ("z", "@z{0.00} km")]))
+        # the pointer's distance, snapped and throttled in the browser (CURSOR_JS)
+        self.sl_at = Span(location=None, dimension="height", line_color=MUTED,
+                          line_alpha=0.7, line_width=1)
+        fig.add_layout(self.sl_at)
+        cb = CustomJS(args=dict(at=self.sl_at, sel=self.sl_src, pins=self.sl_pins_src),
+                      code=CURSOR_JS)
+        fig.js_on_event(MouseMove, cb)
+        fig.js_on_event(MouseLeave, cb)
+        self.sl_at.on_change("location", lambda attr, old, new: self._sl_cursor_at(new))
         self.sl_fig = fig
         self.sl_card = pn.Column(
             pn.Row(self.sl_info, self.sl_field, self.sl_pin, self.sl_big, self.sl_clear,
@@ -102,6 +145,15 @@ class View3DPanel:
         self._sl_pins = []    # pinned: dict(seed, line in this scene or None, color, no)
         self._pin_no = 0
         self._pin_of = []     # pin index of each point of the "pinned" trace
+        self._sl_samples = []  # sampled lines: (first index, distances s, colour)
+        self._sl_cursor = None  # distance under the pointer on the card's plot
+        self._sl_cursor_pts = []  # cursor markers now in the scene
+        self._sl_dim = False  # the streamlines are greyed (DIM_SCALE)
+        self._sl_scale = None  # their own colour scale
+        self._hl_line = None  # line now in the "selected" trace
+        self._pl_key = ()  # (line, colour) of each pin now in the "pinned" trace
+        self._fig3d = None    # the scene shown: the streamline traces are updated in it
+        self._st_cache = (None, None)  # (inputs, streamlines) of the last tracing
 
     # ================================================================ 3D
     def request_3d(self):
@@ -122,13 +174,15 @@ class View3DPanel:
                                color=d["color"].value, op=float(d["op"].value))
                           for d in self.isos if d["on"].value],
                     storm=self._storm_motion(), fstorm=self._field_storm(self.t),
-                    vec=dict(on=self.sv_on.value, level=float(self.sv_lvl.value),
-                             frame=self.sv_frame.value, density=int(self.sv_density.value),
-                             ref=float(self.sv_ref.value or 20.0), color=self.sv_color.value),
+                    vecs=[dict(q=o["q"].value, level=float(o["level"].value),
+                               frame=o["frame"].value, density=int(o["density"].value),
+                               ref=float(o["ref"].value or vectors.VECTORS[o["q"].value].ref),
+                               color=o["color"].value) for o in self.svs if o["on"].value],
                     stream=dict(on=self.st_on.value, z=float(self.st_z.value),
                                 n=int(self.st_n.value), length=float(self.st_len.value),
                                 dir=self.st_dir.value, frame=self.st_frame.value,
-                                color_by=self.st_color.value))
+                                color_by=self.st_color.value,
+                                seed_box=self._seed_in_box()))
         self.v3_status.object = '<div class="cv-status"><span class="busy">● Rendering…' \
                                 '</span></div>'
         self.pools["3d"].submit(self._3d_job, spec, g)
@@ -172,34 +226,44 @@ class View3DPanel:
                 m.update(color=iso["color"], opacity=iso["op"], name=name)
                 meshes.append(m)
             ground = self._floor(spec["ground"], spec["box"], t, spec["fstorm"])
-            vectors = stream = None
-            vs, ss = spec["vec"], spec["stream"]
-            if vs["on"]:
-                cu, cv = self._frame_offset(vs["frame"], spec["storm"])
-                u = F.plane("uinterp", t, "height", vs["level"]) - cu
-                v = F.plane("vinterp", t, "height", vs["level"]) - cv
+            vecs, stream, ss = [], None, spec["stream"]
+            for vs in spec["vecs"]:
+                u, v = vectors.plane(F, vs["q"], t, "height", vs["level"], vs["frame"],
+                                     spec["storm"])
                 X, Y, _ = volume3d.surface_vectors(run, u, v, spec["box"], vs["density"],
                                                    vs["ref"])
                 zlev = max(vs["level"], float(run.z[0]))
                 # drawn at least 2% of the scene height up: right at z = 0 the opaque
                 # reflectivity floor hides them (depth-buffer ties); label keeps zlev
-                vectors = dict(x=X, y=Y, z=max(zlev, 0.02 * spec["ztop"]), color=vs["color"],
-                               name=f'Winds @ {zlev * 1000:.0f} m ({FRAME_SHORT[vs["frame"]]})')
+                vecs.append(dict(x=X, y=Y, z=max(zlev, 0.02 * spec["ztop"]), color=vs["color"],
+                                 name=f'{vectors.label(vs["q"], vs["frame"])} @ '
+                                      f'{zlev * 1000:.0f} m'))
             if ss["on"]:
-                stream = volume3d.streamlines(
-                    run, run.volume("uinterp", t), run.volume("vinterp", t),
-                    run.volume("winterp", t), spec["box"], spec["ztop"], ss["z"], ss["n"],
-                    ss["length"], ss["dir"], self._frame_offset(ss["frame"], spec["storm"]))
+                # traced again only when what they depend on changed: an isosurface or
+                # floor edit keeps the same lines (and the selection and pins on them)
+                off = self._frame_offset(ss["frame"], spec["storm"])
+                key = (id(run), t, spec["box"], spec["ztop"], ss["z"], ss["n"],
+                       ss["length"], ss["dir"], off, ss["seed_box"])
+                if self._st_cache[0] == key:
+                    stream = self._st_cache[1]
+                else:
+                    stream = volume3d.streamlines(
+                        run, run.volume("uinterp", t), run.volume("vinterp", t),
+                        run.volume("winterp", t), spec["box"], spec["ztop"], ss["z"],
+                        ss["n"], ss["length"], ss["dir"], off, seed_box=ss["seed_box"])
+                    self._st_cache = (key, stream)
+                stream = dict(stream) if stream is not None else None
                 if stream is None:
                     notes.append("streamlines: none (calm or outside region)")
                 else:
-                    stream.update(color_by=ss["color_by"],
+                    stream.update(color_by=ss["color_by"], seed_box=ss["seed_box"],
+                                  seed_z=max(ss["z"], float(run.z[0])),
                                   name=f'Streamlines ({FRAME_SHORT[ss["frame"]]}, '
                                        f'{stream["n"]})')
             title = (f"t = {run.time_label(t)} · "
                      f"{'full res' if stride == 1 else f'1/{stride} res'}")
             fig = volume3d.scene_figure(meshes, ground, spec["box"], spec["ztop"],
-                                        spec["exag"], title, vectors=vectors, stream=stream,
+                                        spec["exag"], title, vectors=vecs, stream=stream,
                                         camera=self.v3_cam.value, dragmode=self.v3_drag.value,
                                         revision=f"cam{self._cam_rev}")
             nf = sum(len(m["faces"]) for m in meshes)
@@ -292,8 +356,20 @@ class View3DPanel:
         line = self._seed_line(s3["stream"], self._sl_seed)
         for p in self._sl_pins:
             p["line"] = self._seed_line(s3["stream"], p["seed"])
+        # keep the current view: Panel copies each rotate/zoom into the shown figure, and
+        # once that camera has been sent back (any push of the figure), plotly's
+        # uirevision sees the preset camera as a change and jumps back to it
+        old = self.plot3d.object
+        if old is not None and old.layout.scene.camera is not None:
+            fig.update_layout(scene_camera=old.layout.scene.camera)
+        # the highlights go into the new figure before it is shown, so they travel with
+        # it; the old scene's cursor samples point into the old lines
+        self._fig3d, self._sl_samples, self._sl_cursor_pts = fig, [], []
+        _, base = self._trace("stream")
+        self._sl_scale = base.line.colorscale if base is not None else None
+        self._sl_dim, self._hl_line, self._pl_key = False, None, ()
+        self._select_line(line)
         self.plot3d.object = fig
-        self._select_line(line, push=False)
         self.plot3d.visible = True
         extra = (" · " + " · ".join(notes)) if notes else ""
         self.v3_status.object = (f'<div class="cv-status">{nf:,} triangles · '
@@ -359,9 +435,8 @@ class View3DPanel:
             self._set_status(f'Pressure decomposition for {self.run.time_label(t)} computed '
                              f'in {res["elapsed"]:.0f} s with {pdecomp.script_name()}; {where}')
             self.F.forget(t, pdecomp.NAMES)
-        self._pd_button(self.pd_btn, [self.fill_var.value] +
-                        [o["var"].value for o in self.ovs if o["on"].value], self.t)
-        self._pd_button(self.xs_pd_btn, [self.xs_fill.value, self.xs_cont.value], self.t)
+        self._pd_button(self.pd_btn, self._shown_names(), self.t)
+        self._pd_button(self.xs_pd_btn, self._xs_names(), self.t)
         if isinstance(res, Exception) or t != self.t:
             return
         self.request_map()
@@ -372,7 +447,7 @@ class View3DPanel:
 
     # ---------------------------------------------------------- streamline pick
     def _trace(self, meta):
-        fig = self.plot3d.object
+        fig = self._fig3d
         for n, tr in enumerate(fig.data if fig is not None else ()):
             if tr.meta == meta:
                 return n, tr
@@ -385,9 +460,19 @@ class View3DPanel:
         p = pts[0]
         if p.get("pointNumber") is None:
             return
+        # cleared, so that clicking the same point again (e.g. after ×) fires again
+        self.plot3d.click_data = None
         k, c = int(p["pointNumber"]), p.get("curveNumber")
-        idx, _ = self._trace("stream")
-        pidx, _ = self._trace("pinned")
+        idx, base = self._trace("stream")
+        pidx, pl = self._trace("pinned")
+        tr = base if c == idx else pl if c == pidx else None
+        if tr is None or k >= len(tr.x if tr.x is not None else ()):
+            return
+        # a click made on the previous scene (sent while a re-render was on its way) is
+        # not at that point of this one
+        if any(p.get(a) is not None and not np.isclose(p[a], getattr(tr, a)[k], atol=1e-3)
+               for a in ("x", "y", "z")):
+            return
         if idx is not None and c == idx:
             segs = self._s3["stream"]["segs"]
             line = int(np.searchsorted(segs[:, 0], k, side="right")) - 1
@@ -398,22 +483,23 @@ class View3DPanel:
 
     @staticmethod
     def _seed_line(st, seed):
-        """The streamline of `st` seeded at `seed` (x, y), or None."""
+        """The streamline of `st` seeded at `seed` (x, y, z), or None."""
         if st is None or seed is None:
             return None
         sd = st["segs"][:, 2]
-        d = np.hypot(st["x"][sd] - seed[0], st["y"][sd] - seed[1])
+        d = np.max(np.abs(np.stack([st["x"][sd], st["y"][sd], st["z"][sd]], axis=1)
+                          - np.asarray(seed)), axis=1)
         return int(np.argmin(d)) if d.size and d.min() < 1e-3 else None
 
     def _pin_index(self, seed):
         if seed is None:
             return None
         for i, p in enumerate(self._sl_pins):
-            if np.hypot(p["seed"][0] - seed[0], p["seed"][1] - seed[1]) < 1e-3:
+            if np.max(np.abs(np.subtract(p["seed"], seed))) < 1e-3:
                 return i
         return None
 
-    def _select_line(self, line, push=True):
+    def _select_line(self, line):
         """Select streamline `line` (None: clear the selection, keeping the pins) and plot
         fields along it and the pins."""
         st = self._s3["stream"] if self._s3 else None
@@ -421,9 +507,9 @@ class View3DPanel:
             self._sl_seed, self._sl_line = None, None
         else:
             sd = int(st["segs"][line, 2])
-            self._sl_seed = (float(st["x"][sd]), float(st["y"][sd]))
+            self._sl_seed = (float(st["x"][sd]), float(st["y"][sd]), float(st["z"][sd]))
             self._sl_line = line
-        self._draw_lines(push)
+        self._draw_lines()
         self._sample_line()
 
     def _on_pin(self, ev=None):
@@ -449,15 +535,19 @@ class View3DPanel:
         self._sl_pins = []
         self._select_line(None)
 
-    def _draw_lines(self, push=True):
-        """Draw the selection (yellow) and the pins into the 3D scene's highlight traces;
-        the card shows while there is either."""
+    def _draw_lines(self):
+        """Draw the selection (yellow) and the pins into the 3D scene's highlight traces,
+        the other streamlines grey and faint meanwhile; the card shows while there is either.
+        Once the figure is shown, Panel sends each trace's update as a Plotly.restyle of
+        that trace; re-sending the figure (param.trigger) would rebuild the whole scene,
+        meshes and all, in the browser."""
         st = self._s3["stream"] if self._s3 else None
         _, hl = self._trace("selected")
         _, seed = self._trace("seed")
         _, pl = self._trace("pinned")
         _, ps = self._trace("pinseeds")
-        if hl is not None:
+        if hl is not None and self._sl_line != self._hl_line:
+            self._hl_line = self._sl_line
             if self._sl_line is None:
                 hl.update(x=[], y=[], z=[])
                 seed.update(x=[], y=[], z=[])
@@ -465,22 +555,30 @@ class View3DPanel:
                 a, b, sd = (int(v) for v in st["segs"][self._sl_line])
                 hl.update(x=st["x"][a:b], y=st["y"][a:b], z=st["z"][a:b])
                 seed.update(x=[st["x"][sd]], y=[st["y"][sd]], z=[st["z"][sd]])
-        parts = []
-        if pl is not None:
+        _, base = self._trace("stream")
+        if base is not None:  # the rest go grey while a line is selected or pinned
+            focus = self._sl_line is not None or any(p["line"] is not None
+                                                     for p in self._sl_pins)
+            if focus != self._sl_dim:  # scale and opacity: the colours stay in the browser
+                self._sl_dim = focus
+                base.update(line_colorscale=volume3d.DIM_SCALE if focus else self._sl_scale,
+                            opacity=volume3d.DIM_OPACITY if focus else 1.0)
+        key = tuple((p["line"], p["color"]) for p in self._sl_pins)
+        if pl is not None and key != self._pl_key:
+            self._pl_key = key
             parts = [(i, p, *(int(v) for v in st["segs"][p["line"]]))
                      for i, p in enumerate(self._sl_pins) if p["line"] is not None]
 
             def cat(k):  # the pins' points, a NaN after each line to break it
                 return (np.concatenate([np.append(np.asarray(st[k][a:b], np.float64), np.nan)
                                         for _, _, a, b, _ in parts]) if parts else [])
-            colors = [p["color"] for _, p, a, b, _ in parts for _ in range(b - a + 1)]
+            colors = np.repeat([volume3d.PIN_COLORS.index(p["color"]) for _, p, *_ in parts],
+                               [b - a + 1 for _, _, a, b, _ in parts])
             pl.update(x=cat("x"), y=cat("y"), z=cat("z"), line_color=colors)
             ps.update(x=[st["x"][sd] for *_, sd in parts], y=[st["y"][sd] for *_, sd in parts],
                       z=[st["z"][sd] for *_, sd in parts],
                       marker_color=[p["color"] for _, p, *_ in parts])
             self._pin_of = [i for i, _, a, b, _ in parts for _ in range(b - a + 1)]
-        if push and hl is not None:  # only the changed (highlight) traces are sent
-            self.plot3d.param.trigger("object")
         pinned = self._pin_index(self._sl_seed) is not None
         self.sl_pin.param.update(
             visible=self._sl_line is not None, icon="pinned-off" if pinned else "pin",
@@ -547,7 +645,7 @@ class View3DPanel:
                         val = (ox * u + oy * v + oz * w) / np.maximum(spd, 1e-6)
                 else:
                     val = F.at_points(name, t, samp, storm=fst[0])
-                out.append(dict(key=L["key"], color=L["color"], no=L["no"], s=s,
+                out.append(dict(key=L["key"], color=L["color"], no=L["no"], s=s, a=a,
                                 v=np.asarray(val, np.float64), z=z, x0=x[sd - a],
                                 y0=y[sd - a], z0=z[sd - a], length=float(s[-1] - s[0])))
             res = dict(label=label, lines=out)
@@ -566,6 +664,8 @@ class View3DPanel:
             self.sl_info.object = f'<div class="cv-status" style="color:#f87171">{res}</div>'
             return
         lines = res["lines"]
+        self._sl_samples = [(L["a"], L["s"], L["color"]) for L in lines]
+        self.sl_at.location = None  # the cursor is redrawn when the pointer next moves
         sel = next((L for L in lines if L["key"] == "sel"), None)
         pins = [L for L in lines if L["key"] != "sel"]
         self.sl_src.data = (dict(s=sel["s"], v=sel["v"], z=sel["z"]) if sel else
@@ -617,3 +717,66 @@ class View3DPanel:
             f'<div class="cv-status" style="line-height:1.35"><b>{len(lines)} streamlines'
             f'</b> ({frame}){gone}<div style="max-height:4.2em;overflow-y:auto">{rows}'
             f'</div></div>')
+
+    def _sl_cursor_at(self, x):
+        """The pointer is at distance x on the card's plot (None: it left): mark that
+        point of each line in the 3D scene. The browser snaps and throttles x
+        (CURSOR_JS)."""
+        self._sl_cursor = x
+        self._draw_cursor()
+
+    def _draw_cursor(self):
+        st = self._s3["stream"] if self._s3 else None
+        _, cur = self._trace("cursor")
+        if self._closed or st is None or cur is None:
+            return
+        x, pts = self._sl_cursor, []
+        if x is not None:
+            for a, s, color in self._sl_samples:
+                i = a + int(np.argmin(np.abs(s - x)))
+                if s[0] <= x <= s[-1] and i < len(st["x"]):
+                    pts.append((float(st["x"][i]), float(st["y"][i]), float(st["z"][i]),
+                                color))
+        if pts == self._sl_cursor_pts:  # same samples under the pointer: nothing to send
+            return
+        self._sl_cursor_pts = pts
+        # one small restyle of this trace, not the whole scene (see _draw_lines)
+        cur.update(x=[p[0] for p in pts], y=[p[1] for p in pts], z=[p[2] for p in pts],
+                   marker_color=[p[3] for p in pts])
+
+    # ---------------------------------------------------------- streamline seed box
+    def _on_pick_seeds(self, ev=None):
+        self.workspace.value = "Map"
+        self.mode.set("Seed box")
+
+    def _set_seed_box(self, box):
+        x0, x1, y0, y1 = box
+        self.seed_box = (min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1))
+        self._update_seed_box()
+
+    def _clear_seed_box(self, ev=None):
+        had = self.seed_box is not None
+        self.seed_box = None
+        self._update_seed_box()
+        if had and self.st_on.value and self.gen["3d"]:
+            self.request_3d()
+
+    def _seed_in_box(self):
+        """The seed box inside the 3D region, or None (seed the whole region)."""
+        if self.seed_box is None or self.box is None:
+            return None
+        s0, s1, t0, t1 = self.seed_box
+        x0, x1, y0, y1 = self.box
+        b = (max(s0, x0), min(s1, x1), max(t0, y0), min(t1, y1))
+        return b if b[1] > b[0] and b[3] > b[2] else None
+
+    def _update_seed_box(self):
+        b = self.seed_box
+        self.seed_src.data = (dict(left=[b[0]], right=[b[1]], bottom=[b[2]], top=[b[3]])
+                              if b else dict(left=[], right=[], bottom=[], top=[]))
+        self.st_seed_clear.visible = b is not None
+        where = (f"the seed box ({b[1] - b[0]:.1f} × {b[3] - b[2]:.1f} km)" if b else
+                 "the whole region")
+        self.st_seed_html.object = (
+            f'<div class="cv-hint" style="margin:0 0 12px">Instantaneous streamlines seeded '
+            f'on an n×n grid over {where}; they run until they leave the region.</div>')

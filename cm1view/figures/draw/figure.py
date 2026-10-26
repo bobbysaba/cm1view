@@ -5,21 +5,47 @@ import matplotlib
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 
-from .base import (RC_LOCK, _anchored, panel_letter, time_text, _new_fig, _fs, _cell, rc,
-                   font_size, run_code, run_color, layer_color)
+from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, panel_letter, time_text, _new_fig,
+                   _fs, _cell, rc, font_size, run_code, run_color, layer_color)
 from .v2 import upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text
-from .layers import (_fill, _contour, _shade, _vectors, extend_of, _extends, _ticks,
-                     _colorbars, _cbar_style, _contour_key)
+from .layers import (_fill, _contour, _shade, _vectors, extend_of, union_extend, _extends,
+                     _ticks, _colorbars, _cbar_style, _contour_key)
 from .lines import _lines, _dists
-from .sounding import _sounding
+from .sounding import _sounding, shared_hodo_half
 
-def draw(spec, data):
+
+def draw(spec, data, ends=None):
     """The matplotlib Figure of `spec` (either version) with arrays `data` (see the
-    module notes).  Save it with save(), which keeps the spec's fonts for what
-    matplotlib draws late (tick labels)."""
+    module notes); `ends` ({(panel id, layer): colorbar ends}, fill_ends) fixes the
+    "auto" ends of those fills (an animation's, the same in every frame).  Save it
+    with save(), which keeps the spec's fonts for what matplotlib draws late (tick
+    labels)."""
     spec, data = upgrade(spec, data)
+    if ends:
+        spec = dict(spec, panels=[dict(p, layers=[
+            dict(lay, extend=ends[(p["id"], j)]) if (p["id"], j) in ends else lay
+            for j, lay in enumerate(p.get("layers") or [])]) for p in spec["panels"]])
     with RC_LOCK:
         return _draw2(spec, data)
+
+
+def fill_ends(spec, data, ends=None):
+    """{(panel id, layer): colorbar ends} of the fills with "auto" ends (extend_of),
+    united with `ends` (another frame's: an animation's ends are those of all its
+    frames)."""
+    spec, data = upgrade(spec, data)
+    out = dict(ends or {})
+    for p in spec["panels"]:
+        d = (data or {}).get(p["id"])
+        if d is None or d.get("missing") or p["kind"] in ENTRIES:
+            continue
+        for j, lay in enumerate(_panel_layers(p)):
+            a = d.get(f"L{j}")
+            if lay["type"] == "fill" and lay.get("on", True) and a is not None and \
+                    lay.get("extend") == "auto":
+                out[(p["id"], j)] = union_extend([extend_of(lay, a),
+                                                  out.get((p["id"], j), "neither")])
+    return out
 
 
 def _draw2(spec, data):
@@ -111,7 +137,11 @@ def _block(fig, spec, k, bv, data, fs, ext):
         grid = list(np.atleast_1d(fig.subplots(rows, cols, squeeze=False,
                                                gridspec_kw=gkw or None)).ravel())
     order = {id(p): n for n, p in enumerate(spec["panels"])}
-    used, placed, mappables, legend = [], [], [], {}
+    used, placed, mappables, entries = [], [], [], {}
+    share = bv.get("axes", {}).get("share", "none")
+    half = share != "none" and shared_hodo_half(
+        [(data[p["id"]], panel_view(spec, p, bv).get("skewt", {}))
+         for p in pans if p["kind"] == "sounding" and p["id"] in data])
     for p in pans:
         r, c, rs, cs = _cell(p)
         d = data.get(p["id"]) if data is not None else None
@@ -120,8 +150,11 @@ def _block(fig, spec, k, bv, data, fs, ext):
         ax = grid[r * cols + c] if grid is not None else \
             fig.add_subplot(gs[r:r + rs, c:c + cs])
         V = panel_view(spec, p, bv)
+        if half and p["kind"] == "sounding":
+            V = dict(V, skewt=dict(V.get("skewt", {}), _hodo_half=half))
         used.append(ax)
-        ax, m = _panel(fig, ax, d, V, _panel_layers(p), fs, legend, ext.get(p["id"]))
+        ax, m = _panel(fig, ax, d, V, _panel_layers(p), fs, entries.setdefault(p["id"], {}),
+                       ext.get(p["id"]))
         used[-1] = ax
         if grid is not None:
             grid[r * cols + c] = ax
@@ -131,6 +164,10 @@ def _block(fig, spec, k, bv, data, fs, ext):
         _decorate(ax, d, V, fs, p.get("title") or "",
                   order[id(p)] if letter is None else int(letter), _z_text(V, p), p["id"])
         placed.append((p, ax, V))
+        if getattr(ax, "_cv_hodo", False) and cols > 1:
+            # equal axes are squares in the middle of a wider cell: pack the outer columns
+            # towards the middle, so the spacing between columns shows
+            ax.set_anchor("E" if c == 0 else "W" if c + cs >= cols else "C")
     if grid is not None:
         for ax in grid:
             if ax not in used:
@@ -142,15 +179,9 @@ def _block(fig, spec, k, bv, data, fs, ext):
         r, c, rs, cs = _cell(p)
         cells.append((ax, c, r + rs >= rows or (r + rs, c) not in occ, p["kind"],
                       V.get("axes", {})))
+    _share_limits(placed, data, share)
     _ticks(cells, used, bv.get("axes", {}))
-    if legend:
-        lg = bv.get("legend", {})
-        where = used[min(int(lg.get("panel", 0)), len(used) - 1)] if used else None
-        if where is not None:
-            where.legend(list(legend.values()), list(legend.keys()),
-                         loc=lg.get("loc", "upper right"), fontsize=font_size(bv, "legend"),
-                         ncol=int(lg.get("ncol", 1) or 1),
-                         frameon=lg.get("frame", True), framealpha=0.85)
+    _legends(fig, bv, placed, entries)
     fig._cv_mappables = mappables
     where = {p["id"]: _cell(p)[:2] for p in pans}
     _colorbars(fig, bv.get("colorbar", {}), mappables, used, lambda i: where[i])
@@ -166,6 +197,80 @@ def _block(fig, spec, k, bv, data, fs, ext):
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
                  code["text"])
+
+
+def _style_key(h):
+    """What makes two legend handles look alike (so the same entry of two panels is
+    listed once)."""
+    out = [type(h).__name__]
+    for name in ("get_color", "get_linewidth", "get_linestyle", "get_facecolor",
+                 "get_edgecolor", "get_alpha", "get_marker"):
+        get = getattr(h, name, None)
+        out.append(repr(get()) if callable(get) else "")
+    return tuple(out)
+
+
+def _legends(fig, bv, placed, entries):
+    """The block's legend (bv["legend"]): the layer entries of its panels
+    (entries[panel id] = {text: handle}) in one panel's axes ("where": "panel", at
+    "panel"), or on the figure ("figure": gathering also the legends of the panels' own,
+    which it then removes).  "panels" (0-based, blank: all) are the panels it draws from;
+    the same text and look is listed once."""
+    lg = bv.get("legend", {})
+    if not placed:
+        return
+    on_fig = lg.get("where") == "figure"
+    host = placed[min(max(int(lg.get("panel", 0)), 0), len(placed) - 1)][1]
+    pick = [i for i in (lg.get("panels") or []) if 0 <= int(i) < len(placed)] or \
+        range(len(placed))
+    handles, labels, seen = [], [], set()
+
+    def add(h, text):
+        key = (text, _style_key(h))
+        if key not in seen:
+            seen.add(key)
+            handles.append(h)
+            labels.append(text)
+
+    own = [(placed[i][1], placed[i][0]["id"]) for i in pick]
+    if not on_fig and host not in [a for a, _ in own]:
+        own.append((host, None))  # (a panel's legend the block's would replace)
+    for ax, pid in own:
+        if on_fig or ax is host:
+            for h, text in getattr(ax, "_cv_entries", ()):
+                add(h, text)
+        for text, h in entries.get(pid, {}).items():
+            add(h, text)
+    if not handles or (not on_fig and not any(entries.get(pid) for _, pid in own)):
+        return  # (nothing, or only panels' own legends, which stay)
+    loc = lg.get("loc", "upper right")
+    kw = dict(fontsize=font_size(bv, "legend"), ncol=int(lg.get("ncol", 1) or 1),
+              frameon=lg.get("frame", True), framealpha=0.85, title=lg.get("title") or None,
+              title_fontsize=font_size(bv, "legend"))
+    if on_fig:
+        for ax, _ in own:
+            if ax.get_legend() is not None:
+                ax.get_legend().remove()
+        fig.legend(handles, labels, loc=loc, **kw)
+    else:  # (the "outside" places belong to the figure's legend)
+        host.legend(handles, labels, loc="best" if loc.startswith("outside") else loc, **kw)
+
+
+def _share_limits(placed, data, share):
+    """share "x", "y" or "both": the panels of a kind (not soundings: their views are
+    shared in _block) take the union of their limits, as sharex / sharey would."""
+    if share not in ("x", "y", "both"):
+        return
+    for kind in {p["kind"] for p, _, _ in placed if p["kind"] != "sounding"}:
+        axs = [ax for p, ax, _ in placed if p["kind"] == kind
+               and not data[p["id"]].get("missing") and not getattr(ax, "_cv_hodo", False)]
+        for name in ("x", "y"):
+            if share not in (name, "both") or len(axs) < 2:
+                continue
+            lims = [getattr(ax, f"get_{name}lim")() for ax in axs]
+            lo, hi = min(min(l) for l in lims), max(max(l) for l in lims)
+            for ax, l in zip(axs, lims):
+                getattr(ax, f"set_{name}lim")((hi, lo) if l[0] > l[1] else (lo, hi))
 
 
 def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
@@ -188,6 +293,7 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
     else:
         xsec = kind == "xsec"
         x, y = d["x"], d["y"]
+        nkey = 0  # vector key arrows so far
         for j, lay in enumerate(layers):
             if not lay.get("on", True):
                 continue
@@ -204,7 +310,8 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
             elif t == "shade" and a is not None:
                 _shade(ax, lx, ly, a, lay)
             elif t == "vectors":
-                _vectors(ax, d, j, lay, xsec)
+                _vectors(ax, d, j, lay, xsec, nkey)
+                nkey += bool(lay.get("key")) and lay.get("style") != "streamlines"
             elif t == "track" and "track_x" in d:
                 col = layer_color(spec, lay, d)
                 ax.plot(d["track_x"], d["track_y"], color=col,
@@ -231,7 +338,69 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                     if t == "shade" else
                     Line2D([], [], color=layer_color(spec, lay, d),
                            lw=float(lay.get("lw", 1.0))))
+        _extremes(ax, d, spec, layers, fs)
     return ax, m
+
+
+EXTREME_TYPES = ("fill", "contour", "shade")
+
+
+def extremes_layer(ex, layers):
+    """The layer whose maximum and minimum a panel shows: layer ex["layer"] (a fill,
+    contour or shade), else its first fill that is on, else its first such layer."""
+    k = int(ex.get("layer", -1))
+    if 0 <= k < len(layers) and layers[k]["type"] in EXTREME_TYPES:
+        return k
+    on = [j for j, l in enumerate(layers) if l["type"] in EXTREME_TYPES and l.get("on", True)]
+    return next((j for j in on if layers[j]["type"] == "fill"), on[0] if on else None)
+
+
+def panel_extremes(d, j):
+    """((max, x, y), (min, x, y)) of layer j's array in panel data d within the
+    panel's window (d["xlim"], d["ylim"]; None: nothing finite there)."""
+    a = d.get(f"L{j}")
+    if a is None:
+        return None
+    a = np.asarray(a, dtype=float)
+    x = np.asarray(d.get(f"L{j}_cx", d["x"]), dtype=float)
+    y = np.asarray(d.get(f"L{j}_cy", d["y"]), dtype=float)
+    if x.ndim == 1 and y.ndim == 1:
+        x, y = np.meshgrid(x, y)
+    if x.shape != a.shape or y.shape != a.shape:
+        return None
+    ok = np.isfinite(a)
+    for lim, c in (("xlim", x), ("ylim", y)):
+        if lim in d:
+            lo, hi = sorted(float(v) for v in d[lim])
+            ok &= (c >= lo) & (c <= hi)
+    if not ok.any():
+        return None
+    v = np.where(ok, a, np.nan)
+    i, k = np.nanargmax(v), np.nanargmin(v)
+    return ((float(v.flat[i]), float(x.flat[i]), float(y.flat[i])),
+            (float(v.flat[k]), float(x.flat[k]), float(y.flat[k])))
+
+
+def _extremes(ax, d, spec, layers, fs):
+    """spec["extremes"]: a layer's maximum and / or minimum over the panel's window in
+    a corner ("max 32.1, min −8.4 m/s"), with markers where they are."""
+    ex = spec.get("extremes", {})
+    if not ex.get("on"):
+        return
+    j = extremes_layer(ex, layers)
+    r = None if j is None else panel_extremes(d, j)
+    if r is None:
+        return
+    what = ex.get("what", "both")
+    pick = [("max", r[0])] * (what in ("max", "both")) + [("min", r[1])] * (what in ("min", "both"))
+    units = layers[j].get("units", "")
+    txt = ", ".join(f"{w} {v:.3g}" for w, (v, _, _) in pick) + (f" {units}" if units else "")
+    _anchored(ax, txt, dict(loc=ex.get("loc", "upper right"), box=ex.get("box", True),
+                            bold=False, size=ex.get("size")), fs)
+    if ex.get("marker", True):
+        for w, (_, x, y) in pick:
+            ax.plot(x, y, marker="+" if w == "max" else "x", ms=8, mew=1.5,
+                    color=ex.get("color", "k"), zorder=5, clip_on=True)
 
 
 def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
@@ -269,11 +438,11 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
 
 def _annotate(ax, i, anns, fs):
     """Text, markers, arrows, lines, boxes and circles in panel i (panel -1: every
-    panel), in data coordinates or as fractions of the panel (coords 'axes').  In a
+    panel; a list: those panels), in data coordinates or as fractions of the panel (coords 'axes').  In a
     skew-T, data coordinates are temperature (deg C) and pressure (hPa)."""
     skew = getattr(ax, "_cv_skew", None)
     for a in anns:
-        if int(a.get("panel", -1)) not in (-1, i):
+        if not ann_on(a, i):
             continue
         data = a.get("coords") != "axes"
         tr = ax.transData if data else ax.transAxes

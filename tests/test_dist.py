@@ -130,3 +130,30 @@ def test_map_distribution_panel(viewer):
     v.dist_follow.value = False
     v._dist_drop(list(v.dists))
     assert not v.dists and v.dist_clear.disabled and v.dist_table.object == ""
+
+
+def test_statistics_text(sample):
+    st = dist.summarize(sample.copy())
+    assert figdraw.dist_stat_keys({"stats": True}) == ["mean", "sd", "n"]
+    assert figdraw.dist_stat_keys({"stats": ["max", "bogus"]}) == ["max"]
+    assert figdraw.dist_stat_keys({"stats": False}) == []
+    t = figdraw.dist_stats_text(st, ["n", "median", "iqr", "p5_95"])
+    q5, q25, q50, q75, q95 = np.quantile(sample, [0.05, 0.25, 0.5, 0.75, 0.95])
+    assert t.startswith(f"n = {sample.size:,}") and f"median {q50:.3g}" in t
+    assert f"IQR {q75 - q25:.3g}" in t and f"{q5:.3g} to {q95:.3g}" in t
+
+
+def test_extremes_of_series_and_panels():
+    t = np.arange(10.0)
+    v = np.array([1, 5, 2, np.nan, 9, 0, 3, 3, 3, -1.0])
+    assert figdraw.series_extremes(t, v, "both") == [("max", 4.0, 9.0), ("min", 9.0, -1.0)]
+    assert figdraw.series_extremes(t, v, "max", {"tmax": 3}) == [("max", 1.0, 5.0)]
+    assert figdraw.series_extremes(t, v, "") == []
+    x, y = np.arange(5.0), np.arange(4.0)
+    a = np.zeros((4, 5))
+    a[3, 4], a[1, 1], a[2, 2] = 100.0, -7.0, 3.0  # (the 100 is outside the window)
+    d = dict(x=x, y=y, L0=a, xlim=(0.0, 3.0), ylim=(0.0, 2.5))
+    assert figdraw.panel_extremes(d, 0) == ((3.0, 2.0, 2.0), (-7.0, 1.0, 1.0))
+    assert figdraw.extremes_layer({"layer": 1}, [dict(type="contour"), dict(type="fill")]) == 1
+    assert figdraw.extremes_layer({}, [dict(type="contour"), dict(type="fill")]) == 1
+    assert figdraw.extremes_layer({}, [dict(type="vectors")]) is None

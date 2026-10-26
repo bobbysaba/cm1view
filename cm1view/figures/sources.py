@@ -12,7 +12,7 @@ from functools import partial
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from ..core import render, series as ser
+from ..core import render, series as ser, vectors
 from ..core.run import FileBusy, MissingAtTime
 from .cards import AnnotationRow, DistCard, LEVEL_MODES, SeriesCard, SoundingCard, _dark
 
@@ -51,21 +51,33 @@ class FigureSources:
         return s
 
     def from_map(self):
-        """A one-panel figure of what the map shows (field, levels, contours, winds,
+        """A one-panel figure of what the map shows (field, levels, contours, vectors,
         view), at the shown time."""
         v, F, t = self.v, self.F, self.v.t
         sp = v._map_spec()
-        f = sp["fill"]
-        fill = fg.layer_defaults("fill", F, f["var"], f["level"])
-        fill.update(mode=f["mode"] if f["mode"] in LEVEL_MODES.values() else "height",
-                    cmap=f["cmap"], reverse=f["rev"])
-        try:  # the range the map shows
-            a = F.plane(f["var"], t, fill["mode"], f["level"], storm=sp["fstorm"])
-            lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
-            fill.update(vmin=round(float(lo), 6), vmax=round(float(hi), 6))
-        except Exception:  # noqa: BLE001
-            pass
-        layers = [fill]
+
+        def fill_layer(f):
+            fill = fg.layer_defaults("fill", F, f["var"], f["level"])
+            fill.update(mode=f["mode"] if f["mode"] in LEVEL_MODES.values() else "height",
+                        cmap=f["cmap"], reverse=f["rev"])
+            try:  # the range the map shows
+                a = F.plane(f["var"], t, fill["mode"], f["level"], storm=sp["fstorm"])
+                lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
+                fill.update(vmin=round(float(lo), 6), vmax=round(float(hi), 6))
+            except Exception:  # noqa: BLE001
+                pass
+            return fill
+
+        layers = [fill_layer(sp["fill"])]
+        for f in sp["fills"]:  # the more fills, over the first
+            if not f["on"]:
+                continue
+            lay = fill_layer(f)
+            lay.update(alpha=float(f["alpha"]),
+                       style="contourf" if f["style"] == "contourf" else "mesh",
+                       nlevels=int(f["nlev"]) if f["style"] == "contourf" else 0,
+                       mask_below=lay.get("vmin") if f["clip"] else None)
+            layers.append(lay)
         for o in sp["ov"]:
             if not o["on"]:
                 continue
@@ -80,10 +92,12 @@ class FigureSources:
             lay.update(mode=o["mode"], color=_dark(o["color"]), lw=0.75 * float(o["width"]),
                        neg_dashed=o["negdash"])
             layers.append(lay)
-        if sp["vec"]["on"]:
+        for o in sp["vecs"]:
+            if not o["on"]:
+                continue
             lay = fg.layer_defaults("vectors", F)
-            lay.update(z=sp["vec"]["level"], frame=sp["vec"]["frame"],
-                       color=_dark(sp["vec"]["color"]))
+            lay.update(vector=o["q"], z=o["level"], frame=o["frame"], style=o["style"],
+                       color=_dark(o["color"]), scale=vectors.FIG_SCALE * o["ref"])
             layers.append(lay)
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
@@ -98,20 +112,36 @@ class FigureSources:
         if len(v.xs_pts) != 2:
             self._msg("Draw a cross-section on the map first (Section tool).", True)
             return
-        fill = fg.layer_defaults("fill", F, v.xs_fill.value)
-        fill.update(cmap=v.xs_cmap.value, reverse=v.xs_rev.value)
-        if not v.xs_auto.value:
-            fill.update(vmin=float(v.xs_min.value), vmax=float(v.xs_max.value))
-        layers = [fill]
-        if v.xs_cont.value:
-            lay = fg.layer_defaults("contour", F, v.xs_cont.value)
-            lay.update(levels=v.xs_levels.value or "10, 20", color=_dark(v.xs_ccolor.value),
-                       neg_dashed=v.xs_negdash.value)
-            layers.append(lay)
-        if v.xs_vecs.value:
-            lay = fg.layer_defaults("vectors", F)
-            lay.update(frame=v.xs_vframe.value, spacing=0.75, scale=400.0, width=0.0015)
-            layers.append(lay)
+        def fill_layer(f):
+            fill = fg.layer_defaults("fill", F, f["var"])
+            fill.update(cmap=f["cmap"], reverse=f["rev"],
+                        style="contourf" if f["style"] == "contourf" else "mesh",
+                        nlevels=int(f["nlev"]) if f["style"] == "contourf" else 0)
+            if not f["auto"]:
+                fill.update(vmin=float(f["vmin"]), vmax=float(f["vmax"]))
+            return fill
+
+        sp = v.xs_spec()
+        layers = [fill_layer(dict(sp, var=sp["fill"]))]
+        for f in sp["fills"]:  # the more fills, over the first
+            if f["on"]:
+                lay = fill_layer(f)
+                lay.update(alpha=float(f["alpha"]),
+                           mask_below=lay.get("vmin") if f["clip"] else None)
+                layers.append(lay)
+        for o in sp["ov"]:
+            if o["on"]:
+                lay = fg.layer_defaults("contour", F, o["var"])
+                lay.update(levels=o["levels"] if o["levels"].strip() not in ("", "auto")
+                           else "10, 20", color=_dark(o["color"]),
+                           lw=0.75 * float(o["width"]), neg_dashed=o["negdash"])
+                layers.append(lay)
+        for o in sp["vecs"]:
+            if o["on"]:
+                lay = fg.layer_defaults("vectors", F)
+                lay.update(vector=o["q"], frame=o["frame"], spacing=0.75,
+                           scale=20.0 * o["ref"], width=0.0015, color=_dark(o["color"]))
+                layers.append(lay)
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
         s.update(kind="xsec", rows=1, cols=1, size=[7.0, 3.5], layers=layers, vary="time")
@@ -134,10 +164,13 @@ class FigureSources:
         for c in self.ser_cards:
             c.show(self.kind.value)
         self.ser_box.objects = [c.panel for c in self.ser_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No series: add one from the Series tool above, or a new '
-            'one.</div>')]
+            '<div class="cv-empty">No series yet, so nothing is computed: add one of the '
+            'Series tool’s (above) or a new one.</div>')]
         ss = getattr(self.v, "series", {}) or {}
         self.ser_from.options = {"": ""} | {v["label"]: k for k, v in ss.items()}
+        if not self.ser_from.value and ss:  # (the Series tool's shown series, ready to add)
+            act = getattr(getattr(self.v, "ser_pick", None), "value", None)
+            self.ser_from.value = act if act in ss else next(iter(ss))
 
     def _series_changed(self):
         self._show_series()

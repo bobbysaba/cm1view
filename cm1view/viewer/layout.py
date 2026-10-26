@@ -9,9 +9,10 @@ import panel as pn
 from ..core.fields import CMAPS
 from .zoomview import ParamTable
 from ..theme import CSS, GRID, PANEL
+from .numinput import FloatInput
 from .ui import (
-    BAR, DRAWER, FILL, FRAMES, PANEL_TITLES, PANELS, RAIL_BTN, TAB_MODE, Drawer, _bar,
-    _bokeh, _group, _html, _pill, _settings_toggle,
+    BAR, DRAWER, FILL, FRAMES, PANEL_TITLES, PANELS, RAIL_BTN, TAB_MODE, Drawer, Plotly3D,
+    _bar, _bokeh, _group, _html, _pill, _settings_toggle,
 )
 
 
@@ -56,7 +57,7 @@ class Layout:
             self.isos.append(dict(
                 on=pn.widgets.Checkbox(value=on, width=24, margin=(18, 4, 0, 4)),
                 var=pn.widgets.Select(name="Field", groups=g3, value=var, width=230),
-                val=pn.widgets.FloatInput(name="Value", value=val, width=90),
+                val=FloatInput(name="Value", value=val, width=90),
                 color=pn.widgets.ColorPicker(name="Color", value=col, width=60),
                 op=pn.widgets.FloatSlider(name="Opacity", start=0.05, end=1.0, step=0.05,
                                           value=op, width=130),
@@ -87,11 +88,11 @@ class Layout:
         self.v3_floor_range = pn.widgets.Select(
             name="Range", options={"From the data": "data", "Field default": "field",
                                    "Custom": "custom"}, value="data", width=140)
-        self.v3_floor_min = pn.widgets.FloatInput(name="Min", value=0.0, width=90,
+        self.v3_floor_min = FloatInput(name="Min", value=0.0, width=90,
                                                   visible=False)
-        self.v3_floor_max = pn.widgets.FloatInput(name="Max", value=1.0, width=90,
+        self.v3_floor_max = FloatInput(name="Max", value=1.0, width=90,
                                                   visible=False)
-        self.v3_follow = pn.widgets.Checkbox(name="Re-render when time changes", value=False,
+        self.v3_follow = pn.widgets.Checkbox(name="Re-render when time changes", value=True,
                                              margin=(5, 10, 14, 10))
         self.v3_cam = pn.widgets.Select(
             name="View from", options={"Southwest (default)": "oblique", "Above": "top",
@@ -103,17 +104,14 @@ class Layout:
             value="turntable", width=130)
         self._cam_rev = 0
 
-        # surface wind vectors
-        self.sv_on = pn.widgets.Checkbox(value=False, width=18, margin=(14, 0, 0, 8))
-        self.sv_lvl = pn.widgets.FloatSlider(name="Height (km AGL; 0 = lowest level)",
-                                             start=0.0, end=3.0, step=0.05, value=0.0,
-                                             width=210)
-        self.sv_frame = pn.widgets.Select(name="Frame", options=FRAMES,
-                                          value=self.vec_frame.value, width=150)
-        self.sv_density = pn.widgets.IntSlider(name="Arrows across region", start=6, end=40,
-                                               value=16, width=170)
-        self.sv_ref = pn.widgets.FloatInput(name="Ref. speed (m/s)", value=20.0, width=110)
-        self.sv_color = pn.widgets.ColorPicker(name="Color", value="#f8fafc", width=60)
+        # vectors at a height: wind, horizontal vorticity, ... (Widgets._add_sv)
+        self.svs = []
+        self.sv_list = pn.Column(margin=0, sizing_mode="stretch_width")
+        self.sv_add = pn.widgets.Button(name="Add vectors", icon="plus", button_type="primary",
+                                        button_style="outline", height=32,
+                                        margin=(6, 4, 8, 4))
+        self.sv_add.on_click(lambda e: self._add_sv())
+        self._add_sv(on=False)
 
         # streamlines
         self.st_on = pn.widgets.Checkbox(value=False, width=18, margin=(14, 0, 0, 8))
@@ -132,6 +130,17 @@ class Layout:
         self.st_color = pn.widgets.Select(name="Color by",
                                           options={"Height": "z", "Vertical velocity": "w"},
                                           value="z", width=150)
+        self.st_seed_pick = pn.widgets.Button(name="Seed box on map", icon="square-dot",
+                                              button_type="default", button_style="outline",
+                                              height=32, margin=(4, 4),
+                                              description="Drag a box on the map: the "
+                                                          "streamlines start inside it")
+        self.st_seed_clear = pn.widgets.Button(name="Whole region", button_type="light",
+                                               button_style="outline", height=32,
+                                               margin=(4, 4), visible=False,
+                                               description="Seed over the whole 3D region "
+                                                           "again")
+        self.st_seed_html = _html()
 
         self.v3_pick = pn.widgets.Button(name="Pick region on map", button_type="default",
                                          button_style="outline", height=34, margin=(5, 3))
@@ -144,9 +153,9 @@ class Layout:
                                'map</b> (or the <b>3D box</b> tool on the map) and drag a '
                                'box, or <b>Use map view</b>, then <b>Render 3D</b>. Keep it '
                                'storm-scale (≲ 50 km) for full resolution.</div>')
-        self.plot3d = pn.pane.Plotly(None, sizing_mode="stretch_both", min_height=400,
-                                     config={"displaylogo": False, "responsive": True},
-                                     visible=False)
+        self.plot3d = Plotly3D(None, sizing_mode="stretch_both", min_height=400,
+                               config={"displaylogo": False, "responsive": True},
+                               visible=False)
         self._build_streamline_card()
 
         # ---- analysis panel (right of the map)
@@ -172,26 +181,31 @@ class Layout:
                        align_items="center", gap="0 4px", sizing_mode="stretch_width"),
             snd_set, snd_look, sizing_mode="stretch_width", margin=0)
         d = self.xs_drawer = Drawer()
-        xs_style = d.add("fill", "Fill style", self.xs_cmap, self.xs_rev, self.xs_auto,
-                         self.xs_min, self.xs_max)
-        xs_cont = d.add("cont", "Contours", self.xs_cont, self.xs_levels, self.xs_ccolor,
-                        self.xs_cwidth, self.xs_negdash)
-        xs_vec = _pill(self.xs_vecs, d.add("vec", "Winds", self.xs_vframe, self.xs_vdensity,
-                                           self.xs_vref, self.xs_vcolor,
-                                           _html('<div class="cv-hint" style="margin:0 0 '
-                                                 '12px">In-plane wind (along-section u, w)'
-                                                 '</div>')))
+        # as on the map: the fill's style in the fill's pill, what goes over it in the next
+        xs_style = d.add("style", "Style", self.xs_fill_style, self.xs_cmap, self.xs_rev,
+                         self.xs_auto, self.xs_min, self.xs_max, self.xs_nlev)
+        xs_more = d.add("fills", "More fills", pn.Column(
+            self.xs_fill_list, self.xs_fill_add, margin=0, sizing_mode="stretch_width"))
+        xs_cont = d.add("ov", "Contours", pn.Column(
+            self.xs_ov_list, self.xs_ov_add, margin=0, sizing_mode="stretch_width"))
+        xs_vec = d.add("vec", "Vectors", pn.Column(
+            self.xs_vec_list, self.xs_vec_add,
+            _html('<div class="cv-hint" style="margin:0 0 12px">In the plane: the '
+                  'along-section component and the vertical one (w for the wind, ζ for '
+                  'vorticity).  Several at once.</div>'),
+            margin=0, sizing_mode="stretch_width"))
         for b, _ in d.items.values():  # the same pill as the map's layer menus
             b.param.update(height=32, margin=(4, 2), button_type="light")
-        xs_layers = _group(xs_style, xs_cont, xs_vec)
-        xs_layers.margin = (0, 4, 6, 6)
+        xs_layers = (_group(self.xs_fill, xs_style), _group(xs_more, xs_cont, xs_vec))
+        for gp in xs_layers:
+            gp.margin = (0, 4, 6, 6)
         xs_look = pn.FlexBox(self.xs_smin, self.xs_smax, self.xs_zmin, self.xs_zmax,
                              self.xs_height, self.xs_font, self.xs_grid, self.xs_ab,
                              self.xs_style_reset, flex_wrap="wrap", align_items="flex-end",
                              gap="0 6px", sizing_mode="stretch_width",
                              styles={"border-top": f"1px solid {GRID}"})
         xs = pn.Column(
-            pn.FlexBox(self.xs_fill, self.xs_ztop, xs_layers,
+            pn.FlexBox(*xs_layers, self.xs_ztop,
                        _settings_toggle(xs_look, "palette", "Plot style: axis limits, size, "
                                                             "fonts, grid lines"),
                        flex_wrap="wrap", align_items="flex-end", gap="0 4px",
@@ -283,19 +297,21 @@ class Layout:
         style = d.add("style", "Style", self.fill_style, self.fill_cmap, self.fill_rev,
                       self.fill_auto, self.fill_min, self.fill_max, self.fill_nlev,
                       self.fill_alpha)
-        ovb = []
-        for n, o in enumerate(self.ovs):
-            ovb.append(_pill(o["on"], d.add(f"ov{n}", f"Contours {'AB'[n]}", o["var"],
-                                            o["mode"], o["level"], o["levels"], o["color"],
-                                            o["width"], o["negdash"])))
-        vec = _pill(self.vec_on, d.add("vec", "Winds", self.vec_style, self.vec_lvl,
-                                       self.vec_frame, self.vec_density, self.vec_ref,
-                                       self.vec_color))
+        more = d.add("fills", "More fills", pn.Column(self.fill_list, self.fill_add, margin=0,
+                                                      sizing_mode="stretch_width"))
+        cont = d.add("ov", "Contours", pn.Column(self.ov_list, self.ov_add, margin=0,
+                                                 sizing_mode="stretch_width"))
+        vec = d.add("vec", "Vectors", pn.Column(
+            self.vec_list, self.vec_add,
+            _html('<div class="cv-hint" style="margin:0 0 12px">Several at once.  '
+                  'Storm-relative wind uses the sounding panel’s storm motion.</div>'),
+            margin=0, sizing_mode="stretch_width"))
         for b, _ in d.items.values():
             b.param.update(height=32, margin=(4, 2), button_type="light")
         d.panel.styles = dict(d.panel.styles, **DRAWER)
-        bar = _bar(_group(self.fill_var, self.fill_mode, self.fill_lvl),
-                   _group(style, *ovb, vec))
+        # the fill's style sits in the fill's own pill; what goes over it in the next
+        bar = _bar(_group(self.fill_var, self.fill_mode, self.fill_lvl, style),
+                   _group(more, cont, vec))
         # the tools, down the left edge: each sets what a map click does and opens its
         # panel; the eraser clears every marker on the map
         self.clear_pts.param.update(name="Clear", width=64, height=58, margin=(2, 4),
@@ -312,16 +328,16 @@ class Layout:
         iso_rows = [pn.Row(o["on"], o["var"], o["val"], o["color"], o["op"], margin=0)
                     for o in self.isos]
         iso = d.add("iso", "Isosurfaces", pn.Column(*iso_rows, margin=0))
-        sv = _pill(self.sv_on, d.add("sv", "Surface winds", self.sv_lvl, self.sv_frame,
-                                     self.sv_density, self.sv_ref, self.sv_color,
-                                     _html('<div class="cv-hint" style="margin:0 0 12px">'
-                                           'Storm-relative uses the sounding panel’s '
-                                           'storm motion.</div>')))
+        sv = d.add("sv", "Vectors", pn.Column(
+            self.sv_list, self.sv_add,
+            _html('<div class="cv-hint" style="margin:0 0 12px">Arrows at a height '
+                  '(0 = lowest level); several at once.  Storm-relative wind uses the '
+                  'sounding panel’s storm motion.</div>'),
+            margin=0, sizing_mode="stretch_width"))
         st = _pill(self.st_on, d.add("st", "Streamlines", self.st_z, self.st_n, self.st_len,
                                      self.st_dir, self.st_frame, self.st_color,
-                                     _html('<div class="cv-hint" style="margin:0 0 12px">'
-                                           'Instantaneous streamlines seeded on an n×n grid '
-                                           'over the region.</div>')))
+                                     pn.Row(self.st_seed_pick, self.st_seed_clear, margin=0),
+                                     self.st_seed_html))
         fl = _pill(self.v3_ground, d.add(
             "floor", "Floor", self.v3_floor, self.v3_floor_z,
             pn.Row(self.v3_floor_cmap, self.v3_floor_rev, margin=0),
@@ -420,3 +436,4 @@ class Layout:
             self._update_region_html()
         if isfig:
             self.figed.request(delay=False)
+            self.figed.opened()

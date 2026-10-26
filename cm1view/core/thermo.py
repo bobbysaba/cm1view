@@ -231,10 +231,13 @@ def analyze(z, p, th, qv, u, v, storm="rm", custom=(0.0, 0.0), domain=(0.0, 0.0)
 
     kin = dict(
         storm=(cx, cy), rm=rm, lm=lm, mean06=mean06,
+        shear250=_shear(zz, U, V, zz[0], 250.0),
+        shear500=_shear(zz, U, V, zz[0], 500.0),
         shear01=_shear(zz, U, V, zz[0], 1000.0),
         shear03=_shear(zz, U, V, zz[0], 3000.0),
         shear06=_shear(zz, U, V, zz[0], 6000.0),
         shear08=_shear(zz, U, V, zz[0], 8000.0),
+        srh250=srh(zz, U, V, cx, cy, 0.0, 250.0),
         srh500=srh(zz, U, V, cx, cy, 0.0, 500.0),
         srh1=srh(zz, U, V, cx, cy, 0.0, 1000.0),
         srh3=srh(zz, U, V, cx, cy, 0.0, 3000.0),

@@ -137,9 +137,9 @@ def apply_style(spec, name):
 # what copy_look leaves: where a layer's data come from, and (between fields) its
 # values and names
 _OWN = ("type", "on", "field", "mode", "z", "spacing", "zspacing", "frame", "reduce",
-        "minus", "panels", "run", "time_s", "time_lock")
+        "vector", "minus", "panels", "run", "time_s", "time_lock")
 _OF_FIELD = ("units", "vmin", "vmax", "levels", "threshold", "mask_below", "cbar_label",
-             "legend", "label", "ticks")
+             "cbar_ticks", "legend", "label", "ticks")
 
 
 def copy_look(src, dst):

@@ -8,6 +8,7 @@ from matplotlib.colors import to_hex
 
 from .. import draw as figdraw
 from ...core.fields import CMAPS
+from ...viewer.numinput import FloatInput
 from ...theme import GRID, PANEL, RAISED, TEXT
 
 
@@ -17,7 +18,10 @@ FIG_CMAPS = list(dict.fromkeys(PYART_CMAPS + CMAPS + [
     "Greys", "gray_r", "Blues", "Reds", "Purples", "PuOr", "RdBu", "bwr", "jet"]))
 LOCS = ["upper left", "upper right", "lower left", "lower right", "upper center",
         "lower center", "center left", "center right"]
+FIG_LOCS = ["outside right center", "outside right upper", "outside left center",
+            "outside lower center", "outside upper center"]  # (a figure legend's, beside the panels)
 LABEL_LOCS = LOCS + ["above left", "above right"]  # panel letters, times, run names
+MARK_EXTREMES = {"None": "", "Maximum": "max", "Minimum": "min", "Both": "both"}
 LEVEL_MODES = {"Height (km AGL)": "height", "Model level (k)": "level",
                "Column max": "colmax", "Column min": "colmin"}
 FONT_CHOICES = ["sans-serif", "serif", "DejaVu Sans", "Arial", "Helvetica", "Liberation Sans",
@@ -42,7 +46,7 @@ MATH_FONTS = {"DejaVu Sans": "dejavusans", "Like the text font": "custom",
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
 VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
         "Height (one run, one time)": "height",
-        "Run × time grid": "grid", "Each panel: own run & time": "custom"}
+        "Each panel: own run & time": "custom"}
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
               "track": "Storm track", "line": "Section line"}
@@ -78,13 +82,13 @@ def _hex(c, default="#000000"):
 
 
 def _f(name, value, width=90, **kw):
-    return pn.widgets.FloatInput(name=name, value=value, width=width, **kw)
+    return FloatInput(name=name, value=value, width=width, **kw)
 
 
 def _auto(name, value=None, **kw):
     """A number that may be left blank (automatic)."""
     v = None if value in (None, "", 0) else float(value)
-    return pn.widgets.FloatInput(name=name, value=v, placeholder="auto", width=90, **kw)
+    return FloatInput(name=name, value=v, placeholder="auto", width=90, **kw)
 
 
 def _num(v):
@@ -118,8 +122,46 @@ def _grid(*objs, n=3):
         "column-gap": "2px"})
 
 
-def _section(title, *objs, collapsed=False):
-    """A collapsible section of the editor."""
+def _checks(*groups, title="Show", n=2):
+    """The on / off settings of a section or card as one list of checkboxes at its foot:
+    groups are checkboxes, or (heading, [checkboxes]) for a list in parts (e.g. the
+    hodograph's storm motions, one box each).  Hidden boxes leave no gap; a part, or the
+    list, hides when all its boxes are hidden."""
+    loose = [g for g in groups if not isinstance(g, tuple)]
+    groups = ([("", loose)] if loose else []) + [g for g in groups if isinstance(g, tuple)]
+    parts = []
+    for head, bs in groups:
+        for b in bs:
+            b.width, b.sizing_mode, b.margin = None, "stretch_width", (2, 6, 2, 6)
+        grid = pn.Column(*bs, sizing_mode="stretch_width", margin=0, styles={
+            "display": "grid", "grid-template-columns": f"repeat({n}, minmax(0, 1fr))",
+            "column-gap": "2px"})
+        part = pn.Column(_label(head), grid, margin=(2, 0, 0, 12),
+                         sizing_mode="stretch_width") if head else grid
+        parts.append((part, bs))
+    col = pn.Column(_label(title, strong=True), *[p for p, _ in parts],
+                    sizing_mode="stretch_width", margin=(6, 0, 2, 0),
+                    styles={"border-top": f"1px solid {GRID}", "padding-top": "2px"})
+
+    def show(*e):
+        for part, bs in parts:
+            part.visible = any(b.visible for b in bs)
+        col.visible = any(p.visible for p, _ in parts)
+    for _, bs in parts:
+        for b in bs:
+            b.param.watch(show, "visible")
+    show()
+    return col
+
+
+def _label(text, strong=False):
+    t = f"<b>{text}</b>" if strong else text
+    return pn.pane.HTML(f'<div class="cv-hint">{t}</div>', margin=(4, 4, 0, 4),
+                        sizing_mode="stretch_width")
+
+
+def _section(title, *objs, collapsed=True):
+    """A collapsible section of the editor, closed until clicked."""
     return pn.Card(*objs, title=title, collapsed=collapsed, **SECTION)
 
 

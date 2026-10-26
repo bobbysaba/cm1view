@@ -9,30 +9,61 @@ import panel as pn
 
 from .. import config
 from . import draw as figdraw, spec as fg
-from .cards import FIG_CMAPS, NONE, VARY, _f, _grid, _hint
+from .cards import EXTEND, FIG_CMAPS, FIG_LOCS, LEVEL_MODES, LOCS, NONE, VARY, _f, _grid, _hint
 from .times import _heights
+
+
+PF_KEYS = ("field", "cmap", "vmin", "vmax", "mode", "z", "extend")  # (a new panel's: the fill's)
 
 
 class FigurePanelOpts:
     """Reacting to the Panels tab: fields, heights, layout, size, kind, area."""
 
     # ------------------------------------------------------------ panel fields
+    def _pf_fill(self):
+        """A new fill layer (reflectivity when the run has it)."""
+        F = self.fields
+        return fg.layer_defaults("fill", F, "dbz" if "dbz" in F else next(iter(F.defs)))
+
+    def _pf_sync(self):
+        """A 'field' figure's fill is set panel by panel here (Time and fields), so it is
+        not a Layers card (the Layers tab adds what goes over it): going to 'field'
+        takes the first fill card out of Layers, going back puts it back first, as
+        panel a had it."""
+        field = self.vary.value == "field"
+        if field and self._pf_base is None:
+            c = next((c for c in self.cards if c.type == "fill"), None)
+            if c is not None:
+                self.cards.remove(c)
+            self._pf_base = c.collect() if c is not None else self._pf_fill()
+        elif not field and self._pf_base is not None:
+            pf = self._pf_collect(self.pf_rows[0]) if self.pf_rows else {}
+            self.cards.insert(0, self._card(dict(self._pf_base, **pf)))
+            self._pf_base = None
+        else:
+            return
+        self._show_cards()
+
     def _build_pf(self, fills):
         n = int(self.rows.value or 1) * int(self.cols.value or 1)
-        base = next((c.collect() for c in self.cards if c.type == "fill"), None)
-        rows = []
-        for i in range(n if self.vary.value == "field" else 0):
-            pf = fills[i] if i < len(fills) else None
-            if pf is None:
-                pf = {k: base[k] for k in ("field", "cmap", "vmin", "vmax")} if base else \
-                    {k: v for k, v in fg.layer_defaults("fill", self.fields,
-                                                        next(iter(self.fields.defs)))
-                     .items() if k in ("field", "cmap", "vmin", "vmax")}
-            rows.append(self._pf_row(i, pf))
+        base = self._pf_base or self._pf_fill()
+        new = {k: base.get(k) for k in PF_KEYS}
+        rows = [self._pf_row(i, dict(new, **(fills[i] if i < len(fills) else {})))
+                for i in range(n if self.vary.value == "field" else 0)]
         self.pf_rows = rows
-        head = [_hint("The fill of each panel (it replaces the first fill layer's field, "
-                      "colours and range):")] if rows else []
+        head = [_hint("The fill of each panel. The Layers tab adds what is drawn over it "
+                      "(contours, vectors, another fill …).")] if rows else []
         self.pf_box.objects = head + [r["panel"] for r in rows]
+        self._pf_show()
+
+    def _pf_show(self):
+        """A section has no level or height to choose (it samples every height)."""
+        xs = self.kind.value == "xsec"
+        for r in self.pf_rows:
+            m = r["mode"].value
+            r["mode"].visible = not xs
+            r["z"].visible = not xs and m in ("height", "level")
+            r["z"].name = "Model level (k)" if m == "level" else "Height (km)"
 
     def _pf_row(self, i, pf):
         F = self.fields
@@ -41,7 +72,17 @@ class FigurePanelOpts:
                                     groups=F.groups(), value=pf["field"]),
             cmap=pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
                                    value=pf["cmap"] if pf["cmap"] in FIG_CMAPS else "viridis"),
-            vmin=_f("Min", float(pf["vmin"])), vmax=_f("Max", float(pf["vmax"])))
+            vmin=_f("Min", float(pf["vmin"])), vmax=_f("Max", float(pf["vmax"])),
+            mode=pn.widgets.Select(name="Level", options=LEVEL_MODES,
+                                   value=pf.get("mode") or "height"),
+            z=_f("Height (km)", float(pf.get("z") or 1.0), step=0.25),
+            extend=pn.widgets.Select(name="Colorbar arrows", options=EXTEND,
+                                     value=pf.get("extend") or "auto"),
+            cbar_label=pn.widgets.TextInput(name="Colorbar label (blank: units)",
+                                            value=pf.get("cbar_label", "") or ""),
+            cbar_ticks=pn.widgets.TextInput(name="Colorbar ticks (blank: auto)",
+                                            value=pf.get("cbar_ticks", "") or "",
+                                            placeholder="0:60:10"))
 
         def on_field(ev):
             d = fg.layer_defaults("fill", F, ev.new)
@@ -49,24 +90,31 @@ class FigurePanelOpts:
             try:
                 r["cmap"].value = d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis"
                 r["vmin"].value, r["vmax"].value = d["vmin"], d["vmax"]
+                r["cbar_label"].placeholder = d["units"]
             finally:
                 self._hold = False
             self.request()
 
         r["field"].param.watch(on_field, "value")
-        for k in ("cmap", "vmin", "vmax"):
+        r["mode"].param.watch(lambda e: self._pf_show(), "value")
+        for k in ("cmap", "vmin", "vmax", "mode", "z", "extend", "cbar_label", "cbar_ticks"):
             r[k].param.watch(lambda e: self.request(), "value")
-        r["panel"] = _grid((r["field"], 2), r["cmap"], r["vmin"], r["vmax"], n=5)
+        r["cbar_label"].placeholder = fg.layer_defaults("fill", F, pf["field"])["units"]
+        r["panel"] = _grid((r["field"], 2), r["cmap"], r["vmin"], r["vmax"],
+                           r["mode"], r["z"], r["extend"], (r["cbar_ticks"], 2),
+                           (r["cbar_label"], 3), n=5)
         return r
 
     def _pf_collect(self, r):
-        # the panel's own field defaults (blanking, colorbar ends) override the shared
-        # fill layer's (e.g. reflectivity's "blank where <= 0")
+        # the panel's own field defaults (blanking) override the shared fill layer's
+        # (e.g. reflectivity's "blank where <= 0")
         d = fg.layer_defaults("fill", self.fields, r["field"].value)
         return dict(field=r["field"].value, cmap=r["cmap"].value, vmin=float(r["vmin"].value),
-                    vmax=float(r["vmax"].value), units=d["units"],
-                    mask_below=d["mask_below"], extend=d["extend"], white_first=False,
-                    reverse=False)
+                    vmax=float(r["vmax"].value), mode=r["mode"].value,
+                    z=float(r["z"].value or 0.0), units=d["units"],
+                    mask_below=d["mask_below"], extend=r["extend"].value, white_first=False,
+                    reverse=False, cbar_label=r["cbar_label"].value,
+                    cbar_ticks=r["cbar_ticks"].value)
 
     # ------------------------------------------------------------ panel heights
     def _on_heights(self, layout=False):
@@ -114,11 +162,19 @@ class FigurePanelOpts:
         self.request()
 
     def _show_storm(self):
-        """The custom storm motion's u, v, and the inset's place, when they apply."""
-        sk = self.sk
+        """The skew-T and hodograph sections of the panels' layout, the custom storm
+        motion's u, v, the inset's place, the hodograph's view, and what only a full
+        hodograph draws."""
+        sk, lay = self.sk, self.sk["layout"].value
+        self.skewt_sec.visible = lay != "hodo"
+        self.hodo_sec.visible = lay != "skewt"
         sk["storm_u"].visible = sk["storm_v"].visible = sk["storm"].value == "custom"
-        sk["inset_loc"].visible = sk["layout"].value == "inset"
-        sk["hodo_storm"].visible = sk["layout"].value != "skewt"
+        sk["inset_loc"].visible = sk["inset_size"].visible = lay == "inset"
+        sk["hodo_max"].visible = sk["hodo_center"].value != "fit"
+        sk["hodo_cu"].visible = sk["hodo_cv"].visible = sk["hodo_center"].value == "custom"
+        sk["inset_x"].visible = sk["inset_y"].visible = \
+            lay == "inset" and sk["inset_loc"].value == "custom"
+        sk["hodo_key"].visible = sk["srh"].visible = lay in ("side", "hodo")
 
     def _sync_code(self, text):
         """The highlighted editor and the plain box hold the same code."""
@@ -133,14 +189,16 @@ class FigurePanelOpts:
             config.set_state("figure_code_plain", "1" if plain else "")
 
     # ------------------------------------------------------------ events
-    def _on_layout(self):
+    def _on_layout(self, panels=None):
+        """New grid of panels (panels: the {run, time_s} of each, for vary = custom)."""
         if self._hold:
             return
         field = self.vary.value == "field"
+        self._pf_sync()
         self._show_vary()
         self._build_times()
         self._build_pf([self._pf_collect(r) for r in self.pf_rows])
-        self._build_pc([])
+        self._build_pc(panels or [])
         self._build_titles()
         if field and self.cb_mode.value == "shared":
             self.cb_mode.value = "each"
@@ -148,8 +206,7 @@ class FigurePanelOpts:
         self.request()
 
     def _on_vary(self):
-        """New panel arrangement: a run x time grid gets one row (or column) per run
-        and one column (row) per chosen time."""
+        """New panel arrangement."""
         if self._hold:
             return
         if self.kind.value == "th":
@@ -159,19 +216,6 @@ class FigurePanelOpts:
         if self.vary.value == "height":
             self._on_heights(layout=True)
             return
-        if self.vary.value == "grid":
-            chosen = [t for t in self._time_values() if t != NONE]
-            nr, nt = len(self.run_rows), max(1, len(chosen))
-            if nt == 1 and self.cols.value * self.rows.value > 1:
-                nt = int(self.cols.value if self.runs_as.value == "rows" else self.rows.value)
-            self._hold = True
-            try:
-                self.rows.value, self.cols.value = (nr, nt) if self.runs_as.value == "rows" \
-                    else (nt, nr)
-            finally:
-                self._hold = False
-            self._show_vary()
-            self._build_times(chosen)
         self._on_layout()
 
     def _show_vary(self):
@@ -182,18 +226,19 @@ class FigurePanelOpts:
         self.times_sec.title = {
             "time": "Times (one per panel)", "field": "Time and fields",
             "height": "Time and heights",
-            "grid": "Times (one per " + ("column)" if self.runs_as.value == "rows" else "row)"),
             "custom": "Run and time of each panel"}.get(vary, "Times")
         self.tm_box.visible = self.tstep.visible = self.tfill.visible = \
-            vary in ("time", "grid")
+            vary == "time"
         self.time1.visible = vary in ("field", "height")
         self.pz.visible = self.pz_mode.visible = vary == "height"
         self.pz.name = ("Model levels (k), one per panel" if self.pz_mode.value == "level"
                         else "Heights (km), one per panel")
-        self.zl_row.visible = vary == "height" and maps
+        self.zl_on.visible = vary == "height" and maps
         self.pf_box.visible = vary == "field"
+        self._pf_show()
         self.pc_box.visible = vary == "custom"
-        self.runs_as.visible = (vary == "grid" and maps) or kind == "th"
+        self.runs_as.visible = kind == "th"
+        self.grid_fill_sec.visible = maps
         self.run_sel.visible = (len(self.run_rows) > 1 or bool(self._other_runs())) and \
             vary in ("time", "field", "height") and maps
         opts = VARY if kind != "xsec" else {k: v for k, v in VARY.items() if v != "height"}
@@ -207,8 +252,10 @@ class FigurePanelOpts:
         self.series_col.visible = self.ts_sec.visible = kind in ("th", "line")
         self.ts_sec.title = "Time and height axes" if kind == "th" else "Time and value axes"
         self.ts_zmin.visible = self.ts_zmax.visible = kind == "th"
-        for w in (self.ts_ymin, self.ts_ymax, self.ts_zero, self.ts_legend, self.ts_legloc):
+        for w in (self.ts_ymin, self.ts_ymax, self.ts_zero, self.ts_legend, self.ts_legloc,
+                  self.ts_legncol, self.ts_legframe, self.ts_mark, self.ts_mark_legend):
             w.visible = kind == "line"
+        self.ext_sec.visible = kind in ("plan", "xsec", "th")
         self.snd_col.visible = kind == "sounding"
         self.dist_col.visible = kind == "dist"
         self._show_dist_opts()
@@ -224,14 +271,23 @@ class FigurePanelOpts:
         """The distribution plot settings the chosen kind of plot uses."""
         ds, plot = self.ds, self.ds["plot"].value
         hist, cum, boxy = plot == "hist", plot == "ecdf", plot in ("box", "violin")
-        for k in ("norm", "bins", "width", "hstyle"):
+        for k in ("norm", "bins", "width", "hstyle", "bar_labels"):
             ds[k].visible = hist
         ds["cum"].visible = cum
         ds["whis"].visible = ds["means"].visible = ds["horizontal"].visible = boxy
         ds["ymin"].visible = ds["ymax"].visible = not boxy
         ds["ymin"].name = "Fraction axis from" if cum else "Count axis from"
         ds["ymax"].name = "Fraction axis to" if cum else "Count axis to"
-        ds["legend"].visible = ds["legend_loc"].visible = not boxy
+        for k in ("legend", "legend_loc", "legend_ncol", "legend_frame"):
+            ds[k].visible = not boxy
+        ds["stats_loc"].visible = ds["stats_at"].value == "box"
+
+    def _show_legend(self):
+        """The legend settings the chosen place (a panel's axes or the figure) uses."""
+        fig = self.lg_where.value == "figure"
+        self.lg_panel.visible = not fig
+        self.lg_from.visible = fig
+        self.lg_loc.options = LOCS + FIG_LOCS if fig else LOCS
 
     def _show_cbar(self):
         self.cb_opts.visible = self.cb_mode.value != "none"
@@ -347,14 +403,6 @@ class FigurePanelOpts:
                     self.cb_mode.value = "none"
             finally:
                 self._hold = False
-            if kind in ("th", "line") and not self.ser_cards:
-                ss = getattr(self.v, "series", {}) or {}
-                keys = [k for k in ss if ("profile" in ss[k]["ds"]) == (kind == "th")]
-                for k in keys[:3]:
-                    self.ser_cards.append(self._ser_card(self._tab_series(k)))
-                if not self.ser_cards:
-                    self.ser_cards.append(self._ser_card(fg.series_defaults(
-                        self.F, self._new_recipe())))
             if kind == "sounding" and not self.snd_cards:
                 self.snd_cards = [self._snd_card(e) for e in self.tab_soundings()]
                 if not self.snd_cards:
@@ -383,17 +431,32 @@ class FigurePanelOpts:
 
     def _on_dom(self, ev):
         if ev.new == "box" and not self.spec["domain"].get("box"):
-            self._use_view()
-            return
+            self._set_box([float(v) for v in self.v.view])  # (a start: the map's view)
         self._show_region()
         self.request()
 
-    def _use_view(self):
-        self.spec["domain"] = dict(self.spec["domain"], box=[float(v) for v in self.v.view])
-        if self.dom.value != "box":
-            self.dom.value = "box"  # (re-renders)
-        self._show_region()
-        self.request()
+    def _set_box(self, box):
+        """The fixed box [x0, x1, y0, y1] (grid km), in the spec and its fields."""
+        self.spec["domain"] = dict(self.spec["domain"], box=[round(v, 2) for v in box])
+        hold, self._hold = self._hold, True
+        try:
+            for w, v in zip((self.box_x0, self.box_x1, self.box_y0, self.box_y1),
+                            self.spec["domain"]["box"]):
+                w.value = v
+        finally:
+            self._hold = hold
+
+    def _on_box(self):
+        if self._hold:
+            return
+        b = [w.value for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1)]
+        ok = None not in b and b[1] > b[0] and b[3] > b[2]
+        self.box_html.object = "" if ok else (
+            '<div class="cv-status" style="color:#f87171">The box needs x max above '
+            'x min and y max above y min.</div>')
+        if ok:
+            self.spec["domain"] = dict(self.spec["domain"], box=[float(v) for v in b])
+            self.request()
 
     def _use_ab(self):
         pts = self.v.xs_pts
@@ -416,11 +479,11 @@ class FigurePanelOpts:
         self.area_xs.visible = kind == "xsec" or (kind == "plan" and line)
         self.area_sec.title = "Section" if kind == "xsec" else (
             "Area and section line" if line else "Area")
-        b = self.spec["domain"].get("box")
         self.half.visible = self.dom.value == "storm"
-        self.box_btn.visible = self.dom.value == "box"
-        self.box_html.object = ('<div class="cv-hint">Box x {:.1f} – {:.1f}, y {:.1f} – {:.1f} '
-                                'km</div>'.format(*b) if b and self.dom.value == "box" else "")
+        for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
+            w.visible = self.dom.value == "box"
+        if self.dom.value != "box":
+            self.box_html.object = ""
         x = self.spec["xsec"]
         storm = self.xs_mode.value == "storm"
         for w in (self.xs_angle, self.xs_half, self.xs_offx, self.xs_offy):

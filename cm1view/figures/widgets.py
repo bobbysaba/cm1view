@@ -11,11 +11,16 @@ from .. import config
 from . import draw as figdraw
 from ..viewer.picker import RunPicker
 from .cards import (
-    ANN_KINDS, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS, DIST_WHIS, LOCS,
-    SIZE_PRESETS, SND_LAYOUTS, STORM_MOTIONS, TYPE_LABEL, VARY, _auto, _chk, _f, _grid,
-    _hint, _row, _section,
+    ANN_KINDS, DIST_BAR_LABELS, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS,
+    DIST_STATS_AT, DIST_WHIS, LOCS, MARK_EXTREMES, SIZE_PRESETS, SND_LAYOUTS, STORM_MOTIONS,
+    TYPE_LABEL, VARY, _auto, _checks, _chk, _f, _grid, _hint, _row, _section,
 )
 from .times import _tlabel
+
+SND_ORDER = ("sbcape", "sbcin", "sblcl", "mlcape", "mlcin", "mllcl", "mllfc", "mucape",
+             "mucin", "shear250", "shear500", "shear01", "shear03", "shear06", "srh250", "srh500", "srh1", "srh3", "esrh",
+             "stp_fixed", "stp_eff", "scp")  # (the table choices as the Sounding tab lists them)
+STORM_KEYS = ("storm", "storm_u", "storm_v")  # (the SRH of the table, legend and hodograph)
 
 
 class FigureWidgets:
@@ -32,7 +37,16 @@ class FigureWidgets:
         self.vary = pn.widgets.Select(name="Panels differ in", options=VARY)
         self.run_sel = pn.widgets.Select(name="Run", options={})
         self.runs_as = pn.widgets.Select(name="Runs are", options={
+            "Rows": "rows", "Columns": "cols"})  # (time-height panels)
+        # Fill a grid: panels of runs x times (each panel gets its own run and time)
+        self.gg_runs = pn.widgets.MultiChoice(
+            name="Runs", options={f"1. {os.path.basename(run.path)}": 0}, value=[0])
+        self.gg_as = pn.widgets.Select(name="Runs are", options={
             "Rows": "rows", "Columns": "cols"})
+        self.gg_n = pn.widgets.IntInput(name="Times", value=3, start=1, end=12)
+        self.gg_step = pn.widgets.IntInput(name="Every … outputs", value=5, start=1)
+        self.gg_go = pn.widgets.Button(name="Fill the grid", height=32, button_type="primary",
+                                       button_style="outline")
         self.rows = pn.widgets.IntInput(name="Rows", start=1, end=8)
         self.cols = pn.widgets.IntInput(name="Columns", start=1, end=8)
         self.size_preset = pn.widgets.Select(name="Size", options=SIZE_PRESETS, value="")
@@ -70,11 +84,13 @@ class FigureWidgets:
                                               button_style="outline")
         # ---- Panels: area
         self.dom = pn.widgets.Select(name="Plan-view area", options={
-            "Centred on tracked storm": "storm", "Fixed box (map view)": "box",
+            "Centred on tracked storm": "storm", "Fixed box": "box",
             "Whole domain": "full"})
         self.half = _f("Half-width (km)", 12.5, step=0.5, start=0.5)
-        self.box_btn = pn.widgets.Button(name="Use current map view", height=32,
-                                         button_type="light", button_style="outline")
+        self.box_x0 = _f("x min (km)", None, step=0.5)
+        self.box_x1 = _f("x max (km)", None, step=0.5)
+        self.box_y0 = _f("y min (km)", None, step=0.5)
+        self.box_y1 = _f("y max (km)", None, step=0.5)
         self.box_html = pn.pane.HTML(margin=(2, 4))
         self.coords = pn.widgets.Select(name="Axis coordinates", options={
             "Model grid x, y": "grid", "Relative to the storm": "storm"})
@@ -118,7 +134,7 @@ class FigureWidgets:
         self.ser_new = pn.widgets.Button(name="+ New series", button_type="light",
                                          button_style="outline", height=32)
         self.series_col = pn.Column(
-            _hint('Each series is computed for every run of the figure (<b>Panels → Runs</b>; '
+            _hint('Each series is computed for every run of the figure (<b>Layers → Runs used</b>; '
                   'regions around the storm use each run’s track) and cached, like the Series '
                   'tool. Time–height panels: a row per series and a column per run. Time '
                   'series: series with the same <b>Panel</b> number share a panel; other units '
@@ -135,12 +151,22 @@ class FigureWidgets:
                 "Mixed layer": "ml", "Surface": "sb", "Most unstable": "mu", "None": "none"}),
             params=_chk("CAPE / CIN in legend", True), legend=_chk("Legend (one sounding)", False),
             guides=_chk("Adiabats", True), barbs=_chk("Wind barbs", True),
-            legend_loc=pn.widgets.Select(name="Legend at", options=LOCS))
+            legend_loc=pn.widgets.Select(name="Legend at", options=LOCS),
+            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
+            legend_frame=_chk("Legend frame", True))
         hd = self.hd = dict(
             layout=pn.widgets.Select(name="Panels show", options=SND_LAYOUTS),
-            hodo_max=_f("Hodograph ± (m/s)", 40.0, step=5),
+            hodo_center=pn.widgets.Select(name="Hodograph centred on", options={
+                "The origin (0, 0)": "origin", "What is drawn (fit)": "fit",
+                "Custom (u, v below)": "custom"}),
+            hodo_max=_f("Hodograph ± (m/s)", 40.0, step=5,
+                        description="Half the width of the (square) view"),
+            hodo_cu=_f("Centre u (m/s)", 0.0, step=5),
+            hodo_cv=_f("Centre v (m/s)", 0.0, step=5),
             hodo_top=_f("Hodograph top (km)", 9.0, step=1),
-            hodo_kin=_chk("Storm motions (Bunkers, mean wind)", True),
+            hodo_rm=_chk("Bunkers right mover (RM)", True),
+            hodo_lm=_chk("Bunkers left mover (LM)", True),
+            hodo_mean=_chk("0–6 km mean wind", True),
             hodo_labels=_chk("Heights along the trace", True),
             hodo_key=_chk("Key of the height colours", True),
             srh=pn.widgets.Select(name="SRH shading", options={
@@ -151,31 +177,50 @@ class FigureWidgets:
             hodo_storm=_chk("Ring at the storm motion", True),
             inset_loc=pn.widgets.Select(name="Inset at", options={
                 "Auto (clear of the traces)": "auto", "Upper right": "upper right",
-                "Upper left": "upper left"}))
-        sk_main = list(sk.values())
+                "Upper left": "upper left", "Lower right": "lower right",
+                "Lower left": "lower left", "Custom (x, y below)": "custom"}),
+            inset_size=_f("Inset size", 0.37, step=0.01,
+                          description="Width as a fraction of the skew-T's (0.37: the default)"),
+            inset_x=_f("Inset x (left edge)", 0.62, step=0.01,
+                       description="Fraction of the skew-T's width: 0 left, 1 right"),
+            inset_y=_f("Inset y (bottom edge)", 0.6, step=0.01,
+                       description="Fraction of the skew-T's height: 0 bottom, 1 top"))
+        sk_shows = ("params", "legend", "legend_frame", "guides", "barbs")
+        sk_main = [w for k, w in sk.items() if k not in sk_shows]
         sk.update(hd)  # (one dict for the spec)
         sk["table"] = pn.widgets.MultiChoice(
             name="Parameter table under each panel (blank: none)",
-            options={f"{h} ({u})" if u else h: k for k, h, u in figdraw.SND_PARAMS})
+            options={f"{h} ({u})" if u else h: k for k, h, u in
+                     sorted(figdraw.SND_PARAMS, key=lambda p: SND_ORDER.index(p[0]))})
         self.snd_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.snd_tab = pn.widgets.Button(name="+ The map's soundings", height=32,
                                          button_type="primary", button_style="outline")
         self.snd_new = pn.widgets.Button(name="+ Sounding", button_type="light",
                                          button_style="outline", height=32)
+        self.skewt_sec = _section("Skew-T", _grid(*sk_main),
+                                  _checks(*[sk[k] for k in sk_shows]))
+        self.hodo_sec = _section(
+            "Hodograph",
+            _grid(hd["hodo_center"], hd["hodo_max"], hd["hodo_top"], hd["hodo_cu"],
+                  hd["hodo_cv"], hd["srh"]),
+            _grid(hd["inset_loc"], hd["inset_size"], hd["inset_x"], hd["inset_y"]),
+            _checks(("Storm motions", [hd["hodo_rm"], hd["hodo_lm"], hd["hodo_mean"],
+                                       hd["hodo_storm"]]),
+                    ("Heights", [hd["hodo_labels"], hd["hodo_key"]])),
+            _hint("The key and SRH shading are drawn in a hodograph of its own (side by "
+                  "side, or the hodograph alone), not in an inset. The ring marks the "
+                  "storm motion; with one sounding, dotted lines show the storm-relative "
+                  "inflow and the 0–500 m shear (the critical angle), as in the Sounding "
+                  "tab."))
         self.snd_col = pn.Column(
             _hint("Soundings with the same <b>Panel</b> number share a skew-T (colour = "
                   "sounding). Storm soundings follow each run’s track."),
             _row(self.snd_tab, self.snd_new), self.snd_box,
-            _section("Skew-T and hodograph", _grid(hd["layout"]), _grid(*sk_main),
-                     _grid((sk["table"], 3)),
-                     _hint("Hodograph"), _grid(*list(hd.values())[1:]),
-                     _hint("The key and SRH shading are drawn in a hodograph of its own "
-                           "(side by side, or the hodograph alone), not in the inset. SRH "
-                           "(shading, legend, table) is relative to the chosen storm "
-                           "motion; custom: ground-relative u, v. The ring marks it; with "
-                           "one sounding, dotted lines show the storm-relative inflow and "
-                           "the 0–500 m shear (the critical angle), as in the Sounding "
-                           "tab.")),
+            _section("Sounding panels", _grid(hd["layout"]), _grid((sk["table"], 3)),
+                     _grid(*[hd[k] for k in STORM_KEYS]),
+                     _hint("SRH (shading, legend, table) is relative to the chosen storm "
+                           "motion; custom: ground-relative u, v.")),
+            self.skewt_sec, self.hodo_sec,
             sizing_mode="stretch_width", margin=0)
         # distributions
         ds = self.ds = dict(
@@ -187,17 +232,27 @@ class FigureWidgets:
             bins=pn.widgets.IntInput(name="Bins", value=50, start=1, end=2000, width=90),
             width=_auto("Bin width", description="Blank: the number of bins"),
             hstyle=pn.widgets.Select(name="Bars as", options=DIST_HSTYLES),
+            bar_labels=pn.widgets.Select(name="Bar labels", options=DIST_BAR_LABELS),
             cum=pn.widgets.Select(name="Fraction", options=DIST_CUM),
             whis=pn.widgets.Select(name="Whiskers", options=DIST_WHIS),
             xmin=_auto("Values from"), xmax=_auto("Values to"),
             ymin=_auto("Count axis from"), ymax=_auto("Count axis to"),
             logy=_chk("Log scale", False), means=_chk("Mean (diamond)", True),
-            horizontal=_chk("Horizontal", False), stats=_chk("Mean, sd, n in legend", False),
+            horizontal=_chk("Horizontal", False),
             legend=_chk("Legend", True), legend_loc=pn.widgets.Select(
                 name="Legend at", options=["best"] + LOCS),
+            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
+            legend_frame=_chk("Legend frame", False),
             zero_line=_chk("Zero line", False),
             alpha=_f("Fill opacity", 0.35, step=0.05, start=0.0, end=1.0),
-            lw=_f("Line width", 1.5, step=0.25, start=0.0))
+            lw=_f("Line width", 1.5, step=0.25, start=0.0),
+            stats=pn.widgets.MultiChoice(
+                name="Statistics of each distribution (blank: none)",
+                options={v: k for k, v in figdraw.DIST_STATS.items()}),
+            stats_at=pn.widgets.Select(name="Statistics shown", options=DIST_STATS_AT),
+            stats_loc=pn.widgets.Select(name="Box at", options=LOCS, value="upper right"))
+        stat_keys = ("stats", "stats_at", "stats_loc")
+        ds_shows = ("legend", "legend_frame", "means", "zero_line", "logy", "horizontal")
         self.dist_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.dist_tab = pn.widgets.Button(name="+ The map's distributions", height=32,
                                           button_type="primary", button_style="outline")
@@ -207,12 +262,17 @@ class FigureWidgets:
             _hint("Distributions with the same <b>Panel</b> number share a panel (colour = "
                   "distribution): e.g. one field at two times, or two runs."),
             _row(self.dist_tab, self.dist_new), self.dist_box,
-            _section("Plot", _grid(*ds.values()),
+            _section("Plot", _grid(*[w for k, w in ds.items()
+                                     if k not in stat_keys + ds_shows]),
+                     _checks(*[ds[k] for k in ds_shows]),
                      _hint("Values from / to: the value axis (histogram: the range of the "
                            "bins; blank: the data's, minimum to maximum). Count axis: the "
                            "histogram's or cumulative fraction's. The bins come from a "
                            "4000-bin histogram of every value, so changing them reads "
                            "nothing again.")),
+            _section("Statistics", _grid((ds["stats"], 3), ds["stats_at"], ds["stats_loc"]),
+                     _hint("From every value of each distribution (not only those in the "
+                           "bins). Bar labels (histograms): percent of the whole sample.")),
             sizing_mode="stretch_width", margin=0)
         # time axes of time-height / time-series panels
         self.ts_tmin = pn.widgets.TextInput(name="From (min)", placeholder="data")
@@ -223,12 +283,30 @@ class FigureWidgets:
         self.ts_ymax = _auto("y to (left axis)")
         self.ts_legend = _chk("Legend", True)
         self.ts_legloc = pn.widgets.Select(name="Legend at", options=["best"] + LOCS)
+        self.ts_legncol = pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1)
+        self.ts_legframe = _chk("Legend frame", False)
         self.ts_zero = _chk("Zero line", False)
+        self.ts_mark = pn.widgets.Select(name="Mark each line's", options=MARK_EXTREMES)
+        self.ts_mark_legend = _chk("Extremes in the legend", False)
+        # the maximum / minimum of a layer (plan, section and time-height panels)
+        self.ex_on = _chk("Maximum / minimum", False)
+        self.ex_layer = pn.widgets.Select(name="Of layer", options={"First fill": -1})
+        self.ex_what = pn.widgets.Select(name="Show", value="both", options={
+            k: v for k, v in MARK_EXTREMES.items() if v})
+        self.ex_loc = pn.widgets.Select(name="Text at", options=LOCS, value="upper center")
+        self.ex_marker = _chk("Mark where (+ max, × min)", True)
+        self.ex_box = _chk("White box", True)
+        self.ext_sec = _section(
+            "Maximum and minimum",
+            _grid(self.ex_layer, self.ex_what, self.ex_loc),
+            _checks(self.ex_on, self.ex_marker, self.ex_box),
+            _hint("Of the chosen layer (a fill, contours or shading; else the first fill) "
+                  "over what each panel shows, in each panel."))
 
     def _build_more(self):
-        """Annotate tab (contour key, annotations, own code) and the export widgets."""
+        """Annotate tab (annotations, own code), the contour key and the export widgets."""
         run = self.run
-        # ---- Annotate: contour key and annotations
+        # ---- contour key (Style tab) and annotations (Annotate tab)
         self.ck_on = _chk("Contour key (nested circles)", False)
         self.ck_layer = pn.widgets.Select(name="Of layer", options={"First contours": -1})
         self.ck_label = pn.widgets.TextInput(name="Name in the middle", value="w")
@@ -298,38 +376,50 @@ class FigureWidgets:
             _grid(self.rows, self.cols, self.fit_btn),
             _grid(self.size_preset, self.width, self.height),
             _hint("The height follows the panels (grid, colorbar, titles) until you type "
-                  "a size; <b>Fit height</b> makes it follow again."))
+                  "a size; <b>Fit height</b> makes it follow again."), collapsed=False)
+        self.grid_fill_sec = _section(
+            "Fill a grid", _hint(
+                "One panel per run and time: pick the runs, how many times (from the shown "
+                "time, every … outputs) and whether the runs are rows or columns.  This "
+                "sets the rows and columns and gives every panel its own run and time "
+                "(<b>Panels differ in → Each panel: own run &amp; time</b>)."),
+            _grid((self.gg_runs, 2), self.gg_as, self.gg_n, self.gg_step), self.gg_go)
         self.times_sec = _section("Times", _grid(self.time1, self.tstep, self.tfill),
                                   _grid(self.pz_mode, (self.pz, 2)), self.tm_box, self.pf_box,
                                   self.pc_box)
         self.titles_sec = _section("Titles", self.suptitle, self.titles_box,
                                    _row(self.auto_titles, self.clear_titles))
-        self.area_plan = pn.Column(_grid(self.dom, self.half, self.box_btn, self.coords),
+        self.area_plan = pn.Column(_grid(self.dom, self.half, self.coords),
+                                   _grid(self.box_x0, self.box_x1, self.box_y0, self.box_y1,
+                                         n=2),
                                    self.box_html, margin=0, sizing_mode="stretch_width")
         self.area_xs = pn.Column(_grid(self.xs_mode, self.xs_angle, self.xs_half, self.xs_offx,
                                        self.xs_offy, self.xs_top, self.xs_ab),
                                  self.xs_html, margin=0, sizing_mode="stretch_width")
         self.area_sec = _section("Area", self.area_plan, self.area_xs)
         self.ts_sec = _section("Time and value axes", _grid(
-            self.ts_tmin, self.ts_tmax, self.ts_zero, self.ts_zmin, self.ts_zmax, self.ts_ymin,
-            self.ts_ymax, self.ts_legend, self.ts_legloc),
+            self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax, self.ts_ymin,
+            self.ts_ymax, self.ts_legloc, self.ts_legncol, self.ts_mark),
+            _checks(self.ts_legend, self.ts_legframe, self.ts_zero, self.ts_mark_legend),
             _hint("Blank: the range of the data. Minutes are counted from <b>Style → Panel "
                   "labels → Minutes counted from</b>."))
         self.runs_sec = _section(
-            "Runs", _hint("Runs the panels can come from (e.g. tornadic vs non-tornadic). Each "
-                          "run has its own storm track, for storm-centred panels and "
-                          "storm-relative fields: the viewer's track for this run, or a track "
-                          "file (storm_tracks/*.csv is found automatically)."),
+            "Runs used", _hint(
+                "Each layer, sounding, distribution and series picks its run in its own "
+                "<b>Run</b> list (a run not in the figure yet is added by picking it); a "
+                "run nothing uses any more is dropped.  Here: each run's name, colour, "
+                "line style and storm track (for storm-centred panels and storm-relative "
+                "fields: the viewer's track for this run, or a track file; "
+                "storm_tracks/*.csv is found automatically)."),
             self.runs_box,
-            _hint("<b>Add a run</b>: your recent runs, the runs next to this one and those "
-                  "under <b>Where your runs live</b> (⚙ Settings). Type to filter, or paste "
-                  "a folder. The <b>Run</b> lists of the panels and soundings offer them "
-                  "too."),
-            self.add_pick.body, self.runs_msg, collapsed=True)
+            _hint("<b>Add a run</b> here if you want it before using it: your recent runs, "
+                  "the runs next to this one and those under <b>Where your runs live</b> "
+                  "(⚙ Settings). Type to filter, or paste a folder."),
+            self.add_pick.body, self.runs_msg)
         self._build_combo()
         self._build_tree()
-        panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.times_sec, self.titles_sec,
-                               self.area_sec, self.ts_sec, self.runs_sec,
+        panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.grid_fill_sec, self.times_sec,
+                               self.titles_sec, self.area_sec, self.ts_sec,
                                sizing_mode="stretch_width")
         return panels_tab
 
@@ -340,10 +430,6 @@ class FigureWidgets:
                 "Text, markers, arrows, lines and shapes in one panel (number) or all (0), in "
                 "axis units (km; minutes and km or values for series) or panel fractions."),
                 _grid(self.ann_kind, self.ann_add), self.ann_box),
-            _section("Contour key", _hint(
-                "Nested circles labelled with a contour layer's levels (a key for unlabelled "
-                "contours), placed in figure fractions from the lower left."),
-                self.ck_on, self.ck_opts),
             _section("Your own code", _hint(
                 "Python run after everything else is drawn, for what the editor has no "
                 "setting for. It has <code>fig</code>, <code>axs</code> (the panels' axes: "
@@ -352,7 +438,7 @@ class FigureWidgets:
                 "with the figure and runs in its script too. An error stops the code, not "
                 "the figure (the status line says where). The code is read when you "
                 "click outside the box."), self.code_on, self.code, self.code_plain,
-                self.code_box, collapsed=True),
+                self.code_box),
             sizing_mode="stretch_width")
         export_tab = pn.Column(
             _section("Image", _grid(self.tight, self.pad, self.bg),

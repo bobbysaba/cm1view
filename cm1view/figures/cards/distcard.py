@@ -5,6 +5,7 @@ import panel as pn
 
 from ...core import dist
 from .. import draw as figdraw
+from ...viewer.numinput import FloatInput
 from .base import (
     _hex, _f, _num, _grid, _hint, _fold, SER_REGIONS, ANN_KINDS, ANN_FIELDS, _BTN, _chk,
 )
@@ -17,6 +18,10 @@ DIST_PLOTS = {"Histogram": "hist", "Box plot": "box", "Violin": "violin",
 DIST_NORMS = {"Count": "count", "PDF (density)": "pdf", "Fraction": "frac"}
 DIST_HSTYLES = {"Filled outline": "stepfilled", "Outline": "step", "Bars": "bar"}
 DIST_CUM = {"At or below x": "below", "Above x (exceedance)": "above"}
+DIST_BAR_LABELS = {"None": "", "Count": "count", "Percent of the sample": "percent",
+                   "Value (as the count axis)": "axis"}
+DIST_STATS_AT = {"In the legend (box plots: under the boxes)": "legend",
+                 "In a box in the panel": "box"}
 DIST_WHIS = {"1.5 × IQR (Tukey)": "tukey", "Min – max": "range", "5th – 95th percentile": "p5",
              "1st – 99th percentile": "p1"}
 
@@ -51,11 +56,11 @@ class DistCard:
         off = r.get("offset") or (0.0, 0.0)
         w["offx"] = _f("Offset x (km)", float(off[0]), 100, step=1.0)
         w["offy"] = _f("Offset y (km)", float(off[1]), 100, step=1.0)
-        w["lo"] = pn.widgets.FloatInput(  # (0 is a limit here, not blank)
+        w["lo"] = FloatInput(  # (0 is a limit here, not blank)
             name="Only values from", value=r.get("lo"), placeholder="all", width=120,
             description="Keep values at or above this (blank: no limit), e.g. 1 m/s for "
                         "updrafts")
-        w["hi"] = pn.widgets.FloatInput(name="to", value=r.get("hi"), placeholder="all",
+        w["hi"] = FloatInput(name="to", value=r.get("hi"), placeholder="all",
                                         width=90)
         w["label"] = pn.widgets.TextInput(name="Legend text (blank: automatic)",
                                           value=ent.get("label", ""), width=220)
@@ -143,8 +148,9 @@ class AnnotationRow:
         self.w = w = {}
         w["kind"] = pn.widgets.Select(name="Kind", options=ANN_KINDS, value=a.get("kind", "text"),
                                       width=130)
-        w["panel"] = pn.widgets.IntInput(name="Panel (0: all)", start=0, end=64, width=100,
-                                         value=int(a.get("panel", -1)) + 1)
+        w["panel"] = pn.widgets.TextInput(name="Panels (blank: all)", width=120,
+                                          value=panels_text(a.get("panel", -1)),
+                                          placeholder="all, or 1, 3-4")
         w["coords"] = pn.widgets.Select(name="Position in", options={
             "Axis units (km, min)": "data", "Panel fraction (0–1)": "axes"},
             value=a.get("coords", "data"), width=170)
@@ -178,8 +184,11 @@ class AnnotationRow:
             if k not in ("kind", "panel", "color"):
                 x.visible = k in use
         kind = next(k for k, v in ANN_KINDS.items() if v == w["kind"].value)
-        where = "every panel" if not w["panel"].value else \
-            f"panel {figdraw.panel_letter(int(w['panel'].value) - 1, '{a}')}"
+        p = parse_panels(w["panel"].value)
+        ps = [p] if isinstance(p, int) else p
+        where = "every panel" if p == -1 else \
+            ("panels " if len(ps) > 1 else "panel ") + \
+            ", ".join(figdraw.panel_letter(q, "{a}") for q in ps)
         txt = f" “{w['text'].value}”" if "text" in use and w["text"].value else ""
         self.title.object = f"<b>{kind}</b>{txt} · {where}"
 
@@ -189,9 +198,42 @@ class AnnotationRow:
 
     def collect(self):
         w = self.w
-        a = dict(kind=w["kind"].value, panel=int(w["panel"].value or 0) - 1,
+        a = dict(kind=w["kind"].value, panel=parse_panels(w["panel"].value),
                  color=w["color"].value)
         for k in ANN_FIELDS[a["kind"]]:
             v = w[k].value
             a[k] = float(v or 0.0) if isinstance(w[k], pn.widgets.FloatInput) else v
         return a
+
+
+def parse_panels(text):
+    """An annotation's "panel" from the Panels box (panels counted from 1): -1 (blank,
+    "all" or 0: every panel), one panel index, or a sorted list of them ("1, 3-4" ->
+    [0, 2, 3]); what is not a number or a range is left out."""
+    ps = set()
+    for tok in str(text or "").replace(",", " ").split():
+        lo, _, hi = tok.partition("-")
+        try:
+            lo, hi = int(lo), int(hi or lo)
+        except ValueError:
+            continue
+        ps.update(range(min(lo, hi), max(lo, hi) + 1))
+    if not ps or min(ps) <= 0:
+        return -1
+    ps = sorted(q - 1 for q in ps)
+    return ps[0] if len(ps) == 1 else ps
+
+
+def panels_text(p):
+    """The Panels box's text of an annotation's "panel" (the inverse of parse_panels)."""
+    ps = sorted(int(q) for q in p) if isinstance(p, (list, tuple)) else [int(p)]
+    if not ps or -1 in ps:
+        return ""
+    out, i = [], 0
+    while i < len(ps):  # runs of consecutive panels as ranges
+        j = i
+        while j + 1 < len(ps) and ps[j + 1] == ps[j] + 1:
+            j += 1
+        out.append(f"{ps[i] + 1}" if j == i else f"{ps[i] + 1}-{ps[j] + 1}")
+        i = j + 1
+    return ", ".join(out)

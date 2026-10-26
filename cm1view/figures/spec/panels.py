@@ -108,10 +108,19 @@ def th_panel(run, ds, entry, spec):
     half = 0.5 * (t[1] - t[0]) if t.size > 1 else 1.0
     x0 = float(ts["tmin"]) if ts.get("tmin") not in (None, "") else t[have[0]] - half
     x1 = float(ts["tmax"]) if ts.get("tmax") not in (None, "") else t[have[-1]] + half
-    z0 = float(ts["zmin"]) if ts.get("zmin") not in (None, "") else float(z[0])
-    z1 = float(ts["zmax"]) if ts.get("zmax") not in (None, "") else float(z[-1])
+    # heights: the cells' edges (drawn "nearest"), within the recipe's layer, so a
+    # 0–10 km series shows 0 to 10 km and not the top level's centre (e.g. 9.9)
+    dz = np.diff(z) if z.size > 1 else np.array([1.0])
+    lo, hi = float(z[0] - 0.5 * dz[0]), float(z[-1] + 0.5 * dz[-1])
+    rec = entry.get("recipe") or {}
+    if rec.get("z0") not in (None, ""):
+        lo = max(lo, float(rec["z0"]))
+    if rec.get("z1") not in (None, ""):
+        hi = min(hi, float(rec["z1"])) if float(rec["z1"]) > lo else hi
+    z0 = float(ts["zmin"]) if ts.get("zmin") not in (None, "") else lo
+    z1 = float(ts["zmax"]) if ts.get("zmax") not in (None, "") else hi
     return dict(x=t, y=z, L0=np.asarray(P.T, dtype=np.float32), xlim=(x0, x1),
-                ylim=(z0, min(z1, float(z[-1]) + 1e-6) if z1 > z0 else (z0, z0 + 1.0)))
+                ylim=(z0, min(z1, hi)) if z1 > z0 else (z0, z0 + 1.0))
 
 
 def line_panel(spec, i, get):
@@ -226,13 +235,13 @@ def _param(r, key):
     try:
         if key.endswith(("cape", "cin")):
             return float(r[key[:2]][key[2:]])
-        if key == "mllcl":
-            return float(r["ml"]["lcl_z"])
-        if key in ("srh1", "srh3", "esrh"):
+        if key.endswith(("lcl", "lfc")):
+            return float(r[key[:2]][f"{key[2:]}_z"])
+        if key in ("srh250", "srh500", "srh1", "srh3", "esrh"):
             return float(r["kin"][key])
-        if key == "shear06":
-            return float(np.hypot(*r["kin"]["shear06"]))
-        if key in ("stp_eff", "scp"):
+        if key.startswith("shear"):
+            return float(np.hypot(*r["kin"][key]))
+        if key in ("stp_eff", "stp_fixed", "scp"):
             return float(r["comp"][key])
     except (KeyError, TypeError, ValueError):
         pass
@@ -283,7 +292,9 @@ def sounding_panel(spec, i, get, auto_label=None):
                 out[f"N{n}_{k}"] = float(kin[k])
         out[f"N{n}_par"] = np.array([_param(r, k) for k, _, _ in figdraw.SND_PARAMS])
         lab = ent.get("label") or (auto_label(e) if auto_label else "")
-        if spec.get("skewt", {}).get("params", True) and parcel in ("sb", "ml", "mu"):
+        # (no CAPE/CIN in the label of a hodograph alone: it has no skew-T options to hide it)
+        if (spec.get("skewt", {}).get("params", True) and parcel in ("sb", "ml", "mu")
+                and figdraw.sounding_layout(spec.get("skewt", {})) != "hodo"):
             lab += (f" ({parcel.upper()}CAPE {r[parcel]['cape']:.0f}, "
                     f"CIN {r[parcel]['cin']:.0f} J kg$^{{-1}}$)")
         out[f"N{n}_label"] = lab.strip()

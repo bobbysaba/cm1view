@@ -259,6 +259,9 @@ def skewt_hodo_figure(items, base=None, parcel="ml", units="m/s", width=9.0, sty
                    for a, b, c in HODO_BANDS if a < lk["hodo_top"]]
         handles.append(Line2D([], [], marker="o", ms=7, mfc="none", mec=ACCENT, lw=0,
                               label="Storm motion"))
+        if not single:  # which line style is which sounding
+            handles += [Line2D([], [], color=TEXT, lw=lk["hodo_lw"] * 0.83, ls=LINESTYLES[n],
+                               label=label) for n, (label, _, _) in enumerate(items)]
         _legend(hx, handles, "upper left", fontsize=7)
     fig.cv_axes = {"skew": ax, "hodo": hx}
     return fig
@@ -402,10 +405,13 @@ def param_rows(r, units):
         ("Sfc T / Td", (th["sfc_T"] - 273.15, th["sfc_Td"] - 273.15), "°C", "pair"),
         ("Sfc θe", th["sfc_the"], "K", "{:.1f}"),
         ("Kinematics", None, None),
+        ("0–250 m shear", mag(kin["shear250"]), units),
+        ("0–500 m shear", mag(kin["shear500"]), units),
         ("0–1 km shear", mag(kin["shear01"]), units),
         ("0–3 km shear", mag(kin["shear03"]), units),
         ("0–6 km shear", mag(kin["shear06"]), units),
         ("0–8 km shear", mag(kin["shear08"]), units),
+        ("0–250 m SRH", kin["srh250"], "m²/s²"),
         ("0–500 m SRH", kin["srh500"], "m²/s²"),
         ("0–1 km SRH", kin["srh1"], "m²/s²"),
         ("0–3 km SRH", kin["srh3"], "m²/s²"),

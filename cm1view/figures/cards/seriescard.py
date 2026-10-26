@@ -57,6 +57,12 @@ class SeriesCard:
         w["extend"] = pn.widgets.Select(name="Colorbar ends", options=[
             "auto", "neither", "max", "min", "both"], value=ent.get("extend", "neither"),
             width=110)
+        w["cbar_label"] = pn.widgets.TextInput(
+            name="Colorbar label (blank: units)", value=ent.get("cbar_label", "") or "",
+            placeholder=ent.get("units", ""), width=240)
+        w["cbar_ticks"] = pn.widgets.TextInput(
+            name="Colorbar ticks (blank: auto)", value=ent.get("cbar_ticks", "") or "",
+            placeholder="0:60:10", width=150)
         # time-series look
         w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color", "k")),
                                             width=70)
@@ -88,7 +94,7 @@ class SeriesCard:
         w["field"].param.watch(self._on_field, "value")
         w["op"].param.watch(lambda e: self._set_title(), "value")
         self.th_row = _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
-                            w["nlevels"], w["extend"])
+                            w["nlevels"], w["extend"], (w["cbar_label"], 2), w["cbar_ticks"])
         self.line_row = _grid(w["color"], w["lw"], w["marker"], w["panel"], w["axis"],
                               w["ylabel"], (w["runs"], 3))
         self.panel, self.body = _fold(
@@ -183,7 +189,7 @@ class SeriesCard:
         e.pop("_auto", None)
         e["recipe"] = self.recipe()
         for k in ("op", "label", "cmap", "reverse", "white_first", "nlevels", "extend",
-                  "color", "marker", "axis", "ylabel"):
+                  "color", "marker", "axis", "ylabel", "cbar_label", "cbar_ticks"):
             e[k] = w[k].value
         e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
         e["lw"] = float(w["lw"].value or 1.5)
@@ -231,7 +237,7 @@ class SoundingCard:
             [self.title, pn.Spacer(), self.rm],
             [_grid(w["run"], (w["time"], 2), w["kind"], w["x"], w["y"], w["avg"],
                    w["auto_color"], w["color"], w["panel"], (w["label"], 3)),
-             _hint("Automatic colour: the run's colour (<b>Panels → Runs</b>) when each "
+             _hint("Automatic colour: the run's colour (<b>Layers → Runs used</b>) when each "
                    "sounding of the panel is from another run, else the next colour.")])
         self._show()
 

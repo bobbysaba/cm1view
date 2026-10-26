@@ -147,6 +147,14 @@ FIG_ONLY = ("version", "kind", "arrange", "parts", "blocks", "panels", "size", "
 EXTENDS = ("auto", "neither", "min", "max", "both")
 
 
+def _part_panels(k, p):
+    """An annotation's panel(s) p in part k of a figure of parts, as keys of the whole
+    figure (k * 1000 + panel; -1, every panel, as it is)."""
+    if isinstance(p, (list, tuple)):
+        return -1 if -1 in [int(q) for q in p] else [k * 1000 + int(q) for q in p]
+    return -1 if int(p) == -1 else k * 1000 + int(p)
+
+
 def upgrade(spec, data=None):
     """(version-2 spec, data) of a version-1 spec or a figure of parts (a version-2
     spec comes back as it is): each panel written out with its own layers (the
@@ -166,8 +174,7 @@ def upgrade(spec, data=None):
         ck = None
         if combo:
             opts = {key: copy.deepcopy(v) for key, v in part.items() if key not in V1_PANEL_KEYS}
-            opts["annotations"] = [a if int(a.get("panel", -1)) == -1 else
-                                   dict(a, panel=k * 1000 + int(a["panel"]))
+            opts["annotations"] = [dict(a, panel=_part_panels(k, a.get("panel", -1)))
                                    for a in opts.get("annotations", [])]
             b.update(share=part.get("share"), size=list(part["size"]), opts=opts)
             ck = opts.get("contour_key")

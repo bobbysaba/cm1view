@@ -13,6 +13,7 @@ import shutil
 import numpy as np
 import pytest
 
+from cm1view.figures import spec as fg
 from conftest import difference_layer, swath_layer, txt, wait
 
 BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baseline")
@@ -46,8 +47,7 @@ def _setup(ed, how):
     elif how == "swath":
         swath_layer(ed)
     elif how == "dark":
-        ed.preset.value = "dark"
-        ed._apply_preset()
+        ed.set_spec(fg.apply_style(ed.collect(), "dark"))
     elif how == "parts":
         ed.rows.value, ed.cols.value = 1, 2
         ed._add_part()

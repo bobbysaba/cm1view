@@ -23,23 +23,37 @@ SND_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", 
 RC_LOCK = threading.RLock()
 STORM_NAMES = {"rm": "RM", "lm": "LM", "mean": "mean wind", "custom": "custom"}
 FILL_KEYS = ("cmap", "reverse", "white_first", "vmin", "vmax", "nlevels", "style",
-             "mask_below", "extend", "units", "cbar_label")
+             "mask_below", "extend", "units", "cbar_label", "cbar_ticks")
 SND_PARAMS = [  # (key, column heading, units) of the sounding parameter table
     ("sbcape", "SBCAPE", "J kg$^{-1}$"), ("mlcape", "MLCAPE", "J kg$^{-1}$"),
     ("mucape", "MUCAPE", "J kg$^{-1}$"), ("mlcin", "MLCIN", "J kg$^{-1}$"),
     ("mllcl", "MLLCL", "m"), ("srh1", "0–1 km SRH", "m$^2$ s$^{-2}$"),
     ("srh3", "0–3 km SRH", "m$^2$ s$^{-2}$"), ("esrh", "ESRH", "m$^2$ s$^{-2}$"),
-    ("shear06", "0–6 km shear", "m s$^{-1}$"), ("stp_eff", "STP", ""), ("scp", "SCP", "")]
+    ("shear06", "0–6 km shear", "m s$^{-1}$"), ("stp_eff", "STP", ""), ("scp", "SCP", ""),
+    # (new ones at the end: saved figure data has the values in this order)
+    ("sbcin", "SBCIN", "J kg$^{-1}$"), ("mucin", "MUCIN", "J kg$^{-1}$"),
+    ("sblcl", "SBLCL", "m"), ("mllfc", "MLLFC", "m"), ("srh500", "0–500 m SRH", "m$^2$ s$^{-2}$"),
+    ("shear01", "0–1 km shear", "m s$^{-1}$"), ("shear03", "0–3 km shear", "m s$^{-1}$"),
+    ("stp_fixed", "STP (fixed)", ""),
+    ("srh250", "0–250 m SRH", "m$^2$ s$^{-2}$"), ("shear250", "0–250 m shear", "m s$^{-1}$"),
+    ("shear500", "0–500 m shear", "m s$^{-1}$")]
 HODO_BANDS = [(0, 1, "#e11d48"), (1, 3, "#16a34a"), (3, 6, "#ca8a04"), (6, 9, "#0284c7"),
               (9, 12, "#7c3aed")]
 KT = 1.943844
 ENTRIES = {"line": "series", "sounding": "soundings", "dist": "dists"}  # (kind -> list)
 
 
-def colormap(name, reverse=False, white_first=False):
+# colormaps with a neutral (white) middle: kept on 0 when the range has both signs
+DIVERGING = {"BrBG", "PiYG", "PRGn", "PuOr", "RdBu", "RdGy", "RdYlBu", "RdYlGn", "bwr",
+             "coolwarm", "seismic", "cmo.balance", "cmo.curl", "cmo.delta", "cmo.diff",
+             "cmo.tarn"}
+
+
+def colormap(name, reverse=False, white_first=False, lo=None, hi=None):
     """A matplotlib colormap by name ('reflectivity' = NWS steps; pyart maps such as
     HomeyerRainbow / ChaseSpectral when cmweather or pyart is installed).  white_first: starts from
-    white (as for updraft speed)."""
+    white (as for updraft speed).  lo / hi (the fill's range): a diverging map keeps its
+    middle on 0 -- -2..6 on RdBu uses the colours of -6..6 from -2 up."""
     if name == "reflectivity":
         cm = ListedColormap(["#ffffff00"] + NWS_REF, name="reflectivity")
     else:
@@ -53,6 +67,12 @@ def colormap(name, reverse=False, white_first=False):
             cm = matplotlib.colormaps[name]
     if reverse:
         cm = cm.reversed()
+    base = name[:-2] if name.endswith("_r") else name
+    if (base in DIVERGING and not white_first and lo is not None and hi is not None
+            and lo < 0 < hi and lo != -hi):
+        m = 2.0 * max(-lo, hi)
+        cm = ListedColormap(cm(np.linspace(0.5 + lo / m, 0.5 + hi / m, 256)),
+                            name=cm.name + "_zero")
     if white_first:  # white, then 19 colours of the map, blended
         cols = cm(np.linspace(0, 1, 19))
         cm = LinearSegmentedColormap.from_list(cm.name + "_white",
@@ -131,6 +151,14 @@ def _anchored(ax, text, opts, size, color=None):
                      alpha=0.85)
     at.set_in_layout(False)  # it sits in the panel: small panels must not shrink for it
     ax.add_artist(at)
+
+
+def ann_on(a, i):
+    """Whether annotation a is drawn in panel i: its "panel" is -1 (every panel), i, or
+    a list of panels holding i."""
+    p = a.get("panel", -1)
+    ps = [int(q) for q in p] if isinstance(p, (list, tuple)) else [int(p)]
+    return -1 in ps or i in ps
 
 
 def panel_letter(i, fmt):
@@ -250,6 +278,18 @@ def font_size(spec, what):
                                           "suptitle": 1.4, "legend": 0.85}[what]
 
 
+def panel_legend(ax, handles, o, spec, loc, frame):
+    """A panel's own legend of `handles`: where (o["legend_loc"], else loc), how many
+    columns (o["legend_ncol"]) and whether framed (o["legend_frame"], else frame) are the
+    panel's own settings.  The entries are kept on the axes (ax._cv_entries) for a
+    figure legend that gathers them (figure.py: _legends)."""
+    leg = ax.legend(handles=handles, loc=o.get("legend_loc") or loc,
+                    fontsize=font_size(spec, "legend"), ncol=int(o.get("legend_ncol") or 1),
+                    frameon=bool(o.get("legend_frame", frame)), framealpha=0.85)
+    ax._cv_entries = [(h, t.get_text()) for h, t in zip(handles, leg.get_texts())]
+    return leg
+
+
 def run_code(fig, axs, data, spec, text):
     """The figure's own code (spec["code"]["text"]), run after everything else is drawn
     with fig, axs (the panels' axes, by panel number), data, spec, np and matplotlib.
@@ -269,6 +309,19 @@ def run_color(spec, k):
     """Colour of run k (its own, else the k-th of RUN_COLORS)."""
     runs = spec.get("runs") or []
     return (runs[k].get("color") if k < len(runs) else None) or RUN_COLORS[k % len(RUN_COLORS)]
+
+
+def several_runs(spec):
+    """Whether the figure has more than one run: then a run keeps its colour (and line
+    style) in every panel, also in a panel with a line of one run only."""
+    return len(spec.get("runs") or []) > 1
+
+
+def by_run(spec, runs):
+    """Whether lines from runs `runs` (a run index per line: soundings, distributions)
+    are coloured by run: each from another run, and several or several_runs."""
+    n = len(runs)
+    return n > 0 and len(set(runs)) == n and (n > 1 or several_runs(spec))
 
 
 def layer_color(spec, lay, d):

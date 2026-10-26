@@ -17,7 +17,7 @@ def test_distribution_figure_draws_each_plot(ed, plot):
                               region="domain", lo=0.5), 0, t1)
     ed.dist_cards.append(ed._dist_card(e))
     ed.ds["plot"].value = plot
-    ed.ds["stats"].value = True
+    ed.ds["stats"].value = ["mean", "sd", "n"]
     spec, data, fig = render(ed)
     d = data[0]
     assert d["ndist"] == 2 and not d.get("missing") and "time_s" not in d  # (two times)
@@ -35,6 +35,35 @@ def test_distribution_figure_draws_each_plot(ed, plot):
     ed.ds["bins"].value, ed.ds["logy"].value = 20, True
     render(ed)
     assert len(ed.dist_cache) == n
+
+
+def test_distribution_bar_labels_and_statistics_box(ed):
+    from matplotlib.offsetbox import AnchoredOffsetbox
+    ed.from_dists()  # one distribution: its statistics still show
+    ed.ds["plot"].value, ed.ds["bins"].value = "hist", 10
+    ed.ds["bar_labels"].value = "percent"
+    ed.ds["stats"].value, ed.ds["stats_at"].value = ["n", "median", "p5_95"], "box"
+    assert ed.ds["bar_labels"].visible and ed.ds["stats_loc"].visible
+    spec, data, fig = render(ed)
+    ax = fig.axes[0]
+    pct = [float(t.get_text().rstrip("%")) for t in ax.texts if t.get_text().endswith("%")]
+    assert pct and abs(sum(pct) - 100.0) < 5.0  # (every value is in the bins; 2 digits)
+    boxes = [a for a in ax.artists if isinstance(a, AnchoredOffsetbox)]
+    assert len(boxes) == 1 and ax.get_legend() is None
+    ed.ds["stats_at"].value = "legend"  # one distribution: a legend for its statistics
+    assert not ed.ds["stats_loc"].visible
+    spec, data, fig = render(ed)
+    assert "median" in fig.axes[0].get_legend().texts[0].get_text()
+    ed.ds["plot"].value = "box"
+    assert not ed.ds["bar_labels"].visible
+
+
+def test_old_distribution_stats_flag(ed):
+    ed.from_dists()
+    s = ed.collect()
+    s["dist"]["stats"] = True  # (a spec saved before the statistics list)
+    ed.set_spec(s)
+    assert ed.ds["stats"].value == ["mean", "sd", "n"]
 
 
 def test_distribution_figure_of_the_maps(ed, viewer):
@@ -173,14 +202,13 @@ def test_swaths_follow_the_ground_and_composites_the_storm(tmp_path, monkeypatch
 
 def test_style_presets_and_matplotlib_styles(ed, tmp_path):
     from cm1view.figures import draw as figdraw
-    ed.preset.value = "ams"
-    ed._apply_preset()
+    from cm1view.figures import spec as fg
+    ed.set_spec(fg.apply_style(ed.collect(), "ams"))
     s = ed.collect()
     assert (s["font"]["size"], s["letters"]["fmt"], s["export"]["format"]) == \
         (8.0, "({a})", "pdf")
     assert s["size"][0] == (3.2 if s["cols"] == 1 else 6.5) and not s["size_auto"]
-    ed.preset.value = "dark"
-    ed._apply_preset()
+    ed.set_spec(fg.apply_style(ed.collect(), "dark"))
     s = ed.collect()
     assert (s["background"], s["mplstyle"], ed.bg.value) == ("black", "dark_background", "black")
     assert figdraw.rc(s)["axes.edgecolor"] == "white" and figdraw.rc(s)["font.size"] == 14.0
@@ -191,8 +219,7 @@ def test_style_presets_and_matplotlib_styles(ed, tmp_path):
     assert rc["lines.linewidth"] == 3 and "backend" not in rc
     with pytest.raises(ValueError, match="no such style"):
         figdraw.rc(dict(s, mplstyle="no-such-style"))
-    ed.preset.value = "default"
-    ed._apply_preset()
+    ed.set_spec(fg.apply_style(ed.collect(), "default"))
     assert (ed.collect()["mplstyle"], ed.collect()["font"]["size"]) == ("", 10.0)
 
 
@@ -214,3 +241,19 @@ def test_copy_a_layers_look(ed):
         ("#ff0000", 2.0, other, levels)  # (another field: its levels stay)
     assert "another kind" in txt(ed.msg.object) and ed.cards[fill].collect()["cmap"] == cmap
     render(ed)
+
+
+# ------------------------------------------------------------------ diverging maps
+def test_a_diverging_map_stays_white_at_zero():
+    import matplotlib.colors as mc
+    from cm1view.core.fields import palette
+    from cm1view.figures.draw.base import colormap
+    mid = mc.to_hex(colormap("RdBu")(0.5))
+    for rev in (False, True):  # viewer: 0 is a quarter of the way up -2..6
+        assert palette("RdBu_r", 257, rev, -2.0, 6.0)[64] == mid
+        cm = colormap("RdBu", rev, False, -2.0, 6.0)  # figures
+        assert mc.to_hex(cm(mc.Normalize(-2.0, 6.0)(0.0))) == mid
+        assert mc.to_hex(cm(1.0)) == mc.to_hex(colormap("RdBu", rev)(1.0))  # (6: the full end)
+    # no change for a sequential map or a range on one side of 0
+    assert palette("viridis", 8, lo=-2.0, hi=6.0) == palette("viridis", 8)
+    assert colormap("RdBu", lo=270.0, hi=310.0)(0.0) == colormap("RdBu")(0.0)

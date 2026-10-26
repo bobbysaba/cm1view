@@ -23,6 +23,7 @@ from .. import config
 from ..core import series as ser
 from ..core.fields import CMAPS, palette
 from ..theme import BG, GRID, MUTED, POINT_COLORS, TEXT
+from .numinput import FloatInput
 from .ui import _bokeh, _html, _settings_toggle, style_fig
 
 
@@ -41,26 +42,26 @@ class SeriesPanel:
             value="height", width=150,
             description="Layer: the reduction is also kept at every model level in the "
                         "layer (time–height plot, sub-layers from the saved file)")
-        self.ser_z = pn.widgets.FloatInput(name="Height (km AGL)", value=1.0, step=0.25,
+        self.ser_z = FloatInput(name="Height (km AGL)", value=1.0, step=0.25,
                                            start=0.0, end=ztop, width=110)
-        self.ser_z0 = pn.widgets.FloatInput(name="Bottom (km)", value=0.0, step=0.5,
+        self.ser_z0 = FloatInput(name="Bottom (km)", value=0.0, step=0.5,
                                             start=0.0, end=ztop, width=90, visible=False)
-        self.ser_z1 = pn.widgets.FloatInput(name="Top (km)", value=10.0, step=0.5,
+        self.ser_z1 = FloatInput(name="Top (km)", value=10.0, step=0.5,
                                             start=0.0, end=ztop, width=90, visible=False)
         self.ser_region = pn.widgets.Select(name="Region", options=self._ser_regions(),
                                             value="domain", width=180)
-        self.ser_radius = pn.widgets.FloatInput(name="Radius (km)", value=5.0, step=0.5,
+        self.ser_radius = FloatInput(name="Radius (km)", value=5.0, step=0.5,
                                                 start=0.25, width=90, visible=False)
-        self.ser_offx = pn.widgets.FloatInput(
+        self.ser_offx = FloatInput(
             name="Offset x (km)", value=0.0, step=1.0, width=90, visible=False,
             description="Centre the disc this far from the tracked storm (e.g. in the "
                         "inflow); x, y on the model grid")
-        self.ser_offy = pn.widgets.FloatInput(name="Offset y (km)", value=0.0, step=1.0,
+        self.ser_offy = FloatInput(name="Offset y (km)", value=0.0, step=1.0,
                                               width=90, visible=False)
         self.ser_reduce = pn.widgets.Select(
             name="Reduce", options={"Minimum": "min", "Maximum": "max", "Mean": "mean",
                                     "Percentile": "pct"}, value="min", width=120)
-        self.ser_pct = pn.widgets.FloatInput(name="Percentile", value=99.0, step=0.5,
+        self.ser_pct = FloatInput(name="Percentile", value=99.0, step=0.5,
                                              start=0.0, end=100.0, width=90, visible=False)
         self.ser_go = pn.widgets.Button(name="Compute", button_type="primary", icon="chart-line",
                                         height=32, margin=(5, 4, 8, 10))
@@ -90,22 +91,22 @@ class SeriesPanel:
         # plot settings: limits, a sub-layer of layer series and the time–height colours,
         # all applied to the computed result (no recompute)
         num = dict(value=None, placeholder="auto", width=90)
-        self.ser_t0 = pn.widgets.FloatInput(name="Time from (min)", **num)
-        self.ser_t1 = pn.widgets.FloatInput(name="to", **num)
-        self.ser_y0 = pn.widgets.FloatInput(name="y from", **num)
-        self.ser_y1 = pn.widgets.FloatInput(name="to", **num)
-        self.ser_s0 = pn.widgets.FloatInput(
+        self.ser_t0 = FloatInput(name="Time from (min)", **num)
+        self.ser_t1 = FloatInput(name="to", **num)
+        self.ser_y0 = FloatInput(name="y from", **num)
+        self.ser_y1 = FloatInput(name="to", **num)
+        self.ser_s0 = FloatInput(
             name="Sub-layer from (km)", **dict(num, width=150),
             description="Layer series: reduce over these heights only, from the values "
                         "kept at every level (min, max and mean; a percentile needs a "
                         "recompute)")
-        self.ser_s1 = pn.widgets.FloatInput(name="to", **num)
+        self.ser_s1 = FloatInput(name="to", **num)
         self.ser_cmap = pn.widgets.Select(name="Colormap", options=["auto"] + CMAPS,
                                           value="auto", width=140)
         self.ser_crev = pn.widgets.Checkbox(name="Reverse", value=False,
                                             margin=(5, 10, 14, 10))
-        self.ser_c0 = pn.widgets.FloatInput(name="Colours from", **num)
-        self.ser_c1 = pn.widgets.FloatInput(name="to", **num)
+        self.ser_c0 = FloatInput(name="Colours from", **num)
+        self.ser_c1 = FloatInput(name="to", **num)
         self.ser_auto = pn.widgets.Button(name="Auto limits", button_type="light",
                                           button_style="outline", height=32,
                                           margin=(18, 4, 4, 10))
@@ -517,11 +518,11 @@ class SeriesPanel:
             cmap = "viridis"
         if self.ser_cmap.value != "auto":
             cmap = self.ser_cmap.value
-        pal = palette(cmap, reverse=self.ser_crev.value)
         c0, c1 = self._num(self.ser_c0), self._num(self.ser_c1)
         lo, hi = (lo if c0 is None else c0), (hi if c1 is None else c1)
         if hi <= lo:
             hi = lo + (abs(lo) * 0.1 or 1.0)
+        pal = palette(cmap, reverse=self.ser_crev.value, lo=lo, hi=hi)
         self.ser_th_map.update(low=lo, high=hi, palette=pal)
         thf = self.ser_thfig
         self._ser_range(thf, "x_range", self._num(self.ser_t0), self._num(self.ser_t1),

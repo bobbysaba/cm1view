@@ -5,6 +5,7 @@ import matplotlib
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Circle, Rectangle
 from matplotlib.ticker import MultipleLocator
+from matplotlib.transforms import Bbox
 
 from .base import ENTRIES, colormap, _bounds, _steps, _norm, _levels, _cell
 from .v2 import block_view, _panel_layers, _key_layer
@@ -13,7 +14,8 @@ def _fill(ax, x, y, a, lay):
     a = np.array(a, dtype=float)
     if lay.get("mask_below") is not None and lay["mask_below"] != "":
         a[a <= float(lay["mask_below"])] = np.nan
-    cm = colormap(lay["cmap"], lay.get("reverse", False), lay.get("white_first", False))
+    lo, hi = (None, None) if lay.get("scale") == "log" else _bounds(lay)
+    cm = colormap(lay["cmap"], lay.get("reverse", False), lay.get("white_first", False), lo, hi)
     alpha = float(lay.get("alpha", 1.0))
     alpha = alpha if alpha < 1.0 else None  # (opaque: matplotlib's plain path)
     if lay.get("style") == "contourf":
@@ -52,7 +54,13 @@ def _shade(ax, x, y, a, lay):
                    linewidths=float(lay.get("lw", 1.0)))
 
 
-def _vectors(ax, d, j, lay, xsec):
+# a vector layer's key arrow units (lay["vector"]: the vectors of cm1view/core/vectors.py)
+KEY_UNITS = {"wind": "m s$^{-1}$", "hvort": "s$^{-1}$", "bgen": "10$^{-4}$ s$^{-2}$"}
+
+
+def _vectors(ax, d, j, lay, xsec, nkey=0):
+    """Arrows or streamlines of vector layer j; nkey: key arrows drawn before this
+    one's in the panel (each further one to the left)."""
     if lay.get("style") == "streamlines":
         gx, gy, gu, gv = (d.get(f"L{j}_g{k}") for k in "xyuv")
         if gx is None or np.size(gx) < 2 or np.size(gy) < 2:
@@ -72,7 +80,8 @@ def _vectors(ax, d, j, lay, xsec):
                   scale_units=None, pivot="middle" if lay.get("pivot_mid") else "tail")
     ref = lay.get("key")
     if ref:
-        ax.quiverkey(q, 0.88, 1.02, float(ref), f"{float(ref):g} m s$^{{-1}}$",
+        units = KEY_UNITS.get(lay.get("vector", "wind"), "")
+        ax.quiverkey(q, 0.88 - 0.3 * nkey, 1.02, float(ref), f"{float(ref):g} {units}",
                      labelpos="E", coordinates="axes",
                      fontproperties={"size": max(6, 0.8 * matplotlib.rcParams["font.size"])})
 
@@ -189,8 +198,20 @@ def _colorbars(fig, cb, mappables, used, cell):
     else:
         groups = [(ax, ml) for _, ax, ml in mappables]
     for axes, (m, lay) in groups:
-        c = fig.colorbar(m, ax=axes, extend=lay.get("extend", "neither"), **kw)
+        c = fig.colorbar(m, ax=axes, extend=lay.get("extend", "neither"),
+                         aspect=_cbar_aspect(axes, kw, orient), **kw)
         _cbar_style(c, cb, lay, loc)
+
+
+def _cbar_aspect(axes, kw, orient):
+    """Length / thickness of a colorbar that fills its share (kw fraction) of the
+    panels' box and kw shrink of their length: matplotlib's default (20) caps the
+    thickness, so a larger "Thickness" would only add space."""
+    boxes = [a.get_position().transformed(a.figure.transSubfigure)
+             for a in np.atleast_1d(axes)]
+    box = Bbox.union(boxes)
+    w, h = (box.width, box.height) if orient == "horizontal" else (box.height, box.width)
+    return max(kw["shrink"] * w / max(kw["fraction"] * h, 1e-6), 1.0)
 
 
 def reduce_label(red, units=""):
@@ -206,13 +227,14 @@ def reduce_label(red, units=""):
 
 
 def _cbar_style(c, cb, lay, loc):
-    """Label (the colorbar's own, else the layer's, else its units), ticks and fonts."""
+    """Label and ticks (the layer's or series' own, else the Style tab's for every
+    colorbar, else its units / automatic ticks) and fonts."""
     units = lay.get("units", "")
     if lay.get("reduce"):  # (a time window)
         units = reduce_label(lay["reduce"], units)
     if lay.get("minus"):  # (a difference)
         units = f"difference ({units})" if units else "difference"
-    c.set_label(cb.get("label") or lay.get("cbar_label") or units,
+    c.set_label(lay.get("cbar_label") or cb.get("label") or units,
                 size=float(cb.get("label_size") or 0) or None,
                 weight="bold" if cb.get("label_bold") else "normal")
     side = cb.get("label_side", "")
@@ -221,8 +243,9 @@ def _cbar_style(c, cb, lay, loc):
             c.ax.xaxis.set_label_position("top" if side == "first" else "bottom")
         else:
             c.ax.yaxis.set_label_position("left" if side == "first" else "right")
-    if cb.get("ticks"):
-        c.set_ticks(_levels(cb["ticks"]))
+    ticks = lay.get("cbar_ticks") or cb.get("ticks")
+    if ticks:
+        c.set_ticks(_levels(ticks))
     if cb.get("tick_fmt"):
         c.formatter = matplotlib.ticker.FormatStrFormatter(cb["tick_fmt"])
         c.update_ticks()

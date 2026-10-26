@@ -19,6 +19,7 @@ from ..figures import draw as figdraw
 from .. import pdecomp
 from ..core.fields import palette
 from ..theme import GRID, MUTED, POINT_COLORS, TEXT
+from .numinput import FloatInput
 from .ui import _bokeh, _html, style_fig
 
 DIST_PLOTS = {"Histogram": "hist", "Box": "box", "Violin": "violin", "Cumulative": "ecdf"}
@@ -38,25 +39,25 @@ class DistPanel:
             name="Vertical", options={"At a height": "height", "Layer (every level)": "layer",
                                       "Every level (whole depth)": "all"},
             value="height", width=170)
-        self.dist_z = pn.widgets.FloatInput(name="Height (km AGL)", value=1.0, step=0.25,
+        self.dist_z = FloatInput(name="Height (km AGL)", value=1.0, step=0.25,
                                             start=0.0, end=ztop, width=110)
-        self.dist_z0 = pn.widgets.FloatInput(name="Bottom (km)", value=0.0, step=0.5,
+        self.dist_z0 = FloatInput(name="Bottom (km)", value=0.0, step=0.5,
                                              start=0.0, end=ztop, width=90, visible=False)
-        self.dist_z1 = pn.widgets.FloatInput(name="Top (km)", value=10.0, step=0.5,
+        self.dist_z1 = FloatInput(name="Top (km)", value=10.0, step=0.5,
                                              start=0.0, end=ztop, width=90, visible=False)
         self.dist_region = pn.widgets.Select(name="Region", options=self._ser_regions(),
                                              value="domain", width=180)
-        self.dist_radius = pn.widgets.FloatInput(name="Radius (km)", value=5.0, step=0.5,
+        self.dist_radius = FloatInput(name="Radius (km)", value=5.0, step=0.5,
                                                  start=0.25, width=90, visible=False)
-        self.dist_offx = pn.widgets.FloatInput(name="Offset x (km)", value=0.0, step=1.0,
+        self.dist_offx = FloatInput(name="Offset x (km)", value=0.0, step=1.0,
                                                width=90, visible=False)
-        self.dist_offy = pn.widgets.FloatInput(name="Offset y (km)", value=0.0, step=1.0,
+        self.dist_offy = FloatInput(name="Offset y (km)", value=0.0, step=1.0,
                                                width=90, visible=False)
-        self.dist_lo = pn.widgets.FloatInput(
+        self.dist_lo = FloatInput(
             name="Only values from", value=None, placeholder="all", width=120,
             description="Keep values at or above this (blank: no limit), e.g. 1 m/s for "
                         "updrafts")
-        self.dist_hi = pn.widgets.FloatInput(name="to", value=None, placeholder="all",
+        self.dist_hi = FloatInput(name="to", value=None, placeholder="all",
                                              width=90)
         self.dist_go = pn.widgets.Button(name="Compute", button_type="primary",
                                          icon="chart-histogram", height=32,
@@ -105,8 +106,8 @@ class DistPanel:
         self.dist_logy = pn.widgets.Checkbox(name="Log scale", value=False,
                                              margin=(30, 10, 8, 10))
         num = dict(value=None, placeholder="auto", width=90)
-        self.dist_x0 = pn.widgets.FloatInput(name="Values from", **num)
-        self.dist_x1 = pn.widgets.FloatInput(name="to", **num)
+        self.dist_x0 = FloatInput(name="Values from", **num)
+        self.dist_x1 = FloatInput(name="to", **num)
         self.dist_plot = _bokeh(self._dist_empty(), sizing_mode="stretch_width")
         self.dist_table = _html(sizing_mode="stretch_width")
 

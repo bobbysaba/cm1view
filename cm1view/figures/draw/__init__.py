@@ -3,10 +3,11 @@ cross-sections, time-height plots, time series, soundings or distributions on a 
 of panels.
 
 Needs only numpy and matplotlib (cmweather or pyart, if installed, for their colormaps).  cm1view
-copies this package's code (source(): its modules in MODULES order) into every exported
-figure script, so the script redraws exactly what the viewer showed; edit SPEC in the
-script (or this code) to change the figure.  The modules import each other's names only
-with "from .<module> import ..." lines, which source() leaves out.
+saves this package's code (source(): its modules in MODULES order) with every exported
+figure script (_src/<name>_draw.py), so the script redraws exactly what the viewer showed;
+edit SPEC or my_changes() in the script (or this code) to change the figure.  The modules
+import each other's names only with "from .<module> import ..." lines, which source()
+leaves out.
 
 data: {panel index: {name: array}} with, per panel,
   x, y          1D coordinates (km): plan x / y, or section distance / height

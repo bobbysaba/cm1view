@@ -250,7 +250,7 @@ class SoundingPanel:
         self.params.html = html
         self.prof_row.visible = True
         self._set_status("")
-        if self.vec_on.value and self.vec_frame.value == "storm":
+        if self._storm_vecs():
             self.request_map()
 
     def _draw_figs(self, items, base, spec):

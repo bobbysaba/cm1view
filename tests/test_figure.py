@@ -108,6 +108,40 @@ def test_undo_and_redo(ed):
     assert ed.kind.value == "plan"
 
 
+def test_quick_start(ed, viewer):
+    ed._started = False
+    ed.auto.value = True  # (renders, so that Undo has the example)
+    ed.request(delay=False)
+    viewer.workspace.value = "Map"
+    viewer.workspace.value = "Figure"  # the first time: the quick start
+    assert ed.quick.open and ed._started
+    ed.qs_kind.value = "xsec"
+    assert "height" not in ed.qs_vary.options.values() and ed.qs_rows.visible
+    ed.qs_kind.value = "sounding"
+    assert not ed.qs_rows.visible and not ed.qs_field.visible
+    ed.qs_kind.value = "plan"
+    f = next(v for g in ed.qs_field.groups.values() for v in g.values()
+             if v != ed.cards[0].collect()["field"])
+    ed.qs_vary.value, ed.qs_field.value = "field", f
+    ed.qs_rows.value, ed.qs_cols.value = 1, 2
+    ed.qs_size.value = "6.5"
+    ed.qs_go.clicks += 1
+    s = ed.collect()
+    assert not ed.quick.open
+    assert (s["vary"], s["rows"], s["cols"], s["size"][0]) == ("field", 1, 2, 6.5)
+    assert s["layers"][0]["field"] == f
+    render(ed)
+    ed.undo()  # the example again
+    assert ed.collect()["vary"] == "time"
+    viewer.workspace.value = "Map"
+    viewer.workspace.value = "Figure"  # not again
+    assert not ed.quick.open
+    ed.new_btn.clicks += 1  # the new-figure button shows it again
+    assert ed.quick.open
+    ed.from_soundings()  # a figure from the viewer closes it
+    assert not ed.quick.open
+
+
 def test_saved_bundle_reopens(ed, tmp_path):
     ed.rows.value, ed.cols.value = 1, 1
     ed.let_box.value = True
@@ -137,6 +171,76 @@ def test_series_without_the_series_tool(ed):
     assert not any(d.get("missing") for d in data.values())
 
 
+@pytest.mark.parametrize("kind", ["line", "th"])
+def test_time_series_start_without_series(ed, kind):
+    ed.kind.value = kind  # nothing computed until a series is added
+    assert ed.ser_cards == []
+    spec, data, fig = render(ed)
+    assert not spec["series"] and not ed.series_pending()
+
+
+def test_time_height_range_is_the_layer():
+    import xarray as xr
+    from types import SimpleNamespace
+    from cm1view.figures import spec as fg
+    z = np.arange(0.125, 10.0, 0.25)  # (level centres of a 0–10 km layer)
+    ds = xr.Dataset(dict(computed=("t", np.ones(3, dtype=int)), value=("t", np.zeros(3)),
+                         profile=(("t", "z"), np.ones((3, z.size))), z=("z", z)))
+    run = SimpleNamespace(times=[0.0, 60.0, 120.0])
+    ent = dict(recipe=dict(z0=0.0, z1=10.0), op="")
+    d = fg.th_panel(run, ds, ent, dict(ts=dict(zmin=None, zmax=None)))
+    assert d["ylim"] == (0.0, 10.0)  # (not 0.125–9.875: the 10 km tick shows)
+    d = fg.th_panel(run, ds, ent, dict(ts=dict(zmin=2.0, zmax=8.0)))
+    assert d["ylim"] == (2.0, 8.0)
+
+
+def test_each_colorbar_has_its_own_label(ed):
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.vary.value = "field"
+    ed.cb_mode.value = "each"
+    ed.pf_rows[0]["cbar_label"].value = "first bar"
+    ed.pf_rows[0]["cbar_ticks"].value = "0, 10"
+    ed.cb_label.value = "every other bar"  # (the Style tab's: bars without their own)
+    spec, data, fig = render(ed)
+    bars = [a for a in fig.axes[2:]]
+    labels = [a.get_xlabel() or a.get_ylabel() for a in bars]
+    assert sorted(labels) == ["every other bar", "first bar"]
+    first = bars[labels.index("first bar")]
+    ticks = first.get_xticks() if first.get_xlabel() else first.get_yticks()
+    assert list(ticks) == [0.0, 10.0]
+
+
+def test_field_panels_own_their_fill(ed):
+    from cm1view.figures import draw as figdraw
+    ed.rows.value, ed.cols.value = 1, 2
+    fills = sum(c.type == "fill" for c in ed.cards)
+    ed.vary.value = "field"  # (Time and fields sets the fill: not a Layers card)
+    assert sum(c.type == "fill" for c in ed.cards) == fills - 1
+    ed.pf_rows[1]["extend"].value = "max"
+    ed.pf_rows[1]["z"].value = 3.0
+    s = ed.collect()
+    assert s["layers"][0]["type"] == "fill"
+    lay = figdraw.spec_layers(s, 1)[0]
+    assert lay["z"] == 3.0 and lay["extend"] == "max"
+    spec, data, fig = render(ed)
+    ed.set_spec(json.loads(json.dumps(s)))  # (opened again: still no card)
+    assert sum(c.type == "fill" for c in ed.cards) == fills - 1
+    assert ed.collect()["layers"][0] == s["layers"][0]
+    ed.vary.value = "time"  # back: a fill card again, as panel a had it
+    assert ed.cards[0].type == "fill" and ed.cards[0].collect()["z"] == 1.0
+
+
+def test_number_boxes_round_float_tails():
+    from cm1view.viewer.numinput import FloatInput, tidy
+    w = FloatInput(name="x", value=float(np.float32(0.01)), step=0.001)
+    assert w.value == 0.01
+    w._process_events({"value": 0.008 + 0.001})  # (the arrows' step, in the browser)
+    assert w.value == 0.009 and w.get_root().value == 0.009
+    w.value = float(np.float32(0.3))
+    assert w.value == 0.3
+    assert tidy(None) is None and tidy(123456.5) == 123456.5
+
+
 def test_time_series_y_range(ed):
     ed.from_series()
     ed.kind.value = "line"
@@ -148,12 +252,48 @@ def test_time_series_y_range(ed):
     assert fig.axes[0].get_ylim() == (0.0, 50.0)
 
 
+def test_time_series_marks_extremes(ed):
+    from cm1view.figures import draw as figdraw
+    ed.from_series()
+    ed.kind.value = "line"
+    assert ed.ts_mark.visible and not ed.ext_sec.visible
+    ed.ts_mark.value, ed.ts_mark_legend.value = "max", True
+    ed.panel_data(ed.collect())
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    spec, data, fig = render(ed)
+    ax, d = fig.axes[0], data[0]
+    (w, t, v), = figdraw.series_extremes(d["S0_t"], d["S0_v"], "max")
+    assert v == np.nanmax(d["S0_v"])
+    assert f"{v:.3g}" in [a.get_text() for a in ax.texts]
+    assert "max" in ax.get_legend().texts[0].get_text()  # (one line: still a legend)
+
+
+def test_map_panels_show_the_maximum(ed):
+    from matplotlib.offsetbox import AnchoredText
+    from cm1view.figures import draw as figdraw
+    ed.set_parts(ed._default())  # (a plan view of reflectivity and updraft contours)
+    ed.rows.value, ed.cols.value = 1, 1
+    assert ed.kind.value == "plan" and ed.ext_sec.visible
+    cont = next(j for j, c in enumerate(ed.cards) if c.type == "contour")
+    assert cont in ed.ex_layer.options.values()
+    ed.ex_on.value, ed.ex_layer.value, ed.ex_what.value = True, cont, "max"
+    spec, data, fig = render(ed)
+    (vmax, x, y), _ = figdraw.panel_extremes(data[0], cont)
+    texts = [a.txt.get_text() for a in fig.axes[0].artists if isinstance(a, AnchoredText)]
+    assert f"max {vmax:.3g}" in texts
+    x0, x1 = sorted(data[0].get("xlim", (x, x)))
+    assert x0 <= x <= x1
+
+
 @pytest.mark.parametrize("layout", ["inset", "side", "skewt", "hodo"])
 def test_sounding_layouts(ed, layout):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.quiver import Barbs
     ed.from_soundings()
     ed.sk["layout"].value = layout
+    assert ed.skewt_sec.visible == (layout != "hodo")  # (each section when it is drawn)
+    assert ed.hodo_sec.visible == (layout != "skewt")
+    assert ed.sk["srh"].visible == (layout in ("side", "hodo"))
     ed.sk["srh"].value = "1"
     spec, data, fig = render(ed)
     assert "N0_rm" in data[0] and "N0_srh1" in data[0]
@@ -166,6 +306,42 @@ def test_sounding_layouts(ed, layout):
         b = next(c for c in ax.collections if isinstance(c, Barbs))
         bx = ax.transData.transform(b.get_offsets()[:1])[0, 0]
         assert hodos[0].get_window_extent().x1 < bx
+
+
+def test_sounding_table_lists_every_parameter(ed):
+    from cm1view.figures import draw as figdraw
+    ed.from_soundings()
+    keys = [k for k, _, _ in figdraw.SND_PARAMS]
+    assert sorted(ed.sk["table"].options.values()) == sorted(keys)
+    ed.sk["table"].value = ["sbcape", "sbcin", "mucin", "shear01"]
+    spec, data, fig = render(ed)
+    par = data[0]["N0_par"]
+    assert par.size == len(keys)
+    assert np.isfinite(par[keys.index("sbcin")]) and par[keys.index("sbcin")] <= 0.0
+    table = next(t for a in fig.axes for t in a.tables)
+    heads = [c.get_text().get_text() for (r, _), c in table.get_celld().items() if r == 0]
+    assert any(h.startswith("SBCIN") for h in heads)
+    data[0]["N0_par"] = par[:11]  # (figure data saved before the newer parameters)
+    table = next(t for a in figdraw.draw(spec, data).axes for t in a.tables)
+    row = {c: cell.get_text().get_text() for (r, c), cell in table.get_celld().items()
+           if r == 1}
+    assert row[0] != "–" and row[1] == "–"
+
+
+def test_hodograph_marks_each_storm_motion_on_its_own(ed):
+    ed.from_soundings()
+    ed.sk["layout"].value = "side"
+    ed.sk["hodo_lm"].value = ed.sk["hodo_mean"].value = False
+    spec, data, fig = render(ed)
+    hodo = next(a for a in fig.axes if getattr(a, "_cv_hodo", False))
+    texts = {t.get_text() for t in hodo.texts}
+    assert "RM" in texts and "LM" not in texts
+    s = json.loads(json.dumps(spec))  # (a figure saved with one storm-motions box)
+    for k in ("hodo_rm", "hodo_lm", "hodo_mean"):
+        del s["skewt"][k]
+    s["skewt"]["hodo_kin"] = False
+    ed.set_spec(s)
+    assert not any(ed.sk[k].value for k in ("hodo_rm", "hodo_lm", "hodo_mean"))
 
 
 def test_panels_at_heights(ed):
@@ -208,7 +384,7 @@ def test_clicks_on_the_preview_place_things(ed):
         ed.image.click = [left + f * (right - left), top + 0.5 * (bottom - top), 2 + n]
     s = ed.collect()
     assert s["xsec"]["mode"] == "fixed" and s["xsec"]["a"][0] < s["xsec"]["b"][0]
-    assert any(lay["type"] == "line" for lay in s["layers"])
+    assert not any(lay["type"] == "line" for lay in s["layers"])  # (no layer added)
     ed.image.click = [0.999, 0.999, 9]  # outside the panels
     assert "inside a panel" in txt(ed.status.object)
 
@@ -243,6 +419,39 @@ def test_sounding_storm_motion_ring_and_inset(ed):
         hx = skew.child_axes[0].get_window_extent()
         mid = 0.5 * (skew.get_window_extent().x0 + skew.get_window_extent().x1)
         assert (hx.x1 < mid) == left
+    assert not ed.sk["inset_x"].visible
+    ed.sk["inset_loc"].value = "custom"
+    assert ed.sk["inset_x"].visible and ed.sk["inset_y"].visible
+    ed.sk["inset_x"].value, ed.sk["inset_y"].value, ed.sk["inset_size"].value = 0.0, 0.0, 0.5
+    spec, data, fig = render(ed)
+    FigureCanvasAgg(fig).draw()
+    skew = next(a for a in fig.axes if a.child_axes)
+    sx, hx = skew.get_window_extent(), skew.child_axes[0].get_window_extent()
+    assert np.isclose(hx.x0, sx.x0, atol=1) and np.isclose(hx.y0, sx.y0, atol=1)
+    assert np.isclose(hx.width, 0.5 * sx.width, rtol=0.02) or \
+        np.isclose(hx.height, 0.5 * 0.39 / 0.37 * sx.height, rtol=0.02)  # (equal aspect)
+    # the view: square, about the origin, a custom centre, or fit to the traces
+    hodo = next(c for c in skew.child_axes if getattr(c, "_cv_hodo", False))
+    assert np.allclose(hodo.get_xlim(), (-40, 40)) and np.allclose(hodo.get_ylim(), (-40, 40))
+    assert not ed.sk["hodo_cu"].visible
+    ed.sk["hodo_center"].value = "custom"
+    assert ed.sk["hodo_cu"].visible and ed.sk["hodo_max"].visible
+    ed.sk["hodo_cu"].value, ed.sk["hodo_cv"].value, ed.sk["hodo_max"].value = 10.0, 5.0, 20.0
+    spec, data, fig = render(ed)
+    hodo = next(c for c in next(a for a in fig.axes if a.child_axes).child_axes
+                if getattr(c, "_cv_hodo", False))
+    assert np.allclose(hodo.get_xlim(), (-10, 30)) and np.allclose(hodo.get_ylim(), (-15, 25))
+    ed.sk["hodo_center"].value = "fit"
+    assert not ed.sk["hodo_max"].visible
+    spec, data, fig = render(ed)
+    hodo = next(c for c in next(a for a in fig.axes if a.child_axes).child_axes
+                if getattr(c, "_cv_hodo", False))
+    (x0, x1), (y0, y1) = hodo.get_xlim(), hodo.get_ylim()
+    assert np.isclose(x1 - x0, y1 - y0)  # (square)
+    z, u, v = (np.asarray(data[0][f"N0_{k}"], float) for k in ("z", "u", "v"))
+    sel = z <= 9.0
+    assert x0 <= u[sel].min() and u[sel].max() <= x1
+    assert y0 <= v[sel].min() and v[sel].max() <= y1
 
 
 def test_drag_moves_annotations_and_sets_the_area(ed):

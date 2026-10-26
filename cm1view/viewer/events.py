@@ -8,7 +8,7 @@ from functools import partial
 
 import panel as pn
 
-from ..core import volume3d
+from ..core import vectors, volume3d
 from .zoomview import ZoomImage
 from .ui import PANELS
 
@@ -72,6 +72,7 @@ class Events:
                              "add a box (up to 4)",
             "Cross-section": "Click two points (A, then B) to draw a vertical section",
             "3D region": "Drag a box to choose the 3D region; it renders in the 3D view",
+            "Seed box": "Drag a box inside the 3D region: the 3D streamlines start there",
             "Track": "Auto-track: click the meso to follow it through time; click near the "
                      "track at another time to correct it · Place by hand: each click sets "
                      "the fix at the shown time",
@@ -81,7 +82,8 @@ class Events:
                             "Compute: every value there at the shown time",
         }
         self.hint.object = f'<div class="cv-hint">{hints[mode]}</div>'
-        self.fig.toolbar.active_drag = self.bsel if mode in ("3D region", "Area sounding") \
+        self.fig.toolbar.active_drag = self.bsel if mode in ("3D region", "Area sounding",
+                                                             "Seed box") \
             else self.pan
         if mode in ("Sounding", "Area sounding"):  # the Sounding button reopens this kind
             self.mode.mode_for["Sounding"] = self.snd_pick.value = mode
@@ -155,6 +157,11 @@ class Events:
     def _update_3d_labels(self):
         n = sum(o["on"].value for o in self.isos)
         self.v3_drawer.label("iso", f"Isosurfaces ({n})")
+        on = [o for o in self.svs if o["on"].value]
+        if len(on) == 1:
+            self.v3_drawer.label("sv", f'Vectors · {vectors.VECTORS[on[0]["q"].value].label}')
+        else:
+            self.v3_drawer.label("sv", f"Vectors · {len(on)}" if on else "Vectors")
 
     def _on_fill_var(self, ev):
         d = self.F[ev.new]
@@ -201,7 +208,7 @@ class Events:
         custom = ev.new == "custom"
         self.storm_u.visible = self.storm_v.visible = custom
         self.request_soundings()
-        if self.vec_on.value and self.vec_frame.value == "storm":
+        if self._storm_vecs():
             self.request_map()
 
     def _on_tap(self, ev):
@@ -241,6 +248,15 @@ class Events:
             if x1 - x0 > 0 and y1 - y0 > 0:
                 self._add_sounding((x0 + x1) / 2, (y0 + y1) / 2, self._drag_shift,
                                    (x1 - x0, y1 - y0))
+            return
+        if self.mode.value == "Seed box":
+            self._set_seed_box((g["x0"], g["x1"], g["y0"], g["y1"]))
+            self.workspace.value = "3D"
+            if not self.st_on.value and self.gen["3d"]:
+                self.st_on.value = True  # its watcher re-renders the scene
+            else:
+                self.st_on.value = True
+                self.request_3d()
             return
         if self.mode.value != "3D region":
             return
@@ -289,6 +305,7 @@ class Events:
         self._draw_points()
         self._draw_xs()
         self.box_src.data = dict(left=[], right=[], bottom=[], top=[])
+        self._clear_seed_box()
         self.workspace.value = "Map"
         self._update_region_html()
         self.request_soundings()

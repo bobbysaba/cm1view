@@ -1,6 +1,6 @@
 """Figure editor: the Style tab's widgets (text, axes and ticks, panel labels,
-colorbar, legend, spacing), style presets and matplotlib styles, copying one layer's
-look to others, and figure templates (a figure's layout and look, applied to another
+colorbar, legend, contour key, spacing, matplotlib style), copying one layer's look to
+others, and figure templates (a figure's layout and look, applied to another
 run).
 
 A mixin of the FigureEditor (figures/editor.py)."""
@@ -13,12 +13,8 @@ import panel as pn
 from . import spec as fg
 from .cards import (
     CB_LOCS, CB_MODES, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS, TICKDIR, TYPE_LABEL,
-    _auto, _f, _grid, _hint, _row, _section, _when,
+    _auto, _checks, _f, _grid, _hint, _label, _row, _section, _when,
 )
-
-PRESETS = {"cm1view (default)": "default", "AMS journal": "ams", "Talk": "talk",
-           "Talk, dark": "dark"}
-
 
 class FigureStyle:
     def _build_text(self):
@@ -38,6 +34,8 @@ class FigureStyle:
         self.ylabel = pn.widgets.TextInput(name="y label")
         self.ticklabels = pn.widgets.Select(name="Tick labels on", options={
             "All panels": "all", "Outer panels": "outer", "No panels": "none"})
+        self.share = pn.widgets.Select(name="Share limits (panels of a kind)", options={
+            "No": "none", "x": "x", "y": "y", "x and y": "both"})
         self.tickdir = pn.widgets.Select(name="Ticks point", options=TICKDIR)
         self.ticks = pn.widgets.Checkbox(name="Tick marks")
         self.minor = pn.widgets.Checkbox(name="Minor ticks")
@@ -49,7 +47,7 @@ class FigureStyle:
             "dotted": ":", "dashed": "--", "solid": "-"})
         self.equal = pn.widgets.Checkbox(name="Equal x/y scale")
         self.title_loc = pn.widgets.Select(name="Panel titles at", options={
-            "Centre": "center", "Left": "left", "Right": "right"})
+            "Center": "center", "Left": "left", "Right": "right"})
         self.title_bold = pn.widgets.Checkbox(name="Bold titles")
         # panel labels
         self.let_on = pn.widgets.Checkbox(name="Panel letters")
@@ -86,22 +84,31 @@ class FigureStyle:
         self.cb_mode = pn.widgets.Select(name="Colorbars", options=CB_MODES)
         self.cb_loc = pn.widgets.Select(name="Where", options=CB_LOCS)
         self.cb_label = pn.widgets.TextInput(
-            name="Label (blank: layer's)", placeholder="e.g. w (m s$^{-1}$)",
-            description="Replaces every colorbar's label; $…$ is math, e.g. m s$^{-1}$")
+            name="Label, every colorbar (blank: units)", placeholder="e.g. w (m s$^{-1}$)",
+            description="For colorbars without their own label (Layers: a fill layer's or "
+                        "a time–height series' Colorbar label); $…$ is math, e.g. m s$^{-1}$")
         self.cb_lbold = pn.widgets.Checkbox(name="Bold label")
         self.cb_lside = pn.widgets.Select(name="Label side", options={
             "Auto": "", "Above / left": "first", "Below / right": "second"})
         self.cb_fmt = pn.widgets.TextInput(name="Tick format (blank: auto)", placeholder="%g",
                                            description="e.g. %.1f, %d, %.0e")
-        self.cb_ticks = pn.widgets.TextInput(name="Ticks (blank: auto)", placeholder="0:60:10")
+        self.cb_ticks = pn.widgets.TextInput(
+            name="Ticks, every colorbar (blank: auto)", placeholder="0:60:10",
+            description="For colorbars without their own ticks (Layers: Colorbar ticks)")
         self.cb_shrink = _f("Length (0–1)", 0.7, step=0.05, start=0.1, end=1.0)
         self.cb_fraction = _f("Thickness (0–1)", 0.05, step=0.01, start=0.01, end=0.5)
         self.cb_pad = _f("Gap (0–1)", 0.02, step=0.01, start=0.0, end=0.5)
         self.cb_lsize = _auto("Label size (pt)")
         self.cb_tsize = _auto("Tick size (pt)")
         # legend
-        self.lg_loc = pn.widgets.Select(name="Layer legend at", options=LOCS)
+        self.lg_where = pn.widgets.Select(name="Layer legend on", options={
+            "A panel": "panel", "The figure (this part)": "figure"})
+        self.lg_loc = pn.widgets.Select(name="At", options=LOCS)
         self.lg_panel = pn.widgets.IntInput(name="In panel", start=1, end=64)
+        self.lg_from = pn.widgets.TextInput(
+            name="From panels (blank: all)", placeholder="1, 3",
+            description="The panels whose entries it lists (panel numbers)")
+        self.lg_title = pn.widgets.TextInput(name="Title")
         self.lg_ncol = pn.widgets.IntInput(name="Columns", start=1, end=8, value=1)
         self.lg_frame = pn.widgets.Checkbox(name="Frame")
         # spacing
@@ -114,61 +121,75 @@ class FigureStyle:
 
     def _style_tab(self):
         """The Style tab."""
-        let = _grid(self.let_fmt, self.let_loc, self.let_size, self.let_bold, self.let_box)
-        tl = _grid((self.tl_fmt, 2), self.tl_loc, self.tl_size, self.tl_bold, self.tl_box)
-        rl = _grid(self.rl_loc, self.rl_size, self.rl_bold, self.rl_box, self.rl_color)
-        zl = _grid((self.zl_fmt, 2), self.zl_loc, self.zl_size, self.zl_bold, self.zl_box)
-        self.zl_row = pn.Column(self.zl_on, zl, margin=0, sizing_mode="stretch_width")
+        def part(name, *objs):  # a label's settings, under its name
+            return pn.Column(_label(f"<b>{name}</b>"), _grid(*objs), margin=0,
+                             sizing_mode="stretch_width")
+        let = part("Panel letters", self.let_fmt, self.let_loc, self.let_size, self.let_bold,
+                   self.let_box)
+        tl = part("Time label", (self.tl_fmt, 2), self.tl_loc, self.tl_size, self.tl_bold,
+                  self.tl_box)
+        rl = part("Run name", self.rl_loc, self.rl_size, self.rl_bold, self.rl_box,
+                  self.rl_color)
+        zl = part("Height label", (self.zl_fmt, 2), self.zl_loc, self.zl_size,
+                                self.zl_bold, self.zl_box)
         _when(self.let_on, let)
         _when(self.tl_on, tl)
         _when(self.rl_on, rl)
-        _when(self.zl_on, zl)
+
+        def zl_show(*e):  # (Panels → vary hides zl_on unless the panels vary in height)
+            zl.visible = self.zl_on.visible and self.zl_on.value
+        self.zl_on.param.watch(zl_show, ["value", "visible"])
+        zl_show()
         _when(self.grid, self.grid_ls)
-        self.ck_opts = _grid(self.ck_layer, self.ck_label, self.ck_frame, self.ck_x, self.ck_y,
+        self.ck_opts = _grid(self.ck_layer, self.ck_label, self.ck_x, self.ck_y,
                              self.ck_size, self.ck_fs)
-        _when(self.ck_on, self.ck_opts)
+        _when(self.ck_on, self.ck_opts, self.ck_frame)
         self.cb_opts = _grid(self.cb_loc, self.cb_shrink, self.cb_fraction, (self.cb_label, 2),
                              self.cb_lbold, self.cb_lside, self.cb_lsize, self.cb_pad,
                              self.cb_ticks, self.cb_fmt, self.cb_tsize)
         style_tab = pn.Column(
-            self.preset_sec,
             _section("Text", _grid(self.font, self.math, self.fsize, self.fs_tick,
                                    self.fs_label, self.fs_title, self.fs_sup, self.fs_legend),
                      _hint("Blank sizes follow the base size.")),
             _section("Axes and ticks", _grid(
-                self.xlabel, self.ylabel, self.ticklabels, self.xstep, self.ystep,
-                self.tickdir, self.ticks, self.minor, self.frame_lw, self.grid, self.grid_ls,
-                self.equal, self.title_loc, self.title_bold),
+                self.xlabel, self.ylabel, self.ticklabels, self.share, self.xstep, self.ystep,
+                self.tickdir, self.frame_lw, self.grid_ls, self.title_loc),
+                _checks(self.ticks, self.minor, self.grid, self.equal, self.title_bold),
                 _hint("Labels take matplotlib math, e.g. <code>w (m s$^{-1}$)</code>. Tick "
                       "labels on outer panels only when the panels share their ranges.")),
-            _section("Panel labels", self.let_on, let, self.tl_on, tl,
-                     _grid(self.tl_t0), self.zl_row, self.rl_on, rl),
-            _section("Colorbar", _grid(self.cb_mode), self.cb_opts),
-            _section("Legend", _grid(self.lg_loc, self.lg_panel, self.lg_ncol, self.lg_frame),
+            _section("Panel labels", let, tl, _grid(self.tl_t0), zl, rl,
+                     _checks(self.let_on, self.tl_on, self.zl_on, self.rl_on)),
+            _section("Colorbar", _grid(self.cb_mode), self.cb_opts, _hint(
+                "With several colorbars, give each its own label and ticks where its "
+                "colours are set: the fill layer (Layers), each time–height series "
+                "(Layers → Series) or each panel's field (Panels, when panels differ in "
+                "field). The label and ticks here are for the others.")),
+            _section("Legend", _grid(self.lg_where, self.lg_loc, self.lg_panel, self.lg_from,
+                                     self.lg_ncol, self.lg_title),
+                     _checks(self.lg_frame),
                      _hint("The legend lists layers with a legend entry (contours, shading, "
-                           "track, section line).")),
-            _section("Spacing", _grid(self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad),
-                     collapsed=True),
+                           "track, section line), once for all the panels. On the figure "
+                           "it also gathers the legends of time-series, distribution and "
+                           "sounding panels (each panel's own Legend setting turns its "
+                           "entries on or off), listing an entry shared by panels once; "
+                           "the <i>outside</i> places make room beside the panels. Columns "
+                           "and frame of those panels' own legends are set in Panels.")),
+            _section("Contour key", _hint(
+                "Nested circles labelled with a contour layer's levels (a key for unlabelled "
+                "contours), placed in figure fractions from the lower left."),
+                self.ck_opts, _checks(self.ck_on, self.ck_frame)),
+            _section("Spacing", _grid(self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad)),
+            _section("matplotlib style", _grid((self.mplstyle, 3))),
             sizing_mode="stretch_width")
         return style_tab
 
     def _build_style(self):
         lt = dict(button_type="light", button_style="outline", height=32)
-        # ---- presets (Style tab)
-        self.preset = pn.widgets.Select(name="Preset", options=PRESETS, value="ams")
-        self.preset_go = pn.widgets.Button(name="Apply preset", **lt)
+        # ---- matplotlib style (Style tab)
         self.mplstyle = pn.widgets.TextInput(
             name="matplotlib style (blank: none)", placeholder="e.g. dark_background",
             description="A matplotlib style name or a .mplstyle file on the server: its "
                         "colours and lines (fonts and sizes stay those above)")
-        self.preset_go.on_click(lambda e: self._apply_preset())
-        self.preset_sec = _section(
-            "Presets", _hint(
-                "A preset sets the fonts, label sizes, frame, background, figure width and "
-                "export at once (Undo takes it back). <b>AMS journal</b>: 8 pt sans-serif, "
-                "(a) letters, 3.2 in wide for one column (6.5 in for more), PDF at 600 DPI. "
-                "<b>Talk</b>: large text, 10 in wide; <b>dark</b>: on black."),
-            _grid(self.preset, self.preset_go), _grid((self.mplstyle, 3)))
         # ---- copy look (Layers tab)
         self.look_from = pn.widgets.Select(name="Copy the look of", options={})
         self.look_to = pn.widgets.MultiChoice(name="To layers", options={})
@@ -178,7 +199,7 @@ class FigureStyle:
             "Copy a layer's look", _hint(
                 "Colours, lines, style and colorbar of one layer onto others of its kind; "
                 "the colour range, levels and labels too when they show the same field."),
-            _grid(self.look_from, (self.look_to, 2)), _row(self.look_go), collapsed=True)
+            _grid(self.look_from, (self.look_to, 2)), _row(self.look_go))
         # ---- templates (Export tab)
         self.tpl_name = pn.widgets.TextInput(name="Template name", placeholder="e.g. 2x3 dbz w")
         self.tpl_save = pn.widgets.Button(name="Save as template", **lt)
@@ -194,13 +215,6 @@ class FigureStyle:
                 f"<code>{html.escape(fg.templates_dir())}</code>."),
             _grid((self.tpl_name, 2), self.tpl_save), _grid((self.tpl_sel, 2), self.tpl_go))
         self._list_templates()
-
-    # ------------------------------------------------------------ presets
-    def _apply_preset(self):
-        self.set_spec(fg.apply_style(self.collect(), self.preset.value))
-        name = next((k for k, v in PRESETS.items() if v == self.preset.value), "")
-        self._msg(f"Preset <b>{html.escape(name)}</b> applied "
-                  "(Undo takes it back)")
 
     # ------------------------------------------------------------ copy look
     def _look_opts(self):

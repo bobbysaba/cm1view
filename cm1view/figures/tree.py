@@ -34,6 +34,11 @@ class _PanelEditor:
         self._hold = False
         self._changed = changed
         self._run_names, self._time_opts = ed._run_names, ed._time_opts  # (Difference)
+        self._layer_run_choices = ed._layer_run_choices
+        self._pick_other = ed._pick_other  # (adds the run to the figure)
+
+    def _show_region(self):
+        """(The tree has no region settings to show.)"""
 
     def request(self):
         if not self._hold:
