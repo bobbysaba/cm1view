@@ -295,10 +295,10 @@ def test_shading_hatches_or_stipples():
     a = np.tile(np.linspace(0.0, 20.0, 11), (11, 1))
     ax = Figure().subplots()
     _shade(ax, x, x, a, dict(threshold=10.0, hatch="..", color="#ff0000", alpha=1.0))
-    cs = ax.collections[-1]
-    assert cs.get_hatch() == ".." and cs.get_facecolor()[0][3] == 0.0  # (no fill)
+    cs = ax.collections[-1]  # (a contour set's hatches are its own, applied as it draws)
+    assert cs.hatches == [".."] and cs.get_facecolor()[0][3] == 0.0  # (no fill, not black)
     _shade(ax, x, x, a, dict(threshold=10.0, color="#ff0000"))  # solid, as before
-    assert not ax.collections[-1].get_hatch()
+    assert all(h is None for h in ax.collections[-1].hatches)
 
 
 def test_vectors_as_barbs_in_knots():

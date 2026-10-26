@@ -49,10 +49,12 @@ def _shade(ax, x, y, a, lay):
         return
     color, hatch = lay.get("color", "magenta"), lay.get("hatch") or ""
     if hatch:  # hatching or stippling in the colour, over the fields below
-        with matplotlib.rc_context({"hatch.color": color,
+        # (the opacity is the lines': an alpha on the contourf would make its empty
+        # fill opaque black)
+        rgba = matplotlib.colors.to_rgba(color, float(lay.get("alpha", 0.6)))
+        with matplotlib.rc_context({"hatch.color": rgba,
                                     "hatch.linewidth": float(lay.get("hatch_lw", 0.6))}):
-            ax.contourf(x, y, a, lv, colors="none", hatches=[hatch],
-                        alpha=float(lay.get("alpha", 0.6)))
+            ax.contourf(x, y, a, lv, colors="none", hatches=[hatch])
     else:
         ax.contourf(x, y, a, lv, colors=[color], alpha=float(lay.get("alpha", 0.6)))
     if lay.get("outline"):
