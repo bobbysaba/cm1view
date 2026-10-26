@@ -140,6 +140,8 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
             if ends is not None:
                 (xa, ya), (xb, yb) = ends
                 out["line"] = np.array([xa - ox, ya - oy, xb - ox, yb - oy])
+                if float(spec["xsec"].get("avg") or 0.0) > 0:  # (the strip it averages)
+                    out["line_w"] = float(spec["xsec"]["avg"])
 
 
 def reduce_layer(run, F, lay, t, fixes=None, progress=None):
@@ -149,6 +151,20 @@ def reduce_layer(run, F, lay, t, fixes=None, progress=None):
     storm = ({k: storm_motion(run, fixes, k) for k in range(len(run.times))}
              if F[lay["field"]].storm else None)
     return swath.reduce(run, F, lay, t, centers, storm, progress)
+
+
+def _strip(run, vol, fi, fj, zq, across, width):
+    """render.sample_section, or with width (km) > 0 its mean over lines parallel to
+    the section within width / 2 either side (about one per grid column, at most 21);
+    across: the unit vector across the section (grid x, y)."""
+    if not width or width <= 0:
+        return render.sample_section(run, vol, fi, fj, zq)
+    dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
+    n = int(min(21, max(3, round(width / min(dxk, dyk)) + 1)))
+    secs = [render.sample_section(run, vol, fi + o * across[0] / dxk,
+                                  fj + o * across[1] / dyk, zq)
+            for o in np.linspace(-0.5 * width, 0.5 * width, n)]
+    return np.mean(secs, axis=0).astype(np.float32)
 
 
 def _extract_xsec(run, F, spec, i, t, center, storm, out, progress):
@@ -172,18 +188,19 @@ def _extract_xsec(run, F, spec, i, t, center, storm, out, progress):
     ztop, dz = float(xs["ztop"]), float(xs.get("dz", 0.025))
     zq = np.arange(0.0, ztop + 0.5 * dz, dz)
     s0 = s[-1] / 2.0 if xs["mode"] == "storm" else 0.0  # storm sections: 0 at the storm
+    width, across = float(xs.get("avg") or 0.0), (-ey, ex)  # (a strip: its mean)
     out["x"], out["y"] = s - s0, zq
     out["xlim"], out["ylim"] = (s[0] - s0, s[-1] - s0), (0.0, ztop)
     for j, lay in enumerate(layers):
         if not lay.get("on", True):
             continue
         if lay["type"] in ("fill", "contour", "shade"):
-            out[f"L{j}"] = render.sample_section(run, F.volume(lay["field"], t, storm),
-                                                 fi, fj, zq)
+            out[f"L{j}"] = _strip(run, F.volume(lay["field"], t, storm), fi, fj, zq,
+                                  across, width)
         elif lay["type"] == "vectors":
             q = lay.get("vector", "wind")  # in the plane: along-section and vertical
             u, v, w = (np.zeros((zq.size, s.size), np.float32) if a is None else
-                       render.sample_section(run, a, fi, fj, zq)
+                       _strip(run, a, fi, fj, zq, across, width)
                        for a in vectors.volumes(F, q, t))
             if vectors.VECTORS[q].framed:
                 u, v = vectors.to_frame(run, u, v, lay["frame"], storm)

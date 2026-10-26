@@ -327,7 +327,7 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                 _shade(ax, lx, ly, a, lay)
             elif t == "vectors":
                 _vectors(ax, d, j, lay, xsec, nkey)
-                nkey += bool(lay.get("key")) and lay.get("style") != "streamlines"
+                nkey += bool(lay.get("key")) and lay.get("style", "arrows") == "arrows"
             elif t == "track" and "track_x" in d:
                 col = layer_color(spec, lay, d)
                 ax.plot(d["track_x"], d["track_y"], color=col,
@@ -338,6 +338,14 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                 xa, ya, xb, yb = d["line"]
                 ax.plot([xa, xb], [ya, yb], color=lay.get("color", "k"),
                         lw=float(lay.get("lw", 2.0)))
+                hw = 0.5 * float(d.get("line_w", 0.0))
+                if hw > 0:  # a strip-averaged section: the strip's edges
+                    n = np.hypot(xb - xa, yb - ya) or 1.0
+                    px, py = -(yb - ya) / n * hw, (xb - xa) / n * hw
+                    for sg in (-1, 1):
+                        ax.plot([xa + sg * px, xb + sg * px], [ya + sg * py, yb + sg * py],
+                                color=lay.get("color", "k"), lw=0.6 * float(lay.get("lw", 2.0)),
+                                ls="--")
                 la, lb = ([s.strip() for s in str(lay.get("labels", "")).split(",")]
                           + ["", ""])[:2]
                 yl = d.get("ylim", (np.nanmin(y), np.nanmax(y)))
@@ -348,9 +356,10 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                             va="bottom", clip_on=True)
             if lay.get("legend") and t in ("contour", "shade", "track", "line"):
                 legend[lay["legend"]] = (
-                    Patch(facecolor=lay.get("color", "magenta"),
-                          alpha=float(lay.get("alpha", 0.6)),
-                          edgecolor=lay.get("outline") or "none")
+                    Patch(facecolor="none" if lay.get("hatch") else lay.get("color", "magenta"),
+                          alpha=float(lay.get("alpha", 0.6)), hatch=lay.get("hatch") or None,
+                          edgecolor=(lay.get("outline") or lay.get("color", "magenta")
+                                     if lay.get("hatch") else lay.get("outline") or "none"))
                     if t == "shade" else
                     Line2D([], [], color=layer_color(spec, lay, d),
                            lw=float(lay.get("lw", 1.0))))

@@ -36,7 +36,9 @@ Panels that differ in
 a *Fixed box* (x and y minimum and maximum, in grid km) or the *Whole domain*. *Axis
 coordinates* are the model grid's x, y or relative to the storm. A cross-section is
 *Through tracked storm* (with a direction in degrees from east, a half-length, offsets and
-a top) or a *Fixed A–B from the map*. A plan view can draw the section's line as a
+a top) or a *Fixed A–B from the map*. **Average across** (km) makes it a strip-averaged
+section: the mean of the sections parallel to the line within half that width either
+side (0: the line alone). A plan view can draw the section's line as a
 *Section line* layer ([Figure layers](figures-layers.md)).
 
 *Layers → Maximum and minimum* writes a layer's maximum and/or minimum over what each

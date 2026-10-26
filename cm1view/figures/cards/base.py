@@ -45,6 +45,8 @@ MATH_FONTS = {"DejaVu Sans": "dejavusans", "Like the text font": "custom",
               "STIX Sans": "stixsans", "STIX (Times-like)": "stix",
               "Computer Modern (LaTeX)": "cm"}
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
+HATCHES = {"Solid": "", "Hatching /": "///", "Hatching \\": "\\\\\\", "Cross-hatching": "xxx",
+           "Stippling": "..", "Dense stippling": "...", "Circles": "oo"}  # (shade layers)
 VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
         "Height (one run, one time)": "height",
         "Each panel: own run & time": "custom"}

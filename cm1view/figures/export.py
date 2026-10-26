@@ -206,7 +206,10 @@ class FigureExport:
         except (OSError, ValueError) as e:
             self._msg(f"Could not load <code>{path}</code>: {e}", True)
             return False
-        if not self._open_spec(spec, f"Loaded <code>{path}</code>"):
+        changed = fg.changed_runs(spec)
+        if not self._open_spec(spec, f"Loaded <code>{path}</code>" + "".join(
+                f". <b>Note:</b> the namelist.input of <code>{p}</code> changed since "
+                "the figure was saved, so its data may differ" for p in changed)):
             return False
         self.path.value = saved_base(path)  # (after the runs' sync of the save path)
         return True

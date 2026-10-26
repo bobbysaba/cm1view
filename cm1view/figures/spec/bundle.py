@@ -113,6 +113,15 @@ def made_with(spec):
                 settings={k: config.get(k) for k in SETTINGS_USED})
 
 
+def changed_runs(spec):
+    """Paths of the runs whose namelist.input differs from when the figure was saved
+    (spec["made_with"]): its data may not draw the same now.  Runs saved without a
+    hash, or now without a namelist, are not checked."""
+    return [r["path"] for r in (spec.get("made_with") or {}).get("runs", [])
+            if r.get("namelist_sha256") and namelist_hash(r["path"]) not in
+            ("", r["namelist_sha256"])]
+
+
 def save_bundle(spec, data, base, run=None, note=""):
     """Image + script side by side, data, spec and drawing code in _src/ (see
     bundle_paths).  Returns the paths.  The spec is saved as version 2 (every panel

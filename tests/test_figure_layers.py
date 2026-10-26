@@ -285,3 +285,55 @@ def test_outer_labels_each_axis_on_its_own():
     _ticks(cells, list(axs), dict(ticklabels="outer"))
     assert [ax.yaxis.get_tick_params().get("labelleft", True) for ax in axs] == \
         [True, False, False]
+
+
+# ------------------------------------------------------------------ patterns, barbs, strips
+def test_shading_hatches_or_stipples():
+    from matplotlib.figure import Figure
+    from cm1view.figures.draw.layers import _shade
+    x = np.linspace(-5.0, 5.0, 11)
+    a = np.tile(np.linspace(0.0, 20.0, 11), (11, 1))
+    ax = Figure().subplots()
+    _shade(ax, x, x, a, dict(threshold=10.0, hatch="..", color="#ff0000", alpha=1.0))
+    cs = ax.collections[-1]
+    assert cs.get_hatch() == ".." and cs.get_facecolor()[0][3] == 0.0  # (no fill)
+    _shade(ax, x, x, a, dict(threshold=10.0, color="#ff0000"))  # solid, as before
+    assert not ax.collections[-1].get_hatch()
+
+
+def test_vectors_as_barbs_in_knots():
+    from matplotlib.figure import Figure
+    from matplotlib.quiver import Barbs, Quiver
+    from cm1view.figures.draw.layers import _vectors
+    d = dict(L0_x=np.array([0.0, 1.0]), L0_y=np.array([0.0, 1.0]),
+             L0_u=np.array([10.0, 0.0]), L0_v=np.array([0.0, 5.0]))
+    ax = Figure().subplots()
+    _vectors(ax, d, 0, dict(style="barbs", vector="wind"), False)
+    b = ax.collections[-1]
+    assert isinstance(b, Barbs) and np.allclose(b.u, [19.43844, 0.0])
+    _vectors(ax, d, 0, dict(style="barbs", vector="wind", barb_units="ms"), False)
+    assert np.allclose(ax.collections[-1].u, [10.0, 0.0])
+    _vectors(ax, d, 0, dict(style="barbs", vector="wind"), True)  # a section: arrows
+    assert isinstance(ax.collections[-1], Quiver)
+
+
+def test_strip_averaged_section():
+    from types import SimpleNamespace
+    from cm1view.figures.spec.arrays import _strip
+    run = SimpleNamespace(dx=1000.0, dy=1000.0, z=np.array([0.5, 1.5]))
+    vol = np.broadcast_to((np.arange(11.0) ** 2)[None, :, None], (2, 11, 11)).copy()
+    fi, fj, zq = np.arange(2.0, 9.0), np.full(7, 5.0), np.array([0.5, 1.0])
+    line = _strip(run, vol, fi, fj, zq, (0.0, 1.0), 0.0)  # along x, at y index 5
+    assert np.allclose(line, 25.0)
+    strip = _strip(run, vol, fi, fj, zq, (0.0, 1.0), 4.0)  # y index 3..7
+    assert np.allclose(strip, (9 + 16 + 25 + 36 + 49) / 5.0)
+
+
+def test_reopening_notes_a_changed_namelist(tmp_path):
+    from cm1view.figures import spec as fg
+    (tmp_path / "namelist.input").write_text("&param1\n dx = 250.0\n/\n")
+    spec = dict(runs=[dict(path=str(tmp_path), label="a")])
+    spec["made_with"] = fg.made_with(spec)
+    assert fg.changed_runs(spec) == []
+    (tmp_path / "namelist.input").write_text("&param1\n dx = 500.0\n/\n")
+    assert fg.changed_runs(spec) == [str(tmp_path)]

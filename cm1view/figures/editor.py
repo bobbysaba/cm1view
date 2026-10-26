@@ -147,7 +147,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         rq = lambda *e: self.request()  # noqa: E731
         for w in (self.kind, self.width, self.height, self.time1, self.suptitle,
                   self.half, self.coords, self.xs_mode, self.xs_angle,
-                  self.xs_half, self.xs_offx, self.xs_offy, self.xs_top, self.font, self.math,
+                  self.xs_half, self.xs_offx, self.xs_offy, self.xs_top, self.xs_avg,
+                  self.font, self.math,
                   self.fsize, self.fs_tick, self.fs_label, self.fs_title, self.fs_sup,
                   self.fs_legend, self.xlabel, self.ylabel, self.ticklabels, self.share, self.tickdir,
                   self.ticks, self.minor, self.xstep, self.ystep, self.frame_lw, self.grid,

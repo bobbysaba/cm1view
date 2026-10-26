@@ -47,8 +47,14 @@ def _shade(ax, x, y, a, lay):
     lv = [thr, np.inf] if lay.get("above", True) else [-np.inf, thr]
     if not np.isfinite(a).any():
         return
-    ax.contourf(x, y, a, lv, colors=[lay.get("color", "magenta")],
-                alpha=float(lay.get("alpha", 0.6)))
+    color, hatch = lay.get("color", "magenta"), lay.get("hatch") or ""
+    if hatch:  # hatching or stippling in the colour, over the fields below
+        with matplotlib.rc_context({"hatch.color": color,
+                                    "hatch.linewidth": float(lay.get("hatch_lw", 0.6))}):
+            ax.contourf(x, y, a, lv, colors="none", hatches=[hatch],
+                        alpha=float(lay.get("alpha", 0.6)))
+    else:
+        ax.contourf(x, y, a, lv, colors=[color], alpha=float(lay.get("alpha", 0.6)))
     if lay.get("outline"):
         ax.contour(x, y, a, [thr], colors=lay["outline"],
                    linewidths=float(lay.get("lw", 1.0)))
@@ -59,8 +65,9 @@ KEY_UNITS = {"wind": "m s$^{-1}$", "hvort": "s$^{-1}$", "bgen": "10$^{-4}$ s$^{-
 
 
 def _vectors(ax, d, j, lay, xsec, nkey=0):
-    """Arrows or streamlines of vector layer j; nkey: key arrows drawn before this
-    one's in the panel (each further one to the left)."""
+    """Arrows, barbs (plan panels; wind in kt or m/s: half barb 5, full 10, flag 50)
+    or streamlines of vector layer j; nkey: key arrows drawn before this one's in the
+    panel (each further one to the left)."""
     if lay.get("style") == "streamlines":
         gx, gy, gu, gv = (d.get(f"L{j}_g{k}") for k in "xyuv")
         if gx is None or np.size(gx) < 2 or np.size(gy) < 2:
@@ -74,6 +81,13 @@ def _vectors(ax, d, j, lay, xsec, nkey=0):
         return
     x, y, u, v = (d.get(f"L{j}_{k}") for k in "xyuv")
     if x is None or not np.size(x):
+        return
+    if lay.get("style") == "barbs" and not xsec:  # (a section's arrows stay arrows)
+        kt = lay.get("barb_units", "kt") == "kt" and lay.get("vector", "wind") == "wind"
+        f = 1.943844 if kt else 1.0  # m/s -> kt
+        ax.barbs(x, y, np.asarray(u) * f, np.asarray(v) * f, color=lay.get("color", "k"),
+                 length=float(lay.get("barb_len", 5.5)), linewidth=float(lay.get("slw", 0.8)),
+                 pivot="middle" if lay.get("pivot_mid") else "tip")
         return
     q = ax.quiver(x, y, u, v, color=lay.get("color", "k"), scale=float(lay.get("scale", 250)),
                   width=float(lay.get("width", 0.002)), angles="xy" if xsec else "uv",

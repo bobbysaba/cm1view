@@ -7,7 +7,7 @@ import panel as pn
 from .. import draw as figdraw, spec as fg
 from ...core import vectors
 from .base import (
-    FIG_CMAPS, LEVEL_MODES, FRAMES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, _hex, _f, _grid,
+    FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, _hex, _f, _grid,
     _checks, _fold, _near, _nice, _panels_parse, _panels_text, _chk,
 )
 
@@ -112,6 +112,10 @@ class LayerCard:
             w["above"] = pn.widgets.Select(name="Shade", options={"Above": True, "Below": False},
                                            value=lay.get("above", True))
             w["alpha"] = _f("Opacity (0–1)", lay.get("alpha", 0.6), step=0.1, start=0, end=1)
+            w["hatch"] = pn.widgets.Select(name="Pattern", options=HATCHES,
+                                           value=lay.get("hatch") or "")
+            w["hatch_lw"] = _f("Pattern line width", float(lay.get("hatch_lw", 0.6)),
+                               step=0.1, start=0.1)
             w["outline_on"] = pn.widgets.Checkbox(name="Outline", value=bool(lay.get("outline")))
             w["outline"] = pn.widgets.ColorPicker(name="Outline color",
                                                   value=_hex(lay.get("outline") or "magenta"))
@@ -121,8 +125,8 @@ class LayerCard:
             w["vector"] = pn.widgets.Select(name="Vector", options=opts,
                                             value=q if q in opts.values() else "wind")
             w["style"] = pn.widgets.Select(name="Draw as", options={
-                "Arrows": "arrows", "Streamlines": "streamlines"},
-                value=lay.get("style", "arrows"))
+                "Arrows": "arrows", "Barbs (plan views)": "barbs",
+                "Streamlines": "streamlines"}, value=lay.get("style", "arrows"))
             w["frame"] = pn.widgets.Select(name="Frame", options=FRAMES,
                                            value=lay.get("frame", "ground"))
             w["z"] = _f("Height (km)", lay.get("z", 0.0), step=0.25)
@@ -134,6 +138,10 @@ class LayerCard:
             w["density"] = _f("Density", float(lay.get("density", 1.5)), step=0.25, start=0.25)
             w["slw"] = _f("Line width", float(lay.get("slw", 0.8)), step=0.1)
             w["arrowsize"] = _f("Arrow size", float(lay.get("arrowsize", 1.0)), step=0.25)
+            w["barb_len"] = _f("Barb length", float(lay.get("barb_len", 5.5)), step=0.5,
+                               start=2)
+            w["barb_units"] = pn.widgets.Select(name="Barbs in", options={
+                "knots": "kt", "m/s": "ms"}, value=lay.get("barb_units", "kt"))
         if t in ("contour", "shade", "vectors", "track", "line"):
             w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(lay.get("color", "k")))
         if t in ("contour", "shade", "track", "line"):
@@ -213,7 +221,7 @@ class LayerCard:
                     self._reduce_row(), _checks(w["clabel"], w["neg_dashed"], title="Options")]
         if t == "shade":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["threshold"],
-                          w["above"],
+                          w["above"], w["hatch"], w["hatch_lw"],
                           w["color"], w["alpha"], w["outline_on"], w["outline"], w["lw"],
                           (w["legend"], 3), (w["panels"], 3)),
                     self._reduce_row()]
@@ -221,7 +229,8 @@ class LayerCard:
             return [_grid((w["vector"], 2), w["style"], w["frame"], w["color"], w["z"],
                           w["z_fixed"], w["spacing"],
                           w["zspacing"], w["scale"], w["width"], w["key"], w["density"],
-                          w["slw"], w["arrowsize"], (w["panels"], 3))]
+                          w["slw"], w["arrowsize"], w["barb_len"], w["barb_units"],
+                          (w["panels"], 3))]
         if t == "track":
             return [_grid(w["run_color"], w["color"], w["lw"], w["ls"],
                           (w["legend"], 3), (w["panels"], 3)), _checks(w["marker"])]
@@ -248,10 +257,14 @@ class LayerCard:
                 w[k].visible = not xs and bool(w["reduce_op"].value)
         if t == "vectors":
             st = w["style"].value == "streamlines"
-            for k in ("density", "slw", "arrowsize"):
+            barbs = w["style"].value == "barbs" and not xs
+            for k in ("density", "arrowsize"):
                 w[k].visible = st
+            w["slw"].visible = st or barbs
             for k in ("scale", "width", "key"):
-                w[k].visible = not st
+                w[k].visible = not st and not barbs
+            w["barb_len"].visible = barbs
+            w["barb_units"].visible = barbs and w["vector"].value == "wind"
             w["z_fixed"].visible = by_z
             w["z"].visible = not xs and (not by_z or w["z_fixed"].value)
             w["spacing"].visible = not st
@@ -261,6 +274,7 @@ class LayerCard:
             w["key"].name = f'Key arrow ({vectors.VECTORS[w["vector"].value].units}, 0: none)'
         if t == "shade":
             w["outline"].visible = w["lw"].visible = w["outline_on"].value
+            w["hatch_lw"].visible = bool(w["hatch"].value)
         if t == "track":  # (each panel's run's colour: Layers → Runs used)
             w["color"].visible = not w["run_color"].value
         if t == "contour":
@@ -305,7 +319,8 @@ class LayerCard:
                 sub += " · difference"
         elif t == "vectors":
             sub = (f' · {vectors.VECTORS[w["vector"].value].label}'
-                   + (" · streamlines" if w["style"].value == "streamlines" else " · arrows"))
+                   + {"streamlines": " · streamlines", "barbs": " · barbs"}.get(
+                       w["style"].value, " · arrows"))
         try:
             only = _panels_parse(w["panels"].value)
         except ValueError:  # (collect() reports it)

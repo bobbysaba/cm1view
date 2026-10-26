@@ -10,6 +10,12 @@ has a matching git tag.
 - **Time–height panels follow each series' Runs**: a series is drawn for the runs it
   picks (blank: every run), and a run no series uses gets no column
   ([Panels](guide/figures-panels.md#timeheight-series)).
+- **Hatching and stippling**: a shading layer's *Pattern* hatches, cross-hatches or
+  stipples its area ([Layers](guide/figures-layers.md)).
+- **Wind barbs** on plan views, in knots or m/s, as a vector layer's *Draw as*.
+- **Strip-averaged cross-sections**: *Average across* (km) averages the sections within
+  a strip along the line; a *Section line* layer shows the strip.
+- Reopening a saved figure says when a run's `namelist.input` changed since it was saved.
 
 ## 0.4.0 (2026-10-26)
 

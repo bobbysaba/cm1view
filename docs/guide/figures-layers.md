@@ -12,10 +12,10 @@ On plan views and cross-sections the layer types are
 |---|---|
 | **Fill** | A colour-filled field: colormap, range, steps, linear or log scale, opacity, blanking, colorbar arrows and label. |
 | **Contours** | Lines at chosen levels, with labels and their format. |
-| **Shading** | A translucent colour over the area where a field is above (or below) a *threshold*, with its own colour and opacity and an optional outline at the threshold. |
-| **Vectors** | Arrows or streamlines of the wind, horizontal vorticity or baroclinic generation ([The map](map.md#vectors)). |
+| **Shading** | A translucent colour over the area where a field is above (or below) a *threshold*, with its own colour and opacity and an optional outline at the threshold. Its *Pattern* hatches, cross-hatches or stipples the area instead (in the layer's colour, over the fields below), e.g. where a difference is significant. |
+| **Vectors** | Arrows, wind barbs (plan views; in knots or m/s: half barb 5, full 10, flag 50) or streamlines of the wind, horizontal vorticity or baroclinic generation ([The map](map.md#vectors)). |
 | **Storm track** | The run's track (needs a track). |
-| **Section line** | The A–B line of a section, on a plan view. |
+| **Section line** | The A–B line of a section, on a plan view (dashed edges: the strip a strip-averaged section averages). |
 
 Time–height and time-series figures have **Series** layers; sounding figures have
 **Soundings** layers and distribution figures **Distributions** ([Figure

@@ -27,11 +27,13 @@ def layer_defaults(kind, F, field=None, z=1.0):
     if kind == "shade":
         return dict(type="shade", on=True, field=field, mode="height", z=z, threshold=10.0,
                     above=True,
-                    color="magenta", alpha=0.6, outline="", lw=1.0, legend="")
+                    color="magenta", alpha=0.6, outline="", lw=1.0, legend="", hatch="",
+                    hatch_lw=0.6)
     if kind == "vectors":
         return dict(type="vectors", on=True, vector="wind", z=0.0, spacing=2.0, zspacing=0.5,
                     frame="ground", scale=250.0, width=0.002, color="k", key=0.0,
-                    style="arrows", density=1.5, slw=0.8, arrowsize=1.0)
+                    style="arrows", density=1.5, slw=0.8, arrowsize=1.0, barb_len=5.5,
+                    barb_units="kt")
     if kind == "track":  # (in its run's colour, run_color)
         return dict(type="track", on=True, color="k", run_color=True, lw=1.0, ls="-",
                     marker=True, legend="")
@@ -94,7 +96,7 @@ def default_spec(run, F, t=0):
         runs=[run_entry(run, "viewer")], run=0, runs_as="rows", panels=[],
         domain=dict(mode="storm", half=12.5, box=None), coords="grid",
         xsec=dict(mode="storm", a=None, b=None, angle=0.0, half=10.0, offset=[0.0, 0.0],
-                  ztop=6.0, dz=0.025),
+                  ztop=6.0, dz=0.025, avg=0.0),
         axes=dict(xlabel="x (km)", ylabel="y (km)", ticks=True, ticklabels="outer",
                   equal=True, minor=False, title_bold=True),
         letters=dict(on=True, fmt="{a}", loc="lower left", size=12, bold=True),

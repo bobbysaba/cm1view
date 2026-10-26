@@ -45,6 +45,7 @@ class FigureSpecIO:
             x = s["xsec"]
             self.xs_mode.value, self.xs_angle.value = x["mode"], float(x["angle"])
             self.xs_half.value, self.xs_top.value = float(x["half"]), float(x["ztop"])
+            self.xs_avg.value = float(x.get("avg") or 0.0)
             self.xs_offx.value, self.xs_offy.value = (float(v) for v in x["offset"])
             a = s["axes"]
             self.xlabel.value, self.ylabel.value = a.get("xlabel", ""), a.get("ylabel", "")
@@ -255,7 +256,8 @@ class FigureSpecIO:
                          half=float(self.xs_half.value or 10.0),
                          offset=[float(self.xs_offx.value or 0.0),
                                  float(self.xs_offy.value or 0.0)],
-                         ztop=float(self.xs_top.value or 6.0))
+                         ztop=float(self.xs_top.value or 6.0),
+                         avg=float(self.xs_avg.value or 0.0))
         s["axes"] = dict(s["axes"], xlabel=self.xlabel.value, ylabel=self.ylabel.value,
                          ticklabels=self.ticklabels.value, share=self.share.value, ticks=self.ticks.value,
                          minor=self.minor.value, equal=self.equal.value,

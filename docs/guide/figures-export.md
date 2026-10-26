@@ -20,6 +20,8 @@ runs, newest first in each. A figure saved elsewhere: give the path of its `_spe
 (in the `_src/` folder next to the image) under *A saved figure*; its image or script
 path works too. The editor then shows the figure with all its settings, ready to keep
 editing, and *Save as* is where it was saved, so saving again replaces it. The quick start has the same list ([Figures](figures.md#the-quick-start)).
+If a run's `namelist.input` changed since the figure was saved (its hash, below), the
+message says so: the figure is drawn from the run's data as it is now.
 
 ## Templates
 

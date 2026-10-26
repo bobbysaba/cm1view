@@ -101,6 +101,7 @@ class FigureWidgets:
         self.xs_offx = _f("Offset x (km)", 0.0, step=0.5)
         self.xs_offy = _f("Offset y (km)", 0.0, step=0.5)
         self.xs_top = _f("Top (km)", 6.0, step=0.5, start=0.5)
+        self.xs_avg = _f("Average across (km)", 0.0, step=0.5, start=0.0)  # (0: the line)
         self.xs_ab = pn.widgets.Button(name="Use map A–B", height=32, button_type="light",
                                        button_style="outline")
         self.xs_html = pn.pane.HTML(margin=(2, 4))
@@ -406,7 +407,7 @@ class FigureWidgets:
                                          n=2),
                                    self.box_html, margin=0, sizing_mode="stretch_width")
         self.area_xs = pn.Column(_grid(self.xs_mode, self.xs_angle, self.xs_half, self.xs_offx,
-                                       self.xs_offy, self.xs_top, self.xs_ab),
+                                       self.xs_offy, self.xs_top, self.xs_avg, self.xs_ab),
                                  self.xs_html, margin=0, sizing_mode="stretch_width")
         self.area_sec = _section("Area", self.area_plan, self.area_xs)
         self.ts_sec = _section("Time and value axes", _grid(
