@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cm1view"
-version = "0.3.0"
+version = "0.4.0"
 description = "Interactive web viewer for CM1 netCDF output"
 readme = "README.md"
 requires-python = ">=3.11"

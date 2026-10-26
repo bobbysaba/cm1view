@@ -3,7 +3,10 @@
 What changed in each release, newest first. The version is in `pyproject.toml`; a release
 has a matching git tag.
 
-## Unreleased (since v0.3.0)
+## 0.4.0 (2026-10-26)
+
+Per-layer runs, more map and section layers, 3D streamlines and a much larger figure
+workspace (differences, swaths, legends, statistics, a quick start).
 
 ### The map
 

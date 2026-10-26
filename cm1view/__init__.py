@@ -9,4 +9,4 @@ the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the impl
 warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the LICENSE file
 or <https://www.gnu.org/licenses/>."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
