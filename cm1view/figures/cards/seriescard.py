@@ -121,7 +121,11 @@ class SeriesCard:
         """A run not in the figure picked (its path): add it to the figure, and keep
         it picked here."""
         new = [v for v in ev.new if isinstance(v, str)]
-        if self.ed._hold or not new:
+        if self.ed._hold:
+            return
+        if not new:
+            if self.ed.kind.value == "th":  # (its panels: one per run it uses)
+                self.ed._series_changed()
             return
         keep = [v for v in ev.new if not isinstance(v, str)]
         for p in new:

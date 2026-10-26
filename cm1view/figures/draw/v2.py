@@ -28,14 +28,30 @@ def npanels(spec):
     return min(n, cells)
 
 
+def th_grid(spec):
+    """(rows, cols, cells) of a time-height figure: a panel per series and run of that
+    series (its "runs"; blank: every run of the figure).  The runs any series uses are
+    the columns (runs_as "cols", rows the series) or the rows; cells lists (run index,
+    series index) row by row, None where a series skips that run."""
+    nr, ents = len(spec.get("runs") or [None]), spec.get("series", [])
+    own = [[int(k) for k in (e.get("runs") or range(nr)) if 0 <= int(k) < nr]
+           or list(range(nr)) for e in ents]
+    ks = sorted({k for ks in own for k in ks}) or [0]
+    by_cols = spec.get("runs_as", "cols") == "cols"
+    cells = []
+    for a in range(len(ents) if by_cols else len(ks)):
+        for b in range(len(ks) if by_cols else len(ents)):
+            e, j = (a, b) if by_cols else (b, a)
+            cells.append((ks[j], e) if ks[j] in own[e] else None)
+    n = max(1, len(ents))
+    return (n, len(ks), cells) if by_cols else (len(ks), n, cells)
+
+
 def series_ref(spec, i):
-    """(run index, series entry index) of time-height panel i, or None (an empty cell).
-    runs_as "cols": a column per run and a row per series (else the other way)."""
-    r, c = divmod(i, int(spec["cols"]))
-    k, e = (c, r) if spec.get("runs_as", "cols") == "cols" else (r, c)
-    if k < len(spec.get("runs") or [None]) and e < len(spec.get("series", [])):
-        return k, e
-    return None
+    """(run index, series entry index) of time-height panel i, or None (an empty cell);
+    see th_grid."""
+    cells = th_grid(spec)[2]
+    return cells[i] if i < len(cells) else None
 
 
 def spec_layers(spec, i):

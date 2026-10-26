@@ -283,9 +283,12 @@ class FigureSources:
                 self._hold = hold
 
     def _th_grid(self):
-        """Time-height grid: a row (column) per series and a column (row) per run."""
-        ne, nr = max(1, len(self.ser_cards)), max(1, len(self.run_rows))
-        r, c = (ne, nr) if self.runs_as.value == "cols" else (nr, ne)
+        """Time-height grid: a row (column) per series and a column (row) per run that
+        a series uses (figdraw.th_grid)."""
+        ser = [dict(runs=[int(k) for k in c.w["runs"].value if not isinstance(k, str)])
+               for c in self.ser_cards]
+        r, c, _ = figdraw.th_grid(dict(runs=self.run_rows, series=ser,
+                                       runs_as=self.runs_as.value))
         if (self.rows.value, self.cols.value) != (r, c):
             hold, self._hold = self._hold, True
             try:

@@ -316,3 +316,32 @@ def test_a_run_keeps_its_colour_in_every_panel():
            dict(runs=runs, series=[dict(color="#0000ff"), dict(color="#ff00ff")]), 10)
     assert [to_hex(ln.get_color()) for ln in ax.lines] == ["#0000ff", "#ff00ff"]
     assert {ln.get_linestyle() for ln in ax.lines} == {"--"}
+
+
+def test_time_height_panels_follow_each_series_runs():
+    from cm1view.figures import draw as figdraw
+    runs = [dict(path="/a"), dict(path="/b"), dict(path="/c")]
+    s = dict(kind="th", runs=runs, runs_as="cols",
+             series=[dict(runs=None), dict(runs=[2])])  # every run; run 2 alone
+    assert figdraw.th_grid(s) == (2, 3, [(0, 0), (1, 0), (2, 0), None, None, (2, 1)])
+    s["series"][0]["runs"] = [0]  # run 1: no series uses it, no column
+    assert figdraw.th_grid(s) == (2, 2, [(0, 0), None, None, (2, 1)])
+    s["runs_as"] = "rows"
+    assert figdraw.th_grid(s) == (2, 2, [(0, 0), None, None, (2, 1)])
+    s["series"][1]["runs"] = [0, 2]
+    assert figdraw.th_grid(s)[2] == [(0, 0), (0, 1), None, (2, 1)]
+    s.update(rows=2, cols=2)
+    assert figdraw.series_ref(s, 1) == (0, 1) and figdraw.series_ref(s, 2) is None
+    assert figdraw.series_ref(dict(s, runs_as="cols"), 9) is None
+
+
+def test_time_height_grid_grows_with_a_series_run(ed, demo_root):
+    import os
+    weak = os.path.join(demo_root, "demo", "supercell_weak")
+    ed.from_series()
+    ed.kind.value = "th"
+    assert (ed.rows.value, ed.cols.value) == (len(ed.ser_cards), 1)
+    ed.ser_cards[0].w["runs"].value = [0, weak]  # a column for the run it adds
+    assert (ed.rows.value, ed.cols.value) == (len(ed.ser_cards), 2)
+    from cm1view.figures import draw as figdraw
+    assert figdraw.series_ref(ed.collect(), 1) == (1, 0)

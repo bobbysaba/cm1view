@@ -44,7 +44,10 @@ panel shows in a corner (e.g. "max 32.1 m/s"), with + and × where they are.
 
 ### Time–height (series)
 
-A row per series and a column per run, one colorbar per row. A series can be plotted as
+A row per series and a column per run, one colorbar per row (*Grid and size → Runs
+are* swaps them). Each series is drawn for its own **Runs** (*Layers → Series*; blank:
+every run of the figure); the columns are the runs any series uses, and a series that
+skips a run leaves that cell empty. A series can be plotted as
 its d/dz or d/dt. *Maximum and minimum* works here too. The height axis spans the series'
 layer (a 0–10 km layer shows 0 to 10 km).
 
