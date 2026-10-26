@@ -70,9 +70,9 @@ class FigureQuick:
     def _quick_show(self):
         kind, vary = self.qs_kind.value, self.qs_vary.value
         maps = kind in MAPS
-        for w in (self.qs_vary, self.qs_field, self.qs_cols):
+        for w in (self.qs_vary, self.qs_field):
             w.visible = maps
-        self.qs_rows.visible = maps
+        self.qs_rows.visible = self.qs_cols.visible = kind != "th"  # (th: series × runs)
         self.qs_vary.options = VARY if kind != "xsec" else \
             {k: v for k, v in VARY.items() if v != "height"}
         note = {
@@ -81,10 +81,12 @@ class FigureQuick:
                   "you add one in Layers → Series.",
             "line": "Time series: it starts with no series, so nothing is computed until "
                     "you add one in Layers → Series (each with its panel number).",
-            "sounding": "One panel per sounding of the viewer's Sounding tab (Layers → "
-                        "Soundings adds more).",
-            "dist": "One panel per distribution of the Distribution tool (Layers → "
-                    "Distributions adds more)."}.get(kind) or (maps and {
+            "sounding": "The Sounding tab's soundings go one per panel (more soundings "
+                        "than panels: they wrap and share panels); panels left over start "
+                        "as a copy of the last, to change in Layers → Soundings.",
+            "dist": "The Distribution tool's distributions go one per panel (more than "
+                    "panels: they wrap and share panels); panels left over start as a "
+                    "copy of the last, to change in Layers → Distributions."}.get(kind) or (maps and {
             "field": "Every panel starts with this fill: pick each panel's field in "
                      "Panels → Time and fields.",
             "height": "Pick each panel's height in Panels → Time and heights.",
@@ -110,11 +112,31 @@ class FigureQuick:
             self.kind.value = kind  # (its own labels, colorbar and series / sounding cards)
             if kind in MAPS:
                 self.vary.value = vary
+            if kind != "th":
                 self.rows.value = int(self.qs_rows.value)
                 self.cols.value = int(self.qs_cols.value)
+            if kind in ("sounding", "dist"):
+                self._quick_spread(kind)
             if self.qs_size.value:
                 self.size_preset.value = self.qs_size.value
         finally:
             self.auto.value = live
         self.request(delay=False)
 
+    def _quick_spread(self, kind):
+        """Sounding / distribution cards one per panel of the grid: more cards than
+        panels wrap (sharing panels), panels left over get a copy of the last card."""
+        n = int(self.rows.value or 1) * int(self.cols.value or 1)
+        cards = self.snd_cards if kind == "sounding" else self.dist_cards
+        ents = [c.collect() for c in cards]
+        if not ents:
+            return
+        ents = [dict(e, panel=i % n) for i, e in enumerate(ents)] + \
+            [dict(ents[-1], panel=i) for i in range(len(ents), n)]
+        if kind == "sounding":
+            self.snd_cards = [self._snd_card(e) for e in ents]
+            self._show_soundings()
+        else:
+            self.dist_cards = [self._dist_card(e) for e in ents]
+            self._show_dists()
+        self._build_titles()

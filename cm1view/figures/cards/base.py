@@ -1,6 +1,7 @@
 """Figure editor cards: the choices and constants, and small widget helpers."""
 
 import math
+import re
 
 import panel as pn
 from matplotlib import font_manager
@@ -94,6 +95,17 @@ def _auto(name, value=None, **kw):
 def _num(v):
     """A blank-able number for the spec (None when blank)."""
     return None if v in (None, "") else float(v)
+
+
+def _xy(text):
+    """An "x, y" text as [x, y] for the spec (None unless two numbers)."""
+    v = re.findall(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?", str(text or ""))
+    return [float(v[0]), float(v[1])] if len(v) == 2 else None
+
+
+def _xy_text(v):
+    """[x, y] as the text of an "x, y" box (blank: none)."""
+    return f"{v[0]:g}, {v[1]:g}" if v else ""
 
 
 def _row(*objs):

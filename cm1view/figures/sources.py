@@ -222,8 +222,8 @@ class FigureSources:
 
     def _fit_grid(self, reset=False):
         """Time-series / sounding / distribution figures: enough grid cells for the
-        highest panel number of the cards and no empty rows (reset: a column of up to
-        3, else 2 columns)."""
+        highest panel number of the cards (reset: a column of up to 3, else 2 columns;
+        else the grid only grows, keeping the rows and columns the user set)."""
         kind = self.kind.value
         if kind not in ("line", "sounding", "dist"):
             return
@@ -233,8 +233,7 @@ class FigureSources:
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
         if reset:
             r, c = (n, 1) if n <= 3 else ((n + 1) // 2, 2)
-        else:
-            c = min(c, n)
+        elif r * c < n:
             r = -(-n // c)
         if (r, c) != (self.rows.value, self.cols.value):
             hold, self._hold = self._hold, True

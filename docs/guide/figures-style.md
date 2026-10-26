@@ -16,11 +16,16 @@ The **Style** tab sets the look shared by every panel, in folding sections.
 ### Axes and ticks
 
 x and y labels (matplotlib maths allowed, e.g. `w (m s$^{-1}$)`); **Tick labels on** all
-panels, outer panels only, or none (outer is best when the panels *share their ranges*);
+panels, outer panels only, or none (outer: the y tick labels stay on every panel while the
+panels' y ranges differ, and likewise x; *Share limits* makes them the same; inner
+panels drop the axis labels either way, unless a panel has a different label of its own);
 **Share limits (panels of a kind)** none, x, y, or x and y; **Ticks point** out, in or
 across; **x tick every** and **y tick every**; **Frame width**; **Grid style** (dotted,
 dashed, solid); **Panel titles at** centre, left or right; and checkboxes for *Tick
 marks*, *Minor ticks*, *Grid lines*, *Equal x/y scale* and *Bold titles*.
+
+One panel can have labels of its own: in the **Tree** tab pick the panel and fill in *x
+label* or *y label* (blank: the labels here; a single space: no label).
 
 ### Panel labels
 
@@ -54,14 +59,25 @@ bars that have none of their own.
 
 ### Legend
 
-**Layer legend on** a panel or on the figure (this part), with its position, the panel
+**Layer legend on** a panel or on the figure (this part), with its position (*At*, and
+*Anchor x, y* to place it anywhere: the *At* corner of the legend sits at that point, in
+fractions of the panel, or of the figure for a figure legend; below 0 or above 1 is
+outside, e.g. *At: upper left*, *Anchor: 1.02, 1* just right of the panel), the panel
 it sits in, the panels whose entries it lists (blank: all), a title, columns and a
 frame. The legend lists layers that have a legend entry (contours, shading, track,
 section line), once for all the panels. On the figure it also gathers the legends of
 time-series, distribution and sounding panels (each panel's own *Legend* setting turns
-its entries on or off), listing an entry shared by panels once. The *outside* positions
-make room beside the panels. The columns and frame of those panels' own legends are set
-in *Panels*.
+its entries on or off), and the key of a hodograph of its own, listing an entry shared by
+panels once (three hodographs with the same runs give one legend). A legend on the
+figure turns off every panel's own legend, also those of panels it does not list; on a
+panel, unticking *Panels' own legends* does the same. Either way a panel whose **Tree**
+*Legend* is *Yes* keeps its own (and a figure legend gathers it only when listed in
+*From panels*), so one panel can have a legend and the others none. The *outside*
+positions make room beside the panels. The columns and frame of those panels' own
+legends are set in *Panels* (a hodograph's key: *Hodograph → Key at*, *Key columns*,
+*Key frame*), and for one panel alone in the **Tree** tab: pick the panel, then *Legend of
+this panel* (shown or not, where and its anchor, columns, frame; a sounding's apply to
+both its skew-T legend and its hodograph key).
 
 ### Contour key
 

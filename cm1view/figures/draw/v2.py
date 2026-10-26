@@ -78,9 +78,10 @@ def spec_layers(spec, i):
 
 def panel_edit(spec, i):
     """The changes made to panel i alone (spec["edits"][str(i)], the panel tree): its
-    "run", "time_s", "z" (km), "title", "layers" ({str(j): the keys layer j has in
-    this panel only, its own "run", "time_s" and "z" among them}) and "extra" (layers
-    of this panel only, drawn after the others)."""
+    "run", "time_s", "z" (km), "title", "xlabel", "ylabel" (" ": none), "layers"
+    ({str(j): the keys layer j has in this panel only, its own "run", "time_s" and "z"
+    among them}), "extra" (layers of this panel only, drawn after the others) and
+    "legend" (its own legend: legend_opts)."""
     return (spec.get("edits") or {}).get(str(i)) or {}
 
 
@@ -229,7 +230,41 @@ def _v1_panel(spec, i):
             p["z"], p["zmode"] = float(e["z"]), "height"
     if panel_edit(spec, i).get("title") is not None:
         p["title"] = panel_edit(spec, i)["title"]
+    own = legend_opts(kind, panel_edit(spec, i).get("legend"))
+    labels = {k: v for k, v in panel_edit(spec, i).items()
+              if k in ("xlabel", "ylabel") and v is not None}
+    if labels:
+        own["axes"] = labels
+    if own:
+        p["opts"] = own
     return p
+
+
+LEGEND_OPTS = {"line": ("ts", ("legend",)), "dist": ("dist", ("legend",)),
+               "sounding": ("skewt", ("legend", "hodo_key"))}
+
+
+def legend_opts(kind, lg):
+    """The settings a panel's own legend (panel edit "legend": "on" True / False, "loc",
+    "anchor" [x, y], "ncol", "frame"; a missing key: as laid out) changes, as panel opts:
+    its kind's legend keys (a sounding's: both its skew-T legend and its hodograph key).
+    "on" True also keeps it beside a figure legend, or with the block's panels' own
+    legends off ("legend_keep")."""
+    if kind not in LEGEND_OPTS or not lg:
+        return {}
+    key, names = LEGEND_OPTS[kind]
+    o = {}
+    for name in names:
+        if lg.get("on") is not None:
+            o[name] = bool(lg["on"])
+        for k in ("loc", "anchor", "ncol", "frame"):
+            if lg.get(k) is not None:
+                o[f"{name}_{k}"] = lg[k]
+    if kind == "sounding" and lg.get("on") is not None:
+        o["legend_off"] = not lg["on"]  # (several soundings have a legend regardless)
+    if lg.get("on"):
+        o["legend_keep"] = True
+    return {key: o} if o else {}
 
 
 def _local_entries(spec, i, d):
@@ -262,11 +297,13 @@ def block_view(spec, k):
 
 def panel_view(spec, p, bv=None):
     """The settings panel p is drawn with: its block's (bv: block_view), then its own
-    (p["opts"]), with its kind and layers where version 1 kept them (soundings and
-    the series of a time-series panel and distributions under "soundings", "series"
-    and "dists")."""
+    (p["opts"]; a group of settings, such as "skewt", merged into the block's), with
+    its kind and layers where version 1 kept them (soundings and the series of a
+    time-series panel and distributions under "soundings", "series" and "dists")."""
     v = dict(block_view(spec, int(p.get("block", 0))) if bv is None else bv)
-    v.update(p.get("opts") or {})
+    for k, val in (p.get("opts") or {}).items():  # (a group of settings: merged)
+        v[k] = dict(v[k], **val) if isinstance(val, dict) and isinstance(v.get(k), dict) \
+            else val
     kind = v["kind"] = p["kind"]
     v[ENTRIES.get(kind, "layers")] = p.get("layers") or []
     return v

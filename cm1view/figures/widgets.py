@@ -168,7 +168,13 @@ class FigureWidgets:
             hodo_lm=_chk("Bunkers left mover (LM)", True),
             hodo_mean=_chk("0–6 km mean wind", True),
             hodo_labels=_chk("Heights along the trace", True),
+            hodo_heights=pn.widgets.TextInput(
+                name="Heights marked (km)", value=figdraw.HODO_HEIGHTS,
+                description="Along the trace, e.g. 0.5, 1, 3, 6 or 0:3:0.5 (start:stop:step)"),
             hodo_key=_chk("Key of the height colours", True),
+            hodo_key_loc=pn.widgets.Select(name="Key at", options=LOCS, value="upper right"),
+            hodo_key_ncol=pn.widgets.IntInput(name="Key columns", start=1, end=8, value=1),
+            hodo_key_frame=_chk("Key frame", False),
             srh=pn.widgets.Select(name="SRH shading", options={
                 "None": "", "0–1 km": "1", "0–3 km": "3"}),
             storm=pn.widgets.Select(name="Storm motion (SRH, ring)", options=STORM_MOTIONS),
@@ -204,9 +210,10 @@ class FigureWidgets:
             _grid(hd["hodo_center"], hd["hodo_max"], hd["hodo_top"], hd["hodo_cu"],
                   hd["hodo_cv"], hd["srh"]),
             _grid(hd["inset_loc"], hd["inset_size"], hd["inset_x"], hd["inset_y"]),
+            _grid(hd["hodo_heights"], hd["hodo_key_loc"], hd["hodo_key_ncol"]),
             _checks(("Storm motions", [hd["hodo_rm"], hd["hodo_lm"], hd["hodo_mean"],
                                        hd["hodo_storm"]]),
-                    ("Heights", [hd["hodo_labels"], hd["hodo_key"]])),
+                    ("Heights", [hd["hodo_labels"], hd["hodo_key"], hd["hodo_key_frame"]])),
             _hint("The key and SRH shading are drawn in a hodograph of its own (side by "
                   "side, or the hodograph alone), not in an inset. The ring marks the "
                   "storm motion; with one sounding, dotted lines show the storm-relative "

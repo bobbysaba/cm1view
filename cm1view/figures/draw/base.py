@@ -278,12 +278,24 @@ def font_size(spec, what):
                                           "suptitle": 1.4, "legend": 0.85}[what]
 
 
+def anchor_kw(loc, anchor):
+    """loc and bbox_to_anchor of a legend: with an anchor [x, y] (fractions of the axes,
+    or of the figure for a figure legend; outside 0–1 is beyond them) the corner `loc`
+    of the legend sits at that point ("best" picks the corner, "outside" is dropped)."""
+    if not anchor:
+        return dict(loc=loc)
+    loc = str(loc).replace("outside ", "")
+    return dict(loc=loc, bbox_to_anchor=(float(anchor[0]), float(anchor[1])))
+
+
 def panel_legend(ax, handles, o, spec, loc, frame):
-    """A panel's own legend of `handles`: where (o["legend_loc"], else loc), how many
-    columns (o["legend_ncol"]) and whether framed (o["legend_frame"], else frame) are the
-    panel's own settings.  The entries are kept on the axes (ax._cv_entries) for a
-    figure legend that gathers them (figure.py: _legends)."""
-    leg = ax.legend(handles=handles, loc=o.get("legend_loc") or loc,
+    """A panel's own legend of `handles`: where (o["legend_loc"], else loc, at
+    o["legend_anchor"]), how many columns (o["legend_ncol"]) and whether framed
+    (o["legend_frame"], else frame) are the panel's own settings.  The entries are kept
+    on the axes (ax._cv_entries) for a figure legend that gathers them (figure.py:
+    _legends)."""
+    leg = ax.legend(handles=handles, **anchor_kw(o.get("legend_loc") or loc,
+                                                 o.get("legend_anchor")),
                     fontsize=font_size(spec, "legend"), ncol=int(o.get("legend_ncol") or 1),
                     frameon=bool(o.get("legend_frame", frame)), framealpha=0.85)
     ax._cv_entries = [(h, t.get_text()) for h, t in zip(handles, leg.get_texts())]

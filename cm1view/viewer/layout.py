@@ -167,7 +167,8 @@ class Layout:
         ps = self.ps
         snd_look = pn.FlexBox(*[ps[k] for k in ("t", "td", "parcel", "base", "lw", "parcel_lw",
                                                 "hodo_lw", "prof_lw", "ptop", "tmin", "tmax",
-                                                "ring", "htop", "shade", "barbs", "guides")],
+                                                "ring", "htop", "hheights", "shade", "barbs",
+                                                "guides")],
                               self.ps_reset, flex_wrap="wrap", align_items="flex-end",
                               gap="0 6px", sizing_mode="stretch_width",
                               styles={"border-top": f"1px solid {GRID}"})

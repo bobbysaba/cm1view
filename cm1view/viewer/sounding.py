@@ -317,7 +317,8 @@ class SoundingPanel:
                     shade=ps["shade"].value, barbs=ps["barbs"].value,
                     guides=ps["guides"].value, ptop=float(ps["ptop"].value),
                     tmin=ps["tmin"].value, tmax=ps["tmax"].value,
-                    ring=float(ps["ring"].value) or None, hodo_top=float(ps["htop"].value))
+                    ring=float(ps["ring"].value) or None, hodo_top=float(ps["htop"].value),
+                    hodo_heights=ps["hheights"].value)
 
     def _restyle(self):
         """Redraw the shown soundings with the current style and zoom (no new analysis)."""
@@ -355,7 +356,8 @@ class SoundingPanel:
         defaults = dict(t=st["t_color"], td=st["td_color"], parcel=st["parcel_color"],
                         base=st["base_color"], lw=st["lw"], parcel_lw=st["parcel_lw"],
                         hodo_lw=st["hodo_lw"], prof_lw=st["prof_lw"], ptop=100, tmin=None,
-                        tmax=None, ring=0, htop=12, shade=st["shade"], barbs=st["barbs"],
+                        tmax=None, ring=0, htop=12, hheights=st["hodo_heights"],
+                        shade=st["shade"], barbs=st["barbs"],
                         guides=st["guides"])
         self._hold_style = True
         try:

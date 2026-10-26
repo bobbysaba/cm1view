@@ -9,7 +9,7 @@ import re
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from .cards import FONTS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num
+from .cards import FONTS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num, _xy, _xy_text
 from .times import _heights
 
 
@@ -118,6 +118,8 @@ class FigureSpecIO:
             self.lg_title.value = lg.get("title") or ""
             self.lg_ncol.value = int(lg.get("ncol", 1) or 1)
             self.lg_frame.value = lg.get("frame", True)
+            self.lg_anchor.value = _xy_text(lg.get("anchor"))
+            self.lg_own.value = lg.get("own", True) is not False
             sp = s.get("spacing", {})
             self.sp_w.value, self.sp_h.value = float(sp.get("wspace", 0.02)), \
                 float(sp.get("hspace", 0.02))
@@ -296,7 +298,8 @@ class FigureSpecIO:
                            panels=[int(v) - 1 for v in re.findall(r"\d+", self.lg_from.value)
                                    if int(v) > 0],
                            title=self.lg_title.value.strip(),
-                           ncol=int(self.lg_ncol.value or 1), frame=self.lg_frame.value)
+                           ncol=int(self.lg_ncol.value or 1), frame=self.lg_frame.value,
+                           anchor=_xy(self.lg_anchor.value), own=self.lg_own.value)
         s["spacing"] = dict(wspace=float(self.sp_w.value or 0.0),
                             hspace=float(self.sp_h.value or 0.0),
                             w_pad=float(self.sp_wpad.value or 0.0),

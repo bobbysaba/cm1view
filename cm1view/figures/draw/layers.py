@@ -139,16 +139,17 @@ def _extends(spec, data):
 
 def _ticks(cells, used, block_opts):
     """Tick marks and labels of the panels: cells [(axes, column, in the bottom row (no
-    panel below), kind, axes options)]; block_opts["ticklabels"] outer: labels on the
-    left column and bottom row only (while all panels show the same ranges)."""
+    panel below), kind, axes options)]; block_opts["ticklabels"] outer: tick labels on
+    the left column (y) and bottom row (x) only, each while all panels show the same
+    range of it, and axis labels there only, but a panel's own label that differs from
+    theirs."""
     mode = block_opts.get("ticklabels", "all")  # all | outer | none
-    lims = {(tuple(np.round(ax.get_xlim(), 6)), tuple(np.round(ax.get_ylim(), 6)))
-            for ax in used}
-    if mode == "outer" and len(lims) > 1:  # panels show different ranges: label all
-        mode = "all"
+    same = {name: len({tuple(np.round(getattr(ax, f"get_{name}lim")(), 6))
+                       for ax in used}) <= 1 for name in ("x", "y")}
+    cells = [cell for cell in cells if cell[0] in used]
+    outer_x = {ax.get_xlabel() for ax, _, last_row, _, _ in cells if last_row}
+    outer_y = {ax.get_ylabel() for ax, c, _, _, _ in cells if c == 0}
     for ax, c, last_row, kind, opts in cells:
-        if ax not in used:
-            continue
         hodo = getattr(ax, "_cv_hodo", False)  # (a hodograph keeps its own look)
         if mode == "none" or not opts.get("ticks", True):
             ax.tick_params(labelleft=False, labelbottom=False)
@@ -156,11 +157,15 @@ def _ticks(cells, used, block_opts):
             ax.set_ylabel("")
         elif mode == "outer":
             if not last_row:
-                ax.tick_params(labelbottom=False)
-                ax.set_xlabel("")
+                if same["x"]:
+                    ax.tick_params(labelbottom=False)
+                if ax.get_xlabel() in outer_x:
+                    ax.set_xlabel("")
             if c > 0:
-                ax.tick_params(labelleft=False)
-                ax.set_ylabel("")
+                if same["y"]:
+                    ax.tick_params(labelleft=False)
+                if ax.get_ylabel() in outer_y:
+                    ax.set_ylabel("")
         if not opts.get("ticks", True):
             ax.tick_params(left=False, bottom=False)
         if hodo:

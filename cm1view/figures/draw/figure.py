@@ -6,8 +6,9 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 
 from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, panel_letter, time_text, _new_fig,
-                   _fs, _cell, rc, font_size, run_code, run_color, layer_color)
-from .v2 import upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text
+                   _fs, _cell, rc, anchor_kw, font_size, run_code, run_color, layer_color)
+from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text,
+                 LEGEND_OPTS)
 from .layers import (_fill, _contour, _shade, _vectors, extend_of, union_extend, _extends,
                      _ticks, _colorbars, _cbar_style, _contour_key)
 from .lines import _lines, _dists
@@ -213,16 +214,23 @@ def _style_key(h):
 def _legends(fig, bv, placed, entries):
     """The block's legend (bv["legend"]): the layer entries of its panels
     (entries[panel id] = {text: handle}) in one panel's axes ("where": "panel", at
-    "panel"), or on the figure ("figure": gathering also the legends of the panels' own,
-    which it then removes).  "panels" (0-based, blank: all) are the panels it draws from;
-    the same text and look is listed once."""
+    "panel"), or on the figure ("figure": gathering also the legends of the panels' own),
+    at "loc" (and "anchor" [x, y]: base.anchor_kw).  "panels" (0-based, blank: all but
+    those keeping their own) are the panels it draws from; the same text and look is
+    listed once.  A panel's own legend goes under a figure legend, or with "own" False,
+    unless the panel keeps it (its Tree legend "on": legend_keep)."""
     lg = bv.get("legend", {})
     if not placed:
         return
     on_fig = lg.get("where") == "figure"
     host = placed[min(max(int(lg.get("panel", 0)), 0), len(placed) - 1)][1]
+
+    def keeps(i):  # (a panel whose own legend stays)
+        p, _, V = placed[i]
+        return bool((V.get(LEGEND_OPTS.get(p.get("kind"), ("",))[0]) or {}).get("legend_keep"))
+
     pick = [i for i in (lg.get("panels") or []) if 0 <= int(i) < len(placed)] or \
-        range(len(placed))
+        [i for i in range(len(placed)) if not (on_fig and keeps(i))]
     handles, labels, seen = [], [], set()
 
     def add(h, text):
@@ -235,25 +243,33 @@ def _legends(fig, bv, placed, entries):
     own = [(placed[i][1], placed[i][0]["id"]) for i in pick]
     if not on_fig and host not in [a for a, _ in own]:
         own.append((host, None))  # (a panel's legend the block's would replace)
+
+    def axes(ax):  # (a panel's axes, and those beside them: a sounding's hodograph)
+        return [ax] + getattr(ax, "_cv_more", [])
+
     for ax, pid in own:
         if on_fig or ax is host:
-            for h, text in getattr(ax, "_cv_entries", ()):
-                add(h, text)
+            for a in axes(ax):
+                for h, text in getattr(a, "_cv_entries", ()):
+                    add(h, text)
         for text, h in entries.get(pid, {}).items():
             add(h, text)
+    if on_fig or lg.get("own", True) is False:  # (panels' own legends off, but kept ones)
+        for i, (_, ax, _) in enumerate(placed):
+            for a in [] if keeps(i) else axes(ax):
+                if a.get_legend() is not None:
+                    a.get_legend().remove()
     if not handles or (not on_fig and not any(entries.get(pid) for _, pid in own)):
         return  # (nothing, or only panels' own legends, which stay)
-    loc = lg.get("loc", "upper right")
+    loc, anchor = lg.get("loc", "upper right"), lg.get("anchor")
     kw = dict(fontsize=font_size(bv, "legend"), ncol=int(lg.get("ncol", 1) or 1),
               frameon=lg.get("frame", True), framealpha=0.85, title=lg.get("title") or None,
               title_fontsize=font_size(bv, "legend"))
     if on_fig:
-        for ax, _ in own:
-            if ax.get_legend() is not None:
-                ax.get_legend().remove()
-        fig.legend(handles, labels, loc=loc, **kw)
+        fig.legend(handles, labels, **anchor_kw(loc, anchor), **kw)
     else:  # (the "outside" places belong to the figure's legend)
-        host.legend(handles, labels, loc="best" if loc.startswith("outside") else loc, **kw)
+        host.legend(handles, labels, **anchor_kw(
+            "best" if loc.startswith("outside") and not anchor else loc, anchor), **kw)
 
 
 def _share_limits(placed, data, share):

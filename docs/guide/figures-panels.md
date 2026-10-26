@@ -8,7 +8,10 @@ time each one uses. The layers drawn in them are in [Figure layers](figures-laye
 - **Panels show**: the kind of panel (below).
 - The **grid** (rows and columns) and the **size**: presets by width (3.25 in one journal
   column, 5, 6.5 full page, 7.5, a 13.3 × 7.5 in slide) or your own. The height follows
-  the panels until you type a size; **Fit height** makes it follow again.
+  the panels until you type a size; **Fit height** makes it follow again. Any kind of
+  panel can have several (time–height panels: a row per series and a column per run).
+  Adding a series, sounding or distribution with a higher panel number grows the grid;
+  it never shrinks the rows and columns you set.
 - The **titles** of the figure and of each panel, and the **area** (plan views) or
   **section** (cross-sections) shown.
 - **Fill a grid** makes a grid of runs × times ([below](#fill-a-grid)).
@@ -70,14 +73,16 @@ The **hodograph** marks
 
 - the Bunkers right and left movers and the 0–6 km mean wind (each on or off on its own:
   *Hodograph → Show*),
-- the heights along the trace (labels that would overlap on a short hodograph move
-  aside), and
+- the heights along the trace, 1, 3, 6, 9 and 12 km unless *Heights marked (km)* lists
+  others (`0.5, 1, 3, 6`, or `0:3:0.5` for every 0.5 km to 3 km); labels that would
+  overlap on a short hodograph move aside, and
 - with a ring, the storm motion chosen for the SRH: Bunkers right or left mover, the 0–6
   km mean wind or a custom motion. With one sounding, dotted lines show the
   storm-relative inflow and the 0–500 m shear, as in the Sounding tab.
 
 The SRH shading, legend and parameter table use that storm motion. A hodograph of its
-own adds a key of the height colours and optional 0–1 or 0–3 km SRH shading.
+own adds a key of the height colours (placed, in columns and framed with *Key at*, *Key
+columns* and *Key frame*) and optional 0–1 or 0–3 km SRH shading.
 
 The **inset** sits in a corner (upper or lower, right or left); *Auto* picks the top
 corner the temperature and dewpoint traces cross least; *Custom* puts its lower-left

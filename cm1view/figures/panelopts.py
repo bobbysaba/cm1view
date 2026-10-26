@@ -164,7 +164,7 @@ class FigurePanelOpts:
     def _show_storm(self):
         """The skew-T and hodograph sections of the panels' layout, the custom storm
         motion's u, v, the inset's place, the hodograph's view, and what only a full
-        hodograph draws."""
+        hodograph draws (with its key: the key's place, columns and frame)."""
         sk, lay = self.sk, self.sk["layout"].value
         self.skewt_sec.visible = lay != "hodo"
         self.hodo_sec.visible = lay != "skewt"
@@ -174,7 +174,10 @@ class FigurePanelOpts:
         sk["hodo_cu"].visible = sk["hodo_cv"].visible = sk["hodo_center"].value == "custom"
         sk["inset_x"].visible = sk["inset_y"].visible = \
             lay == "inset" and sk["inset_loc"].value == "custom"
+        sk["hodo_heights"].visible = sk["hodo_labels"].value
         sk["hodo_key"].visible = sk["srh"].visible = lay in ("side", "hodo")
+        for k in ("hodo_key_loc", "hodo_key_ncol", "hodo_key_frame"):
+            sk[k].visible = lay in ("side", "hodo") and sk["hodo_key"].value
 
     def _sync_code(self, text):
         """The highlighted editor and the plain box hold the same code."""
@@ -285,7 +288,7 @@ class FigurePanelOpts:
     def _show_legend(self):
         """The legend settings the chosen place (a panel's axes or the figure) uses."""
         fig = self.lg_where.value == "figure"
-        self.lg_panel.visible = not fig
+        self.lg_panel.visible = self.lg_own.visible = not fig
         self.lg_from.visible = fig
         self.lg_loc.options = LOCS + FIG_LOCS if fig else LOCS
 

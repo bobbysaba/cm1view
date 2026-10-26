@@ -1,7 +1,7 @@
 """The panel tree (the editor's Tree tab): the figure panel by panel, each with what it
-draws, to change one panel alone: its run, time, height and title, and its layers
-(each can come from a run and time of its own, keep its time in an animation, or
-look different here), and layers of that panel only.
+draws, to change one panel alone: its run, time, height, title and axis labels, and
+its layers (each can come from a run and time of its own, keep its time in an
+animation, or look different here), and layers of that panel only.
 
 The changes are kept in the spec as "edits" ({panel: changes}, figdraw.panel_edit):
 the Panels and Layers tabs still lay out every panel (they are the generator), and
@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from .cards import TYPE_LABEL, LayerCard, _chk, _grid, _hint
+from .cards import LOCS, TYPE_LABEL, LayerCard, _chk, _grid, _hint, _xy, _xy_text
 
 PANELS = "the panel's"  # (a layer's run / time: the panel's)
 LAYOUT = "as laid out"  # (a panel's run / time / height / title: the layout's)
@@ -235,6 +235,9 @@ class FigureTree:
             self._tree_changed()
 
         title.param.watch(on_title, "value")
+        axes = s.get("axes") or {}
+        labels = [self._tree_axis_label(i, e, k, axes.get(k) or "")
+                  for k in ("xlabel", "ylabel")]
         reset = pn.widgets.Button(name=f"Undo panel {letter}'s changes",
                                   button_type="default", button_style="outline")
         reset.on_click(lambda ev: self._tree_reset(i))
@@ -242,14 +245,16 @@ class FigureTree:
         head = pn.pane.HTML(f"<b>Panel {letter}</b>", margin=(6, 4, 0, 4))
         objs = [head]
         if s["kind"] in ("plan", "xsec"):
-            objs += self._tree_map_panel(s, i, e, title)
+            objs += self._tree_map_panel(s, i, e, title, labels)
         else:
-            objs += [_grid((title, 2))]
+            objs += [_grid((title, 2)), _grid(*labels)]
             objs += self._tree_entries(s, i)
+            if s["kind"] in figdraw.LEGEND_OPTS:
+                objs += self._tree_legend(s, i, e)
         objs += [reset, self.tree_reset_all]
         self.tree_detail.objects = objs
 
-    def _tree_map_panel(self, s, i, e, title):
+    def _tree_map_panel(self, s, i, e, title, labels):
         names = self._run_names()
         ref = figdraw.form_ref(s, i)
         run = pn.widgets.Select(name="Run", options={LAYOUT: -1} | names,
@@ -300,7 +305,7 @@ class FigureTree:
         run.param.watch(on_run, "value")
         time.param.watch(on_time, "value")
         z.param.watch(on_z, "value")
-        objs = [_grid(run, time, z), _grid((title, 3))]
+        objs = [_grid(run, time, z), _grid((title, 3)), _grid(*labels)]
         base = self._tree_base(s, i)
         objs.append(pn.pane.HTML("<b>Layers</b>", margin=(8, 4, 0, 4)))
         if not base:
@@ -428,6 +433,65 @@ class FigureTree:
             card.body.objects = [_hint("A layer of this panel only.")] + \
                 list(card.body.objects)
         return card.panel
+
+    def _tree_axis_label(self, i, e, k, laid):
+        """Panel i's own x or y axis label (k "xlabel" / "ylabel"; blank: Style's,
+        `laid`; a space: none)."""
+        w = pn.widgets.TextInput(
+            name=f"{k[0]} label (blank: as laid out)", value=e.get(k) or "",
+            placeholder=laid, description="This panel's alone; a space: no label")
+
+        def on_label(ev):
+            self._tree_edit(i)[k] = ev.new or None
+            self._tree_changed()
+
+        w.param.watch(on_label, "value")
+        return w
+
+    def _tree_legend(self, s, i, e):
+        """A time-series, sounding or distribution panel's own legend: shown or not
+        (yes: also kept beside a figure legend), where (and at which anchor), its columns
+        and frame (blank: as laid out in Layers; a sounding's are both its skew-T
+        legend's and its hodograph key's)."""
+        lg = e.get("legend") or {}
+        yes_no = {LAYOUT: "", "Yes": "yes", "No": "no"}
+
+        def tri(v):
+            return "" if v is None else ("yes" if v else "no")
+
+        on = pn.widgets.Select(name="Legend", options=yes_no, value=tri(lg.get("on")))
+        loc = pn.widgets.Select(name="At", options={LAYOUT: ""} | {k: k for k in
+                                                                   ["best"] + LOCS},
+                                value=lg.get("loc") or "")
+        anchor = pn.widgets.TextInput(
+            name="Anchor x, y (blank: none)", placeholder="1.02, 1",
+            value=_xy_text(lg.get("anchor")),
+            description="Puts the legend's 'At' corner at this point, in fractions of the "
+                        "panel; below 0 or above 1 is outside it")
+        ncol = pn.widgets.IntInput(name="Columns (0: as laid out)", start=0, end=8,
+                                   value=int(lg.get("ncol") or 0))
+        frame = pn.widgets.Select(name="Frame", options=yes_no, value=tri(lg.get("frame")))
+
+        def changed(*ev):
+            new = {"on": None if not on.value else on.value == "yes",
+                   "loc": loc.value or None, "anchor": _xy(anchor.value),
+                   "ncol": int(ncol.value or 0) or None,
+                   "frame": None if not frame.value else frame.value == "yes"}
+            new = {k: v for k, v in new.items() if v is not None}
+            if new:
+                self._tree_edit(i)["legend"] = new
+            else:
+                self._tree_edit(i).pop("legend", None)
+            self._tree_changed()
+
+        for w in (on, loc, anchor, ncol, frame):
+            w.param.watch(changed, "value")
+        return [pn.pane.HTML("<b>Legend of this panel</b>", margin=(8, 4, 0, 4)),
+                _grid(on, loc, anchor, ncol, frame),
+                _hint("Settings for this panel alone (a sounding's: its skew-T legend and "
+                      "its hodograph key). With <b>Style → Legend</b> on the figure, the "
+                      "panels' legends are gathered into one instead; <i>Legend: Yes</i> "
+                      "keeps this one as well (and is not gathered unless listed).")]
 
     def _tree_entries(self, s, i):
         """A time-series, sounding, distribution or time-height panel: what it draws

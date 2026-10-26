@@ -105,12 +105,17 @@ class FigureStyle:
             "A panel": "panel", "The figure (this part)": "figure"})
         self.lg_loc = pn.widgets.Select(name="At", options=LOCS)
         self.lg_panel = pn.widgets.IntInput(name="In panel", start=1, end=64)
+        self.lg_anchor = pn.widgets.TextInput(
+            name="Anchor x, y (blank: none)", placeholder="1.02, 1",
+            description="Puts the legend's 'At' corner at this point: fractions of the panel "
+                        "(on the figure: of the figure); below 0 or above 1 is outside it")
         self.lg_from = pn.widgets.TextInput(
             name="From panels (blank: all)", placeholder="1, 3",
             description="The panels whose entries it lists (panel numbers)")
         self.lg_title = pn.widgets.TextInput(name="Title")
         self.lg_ncol = pn.widgets.IntInput(name="Columns", start=1, end=8, value=1)
         self.lg_frame = pn.widgets.Checkbox(name="Frame")
+        self.lg_own = pn.widgets.Checkbox(name="Panels' own legends", value=True)
         # spacing
         self.sp_w = _f("Between columns", 0.02, step=0.01, start=0.0,
                        description="Extra space between panels, as a fraction of a panel")
@@ -164,16 +169,19 @@ class FigureStyle:
                 "colours are set: the fill layer (Layers), each time–height series "
                 "(Layers → Series) or each panel's field (Panels, when panels differ in "
                 "field). The label and ticks here are for the others.")),
-            _section("Legend", _grid(self.lg_where, self.lg_loc, self.lg_panel, self.lg_from,
-                                     self.lg_ncol, self.lg_title),
-                     _checks(self.lg_frame),
+            _section("Legend", _grid(self.lg_where, self.lg_loc, self.lg_anchor,
+                                     self.lg_panel, self.lg_from, self.lg_ncol, self.lg_title),
+                     _checks(self.lg_frame, self.lg_own),
                      _hint("The legend lists layers with a legend entry (contours, shading, "
                            "track, section line), once for all the panels. On the figure "
                            "it also gathers the legends of time-series, distribution and "
-                           "sounding panels (each panel's own Legend setting turns its "
-                           "entries on or off), listing an entry shared by panels once; "
-                           "the <i>outside</i> places make room beside the panels. Columns "
-                           "and frame of those panels' own legends are set in Panels.")),
+                           "sounding panels and hodograph keys (each panel's own Legend "
+                           "setting turns its entries on or off), listing an entry shared "
+                           "by panels once; the <i>outside</i> places make room beside the "
+                           "panels. Columns and frame of those panels' own legends are set "
+                           "in Panels, and for one panel alone in Tree. A legend on the "
+                           "figure, or <i>Panels' own legends</i> off, hides the panels' "
+                           "own legends, except a panel whose Tree <i>Legend</i> is Yes.")),
             _section("Contour key", _hint(
                 "Nested circles labelled with a contour layer's levels (a key for unlabelled "
                 "contours), placed in figure fractions from the lower left."),

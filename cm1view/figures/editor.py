@@ -158,8 +158,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                   self.cb_mode, self.cb_loc,
                   self.cb_label, self.cb_ticks, self.cb_shrink, self.cb_fraction, self.cb_pad,
                   self.cb_lsize, self.cb_tsize, self.cb_lbold, self.cb_lside, self.cb_fmt,
-                  self.lg_where, self.lg_loc, self.lg_panel, self.lg_from, self.lg_title, self.lg_ncol,
-                  self.lg_frame, self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad,
+                  self.lg_where, self.lg_loc, self.lg_anchor, self.lg_panel, self.lg_from,
+                  self.lg_title, self.lg_ncol, self.lg_frame, self.lg_own, self.sp_w, self.sp_h,
+                  self.sp_wpad, self.sp_hpad,
                   self.bg, self.mplstyle, self.tight, self.pad):
             w.param.watch(rq, "value")
         self.run_sel.param.watch(self._on_run_sel, "value")
@@ -174,6 +175,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.sk["layout"].param.watch(lambda e: self._show_storm(), "value")
         self.sk["inset_loc"].param.watch(lambda e: self._show_storm(), "value")
         self.sk["hodo_center"].param.watch(lambda e: self._show_storm(), "value")
+        self.sk["hodo_key"].param.watch(lambda e: self._show_storm(), "value")
+        self.sk["hodo_labels"].param.watch(lambda e: self._show_storm(), "value")
         self.code_plain.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code_box.param.watch(lambda e: self._show_code(True), "value")

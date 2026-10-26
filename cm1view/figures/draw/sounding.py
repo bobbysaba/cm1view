@@ -6,8 +6,8 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 from matplotlib.ticker import NullFormatter
 
-from .base import (SND_COLORS, STORM_NAMES, SND_PARAMS, HODO_BANDS, KT, by_run, font_size,
-                   panel_legend, run_color)
+from .base import (SND_COLORS, STORM_NAMES, SND_PARAMS, HODO_BANDS, KT, _levels, by_run,
+                   anchor_kw, font_size, panel_legend, run_color)
 
 def _moist(T0, p):
     """Pseudo-adiabats: temperatures (deg C) along p (hPa, decreasing) from T0 (deg C,
@@ -48,6 +48,18 @@ def hodo_marks(o):
     return tuple(k for k in HODO_MARKS if o.get(f"hodo_{k}", kin))
 
 
+HODO_HEIGHTS = "1, 3, 6, 9, 12"  # km, the heights marked along the trace by default
+
+
+def hodo_heights(o):
+    """The heights (km) marked along the hodograph's trace: hodo_heights, '0.5, 1, 3'
+    or '0:3:0.5' (unreadable or blank: the default)."""
+    try:
+        return _levels(o.get("hodo_heights") or HODO_HEIGHTS)
+    except ValueError:
+        return _levels(HODO_HEIGHTS)
+
+
 def sounding_colors(spec, d):
     """Colour of each sounding of panel data d: its own, else its run's when each of
     the panel's soundings comes from another run (by_run), else the next of SND_COLORS."""
@@ -85,6 +97,7 @@ def _sounding(fig, ax, d, spec, fs):
         ax, hx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
         _skewt(ax, d, spec, fs, cols, inset=False)
         _hodo(hx, d, n, cols, o, fs, full=True)
+        ax._cv_more = [hx]  # (its key goes into a figure legend with the skew-T's)
         return ax
     _skewt(ax, d, spec, fs, cols, inset=lay == "inset")
     return ax
@@ -205,8 +218,7 @@ def _skewt(ax, d, spec, fs, cols, inset=True):
                 rect = lower[where]
             else:  # auto: the top corner the traces cross least
                 if where not in corners:
-                    legend = (many or o.get("legend", False)) and o.get("legend_loc",
-                                                                        "upper left")
+                    legend = _shows_legend(o, many) and o.get("legend_loc", "upper left")
                     where = min(corners, key=lambda c: _crossed(
                         d, n, X, pb, pt, ax.get_xlim(), corners[c], legend == c))
                 rect = corners[where]
@@ -215,8 +227,14 @@ def _skewt(ax, d, spec, fs, cols, inset=True):
         # (equal aspect shrinks the box: keep it in its corner, custom: at x, y)
         hx.set_anchor({"upper right": "NE", "upper left": "NW", "lower right": "SE",
                        "lower left": "SW", "custom": "SW"}.get(where, "C"))
-    if many or o.get("legend", False):
+    if _shows_legend(o, many):
         panel_legend(ax, handles, o, spec, "upper left", True)
+
+
+def _shows_legend(o, many):
+    """Whether a skew-T has a legend: always with several soundings, with one when asked
+    (legend), but never when a panel turns its legend off (legend_off)."""
+    return not o.get("legend_off") and (many or o.get("legend", False))
 
 
 def _crossed(d, n, X, pb, pt, xlim, rect, legend):
@@ -331,7 +349,7 @@ def _hodo(hx, d, n, cols, o, fs, full=False):
                     lw=1.4 if many else (1.6 if not full else 2.0))
         if o.get("hodo_labels", True):  # heights along the trace
             placed = []
-            for zk in (1, 3, 6, 9, 12):
+            for zk in hodo_heights(o):
                 if zk <= top and z[0] <= zk <= z[-1]:
                     uk, vk = np.interp(zk, z, u), np.interp(zk, z, v)
                     hx.plot([uk], [vk], "o", ms=2.5 if not full else 3.5, color=col,
@@ -343,7 +361,7 @@ def _hodo(hx, d, n, cols, o, fs, full=False):
                     if near < 2:
                         off, ha, va = ((3, 3), "left", "bottom") if not near else \
                             ((-3, -3), "right", "top")
-                        hx.annotate(f"{zk}", (uk, vk), xytext=off, ha=ha, va=va,
+                        hx.annotate(f"{zk:g}", (uk, vk), xytext=off, ha=ha, va=va,
                                     textcoords="offset points", fontsize=fs * small,
                                     color="0.2", zorder=5)
                     placed.append((uk, vk))
@@ -385,5 +403,10 @@ def _hodo(hx, d, n, cols, o, fs, full=False):
             hs += [Line2D([], [], color="k", lw=1.4, ls=HODO_LS[j % len(HODO_LS)],
                           label=str(d.get(f"N{j}_label", "")) or f"{j + 1}")
                    for j in range(n)]
-        hx.legend(handles=hs, loc="upper right", fontsize=fs * small, frameon=False,
-                  handlelength=2.6 if many else 1.2, borderaxespad=0.3, labelspacing=0.25)
+        leg = hx.legend(handles=hs, **anchor_kw(o.get("hodo_key_loc") or "upper right",
+                                                o.get("hodo_key_anchor")),
+                        fontsize=fs * small, ncol=int(o.get("hodo_key_ncol") or 1),
+                        frameon=bool(o.get("hodo_key_frame", False)), framealpha=0.85,
+                        handlelength=2.6 if many else 1.2, borderaxespad=0.3,
+                        labelspacing=0.25)
+        hx._cv_entries = [(h, t.get_text()) for h, t in zip(hs, leg.get_texts())]

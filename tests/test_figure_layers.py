@@ -257,3 +257,28 @@ def test_a_diverging_map_stays_white_at_zero():
     # no change for a sequential map or a range on one side of 0
     assert palette("viridis", 8, lo=-2.0, hi=6.0) == palette("viridis", 8)
     assert colormap("RdBu", lo=270.0, hi=310.0)(0.0) == colormap("RdBu")(0.0)
+
+
+# ------------------------------------------------------------------ outer tick labels
+def test_outer_labels_each_axis_on_its_own():
+    """Outer: a range the panels share loses its inner tick labels, one they don't keeps
+    them; the inner axis labels go either way, but a panel's own (different) label."""
+    from matplotlib.figure import Figure
+    from cm1view.figures.draw.layers import _ticks
+    axs = Figure().subplots(1, 3)
+    for ax, top in zip(axs, (1, 2, 3)):
+        ax.set_xlim(0, 10)
+        ax.set_ylim(0, top)  # (y ranges differ)
+        ax.set_xlabel("x (km)")
+        ax.set_ylabel("PDF")
+    axs[2].set_ylabel("count")  # (its own)
+    cells = [(ax, c, True, "dist", {}) for c, ax in enumerate(axs)]
+    _ticks(cells, list(axs), dict(ticklabels="outer"))
+    assert [ax.get_ylabel() for ax in axs] == ["PDF", "", "count"]
+    assert all(ax.yaxis.get_tick_params().get("labelleft", True) for ax in axs)
+    assert [ax.get_xlabel() for ax in axs] == ["x (km)"] * 3  # (all in the bottom row)
+    for ax in axs:
+        ax.set_ylim(0, 1)
+    _ticks(cells, list(axs), dict(ticklabels="outer"))
+    assert [ax.yaxis.get_tick_params().get("labelleft", True) for ax in axs] == \
+        [True, False, False]

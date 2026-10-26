@@ -94,7 +94,9 @@ temperature dashed and CAPE shaded red and CIN blue. The skew-T also shows:
 The wind trace in `u`, `v`, coloured by height: 0–1 km red, 1–3 green, 3–6 yellow,
 6–9 blue and 9–12 purple (up to the *Hodograph top*). It marks the Bunkers right and left
 movers (RM, LM), circles the storm motion in use, and for the first sounding draws
-dotted lines for the storm-relative inflow and the 0–500 m shear. Rings give the speed.
+dotted lines for the storm-relative inflow and the 0–500 m shear. Dots mark the heights in
+*Hodograph heights (km)* (1, 3 and 6 km to start; e.g. `0.5, 1, 3, 6`, blank for none),
+labelled on the first sounding. Rings give the speed.
 The view is square and scaled to the data, and the title says it is ground-relative.
 
 ### Profile panels
@@ -184,7 +186,7 @@ The palette button in the Sounding panel opens the look of the graphics:
 | Colours | Temperature, dewpoint, parcel and base state. |
 | Line widths | T / Td, parcel, hodograph and profile lines. |
 | Skew-T | *Skew-T top* (100–700 hPa) and the temperature range (*T left*, *T right*, in °C; blank is automatic). |
-| Hodograph | *Hodograph rings* (automatic, 5, 10 or 20) and *Hodograph top* (3–15 km). |
+| Hodograph | *Hodograph rings* (automatic, 5, 10 or 20), *Hodograph top* (3–15 km) and *Hodograph heights (km)* (the heights marked along the trace). |
 | Show | *CAPE / CIN shading*, *Wind barbs*, *Adiabats & mixing lines*. |
 
 Changes only redraw the figures (no new analysis). **Default style** resets them.

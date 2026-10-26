@@ -46,11 +46,23 @@ T_COLOR, TD_COLOR, PARCEL_COLOR = "#f87171", "#4ade80", "#e5e7eb"
 STYLE = dict(t_color=T_COLOR, td_color=TD_COLOR, parcel_color=PARCEL_COLOR,
              lw=2.2, parcel_lw=1.3, hodo_lw=2.4, base_color=MUTED, shade=True, barbs=True,
              guides=True, ring=None, hodo_top=12.0, tmin=None, tmax=None, ptop=100.0,
-             prof_lw=1.8)
+             prof_lw=1.8, hodo_heights="1, 3, 6")
 
 
 def _st(style):
     return dict(STYLE, **(style or {}))
+
+
+def hodo_heights(text):
+    """'0.5, 1, 3' -> the heights (km) marked on the hodograph (blank: none; an
+    unreadable entry is skipped)."""
+    out = []
+    for part in str(text or "").replace(";", ",").split(","):
+        try:
+            out.append(float(part))
+        except ValueError:
+            continue
+    return sorted(set(out))
 
 
 def _legend(ax, handles, loc, ncol=1, fontsize=7.5):
@@ -219,9 +231,6 @@ def skewt_hodo_figure(items, base=None, parcel="ml", units="m/s", width=9.0, sty
         if by_color:
             s = z <= lk["hodo_top"]
             hx.plot(u[s], v[s], color=color, lw=lk["hodo_lw"] * 0.92)
-            for zk in (1, 3, 6):
-                hx.plot(np.interp(zk, z, u), np.interp(zk, z, v), "o", ms=3.5,
-                        color=color, mec=BG, mew=0.6)
         else:
             for z0, z1, c in HODO_BANDS:
                 if z0 >= lk["hodo_top"]:
@@ -232,6 +241,14 @@ def skewt_hodo_figure(items, base=None, parcel="ml", units="m/s", width=9.0, sty
                     zz = np.concatenate(([z0], z[s], [z1]))
                     hx.plot(np.interp(zz, z, u), np.interp(zz, z, v), color=c,
                             lw=lk["hodo_lw"] * (1.0 if n == 0 else 0.83), ls=LINESTYLES[n])
+        for zk in hodo_heights(lk["hodo_heights"]):  # marked heights, labelled once
+            if zk <= lk["hodo_top"] and z[0] <= zk <= z[-1]:
+                uk, vk = np.interp(zk, z, u), np.interp(zk, z, v)
+                hx.plot(uk, vk, "o", ms=3.5, color=color if by_color else TEXT, mec=BG,
+                        mew=0.6, zorder=4)
+                if n == 0:
+                    hx.annotate(f"{zk:g}", (uk, vk), xytext=(4, 3), textcoords="offset points",
+                                color=MUTED, fontsize=7, zorder=4)
         rm, lm, c = np.array(kin["rm"]) * wf, np.array(kin["lm"]) * wf, np.array(kin["storm"]) * wf
         mc = color if by_color else TEXT
         tag = "" if single else label.split(" ")[0]

@@ -81,6 +81,28 @@ has a matching git tag.
 - Figures are drawn and saved one at a time (matplotlib's style settings are
   process-wide).
 - A fix for a figure preview that drew a second, stale image under the first.
+- **Legends**: a hodograph's key now joins a legend on the figure (*Style → Legend*),
+  so panels with the same entries share one legend; the key has its own place, columns
+  and frame (*Hodograph*); and the **Tree** tab sets one panel's legend alone (shown or
+  not, where, columns, frame) for time-series, distribution and sounding panels.
+  A legend on the figure now turns off every panel's own legend, also those of panels
+  it does not list; *Panels' own legends* (off) does the same for a legend on a panel,
+  and a panel whose Tree *Legend* is *Yes* keeps its own either way. *Anchor x, y*
+  (Style and Tree) places a legend at any point, inside or outside the panel or figure.
+- **Axis labels for one panel**: the **Tree** tab's *x label* and *y label* set a
+  panel's own labels (blank: Style's; a space: none).
+- **Tick labels on: outer panels** decides x and y apart: a range the panels share
+  loses its inner tick labels even when the other differs, and inner panels drop a
+  repeated axis label always (before, panels of different ranges kept everything).
+- **Hodograph heights**: *Heights marked (km)* sets the heights marked along the trace
+  (e.g. `0.5, 1, 3, 6`); labels read `0.5` rather than being whole kilometres only. The
+  Sounding tab's *Plot style* has the same, as *Hodograph heights (km)*: its marks are
+  now labelled and drawn in the height-coloured hodograph too.
+- **New figure**: *Rows* and *Columns* are offered for every kind of panel but
+  time–height (its grid is series × runs). Soundings and distributions go one per panel
+  (more than panels: they wrap and share panels; panels left over start as a copy of
+  the last). Adding or renumbering a series, sounding or distribution now only grows
+  the grid, never shrinking the rows and columns you set.
 
 ### Under the hood
 

@@ -446,6 +446,10 @@ class Widgets:
                                    options={"Auto": 0, "5": 5, "10": 10, "20": 20}, width=110),
             htop=pn.widgets.Select(name="Hodograph top (km)", value=12,
                                    options=[3, 6, 9, 12, 15], width=120),
+            hheights=pn.widgets.TextInput(name="Hodograph heights (km)",
+                                          value=st["hodo_heights"], width=150,
+                                          description="Heights marked along the hodograph, "
+                                                      "e.g. 0.5, 1, 3, 6 (blank: none)"),
             shade=pn.widgets.Checkbox(name="CAPE / CIN shading", value=st["shade"], **ck),
             barbs=pn.widgets.Checkbox(name="Wind barbs", value=st["barbs"], **ck),
             guides=pn.widgets.Checkbox(name="Adiabats & mixing lines", value=st["guides"], **ck),
