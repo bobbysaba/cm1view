@@ -255,7 +255,7 @@ def test_3d_streamline_pick_and_sample(viewer, reg):
 
 def test_streamline_card_fits_the_field(viewer):
     v = viewer
-    line = dict(key="sel", color="#fde047", no=None, s=np.linspace(0, 12, 50),
+    line = dict(key="sel", color="#fde047", no=None, a=0, s=np.linspace(0, 12, 50),
                 v=0.02 * np.sin(np.linspace(0, 6, 50)), z=np.linspace(0.3, 2.5, 50),
                 x0=0.0, y0=0.0, z0=0.3, length=12.0)
     v._apply_sl(v.gen["sl"], dict(label="ωs (s⁻¹)", lines=[line]))

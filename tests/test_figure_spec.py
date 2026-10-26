@@ -152,7 +152,8 @@ def test_version_2_panels_span_cells_and_share_colorbar_ends():
 def test_animation_colorbar_ends_are_those_of_all_frames():
     from cm1view.figures import draw as figdraw
     spec, data = _v2_plan("none")
-    calm = {i: dict(d, L0=np.full((11, 11), 5.0)) for i, d in data.items()}
+    spec["panels"][0]["layers"][0]["nlevels"] = 10  # (every panel's: the norm has the ends)
+    calm ={i: dict(d, L0=np.full((11, 11), 5.0)) for i, d in data.items()}
     ends = figdraw.fill_ends(spec, calm)
     assert ends == {(0, 0): "neither", (1, 0): "neither", (2, 0): "neither"}
     ends = figdraw.fill_ends(spec, data, ends)  # a later frame past vmin / vmax

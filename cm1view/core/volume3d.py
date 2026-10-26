@@ -151,8 +151,10 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
             with np.errstate(divide="ignore", invalid="ignore"):
                 f = np.where(q > hi, (hi - p) / dq, np.where(q < lo, (lo - p) / dq, 1.0))
             f = np.clip(np.nan_to_num(f.min(axis=1), nan=1.0), 0.0, 1.0)
-            out = f < 1.0
             q = p + f[:, None] * dq
+            # (a step landing just on the edge ends there too, not with a 0-length step)
+            out = (f < 1.0) | np.any(np.isclose(q, lo, rtol=0.0, atol=1e-6)
+                                     | np.isclose(q, hi, rtol=0.0, atol=1e-6), axis=1)
             done += f * h[:, 0]
             q[~alive] = np.nan
             alive &= ~out & (done < length - 1e-9)

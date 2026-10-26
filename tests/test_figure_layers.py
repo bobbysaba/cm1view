@@ -38,7 +38,7 @@ def test_distribution_figure_draws_each_plot(ed, plot):
 
 
 def test_distribution_bar_labels_and_statistics_box(ed):
-    from matplotlib.offsetbox import AnchoredOffsetbox
+    from matplotlib.offsetbox import AnchoredOffsetbox, AnchoredText
     ed.from_dists()  # one distribution: its statistics still show
     ed.ds["plot"].value, ed.ds["bins"].value = "hist", 10
     ed.ds["bar_labels"].value = "percent"
@@ -48,7 +48,8 @@ def test_distribution_bar_labels_and_statistics_box(ed):
     ax = fig.axes[0]
     pct = [float(t.get_text().rstrip("%")) for t in ax.texts if t.get_text().endswith("%")]
     assert pct and abs(sum(pct) - 100.0) < 5.0  # (every value is in the bins; 2 digits)
-    boxes = [a for a in ax.artists if isinstance(a, AnchoredOffsetbox)]
+    boxes = [a for a in ax.artists  # (not the panel labels)
+             if isinstance(a, AnchoredOffsetbox) and not isinstance(a, AnchoredText)]
     assert len(boxes) == 1 and ax.get_legend() is None
     ed.ds["stats_at"].value = "legend"  # one distribution: a legend for its statistics
     assert not ed.ds["stats_loc"].visible
@@ -248,11 +249,13 @@ def test_a_diverging_map_stays_white_at_zero():
     import matplotlib.colors as mc
     from cm1view.core.fields import palette
     from cm1view.figures.draw.base import colormap
-    mid = mc.to_hex(colormap("RdBu")(0.5))
+    mid = mc.to_rgb(colormap("RdBu")(0.5))
+    white = lambda c: np.allclose(mc.to_rgb(c), mid, atol=2 / 255)  # noqa: E731  (a
+    # reversed map's middle is the colour next to it: #f7f6f6 or #f6f7f7)
     for rev in (False, True):  # viewer: 0 is a quarter of the way up -2..6
-        assert palette("RdBu_r", 257, rev, -2.0, 6.0)[64] == mid
+        assert white(palette("RdBu_r", 257, rev, -2.0, 6.0)[64])
         cm = colormap("RdBu", rev, False, -2.0, 6.0)  # figures
-        assert mc.to_hex(cm(mc.Normalize(-2.0, 6.0)(0.0))) == mid
+        assert white(cm(mc.Normalize(-2.0, 6.0)(0.0)))
         assert mc.to_hex(cm(1.0)) == mc.to_hex(colormap("RdBu", rev)(1.0))  # (6: the full end)
     # no change for a sequential map or a range on one side of 0
     assert palette("viridis", 8, lo=-2.0, hi=6.0) == palette("viridis", 8)

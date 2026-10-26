@@ -158,6 +158,8 @@ def test_figure_clicks_download_and_scanned_runs(ff, server, shots, scanned_run)
     map_canvas(ff)
     click_text(ff, "Figure")
     assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
+    if until(lambda: find(ff, "Keep the example"), 20):  # the first visit's quick start
+        click_text(ff, "Keep the example")
     # the runs_root scan (in the background) feeds the Run lists
     name = os.path.basename(scanned_run)
     offered = ("(() => {" + _WALK + "let n = 0; walk(document, el => { if (el.tagName === "
@@ -168,8 +170,16 @@ def test_figure_clicks_download_and_scanned_runs(ff, server, shots, scanned_run)
     assert until(lambda: rects(ff, "img"), 60), "no preview"
     time.sleep(5)  # (the first preview)
     assert pick(ff, "Click to add a marker")
+    ff.js("(() => {" + _WALK + "let big = null, a = 0; walk(document, el => { if (el.tagName "
+          "=== 'IMG') { const r = el.getBoundingClientRect(); if (r.width * r.height > a) "
+          "{ a = r.width * r.height; big = el; } } }); if (big) big.scrollIntoView({block: "
+          "'center'}); return a; })()")  # (the preview may sit below the window's foot)
+    time.sleep(1)
     x, y, w, h = max(rects(ff, "img"), key=lambda r: r[2] * r[3])
-    for fx, fy in ((0.25, 0.3), (0.5, 0.3), (0.25, 0.7), (0.5, 0.6)):
+    vh = ff.js("window.innerHeight")
+    for fx, fy in ((0.25, 0.3), (0.5, 0.3), (0.25, 0.7), (0.5, 0.6), (0.25, 0.5)):
+        if not 0 < y + fy * h < vh:
+            continue
         click(ff, x + fx * w, y + fy * h)
         if until(lambda: status_has(ff, "Added marker"), 10):
             break

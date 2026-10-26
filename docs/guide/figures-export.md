@@ -13,9 +13,13 @@ preview ([Figures](figures.md#saving)).
 
 ## Reopening a saved figure
 
-Give the path of a saved figure's `_spec.json` (in the `_src/` folder next to the image)
-under *A saved figure* and press **Open**; its image or script path works too. The
-editor then shows the figure with all its settings, ready to keep editing.
+Pick the figure from *Saved figures* and press **Open**. The list holds the figures
+saved with **+ script & data** in the *Figures* folder (⚙ Settings): this run's folder
+first, then the other runs' folders and the last folder used for a figure of several
+runs, newest first in each. A figure saved elsewhere: give the path of its `_spec.json`
+(in the `_src/` folder next to the image) under *A saved figure*; its image or script
+path works too. The editor then shows the figure with all its settings, ready to keep
+editing, and *Save as* is where it was saved, so saving again replaces it. The quick start has the same list ([Figures](figures.md#the-quick-start)).
 
 ## Templates
 

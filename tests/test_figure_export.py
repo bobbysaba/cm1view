@@ -68,14 +68,14 @@ def test_animation_steps_every_panel(ed, tmp_path):
     ed.an_step.value, ed.an_end.value = 2, None
     full = ed._anim_offsets(spec)  # through the end of the run (the second panel's)
     assert full == [float(ts[i] - ts[1]) for i in range(1, len(full) * 2, 2)]
-    assert len(full) > 4 and spec["times_s"][1] + full[-1] <= ts[-1]
+    assert len(full) == 4 and spec["times_s"][1] + full[-1] <= ts[-1]  # (the second ends it)
     ed.anim_sec.collapsed = False  # the End time choices: the frames' times
     assert list(ed.an_end.options.values())[1:] == [float(ts[i])
                                                      for i in range(3, len(full) * 2, 2)]
-    ed.an_end.value = float(ts[7])
+    ed.an_end.value = float(ts[5])
     offsets = ed._anim_offsets(spec)
-    assert offsets == [float(ts[i] - ts[1]) for i in (1, 3, 5, 7)]
-    assert "→ 4 frames" in txt(ed.an_count.object), ed.an_count.object
+    assert offsets == [float(ts[i] - ts[1]) for i in (1, 3, 5)]
+    assert "→ 3 frames" in txt(ed.an_count.object), ed.an_count.object
     last = max(t for t in spec["times_s"] if t is not None)
     assert last + offsets[-1] <= ed.run.times[-1]
     s = fg.shift_times(spec, offsets[1])
@@ -170,7 +170,7 @@ def test_figure_of_parts(ed, tmp_path):
     os.rename(base + ".png", base + "_viewer.png")
     with open(base + ".py") as f:  # (short: the drawing code is in _src/)
         assert "def _draw2" not in f.read()
-    assert os.path.isfile(str(tmp_path / "_src" / f"{start}_draw.py"))
+    assert os.path.isfile(str(tmp_path / "_src" / "parts_draw.py"))
     r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
@@ -277,7 +277,7 @@ def test_figure_of_parts_with_a_series_part(ed, tmp_path):
     os.rename(base + ".png", base + "_viewer.png")
     with open(base + ".py") as f:  # (short: the drawing code is in _src/)
         assert "def _draw2" not in f.read()
-    assert os.path.isfile(str(tmp_path / "_src" / f"{start}_draw.py"))
+    assert os.path.isfile(str(tmp_path / "_src" / "withseries_draw.py"))
     r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]

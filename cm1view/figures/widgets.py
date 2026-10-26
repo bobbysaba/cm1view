@@ -370,6 +370,11 @@ class FigureWidgets:
         self.bg = pn.widgets.Select(name="Background", options={"White": "white",
                                                                 "Black": "black",
                                                                 "Transparent": "none"})
+        self.saved_pick = pn.widgets.Select(
+            name="Saved figures (in the Figures folder, ⚙ Settings)",
+            description="Figures saved with + script & data: this run's first, then the "
+                        "other folders of the Figures setting. Picking one fills in the "
+                        "path below.")
         self.spec_path = pn.widgets.TextInput(name="A saved figure (_spec.json)",
                                               placeholder="…/_src/figure_spec.json")
         self.load_btn = pn.widgets.Button(name="Open", button_type="light",
@@ -455,7 +460,9 @@ class FigureWidgets:
             _section("Open a saved figure", _hint(
                 "<b>+ script & data</b> also writes a Python script that redraws the figure "
                 "without the viewer, and the figure's spec: open the spec here to keep "
-                "editing."), _grid((self.spec_path, 2), self.load_btn)),
+                "editing: pick it from the list, or give the path of its _spec.json "
+                "(or its image or script)."), self.saved_pick,
+                _grid((self.spec_path, 2), self.load_btn)),
             self.tpl_sec,
             sizing_mode="stretch_width")
         return annotate_tab, export_tab

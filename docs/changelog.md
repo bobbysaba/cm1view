@@ -52,6 +52,10 @@ has a matching git tag.
 
 - **Quick start** dialog the first time the Figure workspace opens, and a new-figure
   button ([Figures](guide/figures.md#the-quick-start)).
+- **Open a saved figure from a list**: the quick start and *Export → Open a saved
+  figure* list the figures saved in the *Figures* folder (⚙ Settings), this run's first
+  ([Export](guide/figures-export.md#reopening-a-saved-figure)). A reopened figure's
+  *Save as* is where it was saved.
 - **Difference fills**: a fill layer minus another run or time, with a choice for runs
   on different grids.
 - **Time windows**: swaths (maximum, minimum, mean or sum over a window of outputs) and

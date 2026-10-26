@@ -32,6 +32,11 @@ class FigureQuick:
         self.qs_skip = pn.widgets.Button(
             name="Keep the example", button_type="light", button_style="outline", width=150,
             description="Close: the figure stays as it is")
+        self.qs_saved = pn.widgets.Select(name="Or open a saved figure")
+        self.qs_open = pn.widgets.Button(name="Open", button_type="primary",
+                                         button_style="outline", disabled=True)
+        self.qs_load_note = _hint("")
+        self.qs_load_note.visible = False
         self.quick = pn.Modal(
             pn.pane.HTML('<div class="cv-maptitle" style="font-size:16px"><b>New figure'
                          '</b></div>', margin=(0, 4)),
@@ -39,12 +44,19 @@ class FigureQuick:
             _grid(self.qs_rows, self.qs_cols, self.qs_size), self.qs_note,
             _hint("Everything else (times, layers, style, labels) is in the editor's tabs; "
                   "the new-figure button above the preview shows this again."),
-            pn.Row(self.qs_go, self.qs_skip), width=640, margin=10,
+            pn.Row(self.qs_go, self.qs_skip),
+            pn.layout.Divider(margin=(6, 4)),
+            _grid((self.qs_saved, 2), self.qs_open), self.qs_load_note,
+            _hint("Figures saved with <b>+ script & data</b> in the Figures folder "
+                  "(⚙ Settings); the Export tab opens any other."), width=640, margin=10,
             stylesheets=[DIALOG_DARK])
         self.qs_kind.param.watch(lambda e: self._quick_show(), "value")
         self.qs_vary.param.watch(lambda e: self._quick_show(), "value")
         self.qs_go.on_click(lambda e: self._quick_make())
         self.qs_skip.on_click(lambda e: self.quick.hide())
+        self.qs_saved.param.watch(
+            lambda e: setattr(self.qs_open, "disabled", not e.new), "value")
+        self.qs_open.on_click(lambda e: self._quick_open())
 
     def opened(self):
         """The Figure workspace is shown: the quick start, the first time."""
@@ -65,6 +77,8 @@ class FigureQuick:
         vary = self.vary.value
         self.qs_vary.value = vary if vary in self.qs_vary.options.values() else "time"
         self.qs_rows.value, self.qs_cols.value = int(self.rows.value), int(self.cols.value)
+        self._refresh_saved()
+        self.qs_load_note.visible = False
         self.quick.show()
 
     def _quick_show(self):
@@ -76,9 +90,9 @@ class FigureQuick:
         self.qs_vary.options = VARY if kind != "xsec" else \
             {k: v for k, v in VARY.items() if v != "height"}
         note = {
-            "th": "Time–height panels: one per run and series (Panels → Runs are rows "
-                  "or columns).  It starts with no series, so nothing is computed until "
-                  "you add one in Layers → Series.",
+            "th": "Time–height panels: one per run and series (Panels → Grid and size → "
+                  "Runs are: rows or columns).  It starts with no series, so nothing is "
+                  "computed until you add one in Layers → Series.",
             "line": "Time series: it starts with no series, so nothing is computed until "
                     "you add one in Layers → Series (each with its panel number).",
             "sounding": "The Sounding tab's soundings go one per panel (more soundings "
@@ -94,6 +108,13 @@ class FigureQuick:
                       "panel, or make a grid of runs × times with Panels → Fill a grid."}.get(vary)) or ""
         self.qs_note.object = f'<div class="cv-hint">{note}</div>'
         self.qs_note.visible = bool(note)
+
+    def _quick_open(self):
+        """Open the saved figure picked in the quick start (it closes the dialog); if
+        it cannot be opened, say why in the dialog."""
+        if not self._load_spec(self.qs_saved.value):
+            self.qs_load_note.object = self.msg.object
+            self.qs_load_note.visible = True
 
     def _quick_make(self):
         """A new figure (Undo takes it back) with the quick start's settings."""

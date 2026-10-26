@@ -4,7 +4,7 @@ import numpy as np
 from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, VPacker
 from matplotlib.patches import Patch, Rectangle
 
-from .base import (SND_COLORS, by_run as _by_run, font_size, panel_legend, run_color,
+from .base import (SND_COLORS, by_run, font_size, panel_legend, run_color,
                    run_style, several_runs)
 
 def _lines(ax, d, spec, fs):
@@ -17,7 +17,7 @@ def _lines(ax, d, spec, fs):
     es = {int(d[f"S{j}_e"]) for j in range(n)}
     rs = {int(d[f"S{j}_r"]) for j in range(n)}
     multi = len(rs) > 1 or several_runs(spec)
-    by_run = len(es) == 1 and multi
+    one_series = len(es) == 1 and multi  # (coloured by run)
     ts = spec.get("ts", {})
     mark = ts.get("mark") or ""
     axes, items, handles = {}, {}, []
@@ -35,8 +35,8 @@ def _lines(ax, d, spec, fs):
                 if extra:  # a third axis and more: further out on the right
                     tw.spines["right"].set_position(("axes", 1.0 + 0.16 * extra))
                 axes[key] = tw
-        color = run_color(spec, k) if by_run else e.get("color", "k")
-        ls = "-" if by_run or not multi else run_style(spec, k)
+        color = run_color(spec, k) if one_series else e.get("color", "k")
+        ls = "-" if one_series or not multi else run_style(spec, k)
         t, v = d[f"S{j}_t"], d[f"S{j}_v"]
         ext = series_extremes(t, v, mark, ts)
         label = str(d[f"S{j}_label"])
@@ -258,7 +258,7 @@ def dist_colors(spec, d):
     n = int(d.get("ndist", 0))
     es = [ents[int(d[f"D{j}_e"])] if int(d[f"D{j}_e"]) < len(ents) else {} for j in range(n)]
     runs = [int(e.get("run", 0)) for e in es]
-    rc = _by_run(spec, runs)
+    rc = by_run(spec, runs)
     return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
             for j, (e, k) in enumerate(zip(es, runs))]
 

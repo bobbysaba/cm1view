@@ -117,8 +117,10 @@ def test_quick_start(ed, viewer):
     assert ed.quick.open and ed._started
     ed.qs_kind.value = "xsec"
     assert "height" not in ed.qs_vary.options.values() and ed.qs_rows.visible
-    ed.qs_kind.value = "sounding"
-    assert not ed.qs_rows.visible and not ed.qs_field.visible
+    ed.qs_kind.value = "sounding"  # (rows and columns for every kind but time-height)
+    assert ed.qs_rows.visible and not ed.qs_field.visible
+    ed.qs_kind.value = "th"
+    assert not ed.qs_rows.visible
     ed.qs_kind.value = "plan"
     f = next(v for g in ed.qs_field.groups.values() for v in g.values()
              if v != ed.cards[0].collect()["field"])
@@ -160,6 +162,32 @@ def test_saved_bundle_reopens(ed, tmp_path):
     ed.spec_path.value = base + ".png"  # the image's path finds the spec
     ed._load_spec()
     assert ed.let_box.value and "Loaded" in txt(ed.msg.object)
+
+
+def test_saved_figures_listed(ed, tmp_path):
+    import os
+    own, ed._fig_dir = ed._fig_dir, str(tmp_path / "parent_run")
+    try:
+        ed.rows.value, ed.cols.value = 1, 1
+        ed.let_box.value = True
+        ed._save_job(ed.collect(), True, os.path.join(ed._fig_dir, "fig"))
+        ed._refresh_saved()  # (the save schedules it)
+        spec = os.path.join(ed._fig_dir, "_src", "fig_spec.json")
+        assert ed.saved_pick.groups["This run (parent_run)"] == {"fig": spec}
+        ed.saved_pick.value = spec  # the Export tab: picking fills in the path
+        assert ed.spec_path.value == spec
+        ed.open_quick()  # the quick start lists it too
+        assert ed.qs_saved.value == "" and ed.qs_open.disabled
+        ed.qs_saved.value = spec
+        ed.let_box.value = False
+        ed.qs_open.clicks += 1
+        assert not ed.quick.open and ed.let_box.value
+        assert "Loaded" in txt(ed.msg.object)
+        ed.path.value = ""
+        assert ed._load_spec(spec)  # Save as: where it was saved
+        assert ed.path.value == os.path.join(ed._fig_dir, "fig")
+    finally:
+        ed._fig_dir = own
 
 
 def test_series_without_the_series_tool(ed):

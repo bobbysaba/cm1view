@@ -17,6 +17,45 @@ from . import draw as figdraw, spec as fg
 OLDER = {"run_label": dict(run_color=False),
          "skewt": dict(inset_loc="upper right", hodo_storm=False)}
 
+PICK = "Pick a saved figure…"
+NONE_SAVED = "No saved figures yet (+ script & data saves one)"
+
+
+def saved_figures(own, root, extra=""):
+    """The figures saved with "+ script & data" (their _src/<name>_spec.json), as Select
+    groups {folder: {name: spec path}}: this run's folder `own` first, then the other
+    folders in `root` (the Figures setting) and `extra` (the last folder of a figure of
+    several runs); newest first in each.  One level of folders: no deep search."""
+    dirs = [own]
+    try:
+        dirs += sorted(e.path for e in os.scandir(root) if e.is_dir() and e.path != own)
+    except OSError:
+        pass
+    if extra and extra not in dirs:
+        dirs.append(extra)
+    out = {}
+    for d in dirs:
+        try:
+            specs = [e for e in os.scandir(os.path.join(d, "_src"))
+                     if e.is_file() and e.name.endswith("_spec.json")]
+        except OSError:
+            continue
+        specs.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+        head = f"This run ({os.path.basename(d)})" if d == own else os.path.basename(d)
+        out[head] = {e.name[:-len("_spec.json")]: e.path for e in specs}
+    return {k: v for k, v in out.items() if v}
+
+
+def saved_base(spec_path):
+    """The "Save as" of a saved figure's spec: <folder>/_src/<name>_spec.json was saved
+    as <folder>/<name> (a spec elsewhere: its path without _spec.json)."""
+    d, name = os.path.split(spec_path)
+    name = name[:-len("_spec.json")] if name.endswith("_spec.json") else \
+        os.path.splitext(name)[0]
+    if os.path.basename(d) == "_src":
+        d = os.path.dirname(d)
+    return os.path.join(d, name)
+
 
 class FigureExport:
     # ------------------------------------------------------------ export
@@ -53,6 +92,21 @@ class FigureExport:
             self.path.value = os.path.join(new, os.path.basename(cur))
         self._fig_dir = new
         self._scan_roots()  # (the runs_root setting may have changed)
+        self._refresh_saved()
+
+    def _refresh_saved(self):
+        """The saved-figure lists (Export tab and quick start), keeping their picks."""
+        g = saved_figures(self._fig_dir, config.expand(config.get("figures_dir")),
+                          config.expand(config.state("last_multi_run_dir")))
+        ch = dict(options={}, groups={"": {PICK: ""}} | g) if g else \
+            dict(groups=None, options={NONE_SAVED: ""})
+        paths = {p for grp in g.values() for p in grp.values()}
+        for w in (self.saved_pick, self.qs_saved):
+            keep = w.value
+            w.param.update(**ch)
+            w.value = keep if keep in paths else ""
+            w.disabled = not g
+        self.qs_open.disabled = not self.qs_saved.value
 
     def _save(self, bundle):
         spec = self.collect_all()
@@ -95,6 +149,8 @@ class FigureExport:
                 p = fg.save_image(spec, data, f"{base}.{spec['export']['format']}")
                 html = f"Saved <code>{p}</code>"
             self.v._schedule(partial(self._msg, html))
+            if bundle:
+                self.v._schedule(self._refresh_saved)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             self.v._schedule(partial(self._msg, f"Could not save: {e}", True))
@@ -139,20 +195,25 @@ class FigureExport:
             base.pop("times_s"), base.pop("time_s")
         return base
 
-    def _load_spec(self):
-        """Open a saved figure: its _spec.json, or the image / script saved with it."""
-        path = config.expand(self.spec_path.value.strip())
+    def _load_spec(self, path=None):
+        """Open a saved figure: its _spec.json, or the image / script saved with it
+        (default: the path in the Export tab).  True when it opened."""
+        path = config.expand((path or self.spec_path.value).strip())
         if path and not path.lower().endswith(".json"):
             path = fg.bundle_paths({}, path)["spec"]
         try:
             spec = fg.load_spec(path)
         except (OSError, ValueError) as e:
             self._msg(f"Could not load <code>{path}</code>: {e}", True)
-            return
-        self._open_spec(spec, f"Loaded <code>{path}</code>")
+            return False
+        if not self._open_spec(spec, f"Loaded <code>{path}</code>"):
+            return False
+        self.path.value = saved_base(path)  # (after the runs' sync of the save path)
+        return True
 
     def _open_spec(self, spec, note):
-        """Show a saved figure (or an applied template) in the editor."""
+        """Show a saved figure (or an applied template) in the editor.  True when
+        shown."""
         parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
         bases, ran = [], False
         for part in parts:
@@ -161,7 +222,7 @@ class FigureExport:
                    if lay.get("field") and lay["field"] not in self.F]
             if bad and len(base.get("runs") or part.get("runs") or []) <= 1:
                 self._msg("This run has no field " + ", ".join(bad), True)
-                return
+                return False
             code = base.get("code") or {}
             if code.get("on") and str(code.get("text") or "").strip():
                 base["code"] = dict(code, on=False)  # (code from a file runs once read)
@@ -171,3 +232,4 @@ class FigureExport:
         self._msg(note + (
             ". It has code of its own (<b>Annotate → Your own code</b>): read it, then tick "
             "<b>Run the code</b>." if ran else ""))
+        return True

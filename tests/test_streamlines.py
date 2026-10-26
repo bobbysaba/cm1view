@@ -100,8 +100,9 @@ def test_the_3d_pane_ignores_a_late_restyle_echo():
     from cm1view.viewer.ui import Plotly3D
     fig = go.Figure([go.Scatter3d(x=[1.0], y=[1.0], z=[1.0])])
     pane, sent = Plotly3D(fig), []
-    pane._models = {"ref": (SimpleNamespace(), None)}
-    pane._apply_update = lambda ev, msg, m, ref: sent.append(msg)
+    # (what the pane would send the browser; Panel skips what comes from the browser)
+    pane._send_update_msg = lambda data, layout, traces=None, source=None: \
+        None if source else sent.append(data)
     fig.data[0].update(x=[3.0])
     sent.clear()
     pane.restyle_data = [{"x": [[2.0]]}, [0]]

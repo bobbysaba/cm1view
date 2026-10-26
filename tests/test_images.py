@@ -62,7 +62,7 @@ def test_figure_matches_its_baseline(ed, tmp_path, request, how):
     out = str(tmp_path / f"{how}.png")
     _png(ed, out)
     ref = os.path.join(BASE, f"{how}.png")
-    if request.config.getoption("--make-baselines") or not os.path.exists(ref):
+    if request.config.getoption("--make-baselines", default=False) or not os.path.exists(ref):
         os.makedirs(BASE, exist_ok=True)
         shutil.copyfile(out, ref)
         pytest.skip(f"wrote {ref}: look at it, then commit it")

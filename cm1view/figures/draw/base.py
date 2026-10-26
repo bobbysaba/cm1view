@@ -281,10 +281,16 @@ def font_size(spec, what):
 def anchor_kw(loc, anchor):
     """loc and bbox_to_anchor of a legend: with an anchor [x, y] (fractions of the axes,
     or of the figure for a figure legend; outside 0–1 is beyond them) the corner `loc`
-    of the legend sits at that point ("best" picks the corner, "outside" is dropped)."""
+    of the legend sits at that point ("best" picks the corner).  An "outside" place keeps
+    its side: "outside right upper" puts the legend's upper left corner there (the
+    legend to the right of the point), "outside lower center" its upper center."""
     if not anchor:
         return dict(loc=loc)
-    loc = str(loc).replace("outside ", "")
+    words = str(loc).split()
+    if words[0] == "outside":
+        side, along = words[1], words[2]
+        away = dict(right="left", left="right", upper="lower", lower="upper")[side]
+        loc = f"{along} {away}" if side in ("left", "right") else f"{away} {along}"
     return dict(loc=loc, bbox_to_anchor=(float(anchor[0]), float(anchor[1])))
 
 

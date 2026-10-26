@@ -123,6 +123,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                             ("Annotate", annotate_tab), ("Export", export_tab),
                             dynamic=False, sizing_mode="stretch_width")
         self.tabs.param.watch(lambda e: self._tree_sync() if e.new == 2 else None, "active")
+        self.tabs.param.watch(lambda e: self._refresh_saved() if e.new == 5 else None,
+                              "active")
         self.editor = pn.Column(
             self.tabs, scroll="y-auto", sizing_mode="stretch_height", width=580,
             styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
@@ -227,6 +229,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.save_img.on_click(lambda e: self._save(False))
         self.save_all.on_click(lambda e: self._save(True))
         self.load_btn.on_click(lambda e: self._load_spec())
+        self.saved_pick.param.watch(
+            lambda e: setattr(self.spec_path, "value", e.new) if e.new else None, "value")
         for w in (self.fmt, self.path):
             w.param.watch(lambda e: self._set_dl_name(), "value")
         self.fmt.param.watch(rq, "value")

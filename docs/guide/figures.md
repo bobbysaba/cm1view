@@ -39,7 +39,10 @@ A figure can start from
 | **Width** | A size preset: 3.25 in (one journal column), 5 in, 6.5 in (full page width), 7.5 in, a 13.3 × 7.5 in slide, or custom. Default 8 in. |
 
 **Make the figure** builds it; **Keep the example** closes the dialog and leaves the
-figure as it is (a time grid of plan views around the storm). A note in the dialog says
+figure as it is (a time grid of plan views around the storm). **Or open a saved
+figure** lists the figures saved with *+ script & data* in the *Figures* folder
+(⚙ Settings); **Open** shows the one picked, ready to keep editing
+([Reopening a saved figure](figures-export.md#reopening-a-saved-figure)). A note in the dialog says
 what to do next for the chosen kind. Time–height and time-series figures start with no
 series, so nothing is computed until you add one in *Layers → Series*. Soundings and
 distributions start with the viewer's soundings or distributions. Everything else (times,
