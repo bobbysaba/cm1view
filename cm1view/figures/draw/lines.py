@@ -1,17 +1,23 @@
-"""Time-series and distribution panels."""
+"""Time-series, distribution, vertical profile, joint distribution and azimuthal mean
+panels."""
 
 import numpy as np
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, VPacker
 from matplotlib.patches import Patch, Rectangle
+from matplotlib.ticker import MaxNLocator
 
-from .base import (SND_COLORS, by_run, font_size, panel_legend, run_color,
-                   run_style, several_runs)
+from .base import (SND_COLORS, by_run, colormap, font_size, panel_legend, run_color,
+                   run_style, several_runs, _levels)
 
 def _lines(ax, d, spec, fs):
     """Time-series panel: one line per (series, run).  Series in other units get
     their own y axis on the right.  One series (from one run of a figure with
     several_runs, or from several runs): colour = run's; several series: colour =
-    series', line style = run's (with several_runs, or from several runs)."""
+    series', line style = run's (with several_runs, or from several runs).  An
+    ensemble (S<n>_ens): its band shaded and centre drawn in the series' colour, its
+    members (S<n>_mem) thin and pale ("faint") or as other lines ("full")."""
     ents = spec.get("series", [])
     n = int(d.get("nlines", 0))
     es = {int(d[f"S{j}_e"]) for j in range(n)}
@@ -35,16 +41,32 @@ def _lines(ax, d, spec, fs):
                 if extra:  # a third axis and more: further out on the right
                     tw.spines["right"].set_position(("axes", 1.0 + 0.16 * extra))
                 axes[key] = tw
-        color = run_color(spec, k) if one_series else e.get("color", "k")
-        ls = "-" if one_series or not multi else run_style(spec, k)
+        ens, faint = f"S{j}_ens" in d, f"S{j}_mem" in d and \
+            e.get("ens_members", "faint") == "faint"
+        if ens:  # (an ensemble's centre and band: the series' colour)
+            color, ls = e.get("color", "k"), "-"
+        else:
+            color = run_color(spec, k) if one_series else e.get("color", "k")
+            ls = "-" if one_series or not multi else run_style(spec, k)
         t, v = d[f"S{j}_t"], d[f"S{j}_v"]
-        ext = series_extremes(t, v, mark, ts)
+        ext = [] if faint else series_extremes(t, v, mark, ts)
         label = str(d[f"S{j}_label"])
         if ts.get("mark_legend") and ext:
             label = f"{label} ({'; '.join(f'{w} {y:.3g} at {x:g} min' for w, x, y in ext)})"
-        h, = axes[key].plot(t, v, color=color, ls=ls,
-                            lw=float(e.get("lw", 1.5)), marker=e.get("marker") or None,
-                            ms=3, label=label)
+        lw = float(e.get("lw", 1.5))
+        if faint:  # (an ensemble's member: thin and pale, not in the legend)
+            axes[key].plot(t, v, color=color, ls=ls, lw=0.6 * lw, alpha=0.4, zorder=1.5)
+            items.setdefault(key, []).append((e, e.get("color", "k")))
+            continue
+        if ens:
+            a = float(e.get("ens_alpha", 0.25))
+            axes[key].fill_between(t, d[f"S{j}_lo"], d[f"S{j}_hi"], color=color, alpha=a,
+                                   lw=0, zorder=1.2)
+        h, = axes[key].plot(t, v, color=color, ls=ls, lw=lw,
+                            marker=e.get("marker") or None, ms=3, label=label)
+        if ens:  # (the legend's entry: the band with its centre's colour as the edge)
+            h = Patch(facecolor=color, alpha=float(e.get("ens_alpha", 0.25)) + 0.15,
+                      edgecolor=color, lw=lw, label=label)
         for w, x, y in ext:
             axes[key].plot(x, y, "o", ms=4, color=color, zorder=4)
             axes[key].annotate(f"{y:.3g}", (x, y), xytext=(0, 4 if w == "max" else -4),
@@ -382,3 +404,347 @@ def _dists(ax, d, spec, fs):
         (ax.axvline if horiz else ax.axhline)(0.0, color="0.6", lw=0.6, zorder=0)
     (ax.set_xlabel if horiz else ax.set_ylabel)(vlab)
     (ax.set_ylabel if horiz else ax.set_xlabel)("")
+
+
+def profile_colors(spec, d):
+    """Colour of each profile of panel data d: its own, else its run's when each of the
+    panel's profiles comes from another run (by_run), else the next of SND_COLORS."""
+    ents = spec.get("profiles", [])
+    n = int(d.get("nprof", 0))
+    es = [ents[int(d[f"P{j}_e"])] if int(d[f"P{j}_e"]) < len(ents) else {} for j in range(n)]
+    runs = [int(d[f"P{j}_r"]) for j in range(n)]
+    rc = by_run(spec, runs)
+    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
+            for j, (e, k) in enumerate(zip(es, runs))]
+
+
+def _profiles(ax, d, spec, fs):
+    """Vertical profile panel: one line per profile, value (x) against height (y);
+    spec["prof"]: the axes' ranges, a zero line and the legend."""
+    o = spec.get("prof", {})
+    ents = spec.get("profiles", [])
+    n = int(d.get("nprof", 0))
+    cols = profile_colors(spec, d)
+
+    def num(k):
+        v = o.get(k)
+        return None if v in (None, "") else float(v)
+
+    handles, zlo, zhi = [], np.inf, -np.inf
+    for j in range(n):
+        e = ents[int(d[f"P{j}_e"])] if int(d[f"P{j}_e"]) < len(ents) else {}
+        z, v = np.asarray(d[f"P{j}_z"]), np.asarray(d[f"P{j}_v"])
+        h, = ax.plot(v, z, color=cols[j], ls=e.get("ls") or "-",
+                     lw=float(e.get("lw") or 1.5), label=str(d.get(f"P{j}_label", "")))
+        handles.append(h)
+        r = e.get("recipe") or {}  # (the layer asked for, not only the levels' centres)
+        if z.size:
+            top = float(z[-1]) + (0.5 * float(z[-1] - z[-2]) if z.size > 1 else 0.0)
+            zlo = min(zlo, max(0.0, min(float(r.get("z0", z[0])), float(z[0]))))
+            zhi = max(zhi, float(z[-1]), min(float(r.get("z1", top)), top))
+    if np.isfinite(zlo):
+        zhi = zhi if zhi > zlo else zlo + 1.0
+        ax.set_ylim(zlo if num("zmin") is None else num("zmin"),
+                    zhi if num("zmax") is None else num("zmax"))
+    if num("xmin") is not None or num("xmax") is not None:
+        ax.set_xlim(num("xmin"), num("xmax"))
+    if o.get("zero_line"):
+        ax.axvline(0.0, color="0.6", lw=0.6, zorder=0)
+    ax.set_xlabel("; ".join(dict.fromkeys(str(d[f"P{j}_xl"]) for j in range(n)
+                                          if d.get(f"P{j}_xl"))))
+    if o.get("legend", True) and n > 1:
+        panel_legend(ax, handles, o, spec, "best", False)
+
+
+JOINT_STATS = {"n": "n", "r": "r", "r2": "r²", "fit": "fit", "means": "means"}
+
+
+def joint_of(d, n):
+    """Summary n of joint distribution panel data d (as joint.summarize gives it)."""
+    s = [float(v) for v in np.asarray(d[f"J{n}_s"], dtype=float).ravel()]
+    p = np.asarray(d[f"J{n}_p"], dtype=float).reshape(2, -1)
+    return dict(n=s[0], mx=s[1], my=s[2], sx=s[3], sy=s[4], r=s[5], xlo=s[6], xhi=s[7],
+                ylo=s[8], yhi=s[9], h=np.asarray(d[f"J{n}_h"], dtype=float), px=p[0], py=p[1])
+
+
+def joint_arrays(st, n):
+    """The panel arrays of summary st as joint distribution n (joint_of reads them
+    back)."""
+    keys = ("n", "mx", "my", "sx", "sy", "r", "xlo", "xhi", "ylo", "yhi")
+    return {f"J{n}_s": np.array([st[k] for k in keys], dtype=float),
+            f"J{n}_h": np.asarray(st["h"], dtype=np.int32),
+            f"J{n}_p": np.vstack([st["px"], st["py"]]).astype(np.float32)}
+
+
+def joint_edges(sts, bins=60, xlo=None, xhi=None, ylo=None, yhi=None):
+    """x and y bin edges shared by summaries sts: `bins` bins each, from the given
+    limits (None: the smallest minimum, the largest maximum)."""
+    out = []
+    for lo, hi, a_k, b_k in ((xlo, xhi, "xlo", "xhi"), (ylo, yhi, "ylo", "yhi")):
+        a = float(lo) if lo is not None else min((s[a_k] for s in sts if s["n"]), default=0.0)
+        b = float(hi) if hi is not None else max((s[b_k] for s in sts if s["n"]), default=1.0)
+        if not b > a:
+            a, b = dist_span(a, a)
+        out.append(np.linspace(a, b, max(1, int(bins or 60)) + 1))
+    return out
+
+
+def _overlap(f, e):
+    """(fine bins, coarse bins): the share of each fine bin (edges f) inside each
+    coarse bin (edges e), so a fine bin split by a coarse edge is shared out."""
+    lo = np.maximum(f[:-1, None], e[None, :-1])
+    hi = np.minimum(f[1:, None], e[None, 1:])
+    return np.clip(hi - lo, 0.0, None) / np.diff(f)[:, None]
+
+
+def joint_hist(st, ex, ey, norm="count"):
+    """2D histogram (x along the first axis) of summary st in bins ex, ey: counts,
+    "pdf" (density: the whole sample integrates to 1) or "frac" (fraction of the whole
+    sample per bin), from its fine histogram."""
+    h = st["h"]
+    fx = np.linspace(*dist_span(st["xlo"], st["xhi"]), h.shape[0] + 1)
+    fy = np.linspace(*dist_span(st["ylo"], st["yhi"]), h.shape[1] + 1)
+    v = _overlap(fx, ex).T @ np.asarray(h, dtype=float) @ _overlap(fy, ey)
+    if norm == "pdf":
+        return v / (max(st["n"], 1.0) * np.outer(np.diff(ex), np.diff(ey)))
+    if norm == "frac":
+        return v / max(st["n"], 1.0)
+    return v
+
+
+def joint_levels(H, pcts):
+    """[(value, p)] of 2D histogram H: the values whose contours enclose the fractions
+    p of pcts (in %) of what it counts (the densest bins first), by increasing value;
+    [] for an empty H."""
+    v = np.sort(np.asarray(H, dtype=float).ravel())[::-1]
+    tot = v.sum()
+    if not tot > 0:
+        return []
+    c = np.cumsum(v) / tot
+    out = {}
+    for p in sorted(pcts):  # (two at one value: the smaller p names it)
+        lv = float(v[min(np.searchsorted(c, p / 100.0), v.size - 1)])
+        if 0 < p < 100 and lv > 0:
+            out.setdefault(lv, p)
+    return sorted(out.items())
+
+
+def joint_pcts(text):
+    """The percentages of a contour list ("50, 90"), 0 < p < 100, from the largest."""
+    out = []
+    for tok in str(text or "").replace(",", " ").split():
+        try:
+            p = float(tok.rstrip("%"))
+        except ValueError:
+            continue
+        if 0 < p < 100:
+            out.append(p)
+    return sorted(set(out), reverse=True)
+
+
+def joint_stats_text(st, keys):
+    """'n 12,345, r 0.82, fit y = 0.5x + 1.2' of summary st for keys (JOINT_STATS)."""
+    out = []
+    for k in keys:
+        r = st["r"]
+        if k == "n":
+            out.append(f"n {st['n']:,.0f}")
+        elif k == "r":
+            out.append(f"r {r:.2f}" if np.isfinite(r) else "r –")
+        elif k == "r2":
+            out.append(f"r² {r * r:.2f}" if np.isfinite(r) else "r² –")
+        elif k == "fit" and np.isfinite(r):
+            a = r * st["sy"] / st["sx"]
+            b = st["my"] - a * st["mx"]
+            out.append(f"y = {a:.3g}x {'−' if b < 0 else '+'} {abs(b):.3g}")
+        elif k == "means":
+            out.append(f"means {st['mx']:.3g}, {st['my']:.3g}")
+    return ", ".join(out)
+
+
+def joint_colors(spec, d):
+    """Colour of each joint distribution of panel data d: its own, else its run's
+    when each of the panel's comes from another run (by_run), else the next of
+    SND_COLORS."""
+    ents = spec.get("joints", [])
+    n = int(d.get("njoint", 0))
+    es = [ents[int(d[f"J{j}_e"])] if int(d[f"J{j}_e"]) < len(ents) else {} for j in range(n)]
+    runs = [int(d[f"J{j}_r"]) for j in range(n)]
+    rc = by_run(spec, runs)
+    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
+            for j, (e, k) in enumerate(zip(es, runs))]
+
+
+def _joints(ax, d, spec, fs):
+    """Joint distribution panel: spec["joint"]["plot"] "hist" (the first one's 2D
+    histogram as shading, the others as density contours), "scatter" (a random pick of
+    each one's pairs) or "contour" (density contours of each), x field against y field;
+    contours enclose the given percentages of the pairs.  Fit lines, a 1:1 line and the
+    statistics (of every pair) as asked."""
+    o = spec.get("joint", {})
+    n = int(d.get("njoint", 0))
+    sts = [joint_of(d, j) for j in range(n)]
+    cols = joint_colors(spec, d)
+    labels = [str(d.get(f"J{j}_label", "")) for j in range(n)]
+
+    def num(k):
+        v = o.get(k)
+        return None if v in (None, "") else float(v)
+
+    kind, norm = o.get("plot", "hist"), o.get("norm", "count")
+    lw, alpha = float(o.get("lw", 1.2)), float(o.get("alpha", 0.5))
+    ex, ey = joint_edges(sts, o.get("bins", 60), num("xmin"), num("xmax"), num("ymin"),
+                         num("ymax"))
+    xc, yc = 0.5 * (ex[:-1] + ex[1:]), 0.5 * (ey[:-1] + ey[1:])
+    pcts = joint_pcts(o.get("pcts", "50, 90"))
+    handles = []
+    for j, (st, c, lab) in enumerate(zip(sts, cols, labels)):
+        H = joint_hist(st, ex, ey, norm)
+        if kind == "hist" and j == 0:
+            Hm = np.ma.masked_less_equal(H, 0.0)
+            cm = colormap(o.get("cmap") or "viridis", bool(o.get("reverse")))
+            pos = H[H > 0]
+            if o.get("log") and pos.size and pos.max() > pos.min():
+                nm = LogNorm(vmin=float(pos.min()), vmax=float(pos.max()))
+            else:
+                nm = Normalize(vmin=0.0, vmax=float(H.max()) or 1.0)
+            m = ax.pcolormesh(ex, ey, Hm.T, cmap=cm, norm=nm, rasterized=True)
+            if o.get("colorbar", True):
+                cb = ax.figure.colorbar(m, ax=ax, pad=0.02, fraction=0.06, aspect=30)
+                cb.set_label(DIST_NORM_LABEL.get(norm, "count"))
+                cb.ax.tick_params(labelsize=fs * 0.8)
+            handles.append(Patch(facecolor=cm(0.6), label=lab))
+            line_c = "k"
+        elif kind == "scatter":
+            ax.plot(st["px"], st["py"], ".", color=c, ms=float(o.get("ms", 2.0)), alpha=alpha,
+                    mew=0, rasterized=True)
+            handles.append(Line2D([], [], ls="", marker="o", color=c, ms=5, label=lab))
+            line_c = c
+        else:
+            handles.append(Line2D([], [], color=c, lw=lw, label=lab))
+            line_c = c
+        contours = kind == "contour" or (kind == "hist" and j > 0) or o.get("contours")
+        if contours and pcts:
+            lv = joint_levels(H, pcts)
+            if lv:
+                cs = ax.contour(xc, yc, H.T, levels=[v for v, _ in lv], colors=[line_c],
+                                linewidths=lw)
+                if o.get("contour_labels", True):
+                    at = dict(lv)
+                    ax.clabel(cs, fontsize=fs * 0.7, fmt=lambda v, at=at:
+                              f"{at[min(at, key=lambda k: abs(k - v))]:g}%")
+        if o.get("fit") and np.isfinite(st["r"]):
+            a = st["r"] * st["sy"] / st["sx"]
+            ax.plot(ex[[0, -1]], st["my"] + a * (ex[[0, -1]] - st["mx"]), color=line_c,
+                    lw=lw, ls="--")
+    ax.set_xlim(ex[0], ex[-1])
+    ax.set_ylim(ey[0], ey[-1])
+    if o.get("one_one"):
+        lo, hi = max(ex[0], ey[0]), min(ex[-1], ey[-1])
+        if hi > lo:
+            ax.plot([lo, hi], [lo, hi], color="0.5", lw=0.8, ls=":", zorder=1)
+    if o.get("zero_line"):
+        ax.axvline(0.0, color="0.6", lw=0.6, zorder=0)
+        ax.axhline(0.0, color="0.6", lw=0.6, zorder=0)
+    keys = [k for k in (o.get("stats") or []) if k in JOINT_STATS]
+    if keys:
+        _stats_box(ax, [f"{lab}: {joint_stats_text(s, keys)}" if lab and n > 1 else
+                        joint_stats_text(s, keys) for lab, s in zip(labels, sts)],
+                   cols if n > 1 else ["0.15"], o.get("stats_loc", "upper left"),
+                   font_size(spec, "legend"))
+    ax.set_xlabel("; ".join(dict.fromkeys(str(d[f"J{j}_xl"]) for j in range(n)
+                                          if d.get(f"J{j}_xl"))))
+    ax.set_ylabel("; ".join(dict.fromkeys(str(d[f"J{j}_yl"]) for j in range(n)
+                                          if d.get(f"J{j}_yl"))))
+    if o.get("legend", True) and n > 1:
+        panel_legend(ax, handles, o, spec, "best", False)
+
+
+def azim_edges(c):
+    """Cell edges of bin or level centres c (the ends half a step beyond; radii from
+    0)."""
+    c = np.asarray(c, dtype=np.float64)
+    if c.size < 2:
+        return np.array([c[0] - 0.5, c[0] + 0.5]) if c.size else np.array([0.0, 1.0])
+    mid = 0.5 * (c[1:] + c[:-1])
+    return np.concatenate([[c[0] - (mid[0] - c[0])], mid, [c[-1] + (c[-1] - mid[-1])]])
+
+
+def azim_range(v, o, diverging):
+    """(vmin, vmax) of the shading: spec["azim"]'s, else the data's (symmetric about 0
+    for a diverging field whose values have both signs)."""
+    fin = np.asarray(v)[np.isfinite(v)]
+    lo, hi = (float(fin.min()), float(fin.max())) if fin.size else (0.0, 1.0)
+    if diverging and lo < 0 < hi:
+        lo, hi = -max(-lo, hi), max(-lo, hi)
+    lo = lo if o.get("vmin") in (None, "") else float(o["vmin"])
+    hi = hi if o.get("vmax") in (None, "") else float(o["vmax"])
+    return (lo, hi) if hi > lo else (lo, lo + 1.0)
+
+
+def azim_levels(v, text, n=8):
+    """Contour levels: `text` ('10, 20' or '-6:6:2'), else about n from the data."""
+    lv = _levels(text) if str(text or "").strip() else []
+    if lv:
+        return lv
+    fin = np.asarray(v)[np.isfinite(v)]
+    if not fin.size or fin.max() <= fin.min():
+        return []
+    return [float(x) for x in MaxNLocator(n).tick_values(fin.min(), fin.max())
+            if fin.min() < x < fin.max() and x != 0.0]
+
+
+def _azims(ax, d, spec, fs):
+    """Azimuthal mean panel, radius (x) against height (y): the first one shaded
+    (spec["azim"]: grid cells or filled contours, colormap (blank: the field's), range,
+    colorbar), the others as labelled contour lines in their colours (negative ones
+    dashed)."""
+    o = spec.get("azim", {})
+    ents = spec.get("azims", [])
+    n = int(d.get("nazim", 0))
+
+    def num(k):
+        v = o.get(k)
+        return None if v in (None, "") else float(v)
+
+    handles, rhi, zlo, zhi = [], 0.0, np.inf, -np.inf
+    for j in range(n):
+        e = ents[int(d[f"A{j}_e"])] if int(d[f"A{j}_e"]) < len(ents) else {}
+        x, z, v = (np.asarray(d[f"A{j}_{k}"]) for k in ("x", "z", "v"))
+        xe, ze = azim_edges(x), azim_edges(z)
+        rhi, zlo, zhi = max(rhi, xe[-1]), min(zlo, max(0.0, ze[0])), max(zhi, ze[-1])
+        lab = str(d.get(f"A{j}_label", ""))
+        if j == 0:
+            cm = colormap(o.get("cmap") or str(d.get("A0_cm") or "viridis"),
+                          bool(o.get("reverse")))
+            lo, hi = azim_range(v, o, bool(int(d.get("A0_div", 0))))
+            vm = np.ma.masked_invalid(v)
+            if o.get("plot", "mesh") == "filled" and x.size > 1 and z.size > 1:
+                lv = np.linspace(lo, hi, max(2, int(o.get("nlevels") or 15)) + 1)
+                m = ax.contourf(x, z, vm, lv, cmap=cm, extend="both")
+            else:
+                m = ax.pcolormesh(xe, ze, vm, cmap=cm, vmin=lo, vmax=hi, rasterized=True)
+            if o.get("colorbar", True):
+                cb = ax.figure.colorbar(m, ax=ax, pad=0.02, fraction=0.06, aspect=30)
+                cb.set_label(o.get("cbar_label") or str(d.get("A0_cl", "")))
+                cb.ax.tick_params(labelsize=fs * 0.8)
+            handles.append(Patch(facecolor=cm(0.7), label=lab))
+            continue
+        c = e.get("color") or SND_COLORS[(j - 1) % len(SND_COLORS)]
+        lw = float(e.get("lw") or 1.0)
+        lv = azim_levels(v, e.get("levels", ""))
+        if lv and x.size > 1 and z.size > 1:
+            cs = ax.contour(x, z, np.ma.masked_invalid(v), lv, colors=[c], linewidths=lw,
+                            linestyles=["dashed" if t < 0 else "solid" for t in lv])
+            if o.get("clabels", True):
+                ax.clabel(cs, fmt="%g", fontsize=fs * 0.7)
+        handles.append(Line2D([], [], color=c, lw=lw, label=lab))
+    if np.isfinite(zlo):
+        ax.set_xlim(0.0 if num("rmin") is None else num("rmin"),
+                    rhi if num("rmax") is None else num("rmax"))
+        ax.set_ylim(zlo if num("zmin") is None else num("zmin"),
+                    zhi if num("zmax") is None else num("zmax"))
+    ax.set_xlabel("Radius (km)")
+    ax.set_ylabel("Height (km)")
+    if o.get("legend", True) and n > 1:
+        panel_legend(ax, handles, o, spec, "best", False)

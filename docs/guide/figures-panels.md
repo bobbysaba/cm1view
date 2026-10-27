@@ -10,8 +10,9 @@ time each one uses. The layers drawn in them are in [Figure layers](figures-laye
   column, 5, 6.5 full page, 7.5, a 13.3 × 7.5 in slide) or your own. The height follows
   the panels until you type a size; **Fit height** makes it follow again. Any kind of
   panel can have several (time–height panels: a row per series and a column per run).
-  Adding a series, sounding or distribution with a higher panel number grows the grid;
-  it never shrinks the rows and columns you set.
+  Adding a series, sounding, distribution, profile, joint distribution or azimuthal mean
+  with a higher
+  panel number grows the grid; it never shrinks the rows and columns you set.
 - The **titles** of the figure and of each panel, and the **area** (plan views) or
   **section** (cross-sections) shown.
 - **Fill a grid** makes a grid of runs × times ([below](#fill-a-grid)).
@@ -67,6 +68,13 @@ both puts a dot and its value on the line (over the plotted times); **Extremes i
 legend** adds "max 32.1 at 95 min" to each line's entry. Like time–height, it starts with
 no series.
 
+**Ensemble of its runs** draws a series from several runs as one band: its *Centre line*
+(the runs' mean or median, or none) and a shaded range: *Min to max*, the *10–90th* or
+*25–75th percentile*, or *Mean ± 1 sd*, in the series' colour, with the number of runs in
+the legend. The runs' own lines stay *Faint*, are *Hidden*, or are drawn *As other lines*.
+Runs with other output times are interpolated onto every run's times; the band covers
+the times where two runs or more have values.
+
 ### Soundings
 
 Skew-T log-p with adiabats, parcel and barbs, and a hodograph: as an inset, side by side
@@ -117,9 +125,69 @@ value. *Statistics* (n, mean, sd, median, IQR, min, max, 5–95 % and 1–99 % r
 every value) go in the legend (box plots and violins: under the boxes), or in a box in
 the panel, a line per distribution in its colour.
 
+### Vertical profiles
+
+A field against height: its maximum, minimum, mean or a percentile over the whole
+domain, a box or a disc around each run's track, at every model level from *Bottom* to
+*Top*. Each profile has its own run and time, or a time window (*Mean to*) whose
+profiles are averaged; those with the same panel number share a panel (e.g. two runs,
+or one run at two times), coloured by run (see [Runs](#runs)). *+ The Series tool's
+layer series* adds the Series tool's layer series at the shown time.
+
+A profile is a layer series computed only at the times it needs, and cached with the
+Series tool's: a time–height panel of the same series later reuses those times, and the
+other way round. *Plot* sets the value and height ranges, a zero line and the legend.
+
+### Joint distributions
+
+Two fields against each other at the same points (e.g. vertical vorticity against w):
+at a height, over a layer or the whole depth (a 2D field pairs at one height), in the
+whole domain, a box or around each run's track, with an optional value range for each
+field. Each has its own run and time, or a time window (*To*) whose pairs are all taken;
+those with the same panel number share a panel, coloured by run (see [Runs](#runs)).
+A new one starts from the Distribution tool's last distribution (its field as x), else
+w at 1 km.
+
+*Draw as*: a **2D histogram** (counts, PDF or fractions, linear or log colours, with its
+own colorbar; the panel's other joint distributions as contours in their colours), a
+**scatter** of a random 5,000 pairs of each, or **density contours** of each. Contours
+enclose the given percentages of the pairs (*Contours enclosing*, e.g. 50, 90), densest
+first; *Contours over* adds them to a histogram or scatter. *Fit line* draws the
+least-squares fit of y on x; a 1:1 line and zero lines can be added. *Statistics* (n, the
+Pearson correlation r and r², the fit and the means, from every pair) go in a box in the
+panel. The bins come from a 200 × 200 histogram of every pair, so changing them, the
+ranges or the look reads nothing again.
+
+### Azimuthal means
+
+A field against radius and height around a centre: the values in rings (bins of
+radius) at every model level from *Bottom* to *Top*, reduced to their **mean**,
+**maximum** or **minimum**. The centre is each run's tracked storm (with an offset) or a
+fixed point (model x, y km). A new panel takes w around the storm (else the middle of
+the map's view), the whole ring out to 20 km in bins of the grid spacing, 0–15 km.
+
+The **sector** limits the azimuths: *Azimuth from* … *to*, clockwise, from the storm's
+motion (*Azimuth 0: Storm motion*, the default; 0 is ahead of the storm, 90 to its
+right) or from grid north (0 north, 90 east). 0 to 360 is the whole ring; 0 to 90 the
+front-right quadrant; 300 to 60 wraps through 0. The motion is the run's track's at
+each time (the domain's motion without a track).
+
+Each has its own run and time, or a time window (*Composite to*): a storm-following
+composite, every output's values around its own centre and with its own motion.
+Those with the same panel number share a panel: the first is **shaded** (grid cells or
+filled contours, the field's colours or your own, the data's range or yours, with its
+own colorbar), the others are drawn over it as **contour lines** (their levels, colour
+and width; negative ones dashed). A field must be on the scalar grid (e.g. winterp, not
+w).
+
+A **Sector** layer on a plan view outlines a sector at each panel's time (see
+[Layers](figures-layers.md)); give it the azimuthal mean's settings.
+
 ## Runs
 
-Every layer, sounding, distribution and series picks its run in its own **Run** list.
+Every layer, sounding, distribution, profile, joint distribution, azimuthal mean and
+series picks its
+run in its own **Run** list.
 The list also offers runs not yet in the figure: your recent runs, the runs next to this
 one and those under *Where your runs live*. Picking one adds it, with its storm track; a
 run nothing uses any more is dropped. The field lists hold the fields of every run.
@@ -135,11 +203,15 @@ A run can be added there first by filtering or pasting a folder (the runs under 
 your runs live* are found in the background and join the lists when the search is done).
 
 The colour is the default for the run's time series, storm-track layers, run name in the
-panels, and soundings and distributions. In a figure of several runs a run keeps its
+panels, and soundings, distributions, profiles, joint distributions and azimuthal mean
+contours. In a figure of
+several runs a run keeps its
 colour in every panel, also in a panel of that run alone. A panel with two soundings
-(distributions) of one run colours them apart instead, and a panel of several series
+(distributions, profiles) of one run colours them apart instead, and a panel of several series
 colours them by series, with the run's line style. Removing a run takes its panels,
-soundings and distributions with it; those of the runs after it stay on their runs.
+soundings, distributions, profiles, joint distributions and azimuthal means with it;
+those of the runs
+after it stay on their runs.
 
 ## Fill a grid
 

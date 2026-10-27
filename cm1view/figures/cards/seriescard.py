@@ -10,6 +10,9 @@ from .base import (
     MARKERS, SND_WHERE, _BTN, _chk,
 )
 
+ENS_BANDS = {"Off": "", "Min to max": "minmax", "10–90th percentile": "p10p90",
+             "25–75th percentile": "p25p75", "Mean ± 1 sd": "sd"}
+
 
 class SeriesCard:
     """One series of a time-height / time-series figure: a Series-tab recipe (field,
@@ -80,6 +83,16 @@ class SeriesCard:
                                            width=260)
         w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)",
                                            value=ent.get("ylabel", ""), width=180)
+        w["ens"] = pn.widgets.Select(name="Ensemble of its runs", options=ENS_BANDS,
+                                     value=ent.get("ens", ""), width=170)
+        w["ens_mid"] = pn.widgets.Select(name="Centre line", options={
+            "Mean": "mean", "Median": "median", "None": ""},
+            value=ent.get("ens_mid", "mean"), width=100)
+        w["ens_members"] = pn.widgets.Select(name="Runs' own lines", options={
+            "Faint": "faint", "Hidden": "hidden", "As other lines": "full"},
+            value=ent.get("ens_members", "faint"), width=130)
+        w["ens_alpha"] = _f("Band opacity", float(ent.get("ens_alpha", 0.25)), 100, step=0.05,
+                            start=0.0, end=1.0)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.info = pn.pane.HTML(margin=(0, 4))
         recipe_keys = ("vmode", "z", "z0", "z1", "region", "radius", "offx", "offy", "reduce",
@@ -93,10 +106,12 @@ class SeriesCard:
         w["runs"].param.watch(self._on_runs, "value")
         w["field"].param.watch(self._on_field, "value")
         w["op"].param.watch(lambda e: self._set_title(), "value")
+        w["ens"].param.watch(lambda e: self.show(ed.kind.value), "value")
         self.th_row = _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                             w["nlevels"], w["extend"], (w["cbar_label"], 2), w["cbar_ticks"])
         self.line_row = _grid(w["color"], w["lw"], w["marker"], w["panel"], w["axis"],
-                              w["ylabel"], (w["runs"], 3))
+                              w["ylabel"], (w["runs"], 3), w["ens"], w["ens_mid"],
+                              w["ens_members"], w["ens_alpha"])
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.up, self.down, self.rm],
             [_grid((w["field"], 2), w["vmode"], w["z"], w["z0"], w["z1"], w["region"],
@@ -116,6 +131,8 @@ class SeriesCard:
         w["pct"].visible = w["reduce"].value == "pct"
         self.th_row.visible = kind == "th"
         self.line_row.visible = kind == "line"
+        for k in ("ens_mid", "ens_members", "ens_alpha"):
+            w[k].visible = bool(w["ens"].value)
 
     def _on_runs(self, ev):
         """A run not in the figure picked (its path): add it to the figure, and keep
@@ -193,10 +210,13 @@ class SeriesCard:
         e.pop("_auto", None)
         e["recipe"] = self.recipe()
         for k in ("op", "label", "cmap", "reverse", "white_first", "nlevels", "extend",
-                  "color", "marker", "axis", "ylabel", "cbar_label", "cbar_ticks"):
+                  "color", "marker", "axis", "ylabel", "cbar_label", "cbar_ticks", "ens",
+                  "ens_mid", "ens_members"):
             e[k] = w[k].value
         e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
         e["lw"] = float(w["lw"].value or 1.5)
+        e["ens_alpha"] = float(w["ens_alpha"].value if w["ens_alpha"].value is not None
+                               else 0.25)
         e["panel"] = max(0, int(w["panel"].value or 1) - 1)
         e["runs"] = sorted(int(k) for k in w["runs"].value if not isinstance(k, str)) or None
         e["base_units"] = self.ed.fields[e["recipe"]["field"]].units

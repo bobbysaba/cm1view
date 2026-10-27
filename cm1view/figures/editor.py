@@ -62,6 +62,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.cards = []
         self._pf_base = None  # a 'field' figure's fill (Panels → Time and fields), not a card
         self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
+        self.prof_cards, self.joint_cards, self.azim_cards = [], [], []
         self.tm_rows, self.title_ws = [], []
         self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
         # undo / redo: (figure JSON with all its parts, part in the widgets) before each
@@ -114,7 +115,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
 
         panels_tab = self._panels_tab()
         layers_tab = pn.Column(self.plan_layers, self.series_col, self.snd_col, self.dist_col,
-                               self.ext_sec, self.runs_sec,
+                               self.prof_col, self.joint_col, self.azim_col, self.ext_sec,
+                               self.runs_sec,
                                sizing_mode="stretch_width")
         style_tab = self._style_tab()
         annotate_tab, export_tab = self._more_tabs()
@@ -205,6 +207,11 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.dist_new.on_click(lambda e: self._add_dist())
         for k in ("plot", "stats_at"):
             self.ds[k].param.watch(lambda e: self._show_dist_opts(), "value")
+        self.prof_tab.on_click(lambda e: self._add_tab_profiles())
+        self.prof_new.on_click(lambda e: self._add_profile())
+        self.joint_new.on_click(lambda e: self._add_joint())
+        self.azim_new.on_click(lambda e: self._add_azim())
+        self.jo["plot"].param.watch(lambda e: self._show_joint_opts(), "value")
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
         self.snd_tab.on_click(lambda e: self._add_tab_soundings())
@@ -212,7 +219,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             self.sk[k].param.watch(lambda e: self._fit_size(), "value")
         self.snd_new.on_click(lambda e: self._add_sounding())
         self.ann_add.on_click(lambda e: self._add_annotation())
-        for w in (*self.sk.values(), *self.ds.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
+        for w in (*self.sk.values(), *self.ds.values(), *self.po.values(), *self.jo.values(),
+                  *self.ao.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
                   self.ts_ymin, self.ts_ymax,
                   self.ts_legend, self.ts_legloc, self.ts_legncol, self.ts_legframe, self.ts_zero,
                   self.ts_mark,
@@ -339,6 +347,12 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             return self._sounding_data(spec, progress, cancelled)
         if spec["kind"] == "dist":
             return self._dist_data(spec, progress, cancelled)
+        if spec["kind"] == "profile":
+            return self._profile_data(spec, progress, cancelled)
+        if spec["kind"] == "joint":
+            return self._joint_data(spec, progress, cancelled)
+        if spec["kind"] == "azim":
+            return self._azim_data(spec, progress, cancelled)
         ctx = {}  # run index -> (run, Fields, fixes, centres, track signature)
 
         def context(k):
@@ -361,9 +375,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             t = fg.tindex(run, ts)
             c = centers.get(t) if t is not None else None
             key = fg.data_key(s, i, c, run.path)
-            if any(lay["type"] == "track" or (lay.get("reduce") or {}).get("op") ==
-                   "composite" for lay in figdraw.spec_layers(s, i)):
-                key += sig  # (a composite follows the whole track)
+            if any(lay["type"] in ("track", "sector") or (lay.get("reduce") or {}).get(
+                    "op") == "composite" for lay in figdraw.spec_layers(s, i)):
+                key += sig  # (a composite follows the whole track; a sector its motion)
             d = self.cache.get(key)
             if d is None:
                 if progress:
@@ -404,8 +418,14 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                 for g, js in groups.items():
                     dd = read(fg.group_spec(spec, i, g, set(js)), 0, g[0], g[1], n, i)
                     d = fg.merge_group(d, dd, js, lays)
+            for j, lay in enumerate(lays):  # ensembles: a statistic over several runs
+                if lay["type"] == "fill" and lay.get("ens") and lay.get("on", True):
+                    dds = [read(fg.group_spec(spec, i, g, {j}), 0, g[0], g[1], n, i)
+                           for g in fg.ens_refs(spec, i, lay)]
+                    d = fg.ensemble(d, dds, j, lay["ens"])
             for j, lay in enumerate(lays):  # differences: minus another run or time
-                if lay["type"] == "fill" and lay.get("minus") and lay.get("on", True):
+                if lay["type"] == "fill" and lay.get("minus") and lay.get("on", True) \
+                        and not lay.get("ens"):
                     g = fg.minus_ref(spec, i, lay)
                     if g[0] >= len(spec["runs"]):
                         d = dict(d, missing="difference: that run is no longer in the figure")
@@ -425,7 +445,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             return g != self.v.gen["fig"]
 
         def progress(i, n):
-            what = {"sounding": "sounding", "dist": "distribution"}.get(spec["kind"], "panel")
+            what = {"sounding": "sounding", "dist": "distribution", "profile": "profile",
+                    "joint": "joint distribution",
+                    "azim": "azimuthal mean"}.get(spec["kind"], "panel")
             self.v._schedule(partial(self._status, f'<span class="busy">● Reading {what} '
                                                    f'{i + 1}/{n}…</span>'))
 

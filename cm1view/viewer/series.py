@@ -150,7 +150,7 @@ class SeriesPanel:
         self.ser_th_now = Span(location=run.times[self.t] / 60.0, dimension="height",
                                line_color="#fbbf24", line_width=1.5, line_alpha=0.7)
         th.add_layout(self.ser_th_now)
-        th.on_event(Tap, self._on_ser_tap)
+        th.on_event(Tap, partial(self._on_ser_tap, height=True))
         self.ser_thfig = th
         self.ser_plot = _bokeh(fig, sizing_mode="stretch_width")  # or the th view
 
@@ -532,10 +532,19 @@ class SeriesPanel:
         self.ser_thfig.title.text = s["label"]
         self.ser_thfig.title.text_color = MUTED
 
-    def _on_ser_tap(self, ev):
-        """Click on a series plot: show that time."""
+    def _on_ser_tap(self, ev, height=False):
+        """Click on a series plot (or the track's time series): show that time; on the
+        time–height plot also move the map to the clicked height."""
         if ev.x is None:
             return
+        if height and ev.y is not None and not self.fill_lvl.disabled:
+            run, w = self.run, self.fill_lvl
+            if self.fill_mode.value == "level":
+                v = float(np.argmin(np.abs(run.z - ev.y)))
+            else:
+                v = float(np.clip(round(ev.y / 0.25) * 0.25, w.start, w.end))
+            if v != w.value:
+                w.value = v
         t = int(np.argmin(np.abs(self.run.times / 60.0 - ev.x)))
         if t != self.t:
             self.tslider.value = t

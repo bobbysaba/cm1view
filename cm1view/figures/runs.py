@@ -295,7 +295,8 @@ class FigureRuns:
         hold, self._hold = self._hold, True
         try:
             for w in [self.run_sel] + [r["run"] for r in self.pc_rows] + \
-                    [c.w["run"] for c in self.snd_cards + self.dist_cards]:
+                    [c.w["run"] for c in self.snd_cards + self.dist_cards + self.prof_cards
+                     + self.joint_cards + self.azim_cards]:
                 self._set_runs_of(w, w.value)
             opts = self._series_run_opts(names)
             v = [k for k in self.gg_runs.value if k in names.values()] or [0]
@@ -315,6 +316,10 @@ class FigureRuns:
                     v = c.w["minus_run"].value
                     c.w["minus_run"].options = {"the layer's": -1} | names
                     c.w["minus_run"].value = v if v in names.values() else -1
+                if "ens_runs" in c.w:  # (an ensemble's runs)
+                    v = [k for k in c.w["ens_runs"].value if k in names.values()]
+                    c.w["ens_runs"].options = opts
+                    c.w["ens_runs"].value = v
         finally:
             self._hold = hold
         self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \
@@ -376,7 +381,8 @@ class FigureRuns:
     def _runs_used(self):
         """Indices of the runs something in the figure draws from: the panels' run
         (or each panel's own), layers, difference runs, soundings, distributions,
-        series (blank: every run) and the panel tree's edits."""
+        profiles, joint distributions, azimuthal means, series (blank: every run) and the
+        panel tree's edits."""
         n = len(self.run_rows)
         used, maps = set(), self.kind.value in ("plan", "xsec")
         if maps and self.vary.value == "custom":
@@ -388,7 +394,11 @@ class FigureRuns:
                 v = c.w[key].value if key in c.w else None
                 if isinstance(v, int) and v >= 0:
                     used.add(v)
-        for c in self.snd_cards + self.dist_cards:
+            if "ens_on" in c.w and c.w["ens_on"].value and c.w["on"].value:
+                ks = [int(k) for k in c.w["ens_runs"].value if not isinstance(k, str)]
+                used |= set(ks) if ks else set(range(n))
+        for c in self.snd_cards + self.dist_cards + self.prof_cards + self.joint_cards + \
+                self.azim_cards:
             used.add(c.w["run"].value or 0)
         for c in self.ser_cards:
             ks = [int(k) for k in c.w["runs"].value if not isinstance(k, str)]
@@ -416,8 +426,9 @@ class FigureRuns:
                 self._runs_msg(f"Dropped <code>{r['path']}</code>: nothing uses it now.")
 
     def _remove_run(self, r):
-        """Remove run k: panels, soundings, distributions and series of it go, and those
-        of the runs after it follow their run to its new number."""
+        """Remove run k: panels, soundings, distributions, profiles, joint distributions,
+        azimuthal means and series of it go, and those of the runs after it follow their run to its new
+        number."""
         k = self.run_rows.index(r)
         self.run_rows.remove(r)
         names = self._run_names()  # (the new numbering)
@@ -437,15 +448,21 @@ class FigureRuns:
                 for key in ("run", "minus_run"):
                     if key in c.w and c.w[key].value is not None and c.w[key].value >= k:
                         c.w[key].value = -1 if c.w[key].value == k else c.w[key].value - 1
+                if "ens_runs" in c.w:  # (an ensemble without the removed run)
+                    c.w["ens_runs"].options = self._series_run_opts(names)
+                    c.w["ens_runs"].value = [j - (j > k) for j in c.w["ens_runs"].value
+                                             if isinstance(j, int) and j != k]
             for e in self._edit_runs():
                 if int(e["run"]) >= k:
                     if int(e["run"]) == k:
                         del e["run"]
                     else:
                         e["run"] = int(e["run"]) - 1
-            for what in ("sounding", "distribution"):
+            for what, cards in (("sounding", self.snd_cards), ("distribution", self.dist_cards),
+                                ("profile", self.prof_cards),
+                                ("joint distribution", self.joint_cards),
+                                ("azimuthal mean", self.azim_cards)):
                 keep = []
-                cards = self.snd_cards if what == "sounding" else self.dist_cards
                 for c in cards:
                     j = int(c.w["run"].value or 0)
                     if j == k:
@@ -471,6 +488,9 @@ class FigureRuns:
         self._show_runs()
         self._show_soundings()
         self._show_dists()
+        self._show_profiles()
+        self._show_joints()
+        self._show_azims()
         self._show_series()
         if gone:
             n = {w: gone.count(w) for w in dict.fromkeys(gone)}

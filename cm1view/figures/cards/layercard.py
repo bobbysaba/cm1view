@@ -7,9 +7,14 @@ import panel as pn
 from .. import draw as figdraw, spec as fg
 from ...core import vectors
 from .base import (
-    FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, _hex, _f, _grid,
-    _checks, _fold, _near, _nice, _panels_parse, _panels_text, _chk,
+    FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, AZ_REFS,
+    AZ_CENTERS, _hex, _f, _grid, _hint, _checks, _fold, _near, _nice, _panels_parse, _panels_text,
+    _chk,
 )
+
+ENS_STATS = {"Mean": "mean", "Median": "median", "Spread (sd)": "sd", "Min": "min",
+             "Max": "max", "Range (max − min)": "range",
+             "Probability of exceeding (%)": "prob"}
 
 
 class LayerCard:
@@ -91,8 +96,27 @@ class LayerCard:
             self._minus_times(m.get("time_s"))
             w["minus_grid"] = pn.widgets.Select(name="If the grids differ", options=GRIDS,
                                                 value=m.get("grid", "ask"))
+            en = lay.get("ens") or {}
+            w["ens_on"] = _chk("Ensemble: a statistic over several runs", bool(en))
+            try:
+                ropts = ed._series_run_opts()
+            except AttributeError:  # (no run list yet)
+                ropts = {}
+            w["ens_runs"] = pn.widgets.MultiChoice(
+                name="Runs (blank: all)", options=ropts, width=260,
+                value=[int(k) for k in (en.get("runs") or []) if int(k) in ropts.values()])
+            w["ens_stat"] = pn.widgets.Select(name="Statistic", options=ENS_STATS,
+                                              value=en.get("stat", "mean"))
+            w["ens_thr"] = _f("Threshold", float(en.get("threshold", 0.0)))
+            w["ens_above"] = pn.widgets.Select(name="Where the value is", options={
+                "Above": True, "Below": False}, value=bool(en.get("above", True)))
+            w["ens_grid"] = pn.widgets.Select(name="If the grids differ", options=GRIDS,
+                                              value=en.get("grid", "ask"))
             w["field"].param.watch(self._on_fill_field, "value")
             w["minus_on"].param.watch(self._on_minus, "value")
+            w["ens_on"].param.watch(self._on_ens, "value")
+            w["ens_stat"].param.watch(self._on_ens, "value")
+            w["ens_runs"].param.watch(self._on_ens_runs, "value")
             w["minus_run"].param.watch(lambda e: self._minus_times(w["minus_time"].value or None),
                                        "value")
         if t == "contour":
@@ -142,21 +166,34 @@ class LayerCard:
                                start=2)
             w["barb_units"] = pn.widgets.Select(name="Barbs in", options={
                 "knots": "kt", "m/s": "ms"}, value=lay.get("barb_units", "kt"))
-        if t in ("contour", "shade", "vectors", "track", "line"):
+        if t == "sector":  # (as an azimuthal mean panel's sector)
+            w["center"] = pn.widgets.Select(name="Centre", options=AZ_CENTERS,
+                                            value=lay.get("center", "track"))
+            for k, lab, v, st in (("offx", "Offset x (km)", 0.0, 1.0),
+                                  ("offy", "Offset y (km)", 0.0, 1.0),
+                                  ("cx", "x (km)", 0.0, 1.0), ("cy", "y (km)", 0.0, 1.0),
+                                  ("az0", "Azimuth from (°)", 0.0, 15.0),
+                                  ("az1", "to (°)", 360.0, 15.0),
+                                  ("rmax", "Radius (km)", 20.0, 1.0)):
+                w[k] = _f(lab, float(lay.get(k, v)), step=st)
+            w["ref"] = pn.widgets.Select(name="Azimuth 0", options=AZ_REFS,
+                                         value=lay.get("ref", "motion"))
+        if t in ("contour", "shade", "vectors", "track", "line", "sector"):
             w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(lay.get("color", "k")))
-        if t in ("contour", "shade", "track", "line"):
+        if t in ("contour", "shade", "track", "line", "sector"):
             w["lw"] = _f("Outline width" if t == "shade" else "Line width", lay.get("lw", 1.0),
                          step=0.25)
-        if t == "track":
-            w["run_color"] = _chk("Run's colour", lay.get("run_color", False))
+        if t in ("track", "sector"):
             w["ls"] = pn.widgets.Select(name="Style", options={"solid": "-", "dashed": "--",
                                                                "dotted": ":"},
                                         value=lay.get("ls", "-"))
+        if t == "track":
+            w["run_color"] = _chk("Run's colour", lay.get("run_color", False))
             w["marker"] = pn.widgets.Checkbox(name="Dot at the panel time",
                                               value=lay.get("marker", True))
         if t == "line":
             w["labels"] = pn.widgets.TextInput(name="End labels", value=lay.get("labels", ""))
-        if t in ("contour", "shade", "track", "line"):
+        if t in ("contour", "shade", "track", "line", "sector"):
             w["legend"] = pn.widgets.TextInput(name="Legend entry (blank: none)",
                                                value=lay.get("legend", ""),
                                                placeholder="e.g. w = 10, 20 m s⁻¹")
@@ -173,7 +210,8 @@ class LayerCard:
             w["vector"].param.watch(self._on_vector, "value")
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
-            if k != "run" and (k not in ("field", "minus_on") or t != "fill"):
+            if k != "run" and (k not in ("field", "minus_on", "ens_on", "ens_stat",
+                                         "ens_runs") or t != "fill"):
                 x.param.watch(lambda e: self._changed(), "value")
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self._set_title()
@@ -213,7 +251,13 @@ class LayerCard:
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
                           (w["cbar_label"], 2), w["cbar_ticks"], (w["panels"], 3)),
                     _grid((w["minus_on"], 2), w["minus_run"], w["minus_time"],
-                          w["minus_grid"]), self._reduce_row()]
+                          w["minus_grid"]),
+                    _grid((w["ens_on"], 2), (w["ens_runs"], 2), w["ens_stat"], w["ens_thr"],
+                          w["ens_above"], w["ens_grid"]),
+                    _hint("Ensemble: the field of each of the runs at the layer's time "
+                          "(the layer's Run is not used), combined cell by cell; runs "
+                          "without output at that time are left out."),
+                    self._reduce_row()]
         if t == "contour":
             return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], (w["levels"], 2),
                           w["color"], w["lw"], w["clabel_size"], w["clabel_fmt"],
@@ -234,6 +278,14 @@ class LayerCard:
         if t == "track":
             return [_grid(w["run_color"], w["color"], w["lw"], w["ls"],
                           (w["legend"], 3), (w["panels"], 3)), _checks(w["marker"])]
+        if t == "sector":
+            return [_grid((w["center"], 2), w["offx"], w["offy"], w["cx"], w["cy"],
+                          (w["ref"], 2), w["az0"], w["az1"], w["rmax"], w["color"], w["lw"],
+                          w["ls"], (w["legend"], 3), (w["panels"], 3)),
+                    _hint("The sector of an azimuthal mean panel, at each panel's time: "
+                          "azimuths clockwise from the storm's motion (its track's) or "
+                          "from north, from the first to the second (0 to 360: a circle). "
+                          "Give it the settings of the azimuthal mean it shows.")]
         return [_grid(w["color"], w["lw"], w["labels"], (w["legend"], 3), (w["panels"], 3))]
 
     def _reduce_row(self):
@@ -277,12 +329,23 @@ class LayerCard:
             w["hatch_lw"].visible = bool(w["hatch"].value)
         if t == "track":  # (each panel's run's colour: Layers → Runs used)
             w["color"].visible = not w["run_color"].value
+        if t == "sector":
+            pt = w["center"].value == "point"
+            w["cx"].visible = w["cy"].visible = pt
+            w["offx"].visible = w["offy"].visible = not pt
         if t == "contour":
             w["clabel_size"].visible = w["clabel_fmt"].visible = w["clabel"].value
         if t == "fill":
             w["white_first"].visible = True
+            ens = w["ens_on"].value
+            w["minus_on"].visible = not ens
             for k in ("minus_run", "minus_time", "minus_grid"):
-                w[k].visible = w["minus_on"].value
+                w[k].visible = w["minus_on"].value and not ens
+            for k in ("ens_runs", "ens_stat", "ens_grid"):
+                w[k].visible = ens
+            w["ens_thr"].visible = w["ens_above"].visible = \
+                ens and w["ens_stat"].value == "prob"
+            w["run"].visible = not ens
 
     def _on_vector(self, ev):
         """Another vector: arrows scaled for its magnitudes (a key arrow of its typical
@@ -315,8 +378,16 @@ class LayerCard:
             if w["reduce_op"].value and self.ed.kind.value != "xsec":
                 sub += {"composite": " · storm-following mean"}.get(
                     w["reduce_op"].value, f" · {w['reduce_op'].value} over a time window")
-            if t == "fill" and w["minus_on"].value:
+            if t == "fill" and w["ens_on"].value:
+                sub += f" · ensemble {w['ens_stat'].value}"
+            elif t == "fill" and w["minus_on"].value:
                 sub += " · difference"
+        elif t == "sector":
+            a0, a1 = w["az0"].value or 0.0, w["az1"].value
+            a1 = 360.0 if a1 is None else a1
+            sub = (f" · {a0:g}–{a1:g}° from "
+                   f"{'motion' if w['ref'].value == 'motion' else 'north'}"
+                   f" · {w['rmax'].value or 0:g} km")
         elif t == "vectors":
             sub = (f' · {vectors.VECTORS[w["vector"].value].label}'
                    + {"streamlines": " · streamlines", "barbs": " · barbs"}.get(
@@ -342,6 +413,9 @@ class LayerCard:
             self.w["cbar_label"].placeholder = d["units"]
         finally:
             self.ed._hold = False
+        if self.w["ens_on"].value:  # (an ensemble: its statistic's colours)
+            self._on_ens(None)
+            return
         if self.w["minus_on"].value:  # (a difference: diverging, from the new range)
             self._on_minus(SimpleNamespace(new=True))
             return
@@ -379,10 +453,63 @@ class LayerCard:
             self.ed._hold = False
         self._changed()
 
+    def _on_ens(self, ev):
+        """Ensemble on or another statistic: its colours (a probability 0–100 %, a
+        spread or range from 0, else the field's own); off: the field's own."""
+        w = self.w
+        if self.ed._hold:
+            return
+        if ev is not None and ev.obj is w["ens_stat"] and not w["ens_on"].value:
+            self._changed()
+            return
+        d = fg.layer_defaults("fill", self.ed.fields, w["field"].value)
+        own = dict(cmap=d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis", reverse=False,
+                   vmin=d["vmin"], vmax=d["vmax"],
+                   mask_below="" if d["mask_below"] is None else f"{d['mask_below']:g}")
+        st = w["ens_stat"].value
+        if not w["ens_on"].value:
+            vals = own
+        elif st == "prob":
+            vals = dict(cmap="Blues", reverse=False, white_first=True, vmin=0.0, vmax=100.0,
+                        scale="linear", mask_below="0", nlevels=10, extend="neither")
+        elif st in ("sd", "range"):
+            a = _nice((0.25 if st == "sd" else 0.5) * (float(d["vmax"]) - float(d["vmin"])))
+            vals = dict(cmap="viridis", reverse=False, white_first=False, vmin=0.0, vmax=a,
+                        scale="linear", mask_below="")
+        else:
+            vals = own
+        self.ed._hold = True
+        try:
+            if w["ens_on"].value:
+                w["minus_on"].value = False
+            for k, v in vals.items():
+                w[k].value = v
+        finally:
+            self.ed._hold = False
+        self._changed()
+
+    def _on_ens_runs(self, ev):
+        """A run not in the figure picked (its path): add it, and keep it picked."""
+        if self.ed._hold:
+            return
+        new = [v for v in ev.new if isinstance(v, str)]
+        if new:
+            keep = [v for v in ev.new if not isinstance(v, str)]
+            for p in new:
+                k = self.ed._add_run(p, grid=False)
+                if k is not None:
+                    keep.append(k)
+            hold, self.ed._hold = self.ed._hold, True
+            try:
+                self.w["ens_runs"].value = sorted(set(keep))
+            finally:
+                self.ed._hold = hold
+        self._changed()
+
     def collect(self):
         w, lay = self.w, dict(self.lay)
         for k, x in w.items():
-            if k in ("outline_on",) or k.startswith(("minus_", "reduce_")):
+            if k in ("outline_on",) or k.startswith(("minus_", "reduce_", "ens_")):
                 continue
             lay[k] = x.value
         lay.pop("run", None)
@@ -398,7 +525,13 @@ class LayerCard:
                                      every=max(1, int(w["reduce_every"].value or 1)))
         if self.type == "fill":
             lay.pop("minus", None)
-            if w["minus_on"].value:
+            lay.pop("ens", None)
+            if w["ens_on"].value:
+                ks = [int(k) for k in w["ens_runs"].value if not isinstance(k, str)]
+                lay["ens"] = dict(runs=sorted(ks) or None, stat=w["ens_stat"].value,
+                                  threshold=float(w["ens_thr"].value or 0.0),
+                                  above=bool(w["ens_above"].value), grid=w["ens_grid"].value)
+            elif w["minus_on"].value:
                 r, ts = w["minus_run"].value, w["minus_time"].value
                 lay["minus"] = dict(run=None if r == -1 else int(r),
                                     time_s=None if ts == "" else float(ts),

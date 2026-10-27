@@ -100,7 +100,15 @@ class FigureQuick:
                         "as a copy of the last, to change in Layers → Soundings.",
             "dist": "The Distribution tool's distributions go one per panel (more than "
                     "panels: they wrap and share panels); panels left over start as a "
-                    "copy of the last, to change in Layers → Distributions."}.get(kind) or (maps and {
+                    "copy of the last, to change in Layers → Distributions.",
+            "profile": "The Series tool's layer series go one per panel at the shown time "
+                       "(more than panels: they wrap and share panels); panels left over "
+                       "start as a copy of the last, to change in Layers → Profiles.",
+            "joint": "Every panel starts with vertical vorticity against w at 1 km at the "
+                     "shown time, to change in Layers → Joint distributions.",
+            "azim": "Every panel starts with w around the tracked storm (else the middle "
+                    "of the map's view) at the shown time, the whole ring out to 20 km, to "
+                    "change in Layers → Azimuthal means."}.get(kind) or (maps and {
             "field": "Every panel starts with this fill: pick each panel's field in "
                      "Panels → Time and fields.",
             "height": "Pick each panel's height in Panels → Time and heights.",
@@ -136,7 +144,7 @@ class FigureQuick:
             if kind != "th":
                 self.rows.value = int(self.qs_rows.value)
                 self.cols.value = int(self.qs_cols.value)
-            if kind in ("sounding", "dist"):
+            if kind in ("sounding", "dist", "profile", "joint", "azim"):
                 self._quick_spread(kind)
             if self.qs_size.value:
                 self.size_preset.value = self.qs_size.value
@@ -145,10 +153,13 @@ class FigureQuick:
         self.request(delay=False)
 
     def _quick_spread(self, kind):
-        """Sounding / distribution cards one per panel of the grid: more cards than
-        panels wrap (sharing panels), panels left over get a copy of the last card."""
+        """Sounding / distribution / profile / joint distribution / azimuthal mean cards
+        one per panel of the grid: more cards than panels wrap (sharing panels), panels left over get a copy
+        of the last card."""
         n = int(self.rows.value or 1) * int(self.cols.value or 1)
-        cards = self.snd_cards if kind == "sounding" else self.dist_cards
+        cards = {"sounding": self.snd_cards, "dist": self.dist_cards,
+                 "profile": self.prof_cards, "joint": self.joint_cards,
+                 "azim": self.azim_cards}[kind]
         ents = [c.collect() for c in cards]
         if not ents:
             return
@@ -157,7 +168,16 @@ class FigureQuick:
         if kind == "sounding":
             self.snd_cards = [self._snd_card(e) for e in ents]
             self._show_soundings()
-        else:
+        elif kind == "dist":
             self.dist_cards = [self._dist_card(e) for e in ents]
             self._show_dists()
+        elif kind == "profile":
+            self.prof_cards = [self._prof_card(e) for e in ents]
+            self._show_profiles()
+        elif kind == "joint":
+            self.joint_cards = [self._joint_card(e) for e in ents]
+            self._show_joints()
+        else:
+            self.azim_cards = [self._azim_card(e) for e in ents]
+            self._show_azims()
         self._build_titles()

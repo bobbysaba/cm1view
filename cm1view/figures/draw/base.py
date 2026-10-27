@@ -40,7 +40,8 @@ SND_PARAMS = [  # (key, column heading, units) of the sounding parameter table
 HODO_BANDS = [(0, 1, "#e11d48"), (1, 3, "#16a34a"), (3, 6, "#ca8a04"), (6, 9, "#0284c7"),
               (9, 12, "#7c3aed")]
 KT = 1.943844
-ENTRIES = {"line": "series", "sounding": "soundings", "dist": "dists"}  # (kind -> list)
+ENTRIES = {"line": "series", "sounding": "soundings", "dist": "dists",
+           "profile": "profiles", "joint": "joints", "azim": "azims"}  # (kind -> list)
 
 
 # colormaps with a neutral (white) middle: kept on 0 when the range has both signs

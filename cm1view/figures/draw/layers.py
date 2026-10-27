@@ -66,6 +66,30 @@ def _shade(ax, x, y, a, lay):
 KEY_UNITS = {"wind": "m s$^{-1}$", "hvort": "s$^{-1}$", "bgen": "10$^{-4}$ s$^{-2}$"}
 
 
+def sector_outline(d, lay):
+    """(x, y) of a Sector layer's outline in panel data d (a plan view): the wedge from
+    az0 clockwise to az1 (degrees from the storm motion's direction, d["sector"], or
+    from north) out to rmax, around the track's centre (shifted by offx, offy) or a
+    fixed point (cx, cy grid km); a circle for the whole ring.  None without a
+    centre."""
+    if lay.get("center") == "point":
+        o = d.get("origin", (0.0, 0.0))
+        cx, cy = float(lay.get("cx", 0.0)) - o[0], float(lay.get("cy", 0.0)) - o[1]
+    else:
+        cx = float(d["sector"][0]) + float(lay.get("offx", 0.0))
+        cy = float(d["sector"][1]) + float(lay.get("offy", 0.0))
+    if not (np.isfinite(cx) and np.isfinite(cy)):
+        return None
+    ref = float(d["sector"][2]) if lay.get("ref", "motion") == "motion" else 0.0
+    a0, R = float(lay.get("az0", 0.0)), float(lay.get("rmax", 20.0))
+    span = (float(lay.get("az1", 360.0)) - a0) % 360.0 or 360.0
+    th = np.radians(ref + a0 + np.linspace(0.0, span, max(8, int(span / 2.0)) + 1))
+    x, y = cx + R * np.sin(th), cy + R * np.cos(th)
+    if span >= 360.0:
+        return x, y
+    return np.concatenate([[cx], x, [cx]]), np.concatenate([[cy], y, [cy]])
+
+
 def _vectors(ax, d, j, lay, xsec, nkey=0):
     """Arrows, barbs (plan panels; wind in kt or m/s: half barb 5, full 10, flag 50)
     or streamlines of vector layer j; nkey: key arrows drawn before this one's in the
@@ -247,13 +271,27 @@ def reduce_label(red, units=""):
     return f"{op}{when}{every}" + (f" ({units})" if units else "")
 
 
+def ens_label(ens, units=""):
+    """Colorbar text of an ensemble layer: its statistic (and units)."""
+    stat = ens.get("stat", "mean")
+    if stat == "prob":
+        thr = float(ens.get("threshold") or 0.0)
+        return f"probability {'>' if ens.get('above', True) else '<'} {thr:g}" + \
+            (f" {units}" if units else "") + " (%)"
+    what = {"sd": "ensemble spread (sd)", "range": "ensemble range (max − min)"}.get(
+        stat, f"ensemble {stat}")
+    return f"{what} ({units})" if units else what
+
+
 def _cbar_style(c, cb, lay, loc):
     """Label and ticks (the layer's or series' own, else the Style tab's for every
     colorbar, else its units / automatic ticks) and fonts."""
     units = lay.get("units", "")
     if lay.get("reduce"):  # (a time window)
         units = reduce_label(lay["reduce"], units)
-    if lay.get("minus"):  # (a difference)
+    if lay.get("ens"):  # (a statistic over several runs)
+        units = ens_label(lay["ens"], units)
+    elif lay.get("minus"):  # (a difference)
         units = f"difference ({units})" if units else "difference"
     c.set_label(lay.get("cbar_label") or cb.get("label") or units,
                 size=float(cb.get("label_size") or 0) or None,

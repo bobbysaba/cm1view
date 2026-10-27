@@ -1,6 +1,7 @@
 """Figure editor: new figures from the map, the cross-section, the series, the
-soundings and the distributions, the series / sounding / distribution / annotation
-lists, and the series, sounding and distribution data of a figure.
+soundings and the distributions, the series / sounding / distribution / profile / joint
+distribution / azimuthal mean / annotation lists, and the series, sounding,
+distribution, profile, joint distribution and azimuthal mean data of a figure.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
@@ -14,7 +15,8 @@ import panel as pn
 from . import draw as figdraw, spec as fg
 from ..core import render, series as ser, vectors
 from ..core.run import FileBusy, MissingAtTime
-from .cards import AnnotationRow, DistCard, LEVEL_MODES, SeriesCard, SoundingCard, _dark
+from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
+                    SeriesCard, SoundingCard, _dark)
 
 
 class FigureSources:
@@ -225,10 +227,11 @@ class FigureSources:
         highest panel number of the cards (reset: a column of up to 3, else 2 columns;
         else the grid only grows, keeping the rows and columns the user set)."""
         kind = self.kind.value
-        if kind not in ("line", "sounding", "dist"):
+        if kind not in ("line", "sounding", "dist", "profile", "joint", "azim"):
             return
         cards = {"line": self.ser_cards, "sounding": self.snd_cards,
-                 "dist": self.dist_cards}[kind]
+                 "dist": self.dist_cards, "profile": self.prof_cards,
+                 "joint": self.joint_cards, "azim": self.azim_cards}[kind]
         n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
         if reset:
@@ -264,6 +267,12 @@ class FigureSources:
                 h += r * (0.45 + 0.25 * per)
         elif kind == "dist":
             w, h = (5.5 if c == 1 else 4.2 * c), 3.6 * r + 0.3
+        elif kind == "profile":
+            w, h = (4.0 if c == 1 else 3.4 * c) + 0.4, 4.6 * r + 0.3
+        elif kind == "joint":  # (with its colorbar)
+            w, h = (5.2 if c == 1 else 4.4 * c) + 0.3, 4.0 * r + 0.3
+        elif kind == "azim":  # (with its colorbar)
+            w, h = (5.6 if c == 1 else 4.6 * c) + 0.3, 3.8 * r + 0.3
         else:
             w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
         hold, self._hold = self._hold, True
@@ -400,6 +409,122 @@ class FigureSources:
         e["panel"] = 0
         self.dist_cards.append(self._dist_card(e))
         self._show_dists()
+        self._fit_grid()
+        self.request()
+
+    # ------------------------------------------------------------ profile cards
+    def _prof_card(self, e):
+        c = ProfileCard(self, e)
+        c.rm.on_click(lambda ev: self._remove_prof(c))
+        return c
+
+    def _show_profiles(self):
+        self.prof_box.objects = [c.panel for c in self.prof_cards] or [pn.pane.HTML(
+            '<div class="cv-empty">No profiles: add the Series tool\'s layer series, or a '
+            'new one.</div>')]
+
+    def _remove_prof(self, c):
+        self.prof_cards.remove(c)
+        self._show_profiles()
+        self._fit_grid()
+        self.request()
+
+    def tab_profiles(self):
+        """spec["profiles"] entries of the Series tool's layer series (this run) at the
+        shown time, all in the first panel."""
+        out = []
+        for s in (getattr(self.v, "series", {}) or {}).values():
+            if "profile" in s["ds"]:
+                out.append(fg.profile_defaults(s["recipe"], self._own_index(),
+                                               float(self.run.times[self.v.t]),
+                                               len(out) + len(self.prof_cards)))
+        return out
+
+    def _add_tab_profiles(self):
+        new = self.tab_profiles()
+        if not new:
+            self._msg("No layer series yet: make one with the Series tool (Vertical: "
+                      "Layer) first, or add a profile here.", True)
+            return
+        self.prof_cards += [self._prof_card(e) for e in new]
+        self._show_profiles()
+        self.request()
+
+    def _add_profile(self):
+        e = fg.profile_defaults(self._new_recipe(), self._own_index(),
+                                float(self.run.times[self.v.t]), len(self.prof_cards))
+        self.prof_cards.append(self._prof_card(e))
+        self._show_profiles()
+        self._fit_grid()
+        self.request()
+
+    # ------------------------------------------------------------ joint distribution cards
+    def _joint_card(self, e):
+        c = JointCard(self, e)
+        c.rm.on_click(lambda ev: self._remove_joint(c))
+        return c
+
+    def _show_joints(self):
+        self.joint_box.objects = [c.panel for c in self.joint_cards] or [pn.pane.HTML(
+            '<div class="cv-empty">No joint distributions: add one.</div>')]
+
+    def _remove_joint(self, c):
+        self.joint_cards.remove(c)
+        self._show_joints()
+        self._fit_grid()
+        self.request()
+
+    def _new_joint_recipe(self):
+        """A recipe for a new joint distribution: vertical vorticity against w (the
+        map's distribution's field and place, when the Distribution tool has one) over
+        the whole domain at 1 km."""
+        tool = list((getattr(self.v, "dists", {}) or {}).values())
+        r = dict(tool[-1]["recipe"]) if tool else self._new_dist_recipe()
+        r["yfield"] = "zvort" if "zvort" in self.F and r["field"] != "zvort" else r["field"]
+        return r
+
+    def _add_joint(self):
+        e = fg.joint_defaults(self._new_joint_recipe(), self._own_index(),
+                              float(self.run.times[self.v.t]), len(self.joint_cards))
+        self.joint_cards.append(self._joint_card(e))
+        self._show_joints()
+        self._fit_grid()
+        self.request()
+
+    # ------------------------------------------------------------ azimuthal mean cards
+    def _azim_card(self, e):
+        c = AzimCard(self, e)
+        c.rm.on_click(lambda ev: self._remove_azim(c))
+        return c
+
+    def _show_azims(self):
+        self.azim_box.objects = [c.panel for c in self.azim_cards] or [pn.pane.HTML(
+            '<div class="cv-empty">No azimuthal means: add one.</div>')]
+
+    def _remove_azim(self, c):
+        self.azim_cards.remove(c)
+        self._show_azims()
+        self._fit_grid()
+        self.request()
+
+    def _new_azim_recipe(self):
+        """A recipe for a new azimuthal mean: w (the previous one's field and sector,
+        when there is one) around the tracked storm, else around the middle of the
+        map's view; the whole ring out to 20 km, 0-15 km."""
+        if self.azim_cards:
+            return self.azim_cards[-1].recipe()
+        f = "winterp" if "winterp" in self.F else next(
+            (k for k, d in self.F.defs.items() if d.ndim == 3), next(iter(self.F.defs)))
+        track = bool(self.v.fixes) or any(r.get("track") for r in self._runs_collect())
+        x0, x1, y0, y1 = (float(v) for v in self.v.view)
+        return dict(field=f, center="track" if track else "point",
+                    point=(0.5 * (x0 + x1), 0.5 * (y0 + y1)))
+
+    def _add_azim(self):
+        e = fg.azim_defaults(self._new_azim_recipe(), self._own_index(),
+                             float(self.run.times[self.v.t]), len(self.azim_cards))
+        self.azim_cards.append(self._azim_card(e))
+        self._show_azims()
         self._fit_grid()
         self.request()
 
@@ -622,6 +747,192 @@ class FigureSources:
             data[i] = fg.dist_panel(spec, i, get, lambda e: labels.get(e, ""),
                                     lambda e: vlabs.get(e, ""))
         return data
+
+    def _joint_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of a joint distribution figure; the summaries are kept
+        (dist_cache, with the distributions'), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("joints", [])
+        res, labels, axlabs = {}, {}, {}
+        multi = len(runs) > 1
+
+        def get(e):
+            if e in res:
+                return res[e]
+            ent = ents[e]
+            k = int(ent.get("run", 0))
+            if k >= len(runs):
+                res[e] = "no such run"
+                return res[e]
+            try:
+                run, F = self.open_run(runs[k]["path"])
+                fx = self.run_fixes(runs[k], run)
+                r = ent["recipe"]
+                track = r["region"] == "track" or any(
+                    f in F and F[f].storm for f in (r["field"], r["yfield"]))
+                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                        for t, f in fx.items())) if track else ""
+                key = json.dumps(["joint", run.path, float(ent["time_s"]),
+                                  ent.get("time_s1"), r, sig], sort_keys=True)
+                res[e] = self.dist_cache.get(key)
+                if res[e] is None:
+                    if progress:
+                        progress(e, len(ents))
+                    res[e] = fg.joint_compute(run, F, ent, fx)
+                    self.dist_cache[key] = res[e]
+                    while len(self.dist_cache) > 60:
+                        self.dist_cache.popitem(last=False)
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
+                             for x in mine}) > 1
+                labels[e] = fg.joint_label(ent, runs[k].get("label", ""), F, multi, times)
+                axlabs[e] = (fg.dist_value_label(F, r["field"]),
+                             fg.dist_value_label(F, r["yfield"]))
+            except (MissingAtTime, FileBusy) as ex:
+                res[e] = str(ex)
+            except Exception as ex:  # noqa: BLE001
+                traceback.print_exc()
+                res[e] = f"{type(ex).__name__}: {ex}"
+            return res[e]
+
+        data = {}
+        for i in range(fg.npanels(spec)):
+            if cancelled and cancelled():
+                return None
+            data[i] = fg.joint_panel(spec, i, get, lambda e: labels.get(e, ""),
+                                     lambda e: axlabs.get(e, ("", "")))
+        return data
+
+    def _azim_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of an azimuthal mean figure; the results are kept
+        (dist_cache, with the distributions'), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("azims", [])
+        res, labels, cbl, look = {}, {}, {}, {}
+        multi = len(runs) > 1
+
+        def get(e):
+            if e in res:
+                return res[e]
+            ent = ents[e]
+            k = int(ent.get("run", 0))
+            if k >= len(runs):
+                res[e] = "no such run"
+                return res[e]
+            try:
+                run, F = self.open_run(runs[k]["path"])
+                fx = self.run_fixes(runs[k], run)
+                r = ent["recipe"]
+                # (the track: centres, and azimuth 0 / storm-relative fields: motion)
+                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                        for t, f in fx.items()))
+                key = json.dumps(["azim", run.path, float(ent["time_s"]),
+                                  ent.get("time_s1"), r, sig], sort_keys=True)
+                res[e] = self.dist_cache.get(key)
+                if res[e] is None:
+                    if progress:
+                        progress(e, len(ents))
+                    res[e] = fg.azim_compute(run, F, ent, fx)
+                    self.dist_cache[key] = res[e]
+                    while len(self.dist_cache) > 60:
+                        self.dist_cache.popitem(last=False)
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
+                             for x in mine}) > 1
+                labels[e] = fg.azim_label(ent, runs[k].get("label", ""), F, multi, times)
+                cbl[e] = fg.dist_value_label(F, r["field"])
+                d = F[r["field"]] if r["field"] in F else None
+                look[e] = (d.cmap, d.diverging) if d is not None else ("viridis", False)
+            except (MissingAtTime, FileBusy) as ex:
+                res[e] = str(ex)
+            except Exception as ex:  # noqa: BLE001
+                traceback.print_exc()
+                res[e] = f"{type(ex).__name__}: {ex}"
+            return res[e]
+
+        data = {}
+        for i in range(fg.npanels(spec)):
+            if cancelled and cancelled():
+                return None
+            data[i] = fg.azim_panel(spec, i, get, lambda e: labels.get(e, ""),
+                                    lambda e: cbl.get(e, ""),
+                                    lambda e: look.get(e, ("viridis", False)))
+        return data
+
+    def _profile_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of a profile figure.  Each profile is a layer series
+        computed (ser.compute) only at the outputs it needs and cached with the series
+        (on disk and in _ser_mem), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("profiles", [])
+        res, labels, vlabs = {}, {}, {}
+        multi = len(runs) > 1
+
+        def get(e):
+            if e in res:
+                return res[e]
+            ent = ents[e]
+            k = int(ent.get("run", 0))
+            if k >= len(runs):
+                res[e] = "no such run"
+                return res[e]
+            try:
+                res[e] = self._profile_get(runs[k], ent, e, len(ents), progress, cancelled)
+                run, F = self.open_run(runs[k]["path"])
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
+                             for x in mine}) > 1
+                labels[e] = fg.profile_label(ent, runs[k].get("label", ""), F, multi, times)
+                vlabs[e] = fg.dist_value_label(F, ent["recipe"]["field"])
+            except Exception as ex:  # noqa: BLE001
+                traceback.print_exc()
+                res[e] = f"{type(ex).__name__}: {ex}"
+            return res[e]
+
+        data = {}
+        for i in range(fg.npanels(spec)):
+            if cancelled and cancelled():
+                return None
+            data[i] = fg.profile_panel(spec, i, get, lambda e: labels.get(e, ""),
+                                       lambda e: vlabs.get(e, ""))
+        return data
+
+    def _profile_get(self, rentry, ent, e, n, progress=None, cancelled=None):
+        """(z, values) of profile entry ent of run entry rentry, or why not (a
+        string): its outputs not computed yet are computed here."""
+        run, F = self.open_run(rentry["path"])
+        r = ent["recipe"]
+        if r["field"] not in F:
+            return f"this run has no {r['field']}"
+        if F[r["field"]].ndim != 3:
+            return "profiles need a 3D field"
+        ts = fg.profile_times(run, ent)
+        if not ts:
+            return f"no output at {float(ent['time_s']) / 60:g} min in this run"
+        fx = self.run_fixes(rentry, run)
+        track = r["region"] == "track"
+        if track and not fx:
+            return "no storm track for this run (Runs tab)"
+        centers = ser.track_centers(fx, len(run.times)) if track else None
+        sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                for t, f in fx.items())) if track else ""
+        key = (run.path, json.dumps(r, sort_keys=True), sig)  # (as _series_get's)
+        ds = self._ser_mem.get(key)
+        if ds is None:
+            d = F[r["field"]]
+            ds = ser.cached(run, r, d.label, d.units, centers)
+            self._ser_mem[key] = ds
+        todo = [t for t in ts if not ds["computed"].values[t]]
+        skipped = {}
+        if todo:
+            if progress:
+                progress(e, n)
+            storm = ({t: fg.storm_motion(run, fx, t) for t in todo}
+                     if F[r["field"]].storm else None)
+            _, skipped = ser.compute(run, F, r, ds, centers, storm, cancelled=cancelled,
+                                     times=todo)
+        z, v, used = fg.profile_values(ds, ts)
+        if not used:
+            why = next(iter(skipped.values()), "not computed")
+            return f"no profile: {why}"
+        return z, v
 
     # ------------------------------------------------------------ start from series / soundings
     def from_series(self):

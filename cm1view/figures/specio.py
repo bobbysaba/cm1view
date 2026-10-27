@@ -158,6 +158,12 @@ class FigureSpecIO:
                 if k in dd:
                     wdg.value = (None if dd[k] in (None, "") else float(dd[k])) \
                         if isinstance(wdg, pn.widgets.FloatInput) else dd[k]
+            for opts, ws in ((s.get("prof", {}), self.po), (s.get("joint", {}), self.jo),
+                             (s.get("azim", {}), self.ao)):
+                for k, wdg in ws.items():
+                    if k in opts:
+                        wdg.value = (None if opts[k] in (None, "") else float(opts[k])) \
+                            if isinstance(wdg, pn.widgets.FloatInput) else opts[k]
             ck = s.get("contour_key", {})
             self.ck_on.value, self.ck_label.value = ck.get("on", False), ck.get("label", "w")
             self.ck_x.value, self.ck_y.value = float(ck.get("x", 0.01)), float(ck.get("y", 0.01))
@@ -189,10 +195,16 @@ class FigureSpecIO:
             self.ser_cards = [self._ser_card(e) for e in s.get("series", [])]
             self.snd_cards = [self._snd_card(e) for e in s.get("soundings", [])]
             self.dist_cards = [self._dist_card(e) for e in s.get("dists", [])]
+            self.prof_cards = [self._prof_card(e) for e in s.get("profiles", [])]
+            self.joint_cards = [self._joint_card(e) for e in s.get("joints", [])]
+            self.azim_cards = [self._azim_card(e) for e in s.get("azims", [])]
             self.ann_rows = [self._ann_row(a) for a in s.get("annotations", [])]
             self._show_series()
             self._show_soundings()
             self._show_dists()
+            self._show_profiles()
+            self._show_joints()
+            self._show_azims()
             self._show_anns()
         finally:
             self._hold = False
@@ -325,6 +337,21 @@ class FigureSpecIO:
         for k, v in (("alpha", 0.35), ("lw", 1.5)):  # (not blank-able)
             if s["dist"][k] is None:
                 s["dist"][k] = v
+        s["profiles"] = [c.collect() for c in self.prof_cards]
+        s["prof"] = dict(s.get("prof", {}), **{
+            k: _num(w.value) if isinstance(w, pn.widgets.FloatInput) else w.value
+            for k, w in self.po.items()})
+        s["joints"] = [c.collect() for c in self.joint_cards]
+        s["joint"] = dict(s.get("joint", {}), **{
+            k: _num(w.value) if isinstance(w, pn.widgets.FloatInput) else w.value
+            for k, w in self.jo.items()})
+        for k, v in (("ms", 2.0), ("alpha", 0.5), ("lw", 1.2)):  # (not blank-able)
+            if s["joint"][k] is None:
+                s["joint"][k] = v
+        s["azims"] = [c.collect() for c in self.azim_cards]
+        s["azim"] = dict(s.get("azim", {}), **{
+            k: _num(w.value) if isinstance(w, pn.widgets.FloatInput) else w.value
+            for k, w in self.ao.items()})
         s["annotations"] = [r.collect() for r in self.ann_rows]
         s["ts"] = dict(s.get("ts", {}), tmin=minutes(self.ts_tmin), tmax=minutes(self.ts_tmax),
                        zmin=float(self.ts_zmin.value or 0.0),

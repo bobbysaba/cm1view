@@ -52,7 +52,7 @@ VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
         "Each panel: own run & time": "custom"}
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
-              "track": "Storm track", "line": "Section line"}
+              "track": "Storm track", "line": "Section line", "sector": "Sector"}
 REDUCE = {"One time (off)": "", "Maximum (swath)": "max", "Minimum": "min", "Mean": "mean",
           "Sum": "sum", "Storm-following mean (composite)": "composite"}
 GRIDS = {"Say so (ask)": "ask", "Interpolate onto this layer's grid": "interp",
@@ -262,6 +262,9 @@ def _dark(color):
 SER_REGIONS = {"Around tracked storm": "track", "Whole domain": "domain",
                "Fixed box (map view)": "box"}
 SER_REDUCE = {"Maximum": "max", "Minimum": "min", "Mean": "mean", "Percentile": "pct"}
+AZ_REFS = {"Storm motion (0: ahead, 90: right)": "motion", "Grid north (0: north, 90: east)":
+           "north"}
+AZ_CENTERS = {"Tracked storm (offset, km)": "track", "Point (model x, y km)": "point"}
 SER_OPS = {"Value": "", "d/dz (per m)": "ddz", "d/dt (per s)": "ddt"}
 MARKERS = {"none": "", "dots": "o", "squares": "s", "triangles": "^"}
 SND_LAYOUTS = {"Skew-T with a hodograph inset": "inset",

@@ -7,7 +7,10 @@ at fixed heights or vertical cross-sections, over the whole domain, a fixed box,
 window centred on the tracked storm.  Other kinds of panels: time-height plots and
 time series of reduced fields (the Series tab's recipes, spec["series"]), soundings
 (skew-T + hodograph, spec["soundings"]), and distributions of a field over a region at
-one time (histogram, box, violin or cumulative, spec["dists"]).  Panels can come from
+one time (histogram, box, violin or cumulative, spec["dists"]), vertical profiles
+of a field reduced over a region at each level (spec["profiles"]), joint
+distributions of two fields at the same points (spec["joints"]), and azimuthal means
+of a field in radius and height around the storm or a point (spec["azims"]).  Panels can come from
 different runs (e.g. tornadic vs non-tornadic): spec["runs"] lists the runs with a
 label and a storm track each, and panels refer to them by index, with times in model
 seconds so they match across runs.

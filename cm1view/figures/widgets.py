@@ -12,7 +12,8 @@ from . import draw as figdraw
 from ..viewer.picker import RunPicker
 from .cards import (
     ANN_KINDS, DIST_BAR_LABELS, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS,
-    DIST_STATS_AT, DIST_WHIS, LOCS, MARK_EXTREMES, SIZE_PRESETS, SND_LAYOUTS, STORM_MOTIONS,
+    DIST_STATS_AT, DIST_WHIS, FIG_CMAPS, JOINT_PLOTS, LOCS, MARK_EXTREMES, SIZE_PRESETS,
+    SND_LAYOUTS, STORM_MOTIONS,
     TYPE_LABEL, VARY, _auto, _checks, _chk, _f, _grid, _hint, _row, _section,
 )
 from .times import _tlabel
@@ -33,7 +34,9 @@ class FigureWidgets:
         self.kind = pn.widgets.Select(name="Panels show", options={
             "Plan views": "plan", "Vertical cross-sections": "xsec",
             "Time–height (series)": "th", "Time series": "line", "Soundings": "sounding",
-            "Distributions": "dist"})
+            "Distributions": "dist", "Vertical profiles": "profile",
+            "Joint distributions (x vs y)": "joint",
+            "Azimuthal means (radius–height)": "azim"})
         self.vary = pn.widgets.Select(name="Panels differ in", options=VARY)
         self.run_sel = pn.widgets.Select(name="Run", options={})
         self.runs_as = pn.widgets.Select(name="Runs are", options={
@@ -115,7 +118,7 @@ class FigureWidgets:
         self.runs_msg = pn.pane.HTML(sizing_mode="stretch_width")
 
     def _build_layer_widgets(self):
-        """Layers tab: series, soundings, distributions and time axes."""
+        """Layers tab: series, soundings, distributions, profiles and time axes."""
         # ---- Layers
         self.layer_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.add_btns = {k: pn.widgets.Button(name=f"+ {TYPE_LABEL[k]}", height=30,
@@ -281,6 +284,111 @@ class FigureWidgets:
             _section("Statistics", _grid((ds["stats"], 3), ds["stats_at"], ds["stats_loc"]),
                      _hint("From every value of each distribution (not only those in the "
                            "bins). Bar labels (histograms): percent of the whole sample.")),
+            sizing_mode="stretch_width", margin=0)
+        # vertical profiles
+        po = self.po = dict(
+            xmin=_auto("Values from"), xmax=_auto("Values to"),
+            zmin=_auto("Bottom (km)", description="Blank: the profiles' layer"),
+            zmax=_auto("Top (km)", description="Blank: the profiles' layer"),
+            legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
+            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
+            legend=_chk("Legend", True), legend_frame=_chk("Legend frame", False),
+            zero_line=_chk("Zero line", False))
+        po_shows = ("legend", "legend_frame", "zero_line")
+        self.prof_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.prof_tab = pn.widgets.Button(name="+ The Series tool's layer series", height=32,
+                                          button_type="primary", button_style="outline")
+        self.prof_new = pn.widgets.Button(name="+ Profile", button_type="light",
+                                          button_style="outline", height=32)
+        self.prof_col = pn.Column(
+            _hint("Profiles with the same <b>Panel</b> number share a panel (colour = "
+                  "profile, or run): e.g. two runs, or one run at two times."),
+            _row(self.prof_tab, self.prof_new), self.prof_box,
+            _section("Plot", _grid(*[w for k, w in po.items() if k not in po_shows]),
+                     _checks(*[po[k] for k in po_shows]),
+                     _hint("Values from / to and Bottom / Top: the axes' ranges (blank: the "
+                           "data's values and the profiles' layer).")),
+            sizing_mode="stretch_width", margin=0)
+        # joint distributions
+        jo = self.jo = dict(
+            plot=pn.widgets.Select(name="Draw as", options=JOINT_PLOTS),
+            norm=pn.widgets.Select(name="Histogram of", options=DIST_NORMS,
+                                   description="PDF: the whole sample integrates to 1; "
+                                               "fraction: of the whole sample per bin"),
+            bins=pn.widgets.IntInput(name="Bins (each axis)", value=60, start=2, end=200,
+                                     width=90),
+            cmap=pn.widgets.Select(name="Colours", options=FIG_CMAPS, value="viridis"),
+            pcts=pn.widgets.TextInput(name="Contours enclosing (%)", value="50, 90",
+                                      description="Each contour encloses this percentage "
+                                                  "of the pairs, densest first"),
+            ms=_f("Dot size", 2.0, step=0.5, start=0.5),
+            alpha=_f("Dot opacity", 0.5, step=0.05, start=0.05, end=1.0),
+            lw=_f("Line width", 1.2, step=0.25, start=0.25),
+            xmin=_auto("x from"), xmax=_auto("x to"), ymin=_auto("y from"), ymax=_auto("y to"),
+            stats=pn.widgets.MultiChoice(
+                name="Statistics of each (blank: none)", value=["n", "r"],
+                options={v: k for k, v in figdraw.JOINT_STATS.items()}),
+            stats_loc=pn.widgets.Select(name="Box at", options=LOCS, value="upper left"),
+            legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
+            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
+            log=_chk("Log colours", True), reverse=_chk("Reverse colours", False),
+            colorbar=_chk("Colorbar", True), contours=_chk("Contours over", False),
+            contour_labels=_chk("Contour labels", True), fit=_chk("Fit line", False),
+            one_one=_chk("1:1 line", False), zero_line=_chk("Zero lines", False),
+            legend=_chk("Legend", True), legend_frame=_chk("Legend frame", False))
+        jo_shows = ("log", "reverse", "colorbar", "contours", "contour_labels", "fit",
+                    "one_one", "zero_line", "legend", "legend_frame")
+        self.joint_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.joint_new = pn.widgets.Button(name="+ Joint distribution", button_type="light",
+                                           button_style="outline", height=32)
+        self.joint_col = pn.Column(
+            _hint("Joint distributions with the same <b>Panel</b> number share a panel "
+                  "(colour = joint distribution, or run): e.g. two runs, or two times."),
+            _row(self.joint_new), self.joint_box,
+            _section("Plot", _grid(*[w for k, w in jo.items()
+                                     if k not in jo_shows + ("stats", "stats_loc")]),
+                     _checks(*[jo[k] for k in jo_shows]),
+                     _hint("2D histogram: the panel's first joint distribution as shading "
+                           "(the others as density contours in their colours). Scatter: "
+                           "a random 5,000 pairs of each. x / y from / to: the axes and the "
+                           "bins' range (blank: the data's). The bins come from a 200 × 200 "
+                           "histogram of every pair, so changing them reads nothing again.")),
+            _section("Statistics", _grid((jo["stats"], 3), jo["stats_loc"]),
+                     _hint("From every pair: n, the Pearson correlation r (and r²), the "
+                           "least-squares fit of y on x, and the means.")),
+            sizing_mode="stretch_width", margin=0)
+        # azimuthal means
+        ao = self.ao = dict(
+            plot=pn.widgets.Select(name="Shade as", options={"Grid cells": "mesh",
+                                                             "Filled contours": "filled"}),
+            cmap=pn.widgets.Select(name="Colours", options={"The field's": ""} | {
+                c: c for c in FIG_CMAPS}, value=""),
+            nlevels=pn.widgets.IntInput(name="Colour steps", value=15, start=2, end=60,
+                                        width=90),
+            vmin=_auto("Colours from"), vmax=_auto("Colours to"),
+            cbar_label=pn.widgets.TextInput(name="Colorbar label (blank: the field's)",
+                                            value=""),
+            rmin=_auto("Radius from (km)"), rmax=_auto("Radius to (km)"),
+            zmin=_auto("Bottom (km)"), zmax=_auto("Top (km)"),
+            legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
+            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
+            reverse=_chk("Reverse colours", False), colorbar=_chk("Colorbar", True),
+            clabels=_chk("Contour labels", True), legend=_chk("Legend", True),
+            legend_frame=_chk("Legend frame", False))
+        ao_shows = ("reverse", "colorbar", "clabels", "legend", "legend_frame")
+        self.azim_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.azim_new = pn.widgets.Button(name="+ Azimuthal mean", button_type="light",
+                                          button_style="outline", height=32)
+        self.azim_col = pn.Column(
+            _hint("Azimuthal means with the same <b>Panel</b> number share a panel: the "
+                  "first is shaded, the others drawn over it as contour lines (e.g. w "
+                  "shaded with θ′ contours, or one run's against another's)."),
+            _row(self.azim_new), self.azim_box,
+            _section("Plot", _grid(*[w for k, w in ao.items() if k not in ao_shows]),
+                     _checks(*[ao[k] for k in ao_shows]),
+                     _hint("Colours from / to: blank for the data's range (about 0 for a "
+                           "diverging field). Radius and Bottom / Top: the axes' ranges "
+                           "(blank: the bins' and layer's).")),
             sizing_mode="stretch_width", margin=0)
         # time axes of time-height / time-series panels
         self.ts_tmin = pn.widgets.TextInput(name="From (min)", placeholder="data")

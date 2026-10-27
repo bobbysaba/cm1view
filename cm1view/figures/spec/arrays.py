@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 
-from ...core import render, series as ser, swath, vectors
+from ...core import azim, render, series as ser, swath, vectors
 from .. import draw as figdraw
 from ...core.run import FileBusy, MissingAtTime
 from .base import panel_ref, tindex, storm_motion
@@ -142,6 +142,11 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
                 out["line"] = np.array([xa - ox, ya - oy, xb - ox, yb - oy])
                 if float(spec["xsec"].get("avg") or 0.0) > 0:  # (the strip it averages)
                     out["line_w"] = float(spec["xsec"]["avg"])
+        elif lay["type"] == "sector":  # (the track's centre; the wedge itself: drawn)
+            m = storm_motion(run, fixes, t)
+            c = ser.track_centers(fixes or {}, len(run.times)).get(t)  # (not the view's)
+            out["sector"] = np.array([np.nan, np.nan, azim.bearing(*m)]) if c is None \
+                else np.array([c[0] - ox, c[1] - oy, azim.bearing(*m)])
 
 
 def reduce_layer(run, F, lay, t, fixes=None, progress=None):

@@ -261,9 +261,13 @@ class FigurePanelOpts:
         self.ext_sec.visible = kind in ("plan", "xsec", "th")
         self.snd_col.visible = kind == "sounding"
         self.dist_col.visible = kind == "dist"
+        self.prof_col.visible = kind == "profile"
+        self.joint_col.visible = kind == "joint"
+        self.azim_col.visible = kind == "azim"
         self._show_dist_opts()
+        self._show_joint_opts()
         self.equal.visible = kind == "plan"
-        for k in ("track", "line"):  # plan views only
+        for k in ("track", "line", "sector"):  # plan views only
             self.add_btns[k].visible = kind == "plan"
         for c in self.cards:
             c.show(kind)
@@ -284,6 +288,15 @@ class FigurePanelOpts:
         for k in ("legend", "legend_loc", "legend_ncol", "legend_frame"):
             ds[k].visible = not boxy
         ds["stats_loc"].visible = ds["stats_at"].value == "box"
+
+    def _show_joint_opts(self):
+        """The joint distribution plot settings the chosen kind of plot uses."""
+        jo, plot = self.jo, self.jo["plot"].value
+        hist, scatter = plot == "hist", plot == "scatter"
+        for k in ("norm", "cmap", "log", "reverse", "colorbar"):
+            jo[k].visible = hist
+        jo["ms"].visible = jo["alpha"].visible = scatter
+        jo["contours"].visible = plot != "contour"
 
     def _show_legend(self):
         """The legend settings the chosen place (a panel's axes or the figure) uses."""
@@ -344,7 +357,8 @@ class FigurePanelOpts:
                 return 1.0
             return abs(y1 - y0) / max(abs(x1 - x0), 1e-6)
         return {"xsec": 0.5, "th": 0.55, "line": 0.45, "sounding": 1.0,
-                "dist": 0.7}.get(s["kind"], 0.75)
+                "dist": 0.7, "profile": 1.3, "joint": 0.85,
+                "azim": 0.8}.get(s["kind"], 0.75)
 
     def fit_height(self, s=None):
         """A figure height (in) that fits the panels at the figure's width: their shape
@@ -401,6 +415,12 @@ class FigurePanelOpts:
                 elif kind == "dist":
                     self.xlabel.value = self.ylabel.value = ""  # (the field's, the plot's)
                     self.cb_mode.value = "none"
+                elif kind == "profile":
+                    self.xlabel.value, self.ylabel.value = "", "height (km)"  # (x: the field's)
+                    self.cb_mode.value = "none"
+                elif kind in ("joint", "azim"):  # (the fields' / radius, height; the
+                    self.xlabel.value = self.ylabel.value = ""  # panel's own colorbar)
+                    self.cb_mode.value = "none"
                 else:
                     self.xlabel.value, self.ylabel.value = "temperature (°C)", "pressure (hPa)"
                     self.cb_mode.value = "none"
@@ -414,9 +434,20 @@ class FigurePanelOpts:
                 self.dist_cards = [self._dist_card(e) for e in self.tab_dists()]
                 if not self.dist_cards:
                     self._add_dist()
+            if kind == "profile" and not self.prof_cards:
+                self.prof_cards = [self._prof_card(e) for e in self.tab_profiles()]
+                if not self.prof_cards:
+                    self._add_profile()
+            if kind == "joint" and not self.joint_cards:
+                self._add_joint()
+            if kind == "azim" and not self.azim_cards:
+                self._add_azim()
             self._show_series()
             self._show_soundings()
             self._show_dists()
+            self._show_profiles()
+            self._show_joints()
+            self._show_azims()
             self._auto_size = True
             if kind == "th":
                 self._th_grid()

@@ -42,6 +42,18 @@ def _setup(ed, how):
     elif how == "dist":
         ed.from_dists()
         ed.ds["plot"].value = "violin"
+    elif how == "profile":  # (max w near the storm, at two times)
+        ed.kind.value = "profile"
+        e = dict(ed.prof_cards[0].collect(), time_s=float(ed.run.times[2]))
+        ed.prof_cards.append(ed._prof_card(e))
+    elif how == "joint":  # (zvort against w at 1 km, as a 2D histogram with contours)
+        ed.kind.value = "joint"
+        ed.jo["contours"].value = ed.jo["fit"].value = True
+    elif how == "azim":  # (w around the storm, with its maximum in the front-right as lines)
+        ed.kind.value = "azim"
+        r = dict(ed.azim_cards[0].collect()["recipe"], op="max", az0=0.0, az1=90.0)
+        e = dict(ed.azim_cards[0].collect(), recipe=r, levels="2, 6, 10")
+        ed.azim_cards.append(ed._azim_card(e))
     elif how == "difference":
         difference_layer(ed)
     elif how == "swath":
@@ -55,7 +67,8 @@ def _setup(ed, how):
 
 
 @pytest.mark.parametrize("how", ["plan", "xsec", "th", "line", "sounding", "dist",
-                                 "difference", "swath", "dark", "parts"])
+                                 "profile", "joint", "azim", "difference", "swath", "dark",
+                                 "parts"])
 def test_figure_matches_its_baseline(ed, tmp_path, request, how):
     from matplotlib.testing.compare import compare_images
     _setup(ed, how)
@@ -71,7 +84,8 @@ def test_figure_matches_its_baseline(ed, tmp_path, request, how):
     assert err is None, err
 
 
-@pytest.mark.parametrize("how", ["plan", "xsec", "th", "line", "sounding", "dist", "parts"])
+@pytest.mark.parametrize("how", ["plan", "xsec", "th", "line", "sounding", "dist",
+                                 "profile", "joint", "azim", "parts"])
 def test_saved_figure_reopens_and_draws_the_same(ed, tmp_path, how):
     import matplotlib.image as mi
     _setup(ed, how)

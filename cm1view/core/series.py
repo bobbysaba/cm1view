@@ -401,11 +401,12 @@ def store(run, recipe, ds):
 
 # ------------------------------------------------------------------ compute
 def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancelled=None,
-            workers=None):
-    """Fill the not-yet-computed times of `ds` (from cached()).  centers: {t: (x, y)}
-    for track regions; storm: {t: (u, v)} ground-relative storm motion for
-    storm-relative fields.  on_result(ds, done, total) after each time.  Returns
-    (ds, {t: reason}) for times that could not be computed."""
+            workers=None, times=None):
+    """Fill the not-yet-computed times of `ds` (from cached()), or of those among
+    `times` (output indices; None: every time).  centers: {t: (x, y)} for track
+    regions; storm: {t: (u, v)} ground-relative storm motion for storm-relative
+    fields.  on_result(ds, done, total) after each time.  Returns (ds, {t: reason}) for
+    times that could not be computed."""
     from concurrent.futures import ProcessPoolExecutor, as_completed
     import multiprocessing as mp
 
@@ -423,7 +424,7 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
     weights = run.level_weights(recipe["z"]) if vmode == "height" else None
     ks = levels(run, recipe) if vmode == "layer" else None
     t_done = ds["computed"].values
-    for t in range(len(run.times)):
+    for t in range(len(run.times)) if times is None else sorted(set(times)):
         if t_done[t]:
             continue
         reg = region_at(run, recipe, centers.get(t))

@@ -10,6 +10,7 @@ from functools import partial
 
 import numpy as np
 import panel as pn
+from bokeh.events import Tap
 from bokeh.models import ColumnDataSource, HoverTool
 from bokeh.plotting import figure
 
@@ -129,6 +130,7 @@ class TrackPanel:
         fig.scatter("tmin", "value", source=self.trk_ts_now, size=11, fill_alpha=0,
                     line_color="#fbbf24", line_width=2.5)
         fig.select_one(HoverTool).tooltips = [("t", "@hms"), ("value", "@value{0.000}")]
+        fig.on_event(Tap, self._on_ser_tap)  # click: show that time
         self.trk_fig = fig
         # shown once there are tracked values (a loaded track may have none: an all-NaN
         # plot is an empty box)

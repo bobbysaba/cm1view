@@ -14,7 +14,9 @@ from . import draw as figdraw, spec as fg
 from .cards import _auto, _chk, _grid, _hint, _num, _section
 
 KIND_NAMES = {"plan": "plan views", "xsec": "cross-sections", "th": "time–height",
-              "line": "time series", "sounding": "soundings", "dist": "distributions"}
+              "line": "time series", "sounding": "soundings", "dist": "distributions",
+              "profile": "profiles", "joint": "joint distributions",
+              "azim": "azimuthal means"}
 
 
 class FigureCombo:

@@ -257,6 +257,8 @@ def _v1_panel(spec, i):
 
 
 LEGEND_OPTS = {"line": ("ts", ("legend",)), "dist": ("dist", ("legend",)),
+               "profile": ("prof", ("legend",)), "joint": ("joint", ("legend",)),
+               "azim": ("azim", ("legend",)),
                "sounding": ("skewt", ("legend", "hodo_key"))}
 
 
@@ -290,7 +292,8 @@ def _local_entries(spec, i, d):
     if kind not in ENTRIES:
         return d
     key, count = {"line": ("S", "nlines"), "sounding": ("N", "nsnd"),
-                  "dist": ("D", "ndist")}[kind]
+                  "dist": ("D", "ndist"), "profile": ("P", "nprof"),
+                  "joint": ("J", "njoint"), "azim": ("A", "nazim")}[kind]
     mine = [e for e, ent in enumerate(spec.get(ENTRIES[kind], []))
             if int(ent.get("panel", 0)) == i]
     where = {e: n for n, e in enumerate(mine)}
@@ -315,7 +318,8 @@ def panel_view(spec, p, bv=None):
     """The settings panel p is drawn with: its block's (bv: block_view), then its own
     (p["opts"]; a group of settings, such as "skewt", merged into the block's), with
     its kind and layers where version 1 kept them (soundings and the series of a
-    time-series panel and distributions under "soundings", "series" and "dists")."""
+    time-series panel, distributions, profiles, joint distributions and azimuthal
+    means under "soundings", "series", "dists", "profiles", "joints" and "azims")."""
     v = dict(block_view(spec, int(p.get("block", 0))) if bv is None else bv)
     for k, val in (p.get("opts") or {}).items():  # (a group of settings: merged)
         v[k] = dict(v[k], **val) if isinstance(val, dict) and isinstance(v.get(k), dict) \

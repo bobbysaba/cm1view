@@ -9,9 +9,9 @@ from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, panel_letter, time_text,
                    _fs, _cell, rc, anchor_kw, font_size, run_code, run_color, layer_color)
 from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text,
                  LEGEND_OPTS)
-from .layers import (_fill, _contour, _shade, _vectors, extend_of, union_extend, _extends,
-                     _ticks, _colorbars, _cbar_style, _contour_key)
-from .lines import _lines, _dists
+from .layers import (_fill, _contour, _shade, _vectors, sector_outline, extend_of,
+                     union_extend, _extends, _ticks, _colorbars, _cbar_style, _contour_key)
+from .lines import _lines, _dists, _profiles, _joints, _azims
 from .sounding import _sounding, shared_hodo_half
 
 
@@ -306,6 +306,12 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
         ax = _sounding(fig, ax, d, spec, fs)
     elif kind == "dist":
         _dists(ax, d, spec, fs)
+    elif kind == "profile":
+        _profiles(ax, d, spec, fs)
+    elif kind == "joint":
+        _joints(ax, d, spec, fs)
+    elif kind == "azim":
+        _azims(ax, d, spec, fs)
     else:
         xsec = kind == "xsec"
         x, y = d["x"], d["y"]
@@ -334,6 +340,11 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                         lw=float(lay.get("lw", 1.0)), ls=lay.get("ls", "-"))
                 if lay.get("marker", True) and "now_x" in d:
                     ax.plot(d["now_x"], d["now_y"], marker="o", ms=4, color=col)
+            elif t == "sector" and "sector" in d and not xsec:
+                xy = sector_outline(d, lay)
+                if xy is not None:
+                    ax.plot(*xy, color=lay.get("color", "k"), lw=float(lay.get("lw", 1.5)),
+                            ls=lay.get("ls", "-"))
             elif t == "line" and "line" in d:
                 xa, ya, xb, yb = d["line"]
                 ax.plot([xa, xb], [ya, yb], color=lay.get("color", "k"),
@@ -354,7 +365,7 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                     ax.text(px, py + off, txt, fontsize=fs * 1.1,
                             weight="bold", color=lay.get("color", "k"), ha="center",
                             va="bottom", clip_on=True)
-            if lay.get("legend") and t in ("contour", "shade", "track", "line"):
+            if lay.get("legend") and t in ("contour", "shade", "track", "line", "sector"):
                 legend[lay["legend"]] = (
                     Patch(facecolor="none" if lay.get("hatch") else lay.get("color", "magenta"),
                           alpha=float(lay.get("alpha", 0.6)), hatch=lay.get("hatch") or None,
@@ -440,9 +451,10 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
     if kind == "plan" and ax_opts.get("equal", True):
         ax.set_aspect("equal")
     if not getattr(ax, "_cv_hodo", False):  # (a hodograph panel labels its rings)
-        if ax_opts.get("xlabel") or kind != "dist":  # distributions: the field's
-            ax.set_xlabel(ax_opts.get("xlabel", ""))
-        if ax_opts.get("ylabel") or kind not in ("line", "dist"):  # (time series: units)
+        if ax_opts.get("xlabel") or kind not in ("dist", "profile", "joint", "azim"):
+            ax.set_xlabel(ax_opts.get("xlabel", ""))  # (dist, ...: the field's)
+        if ax_opts.get("ylabel") or kind not in ("line", "dist", "joint", "azim"):
+            ax.set_ylabel(ax_opts.get("ylabel", ""))  # (time series: units)
             ax.set_ylabel(ax_opts.get("ylabel", ""))
     if title:
         ax.set_title(title, weight="bold" if ax_opts.get("title_bold", True)

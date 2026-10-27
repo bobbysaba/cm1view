@@ -172,14 +172,19 @@ class FigureTree:
         mine = [e for e in ents if int(e.get("panel", 0)) == i]
         what = "; ".join(str(e.get("label") or "") or self._entry_name(e, n) for n, e in
                          enumerate(mine[:3])) + (f" +{len(mine) - 3}" if len(mine) > 3 else "")
-        head = {"line": "Time series", "sounding": "Sounding", "dist": "Distribution"}[kind]
+        head = {"line": "Time series", "sounding": "Sounding", "dist": "Distribution",
+                "profile": "Profile", "joint": "Joint", "azim": "Azimuthal"}[kind]
         return f"{letter}  {head} — {what or 'nothing yet'}{tail}{mark}", True
 
     def _entry_name(self, e, n):
-        """A line, sounding or distribution without a label of its own: its field
-        (distributions), else its number."""
-        f = (e.get("recipe") or {}).get("field") if "where" not in e else None
-        return self.fields[f].label if f in self.fields else f"#{n + 1}"
+        """A line, sounding, distribution, profile or joint distribution without a
+        label of its own: its field (distributions, profiles; joint distributions: y vs
+        x), else its number."""
+        r = (e.get("recipe") or {}) if "where" not in e else {}
+        f, F = r.get("field"), self.fields
+        if f in F and r.get("yfield") in F:
+            return f"{F[r['yfield']].label} vs {F[f].label}"
+        return F[f].label if f in F else f"#{n + 1}"
 
     def _layer_name(self, lay):
         t = lay["type"]
@@ -494,16 +499,19 @@ class FigureTree:
                       "keeps this one as well (and is not gathered unless listed).")]
 
     def _tree_entries(self, s, i):
-        """A time-series, sounding, distribution or time-height panel: what it draws
-        (set in the Layers tab, where each line, sounding and distribution has its own
-        run, time and panel)."""
+        """A time-series, sounding, distribution, profile, joint distribution or
+        time-height panel: what it draws (set in the Layers tab, where each line,
+        sounding, distribution, profile and joint distribution has its own run, time and
+        panel)."""
         kind = s["kind"]
         if kind == "th":
             return [_hint("A time-height panel draws its series (<b>Layers</b>): its run "
                           "and series follow from its place in the grid.")]
         ents = s.get(figdraw.ENTRIES[kind]) or []
         mine = [(n, e) for n, e in enumerate(ents) if int(e.get("panel", 0)) == i]
-        what = {"line": "line", "sounding": "sounding", "dist": "distribution"}[kind]
+        what = {"line": "line", "sounding": "sounding", "dist": "distribution",
+                "profile": "profile", "joint": "joint distribution",
+                "azim": "azimuthal mean"}[kind]
         names = {k: n for n, k in self._run_names().items()}
         rows = []
         for n, ent in mine:
@@ -511,10 +519,16 @@ class FigureTree:
                 runs = ent.get("runs")
                 src = "every run" if runs is None else ", ".join(
                     names.get(int(k), str(k)) for k in runs) or "no run"
+            elif kind in ("profile", "joint", "azim"):  # (joint: the window's pairs, no mean)
+                when = fg.profile_when(ent)
+                src = f"{names.get(int(ent.get('run', 0)), '')} · " + \
+                    (when.replace(" mean", "") if kind == "joint" else when)
             else:
                 src = (f"{names.get(int(ent.get('run', 0)), '')} · "
                        f"{float(ent.get('time_s', 0)) / 60:g} min")
-            name = ent.get("label") or (self._entry_name(ent, n) if kind == "dist" else what)
+            name = ent.get("label") or (self._entry_name(ent, n)
+                                        if kind in ("dist", "profile", "joint", "azim")
+                                        else what)
             rows.append(f"<li><b>{n + 1}.</b> {name} — {src}</li>")
         go = pn.widgets.Button(name=f"Edit the {what}s (Layers)", button_type="default",
                                button_style="outline")

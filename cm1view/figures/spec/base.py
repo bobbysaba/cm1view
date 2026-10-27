@@ -2,6 +2,7 @@
 
 import json
 import os
+import warnings
 
 import numpy as np
 
@@ -39,6 +40,10 @@ def layer_defaults(kind, F, field=None, z=1.0):
                     marker=True, legend="")
     if kind == "line":
         return dict(type="line", on=True, color="k", lw=2.0, labels="X, X′", legend="")
+    if kind == "sector":  # (as an azimuthal mean's: azimuths clockwise from the motion)
+        return dict(type="sector", on=True, color="k", lw=1.5, ls="-", az0=0.0, az1=360.0,
+                    rmax=20.0, ref="motion", center="track", offx=0.0, offy=0.0, cx=0.0,
+                    cy=0.0, legend="")
     raise ValueError(kind)
 
 
@@ -132,6 +137,20 @@ def default_spec(run, F, t=0):
                             legend_frame=False, stats=[],
                             stats_at="legend", stats_loc="upper right", bar_labels="",
                             zero_line=False),
+        profiles=[], prof=dict(xmin=None, xmax=None, zmin=None, zmax=None, zero_line=False,
+                               legend=True, legend_loc="best", legend_ncol=1,
+                               legend_frame=False),
+        joints=[], joint=dict(plot="hist", norm="count", bins=60, log=True, cmap="viridis",
+                              reverse=False, colorbar=True, ms=2.0, alpha=0.5, lw=1.2,
+                              contours=False, pcts="50, 90", contour_labels=True, fit=False,
+                              one_one=False, zero_line=False, xmin=None, xmax=None,
+                              ymin=None, ymax=None, stats=["n", "r"], stats_loc="upper left",
+                              legend=True, legend_loc="best", legend_ncol=1,
+                              legend_frame=False),
+        azims=[], azim=dict(plot="mesh", cmap="", reverse=False, nlevels=15, vmin=None,
+                            vmax=None, cbar_label="", colorbar=True, clabels=True, rmin=None,
+                            rmax=None, zmin=None, zmax=None, legend=True, legend_loc="best",
+                            legend_ncol=1, legend_frame=False),
         contour_key=dict(on=False, layer=-1, label="w", x=0.01, y=0.01, size=0.1, fs=10.0,
                          r0=0.35, step=0.15, yoffset=0.06, frame=True),
         annotations=[], code=dict(on=False, text=""),
@@ -191,7 +210,7 @@ def merge_group(d, dd, js, layers):
             d[f"L{j}_cx"], d[f"L{j}_cy"] = dd["x"], dd["y"]
         t = layers[j]["type"]
         keys = ("track_x", "track_y", "now_x", "now_y") if t == "track" else \
-            ("line",) if t == "line" else ()
+            ("line",) if t == "line" else ("sector",) if t == "sector" else ()
         for key in keys:
             if key in dd:
                 d[key] = dd[key]
@@ -231,6 +250,69 @@ def subtract(d, dd, j, grid="ask"):
     out = dict(d)
     out[f"L{j}"] = np.asarray(a - b, dtype=np.float32)
     return out
+
+
+ENS_STATS = ("mean", "median", "sd", "min", "max", "range", "prob")
+
+
+def ens_refs(spec, i, lay):
+    """[(run index, time s)] that fill layer `lay` of panel i is an ensemble of: its
+    "ens" runs (None: every run of the figure) at the layer's time (itself the
+    panel's when unset)."""
+    ref, e = panel_ref(spec, i), lay.get("ens") or {}
+    ts = ref[1] if lay.get("time_s") is None else float(lay["time_s"])
+    nr = len(spec.get("runs") or [])
+    ks = range(nr) if e.get("runs") is None else [int(k) for k in e["runs"] if int(k) < nr]
+    return [(k, ts) for k in dict.fromkeys(ks)]
+
+
+def ensemble(d, dds, j, ens):
+    """Panel arrays d with layer j replaced by a statistic over the same layer read
+    from each run of an ensemble (dds, one per run; a missing one is left out): ens
+    {stat: mean, median, sd, min, max, range (max - min) or prob (% of the members
+    above, or with above False below, threshold), threshold, above, grid}.  Members
+    on another grid than layer j's: interpolated onto it with grid "interp", else
+    the panel is left blank with a note (as a difference).  L<j>_ens: the number of
+    members."""
+    if d.get("missing") or f"L{j}" not in d:
+        return d
+    ax, ay = d.get(f"L{j}_cx", d["x"]), d.get(f"L{j}_cy", d["y"])
+    shape, grid = np.shape(d[f"L{j}"]), ens.get("grid", "ask")
+    stack = []
+    for dd in dds:
+        if dd.get("missing") or f"L{j}" not in dd:
+            continue
+        b = np.asarray(dd[f"L{j}"], dtype=float)
+        if not (b.shape == shape and _same(ax, dd["x"]) and _same(ay, dd["y"])):
+            if grid != "interp":
+                return dict(d, missing="ensemble not drawn: the runs' grids differ" + (
+                    "" if grid == "refuse" else " (choose Interpolate or Refuse under the "
+                                                "layer's Ensemble)"))
+            b = regrid(b, dd["x"], dd["y"], ax, ay)
+        stack.append(b)
+    if not stack:
+        return dict(d, missing="ensemble: no run has output at this time")
+    V = np.stack(stack)
+    ok = np.isfinite(V)
+    have = ok.any(axis=0)
+    stat = ens.get("stat", "mean")
+    with np.errstate(invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # (all-NaN cells: NaN)
+        if stat == "prob":
+            thr = float(ens.get("threshold") or 0.0)
+            hit = (V > thr) if ens.get("above", True) else (V < thr)
+            out = 100.0 * (hit & ok).sum(axis=0) / np.maximum(ok.sum(axis=0), 1)
+        elif stat == "sd":
+            out = np.nanstd(V, axis=0)
+        elif stat == "median":
+            out = np.nanmedian(V, axis=0)
+        elif stat in ("min", "max", "range"):
+            lo, hi = np.nanmin(V, axis=0), np.nanmax(V, axis=0)
+            out = {"min": lo, "max": hi}.get(stat, hi - lo)
+        else:
+            out = np.nanmean(V, axis=0)
+    out = np.where(have, out, np.nan)
+    return dict(d, **{f"L{j}": np.asarray(out, dtype=np.float32), f"L{j}_ens": len(stack)})
 
 
 def _same(u, v):
@@ -296,8 +378,11 @@ def shift_times(spec, dt_s):
         s["time_s"] = float(s["time_s"]) + dt_s
     for p in s.get("panels") or []:
         p["time_s"] = float(p["time_s"]) + dt_s
-    for e in (s.get("soundings") or []) + (s.get("dists") or []):
+    for e in [e for key in ("soundings", "dists", "profiles", "joints", "azims")
+              for e in s.get(key) or []]:
         e["time_s"] = float(e["time_s"]) + dt_s
+        if e.get("time_s1") is not None:
+            e["time_s1"] = float(e["time_s1"]) + dt_s
     for e in (s.get("edits") or {}).values():  # (panels and layers with their own time)
         if e.get("time_s") is not None:
             e["time_s"] = float(e["time_s"]) + dt_s
@@ -316,7 +401,8 @@ def animated(spec):
 
 def time_refs(spec):
     """(run path, model time s) of every panel that steps in an animation: plan views
-    and sections (all parts of a figure of parts), soundings and distributions."""
+    and sections (all parts of a figure of parts), soundings, distributions, profiles,
+    joint distributions and azimuthal means."""
     out = []
     for p in spec["parts"] if spec.get("kind") == "combo" else [spec]:
         runs = p.get("runs") or []
@@ -329,7 +415,7 @@ def time_refs(spec):
                 lays = figdraw.spec_layers(p, i)
                 out += [(runs[k]["path"], ts) for (k, ts), js in layer_groups(p, i).items()
                         if not all(lays[j].get("time_lock") for j in js)]
-        elif p["kind"] in ("sounding", "dist"):
+        elif p["kind"] in ("sounding", "dist", "profile", "joint", "azim"):
             out += [(runs[int(e.get("run", 0))]["path"], float(e["time_s"]))
                     for e in p.get(figdraw.ENTRIES[p["kind"]]) or []
                     if int(e.get("run", 0)) < len(runs)]

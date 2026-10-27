@@ -20,13 +20,15 @@ def template(spec, name=""):
         p.pop("runs", None)
         p["run"] = 0
         p["panels"] = [q for q in p.get("panels") or [] if int(q.get("run", 0)) == 0]
-        for key in ("soundings", "dists"):
+        for key in ("soundings", "dists", "profiles", "joints", "azims"):
             p[key] = [e for e in p.get(key) or [] if int(e.get("run", 0)) == 0]
         for e in p.get("series") or []:
             e["runs"] = None
         for lay in p.get("layers") or []:
             if (lay.get("minus") or {}).get("run") not in (None, 0):
                 lay.pop("minus")
+            if lay.get("ens"):  # (an ensemble: of the new figure's runs)
+                lay["ens"] = dict(lay["ens"], runs=None)
         for e in (p.get("edits") or {}).values():
             for lay in [e] + list((e.get("layers") or {}).values()) + list(e.get("extra") or []):
                 if lay.get("run") not in (None, 0):
@@ -55,8 +57,12 @@ def from_template(tpl, run, t):
         p["time_s"] = near(p.get("time_s", tt[t]))
         p["times"] = [None if ts is None else tindex(run, ts) for ts in p["times_s"]]
         p["time"] = tindex(run, p["time_s"])
-        for e in (p.get("panels") or []) + (p.get("soundings") or []) + (p.get("dists") or []):
+        for e in (p.get("panels") or []) + (p.get("soundings") or []) + \
+                (p.get("dists") or []) + (p.get("profiles") or []) + (p.get("joints") or []) + \
+                (p.get("azims") or []):
             e["time_s"] = near(e["time_s"])
+            if e.get("time_s1") is not None:
+                e["time_s1"] = near(e["time_s1"])
         for e in (p.get("edits") or {}).values():
             for lay in [e] + list((e.get("layers") or {}).values()) + list(e.get("extra") or []):
                 if lay.get("time_s") is not None and not lay.get("time_lock"):
@@ -137,7 +143,7 @@ def apply_style(spec, name):
 # what copy_look leaves: where a layer's data come from, and (between fields) its
 # values and names
 _OWN = ("type", "on", "field", "mode", "z", "spacing", "zspacing", "frame", "reduce",
-        "vector", "minus", "panels", "run", "time_s", "time_lock")
+        "vector", "minus", "ens", "panels", "run", "time_s", "time_lock")
 _OF_FIELD = ("units", "vmin", "vmax", "levels", "threshold", "mask_below", "cbar_label",
              "cbar_ticks", "legend", "label", "ticks")
 

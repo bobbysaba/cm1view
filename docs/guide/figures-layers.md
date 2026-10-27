@@ -16,6 +16,7 @@ On plan views and cross-sections the layer types are
 | **Vectors** | Arrows, wind barbs (plan views; in knots or m/s: half barb 5, full 10, flag 50) or streamlines of the wind, horizontal vorticity or baroclinic generation ([The map](map.md#vectors)). |
 | **Storm track** | The run's track (needs a track). |
 | **Section line** | The A–B line of a section, on a plan view (dashed edges: the strip a strip-averaged section averages). |
+| **Sector** | The sector of an [azimuthal mean](figures-panels.md#azimuthal-means) on a plan view: azimuths clockwise from the storm's motion or north, out to a radius, around the track (with an offset) or a fixed point, at each panel's time. |
 
 Time–height and time-series figures have **Series** layers; sounding figures have
 **Soundings** layers and distribution figures **Distributions** ([Figure
@@ -31,6 +32,19 @@ field at another run and/or time (blank: the layer's own) and switches to a red�
 colormap centred on 0. When the two grids differ the panel says so; pick *Interpolate
 onto this layer's grid* or *Refuse* under *If the grids differ*. A fixed *Minus time* stays
 put in animations.
+
+## Ensembles
+
+A fill can be an **ensemble** of several runs. *Ensemble: a statistic over several runs*
+reads the same field from each run in its *Runs* list (blank: every run of the figure) at
+the layer's time and combines them cell by cell: the **mean**, **median**, **spread**
+(standard deviation), **min**, **max**, **range** (max − min) or the **probability of
+exceeding** a *Threshold* (the percentage of the runs above it, or below it with *Where the
+value is: Below*). Each statistic starts with fitting colours (a probability 0–100 % in
+blues, blank at 0; a spread or range from 0); the colorbar says which statistic it is.
+Runs without output at the layer's time are left out. Runs on other grids are
+interpolated onto the panel's run's grid with *Interpolate* under *If the grids differ*
+(as a difference). An ensemble is not also a difference; the layer's own *Run* is not used.
 
 ## Time windows
 

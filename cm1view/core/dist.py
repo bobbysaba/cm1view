@@ -62,9 +62,8 @@ def describe(recipe, label="", units=""):
     return f"{name}{where}{keep}, {reg}"
 
 
-def sample(run, F, recipe, t, storm=None, center=None):
-    """The finite values (float32, 1D) of a recipe at output t.  storm: storm motion of
-    storm-relative fields; center: (x, y) km of the tracked storm (track regions).
+def region(run, recipe, center=None):
+    """series.region_at of a recipe's region: (i0, i1, j0, j1, mask or None, centre).
     Raises ValueError when the region is empty or off the domain."""
     r = recipe
     reg = ser.region_at(run, dict(r, offset=r.get("offset") or (0.0, 0.0),
@@ -72,15 +71,29 @@ def sample(run, F, recipe, t, storm=None, center=None):
     if reg is None:
         raise ValueError("no track position at this time" if r["region"] == "track"
                          and center is None else "the region is empty")
+    return reg
+
+
+def values(run, F, recipe, field, t, storm, reg):
+    """Every value (1D, not filtered) of `field` at output t in region reg (region())
+    at the recipe's height, layer or whole depth; storm: as sample()."""
+    r = recipe
     i0, i1, j0, j1, mask, _ = reg
-    d = F[r["field"]]
+    d = F[field]
     if d.ndim == 2 or r["vmode"] in ("height", "2d"):
         a = F.plane(d.name, t, "height", float(r.get("z") or 0.0), storm=storm)[j0:j1, i0:i1]
-        a = a[mask] if mask is not None else a.ravel()
-    else:
-        ks = ser.levels(run, r) if r["vmode"] == "layer" else [0, len(run.z) - 1]
-        a = F.volume(d.name, t, storm=storm)[ks[0]:ks[-1] + 1, j0:j1, i0:i1]
-        a = a[:, mask].ravel() if mask is not None else a.ravel()
+        return a[mask] if mask is not None else a.ravel()
+    ks = ser.levels(run, r) if r["vmode"] == "layer" else [0, len(run.z) - 1]
+    a = F.volume(d.name, t, storm=storm)[ks[0]:ks[-1] + 1, j0:j1, i0:i1]
+    return a[:, mask].ravel() if mask is not None else a.ravel()
+
+
+def sample(run, F, recipe, t, storm=None, center=None):
+    """The finite values (float32, 1D) of a recipe at output t.  storm: storm motion of
+    storm-relative fields; center: (x, y) km of the tracked storm (track regions).
+    Raises ValueError when the region is empty or off the domain."""
+    r = recipe
+    a = values(run, F, r, r["field"], t, storm, region(run, r, center))
     keep = np.isfinite(a)
     if r.get("lo") is not None:
         keep &= a >= r["lo"]

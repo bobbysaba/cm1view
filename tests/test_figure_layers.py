@@ -1,5 +1,6 @@
-"""Figure layers: distributions, differences, time windows / swaths, style presets and
-copying a layer's look."""
+"""Figure layers: distributions, vertical profiles, joint distributions, azimuthal means
+and the Sector layer, differences,
+time windows / swaths, style presets and copying a layer's look."""
 import numpy as np
 import pytest
 
@@ -99,6 +100,183 @@ def test_distribution_spec_upgrades_to_panels(ed):
     figdraw.draw(s, data)
     ed._tree_sync(force=True)
     assert ed.tree_list.objects[0].name.startswith("a  Distribution")
+
+
+# ------------------------------------------------------------------ vertical profiles
+def test_profile_figure_computes_only_its_times(ed):
+    import json
+    from cm1view.figures import spec as fg
+    ed.kind.value = "profile"  # (no layer series in the Series tool: a new one)
+    assert len(ed.prof_cards) == 1 and ed.prof_col.visible
+    r = dict(ed.prof_cards[0].collect()["recipe"], region="domain", reduce="pct",
+             pct=97.5, z1=9.0)  # (a recipe no other test has cached)
+    t = ed.run.times
+    one = fg.profile_defaults(r, 0, float(t[3]))
+    win = dict(fg.profile_defaults(r, 0, float(t[1])), time_s1=float(t[3]), ls="--")
+    ed.prof_cards = [ed._prof_card(one), ed._prof_card(win)]
+    ed.po["zmax"].value, ed.po["zero_line"].value = 8.0, True
+    spec, data, fig = render(ed)
+    d = data[0]
+    assert d["nprof"] == 2 and not d.get("missing") and "time_s" not in d
+    assert d["P0_z"].size > 3 and np.isfinite(d["P0_v"]).all()
+    assert "min mean" in str(d["P1_label"]) and spec["profiles"][1]["time_s1"] == float(t[3])
+    ax = fig.axes[0]
+    assert ax.get_ylabel() == "height (km)" and "(" in ax.get_xlabel()  # (field, units)
+    assert ax.get_ylim()[1] == 8.0 and ax.get_legend() is not None
+    assert ax.get_lines()[1].get_linestyle() == "--"
+    # the window's last profile is the one-time profile: the mean is not it
+    assert not np.allclose(d["P0_v"], d["P1_v"])
+    key = next(k for k in ed._ser_mem if json.loads(k[1]).get("pct") == 97.5)
+    ds = ed._ser_mem[key]
+    assert int(ds["computed"].sum()) == 3  # (outputs 1-3 only, not every time)
+    s = ed.collect()  # (reopened: the same cards)
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert [c.collect() for c in ed.prof_cards] == s["profiles"]
+    assert ed.collect()["prof"]["zmax"] == 8.0
+
+
+def test_profile_spec_upgrades_to_panels(ed):
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.kind.value = "profile"
+    e = dict(ed.prof_cards[0].collect(), panel=1)
+    ed.prof_cards.append(ed._prof_card(e))
+    ed._fit_grid(reset=True)
+    s = ed.collect()
+    assert fg.npanels(s) == 2
+    data = ed.panel_data(s)
+    v2, d2 = figdraw.upgrade(s, data)
+    assert [p["kind"] for p in v2["panels"]] == ["profile", "profile"]
+    assert int(d2[1]["P0_e"]) == 0  # (counted within its panel)
+    figdraw.draw(s, data)
+    ed._tree_sync(force=True)
+    assert ed.tree_list.objects[0].name.startswith("a  Profile")
+
+
+# ------------------------------------------------------------------ joint distributions
+@pytest.mark.parametrize("plot", ["hist", "scatter", "contour"])
+def test_joint_figure_draws_each_plot(ed, plot):
+    import json
+    from cm1view.figures import spec as fg
+    ed.kind.value = "joint"  # (no distribution on the map: zvort against w at 1 km)
+    assert len(ed.joint_cards) == 1 and ed.joint_col.visible
+    r = ed.joint_cards[0].collect()["recipe"]
+    assert (r["field"], r["yfield"]) == ("winterp", "zvort")
+    t = ed.run.times
+    one = fg.joint_defaults(r, 0, float(t[2]))
+    win = dict(fg.joint_defaults(r, 0, float(t[1])), time_s1=float(t[2]))
+    ed.joint_cards = [ed._joint_card(one), ed._joint_card(win)]
+    ed.jo["plot"].value = plot
+    ed.jo["stats"].value = ["n", "r", "fit"]
+    ed.jo["fit"].value = ed.jo["contours"].value = True
+    spec, data, fig = render(ed)
+    d = data[0]
+    assert d["njoint"] == 2 and not d.get("missing") and "time_s" not in d
+    n0, n1 = float(d["J0_s"][0]), float(d["J1_s"][0])
+    assert n1 > n0 > 0 and int(d["J0_h"].sum()) == n0  # (the window: two outputs' pairs)
+    assert -1.0 <= float(d["J0_s"][5]) <= 1.0 and d["J0_p"].shape[0] == 2
+    assert "min" in str(d["J1_label"]) and "mean" not in str(d["J1_label"])
+    ax = fig.axes[0]
+    assert "(" in ax.get_xlabel() and "(" in ax.get_ylabel()  # (fields, units)
+    assert len(fig.axes) == (2 if plot == "hist" else 1)  # (the colorbar)
+    assert ax.get_legend() is not None
+    s = ed.collect()  # (reopened: the same cards and settings)
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert [c.collect() for c in ed.joint_cards] == s["joints"]
+    assert ed.collect()["joint"]["plot"] == plot
+    assert ed.collect()["joint"]["stats"] == ["n", "r", "fit"]
+
+
+def test_joint_spec_upgrades_to_panels(ed):
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.kind.value = "joint"
+    e = dict(ed.joint_cards[0].collect(), panel=1)
+    ed.joint_cards.append(ed._joint_card(e))
+    ed._fit_grid(reset=True)
+    s = ed.collect()
+    assert fg.npanels(s) == 2
+    data = ed.panel_data(s)
+    v2, d2 = figdraw.upgrade(s, data)
+    assert [p["kind"] for p in v2["panels"]] == ["joint", "joint"]
+    assert int(d2[1]["J0_e"]) == 0  # (counted within its panel)
+    figdraw.draw(s, data)
+    ed._tree_sync(force=True)
+    assert ed.tree_list.objects[0].name.startswith("a  Joint")
+
+
+# ------------------------------------------------------------------ azimuthal means
+def test_azim_figure_shades_the_first_and_contours_the_rest(ed):
+    import json
+    from cm1view.figures import spec as fg
+    ed.kind.value = "azim"  # (w around the tracked storm, the whole ring to 20 km)
+    assert len(ed.azim_cards) == 1 and ed.azim_col.visible
+    r = ed.azim_cards[0].collect()["recipe"]
+    assert (r["field"], r["center"], r["rmax"], r["op"]) == ("winterp", "track", 20.0, "mean")
+    t = ed.run.times
+    ks = sorted(ed.run_fixes(ed.collect()["runs"][0], ed.run))  # (outputs with a centre)
+    one = fg.azim_defaults(dict(r, z1=8.0), 0, float(t[ks[3]]))
+    over = dict(fg.azim_defaults(dict(r, op="max", az0=0.0, az1=90.0, dr=2.0), 0,
+                                 float(t[ks[2]])), time_s1=float(t[ks[3]]), levels="5, 10",
+                color="#ff0000")
+    ed.azim_cards = [ed._azim_card(one), ed._azim_card(over)]
+    ed.ao["plot"].value, ed.ao["zmax"].value = "filled", 6.0
+    spec, data, fig = render(ed)
+    d = data[0]
+    assert d["nazim"] == 2 and not d.get("missing") and "time_s" not in d
+    assert d["A0_v"].shape == (d["A0_z"].size, d["A0_x"].size) == (d["A0_z"].size, 40)
+    assert d["A1_x"].size == 10 and np.isfinite(d["A0_v"]).any()
+    assert "min" in str(d["A1_label"]) and "0–90°" in str(d["A1_label"])
+    assert str(d["A0_cm"]) and "(" in str(d["A0_cl"])  # (the field's colours, units)
+    ax = fig.axes[0]
+    assert ax.get_xlabel() == "Radius (km)" and ax.get_ylabel() == "Height (km)"
+    assert len(fig.axes) == 2 and ax.get_ylim()[1] == 6.0  # (the colorbar)
+    assert ax.get_legend() is not None
+    s = ed.collect()  # (reopened: the same cards and settings)
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert [c.collect() for c in ed.azim_cards] == s["azims"]
+    assert ed.collect()["azim"]["plot"] == "filled" and ed.collect()["azim"]["zmax"] == 6.0
+
+
+def test_azim_spec_upgrades_to_panels(ed):
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.kind.value = "azim"
+    e = dict(ed.azim_cards[0].collect(), panel=1)
+    ed.azim_cards.append(ed._azim_card(e))
+    ed._fit_grid(reset=True)
+    s = ed.collect()
+    assert fg.npanels(s) == 2
+    data = ed.panel_data(s)
+    v2, d2 = figdraw.upgrade(s, data)
+    assert [p["kind"] for p in v2["panels"]] == ["azim", "azim"]
+    assert int(d2[1]["A0_e"]) == 0  # (counted within its panel)
+    figdraw.draw(s, data)
+    ed._tree_sync(force=True)
+    assert ed.tree_list.objects[0].name.startswith("a  Azimuthal")
+
+
+def test_sector_layer_on_plan_views(ed):
+    import json
+    assert ed.kind.value == "plan" and ed.add_btns["sector"].visible
+    ed._add_layer("sector")
+    c = ed.cards[-1]
+    assert c.type == "sector" and not c.w["cx"].visible
+    c.w["az0"].value, c.w["az1"].value, c.w["rmax"].value = 0.0, 90.0, 10.0
+    c.w["color"].value = "#ff0000"
+    from cm1view.figures import draw as figdraw
+    spec = ed.collect()  # (drawn at a tracked time: the wedge sits on the track's centre)
+    ks = sorted(ed.run_fixes(spec["runs"][0], ed.run))
+    spec.setdefault("edits", {})["0"] = dict(time_s=float(ed.run.times[ks[0]]))
+    data = ed.panel_data(spec)
+    fig = figdraw.draw(spec, data)
+    d = next(d for d in data.values() if not d.get("missing"))
+    assert d["sector"].shape == (3,) and np.isfinite(d["sector"]).all()
+    lay = spec["layers"][-1]
+    assert (lay["type"], lay["az1"], lay["rmax"]) == ("sector", 90.0, 10.0)
+    assert any(ln.get_color() == "#ff0000" for ln in fig.axes[0].get_lines())
+    s = ed.collect()
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert ed.collect()["layers"][-1] == s["layers"][-1]
+    ed.kind.value = "dist"
+    assert not ed.add_btns["sector"].visible
 
 
 def test_difference_layer(ed):
@@ -337,3 +515,39 @@ def test_reopening_notes_a_changed_namelist(tmp_path):
     assert fg.changed_runs(spec) == []
     (tmp_path / "namelist.input").write_text("&param1\n dx = 500.0\n/\n")
     assert fg.changed_runs(spec) == [str(tmp_path)]
+
+
+def test_ensemble_statistics_and_band():
+    from cm1view.figures import spec as fg
+    from cm1view.figures.draw import ens_label
+    x, y = np.arange(4.0), np.arange(3.0)
+    a, b = np.ones((3, 4)), 3 * np.ones((3, 4))
+    b[0, 0] = np.nan
+    d = dict(x=x, y=y, L0=a)
+    dds = [dict(x=x, y=y, L0=a), dict(x=x, y=y, L0=b), dict(missing="no output")]
+    want = dict(mean=2.0, median=2.0, sd=1.0, min=1.0, max=3.0, range=2.0, prob=50.0)
+    for st, v in want.items():
+        r = fg.ensemble(d, dds, 0, dict(stat=st, threshold=2.0))
+        assert r["L0_ens"] == 2 and r["L0"][1, 1] == v
+        assert r["L0"][0, 0] == (0.0 if st in ("sd", "range") else 1.0 if st != "prob"
+                                 else 0.0)  # (one member there)
+    assert fg.ensemble(d, dds, 0, dict(stat="prob", threshold=2.0, above=False))["L0"][1, 1] \
+        == 50.0
+    moved = dict(x=x + 0.5, y=y, L0=a)
+    assert "choose" in fg.ensemble(d, [moved], 0, {})["missing"]
+    r = fg.ensemble(d, [moved], 0, dict(grid="interp"))
+    assert np.isnan(r["L0"][0, 0]) and r["L0"][0, 1] == 1.0
+    assert "no run" in fg.ensemble(d, [dict(missing="x")], 0, {})["missing"]
+    assert ens_label(dict(stat="prob", threshold=30.0), "m/s") == "probability > 30 m/s (%)"
+    assert ens_label(dict(stat="sd"), "K") == "ensemble spread (sd) (K)"
+    spec = dict(kind="plan", runs=[{}, {}, {}], panels=[dict(run=1, time_s=60.0)],
+                vary="custom", rows=1, cols=1)
+    assert fg.ens_refs(spec, 0, dict(ens=dict(runs=[2, 0, 7]))) == [(2, 60.0), (0, 60.0)]
+    assert fg.ens_refs(spec, 0, dict(ens={}, time_s=30.0)) == [(0, 30.0), (1, 30.0),
+                                                               (2, 30.0)]
+    t = np.arange(10.0)
+    T, c, lo, hi = fg.ensemble_band([(t, t), (t[2:], 2 * t[2:])], "minmax", "mean")
+    assert T[0] == 2.0 and c[0] == 3.0 and (lo[0], hi[0]) == (2.0, 4.0)
+    T, c, lo, hi = fg.ensemble_band([(t, t), (t, 3 * t)], "sd", "")
+    assert np.isnan(c).all() and np.allclose(hi - lo, 2 * t)
+    assert fg.ensemble_band([(t, t)]) is None

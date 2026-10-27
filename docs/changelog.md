@@ -16,6 +16,32 @@ has a matching git tag.
 - **Strip-averaged cross-sections**: *Average across* (km) averages the sections within
   a strip along the line; a *Section line* layer shows the strip.
 - Reopening a saved figure says when a run's `namelist.input` changed since it was saved.
+- **Vertical profile panels**: a field's maximum, minimum, mean or percentile over the
+  domain, a box or around the storm, against height, one line per run and time (or the
+  mean over a time window); computed like a layer series and cached with them
+  ([Panels](guide/figures-panels.md#vertical-profiles)).
+- **Joint distribution panels**: one field against another at the same points (at a
+  height, over a layer or the whole depth, in the domain, a box or around the storm, at
+  one time or over a time window), as a 2D histogram, a scatter or density contours
+  enclosing chosen percentages, with a fit line and n, r, r², fit and means in a box
+  ([Panels](guide/figures-panels.md#joint-distributions)).
+- **Azimuthal mean panels**: a field's mean, maximum or minimum in radius bins against
+  height around the tracked storm or a fixed point, within a sector of azimuths
+  (clockwise from the storm's motion or from north), at one time or as a
+  storm-following composite over a time window; the first in a panel shaded, the others
+  as contour lines ([Panels](guide/figures-panels.md#azimuthal-means)). A **Sector**
+  layer outlines the sector on plan views.
+- **Ensemble bands** on time-series panels: a series over several runs as its mean or
+  median and a shaded min–max, 10–90 %, 25–75 % or ±1 sd range, the runs faint or hidden
+  ([Panels](guide/figures-panels.md#time-series)).
+- **Ensemble fills**: a fill layer as the mean, median, spread, min, max, range or
+  probability of exceeding a threshold over several runs
+  ([Layers](guide/figures-layers.md#ensembles)).
+
+### The viewer
+
+- **Linked clicks**: clicking the track's time series shows that time; clicking the
+  time–height plot also moves the map to the clicked height.
 
 ## 0.4.0 (2026-10-26)
 

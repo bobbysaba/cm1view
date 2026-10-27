@@ -345,3 +345,60 @@ def test_time_height_grid_grows_with_a_series_run(ed, demo_root):
     assert (ed.rows.value, ed.cols.value) == (len(ed.ser_cards), 2)
     from cm1view.figures import draw as figdraw
     assert figdraw.series_ref(ed.collect(), 1) == (1, 0)
+
+
+def test_ensemble_band_of_a_series_over_runs(ed, demo_root):
+    import os
+    from matplotlib.collections import PolyCollection
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    ed.from_series()
+    ed.kind.value = "line"
+    c = ed.ser_cards[0]
+    assert not c.w["ens_mid"].visible
+    c.w["ens"].value = "minmax"
+    assert c.w["ens_mid"].visible and c.collect()["ens"] == "minmax"
+    ed.panel_data(ed.collect())
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    spec, data, fig = render(ed)
+    d = data[0]
+    j = next(j for j in range(d["nlines"]) if f"S{j}_ens" in d)
+    assert d[f"S{j}_ens"] == 2 and d[f"S{j}_r"] == -1 and "2 runs" in d[f"S{j}_label"]
+    ok = np.isfinite(d[f"S{j}_v"])
+    assert ok.any() and np.all(d[f"S{j}_lo"][ok] <= d[f"S{j}_v"][ok] + 1e-6)
+    assert np.all(d[f"S{j}_v"][ok] <= d[f"S{j}_hi"][ok] + 1e-6)
+    assert sum(f"S{n}_mem" in d for n in range(d["nlines"])) == 2
+    assert any(isinstance(x, PolyCollection) for x in fig.axes[0].collections)
+    c.w["ens_members"].value = "hidden"  # (the band and its centre alone)
+    spec, data, fig = render(ed)
+    assert data[0]["nlines"] == 1 and "S0_ens" in data[0]
+
+
+def test_ensemble_fill_layer_over_runs(ed, demo_root):
+    import os
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    c = next(c for c in ed.cards if c.type == "fill")
+    c.w["ens_on"].value = True
+    c.w["ens_grid"].value = "interp"
+    lay = c.collect()
+    assert lay["ens"] == dict(runs=None, stat="mean", threshold=0.0, above=True, grid="interp")
+    assert "minus" not in lay and not c.w["minus_on"].visible and not c.w["run"].visible
+    assert ed._runs_used() == {0, 1}
+    spec, data, fig = render(ed)
+    j = next(j for j, x in enumerate(spec["layers"]) if x.get("ens"))
+    assert all(d[f"L{j}_ens"] == 2 for d in data.values() if not d.get("missing"))
+    assert any("ensemble mean" in a.get_ylabel() + a.get_xlabel() for a in fig.axes)
+    c.w["ens_stat"].value = "prob"  # (a probability: 0-100 %)
+    c.w["ens_thr"].value = 1.0
+    lay = c.collect()
+    assert (lay["cmap"], lay["vmin"], lay["vmax"]) == ("Blues", 0.0, 100.0)
+    spec, data, fig = render(ed)
+    v = np.concatenate([d[f"L{j}"][np.isfinite(d[f"L{j}"])].ravel() for d in data.values()
+                        if not d.get("missing")])
+    assert v.min() >= 0 and v.max() <= 100 and set(np.unique(v)) <= {0.0, 50.0, 100.0}
+    c.w["ens_runs"].value = [1]
+    ed._remove_run(ed.run_rows[0])  # (run 1 becomes 0)
+    assert c.collect()["ens"]["runs"] == [0]
+    c.w["ens_on"].value = False
+    assert "ens" not in c.collect()
