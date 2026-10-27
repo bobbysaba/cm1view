@@ -97,12 +97,14 @@ def summarize(x, y, seed=0):
                 py=np.asarray(y[pick], dtype=np.float32))
 
 
-def compute(run, F, recipe, ts, storm=None, centers=None):
+def compute(run, F, recipe, ts, storm=None, centers=None, cancelled=None):
     """summarize() of the pairs of a recipe at the outputs ts, together.  storm: {t:
     storm motion}; centers: {t: (x, y)} (track regions).  Raises ValueError as
-    sample() (at any of the times)."""
+    sample() (at any of the times); None when cancelled() turns true before a time."""
     xs, ys = [], []
     for t in ts:
+        if cancelled and cancelled():
+            return None
         a, b = sample(run, F, recipe, t, (storm or {}).get(t), (centers or {}).get(t))
         xs.append(a)
         ys.append(b)

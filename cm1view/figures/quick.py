@@ -16,6 +16,7 @@ MAPS = ("plan", "xsec")  # (the kinds with a fill field, a grid and panels that 
 
 class FigureQuick:
     _started = False  # a figure has been made (here, from the viewer, or loaded)
+    _quick_xsec = False  # (making sections: no cards from the plan views' grid)
 
     def _build_quick(self):
         self.qs_kind = pn.widgets.Select(name="Panels show", options=dict(self.kind.options),
@@ -86,17 +87,17 @@ class FigureQuick:
     def _quick_show(self):
         kind, vary = self.qs_kind.value, self.qs_vary.value
         maps = kind in MAPS
-        for w in (self.qs_vary, self.qs_field):
-            w.visible = maps
-        self.qs_rows.visible = self.qs_cols.visible = kind != "th"  # (th: series × runs)
-        bad = "sections" if kind != "xsec" else "heights"
-        self.qs_vary.options = {k: v for k, v in QUICK_VARY.items() if v != bad}
+        self.qs_field.visible = maps
+        self.qs_vary.visible = kind == "plan"  # (sections: a card per panel)
+        self.qs_rows.visible = self.qs_cols.visible = kind != "th"  # (th: its cards')
         note = {
-            "th": "Time–height panels: one per run and series (Panels → Grid and size → "
-                  "Runs are: rows or columns).  It starts with no series, so nothing is "
-                  "computed until you add one in Layers → Series.",
+            "th": "Time–height panels: a series card per panel (Layers → Series: its "
+                  "run and panel), like the section cards; click a card's <b>One per "
+                  "run</b> for runs × series.  It starts with no series, so nothing is "
+                  "computed until you add one.",
             "line": "Time series: it starts with no series, so nothing is computed until "
-                    "you add one in Layers → Series (each with its panel number).",
+                    "you add one in Layers → Series (each card with its run, or all runs, "
+                    "and its panel number).",
             "sounding": "The Sounding tab's soundings go one per panel (more soundings "
                         "than panels: they wrap and share panels); panels left over start "
                         "as a copy of the last, to change in Layers → Soundings.",
@@ -110,13 +111,17 @@ class FigureQuick:
                      "shown time, to change in Layers → Joint distributions.",
             "azim": "Every panel starts with w around the tracked storm (else the middle "
                     "of the map's view) at the shown time, the whole ring out to 20 km, to "
-                    "change in Layers → Azimuthal means."}.get(kind) or (maps and {
+                    "change in Layers → Azimuthal means.",
+            "xsec": "A section card per panel (Layers → Sections), alternately x–z and "
+                    "y–z (through the storm when it is tracked) at the shown time: set "
+                    "each card's run, time "
+                    "and section there.  For runs × sections, keep one row of cards and "
+                    "click each one's <b>One per run</b>."}.get(kind) or (maps and {
             "fields": "Every panel starts with this fill: pick each panel's field in "
                       "Panels → Time and fields.",
             "heights": "Pick each panel's height in Panels → Time and heights.",
-            "sections": "A panel per section: add and set them in Panels → Sections.",
             "runs": "A panel per run: add runs in Panels → Runs, times.  For a grid such "
-                    "as runs × sections, set Panels → Grid and size → Rows are / "
+                    "as runs × times, set Panels → Grid and size → Rows are / "
                     "Columns are.",
             "none": "Every panel is alike: change one in the panel tree (its run, time, "
                     "height …)."}.get(vary)) or ""
@@ -144,25 +149,38 @@ class FigureQuick:
         live, self.auto.value = self.auto.value, False  # (one render: one undo step)
         try:
             self.set_parts(s)
-            self.kind.value = kind  # (its own labels, colorbar and series / sounding cards)
-            if kind in MAPS:
+            self._quick_xsec = True  # (_quick_spread makes the section cards, once)
+            try:
+                self.kind.value = kind  # (its own labels, colorbar and cards)
+            finally:
+                self._quick_xsec = False
+            if kind == "plan":
                 self.g_rows.value, self.g_cols.value = "none", vary
             if kind != "th":
                 self.rows.value = int(self.qs_rows.value)
                 self.cols.value = int(self.qs_cols.value)
-            if kind in ("sounding", "dist", "profile", "joint", "azim"):
+            if kind in ("sounding", "dist", "profile", "joint", "azim", "xsec"):
                 self._quick_spread(kind)
             if self.qs_size.value:
                 self.size_preset.value = self.qs_size.value
         finally:
             self.auto.value = live
-        self.request(delay=False)
+        self.request()  # (shortly: the dialog closes and the editor shows first)
 
     def _quick_spread(self, kind):
         """Sounding / distribution / profile / joint distribution / azimuthal mean cards
         one per panel of the grid: more cards than panels wrap (sharing panels), panels left over get a copy
         of the last card."""
         n = int(self.rows.value or 1) * int(self.cols.value or 1)
+        if kind == "xsec":  # (x–z, y–z, x–z ... at the shown time; no track: fixed)
+            track = bool(self.v.fixes) or any(r.get("track") for r in self._runs_collect())
+            e = fg.section_defaults(run=self._own_index(), time_s=self._shown_s(),
+                                    pos="storm" if track else "fixed")
+            self.sec_cards = self._sec_cards([dict(e, orient="xy"[i % 2], panel=i)
+                                              for i in range(n)])
+            self._show_sections()
+            self._build_titles()
+            return
         cards = {"sounding": self.snd_cards, "dist": self.dist_cards,
                  "profile": self.prof_cards, "joint": self.joint_cards,
                  "azim": self.azim_cards}[kind]

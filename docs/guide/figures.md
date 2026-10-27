@@ -33,7 +33,7 @@ A figure can start from
 | Setting | Meaning |
 |---|---|
 | **Panels show** | *Plan views*, *Vertical cross-sections*, *Time–height (series)*, *Time series*, *Soundings* or *Distributions*. |
-| **Panels differ in** | (Plan views and cross-sections.) *Time*, *Field*, *Height* (plan views), *Section* (cross-sections), *Run*, or *Nothing*; the panels fill the grid row by row. For a grid of two (e.g. runs × sections) set *Panels → Grid and size → Rows are / Columns are*. |
+| **Panels differ in** | (Plan views.) *Time*, *Field*, *Height*, *Run*, or *Nothing*; the panels fill the grid row by row. For a grid of two (e.g. runs × times) set *Panels → Grid and size → Rows are / Columns are*. Cross-sections start with a section card per panel, x–z and y–z in turn (*Layers → Sections*). |
 | **Colour fill** | The field every panel starts with. |
 | **Rows**, **Columns** | The grid, up to 8 × 8. |
 | **Width** | A size preset: 3.25 in (one journal column), 5 in, 6.5 in (full page width), 7.5 in, a 13.3 × 7.5 in slide, or custom. Default 8 in. |

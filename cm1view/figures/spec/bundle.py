@@ -49,15 +49,19 @@ def save_kw(spec, dpi=None):
 
 
 def bundle_paths(spec, base):
-    """{image, script, data, spec, draw} for a bundle saved as `base`: the image and
-    script side by side, the arrays, spec and drawing code in _src/ next to them."""
+    """{image, script, data, spec, draw} for a bundle saved as `base`: the image, the
+    script in scripts/ next to it, the arrays, spec and drawing code in _src/ (`base`
+    may be the image or the script)."""
     base = _abs(base)
     root, ext = os.path.splitext(base)
-    if ext.lower() in (".png", ".pdf", ".svg", ".eps", ".tif", ".tiff", ".jpg"):
+    if ext.lower() in (".png", ".pdf", ".svg", ".eps", ".tif", ".tiff", ".jpg", ".py"):
         base = root
+    if ext.lower() == ".py" and os.path.basename(os.path.dirname(base)) == "scripts":
+        base = os.path.join(os.path.dirname(os.path.dirname(base)), os.path.basename(base))
     fmt = spec.get("export", {}).get("format", "png")
-    src, name = os.path.join(os.path.dirname(base), "_src"), os.path.basename(base)
-    return dict(image=f"{base}.{fmt}", script=f"{base}.py",
+    d, name = os.path.dirname(base), os.path.basename(base)
+    src = os.path.join(d, "_src")
+    return dict(image=f"{base}.{fmt}", script=os.path.join(d, "scripts", f"{name}.py"),
                 data=os.path.join(src, f"{name}_data.npz"),
                 spec=os.path.join(src, f"{name}_spec.json"),
                 draw=os.path.join(src, f"{name}_draw.py"))
@@ -123,14 +127,15 @@ def changed_runs(spec):
 
 
 def save_bundle(spec, data, base, run=None, note=""):
-    """Image + script side by side, data, spec and drawing code in _src/ (see
+    """Image, script in scripts/, data, spec and drawing code in _src/ (see
     bundle_paths).  Returns the paths.  The spec is saved as version 2 (every panel
     written out) with the editor's settings that made it under "form" (load_spec opens
     those); the script draws the version-2 spec with the drawing code."""
     out = bundle_paths(spec, base)
     form = dict(spec, made_with=made_with(spec))
     v2, data = figdraw.upgrade(form, data)
-    os.makedirs(os.path.dirname(out["data"]), exist_ok=True)
+    for d in (out["data"], out["script"]):
+        os.makedirs(os.path.dirname(d), exist_ok=True)
     out["image"] = save_image(v2, data, out["image"])
     np.savez_compressed(out["data"], **flatten(data))
     with open(out["spec"], "w") as f:
@@ -138,9 +143,9 @@ def save_bundle(spec, data, base, run=None, note=""):
     with open(out["draw"], "w") as f:
         f.write(drawing_code())
     with open(out["script"], "w") as f:
-        f.write(script(v2, "_src/" + os.path.basename(out["data"]),
-                       os.path.basename(out["image"]), run, note,
-                       "_src/" + os.path.basename(out["draw"])))
+        f.write(script(v2, "../_src/" + os.path.basename(out["data"]),
+                       "../" + os.path.basename(out["image"]), run, note,
+                       "../_src/" + os.path.basename(out["draw"])))
     return out
 
 
@@ -172,7 +177,7 @@ def drawing_code():
     ])
 
 
-def script(spec, npz_name, out_name, run=None, note="", draw_name="_src/draw.py"):
+def script(spec, npz_name, out_name, run=None, note="", draw_name="../_src/draw.py"):
     """A short stand-alone script that redraws the figure from the saved arrays: SPEC,
     my_changes (the user's own matplotlib) and the drawing code imported from
     draw_name (drawing_code())."""
@@ -240,7 +245,7 @@ def script(spec, npz_name, out_name, run=None, note="", draw_name="_src/draw.py"
         "    if getattr(fig, '_cv_code_error', None):",
         "        print('the figure code stopped at', fig._cv_code_error)",
         "    my_changes(fig, [fig._cv_axes[i] for i in sorted(fig._cv_axes)], data, SPEC)",
-        f"    out = os.path.join(HERE, {out_name!r})",
+        f"    out = os.path.normpath(os.path.join(HERE, *{out_name!r}.split('/')))",
         "    ex = SPEC.get('export', {})",
         "    tight = ex.get('tight', True)",
         "    cv.save(SPEC, fig, out, dpi=ex.get('dpi', 250), bbox_inches='tight' if tight else None,",

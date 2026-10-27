@@ -173,12 +173,27 @@ class FigureCombo:
 
 def share_sections(parts, src):
     """The plan-view and section parts of a figure of parts take part src's list of
-    cross-sections (when src is one of those kinds), in place: they share one list."""
+    cross-sections (when src is one of those kinds), in place: they share one list.  A
+    section part of cards keeps its cards' runs, times and panels (the cards src has
+    beyond its own: new panels, at its first card's run and time)."""
     if src.get("kind") not in ("plan", "xsec") or not src.get("sections"):
         return parts
+    new = json.loads(json.dumps(src["sections"], default=float))
     for p in parts:
-        if p is not src and p.get("kind") in ("plan", "xsec"):
-            p["sections"] = json.loads(json.dumps(src["sections"], default=float))
+        if p is src or p.get("kind") not in ("plan", "xsec"):
+            continue
+        old = figdraw.xsec_cards(p) if src.get("kind") == "plan" else None
+        if old is None:
+            p["sections"] = json.loads(json.dumps(new))
+            continue
+        nxt = 1 + max(int(c.get("panel", 0)) for c in old)
+        out = []
+        for k, sec in enumerate(new):
+            keys = {c: old[min(k, len(old) - 1)].get(c) for c in fg.CARD_KEYS}
+            if k >= len(old):
+                keys["panel"], nxt = nxt, nxt + 1
+            out.append(dict(fg.card_section(sec), **keys))
+        p["sections"] = out
     return parts
 
 

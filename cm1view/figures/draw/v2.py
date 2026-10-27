@@ -8,6 +8,26 @@ GRID_DIMS = ("runs", "sections", "times", "fields", "heights")  # (or "none")
 LEGACY_VARY = {"time": "times", "field": "fields", "height": "heights", "custom": "custom"}
 
 
+def xsec_cards(spec):
+    """The section cards of a section figure made of them (spec["sections"] entries
+    with a "panel": each one panel's section, its "run" and "time_s"; None: the
+    figure's), or None (a plan view, or an older section figure: its grid)."""
+    if spec.get("kind") != "xsec":
+        return None
+    secs = spec.get("sections") or []
+    return secs if any("panel" in sec for sec in secs) else None
+
+
+def xsec_card(spec, i):
+    """(index, card) of the first section card drawn in panel i of a figure of cards,
+    or None (none there, or its run is not one of the figure's)."""
+    nr = len(spec.get("runs") or [None])
+    for k, sec in enumerate(xsec_cards(spec) or []):
+        if int(sec.get("panel", 0)) == i:
+            return (k, sec) if 0 <= int(sec.get("run") or 0) < nr else None
+    return None
+
+
 def grid_axes(spec):
     """(rows, columns) of a plan-view or section figure: what each steps through,
     "runs", "sections", "times", "fields", "heights" or "none" (spec["grid"]; an older
@@ -54,7 +74,10 @@ def dim_items(spec, d):
 def grid_cell(spec, i):
     """What panel i of a plan-view or section figure takes from its row and column
     (grid_axes, dim_items: a dict, {} for nothing), or None for an empty cell.  A
-    figure of fields or heights without any yet draws its one panel as it is."""
+    figure of fields or heights without any yet draws its one panel as it is.  A
+    section figure of cards: {} where a card is, else None."""
+    if xsec_cards(spec) is not None:
+        return {} if xsec_card(spec, i) is not None else None
     rd, cd = grid_axes(spec)
     if rd != "none" and cd != "none":
         r, c = divmod(i, int(spec["cols"]))
@@ -89,10 +112,12 @@ def npanels(spec):
         return sum(npanels(p) for p in spec["parts"])
     cells = int(spec["rows"]) * int(spec["cols"])
     kind = spec.get("kind", "plan")
-    if kind == "th":
+    if kind == "th" and th_cards(spec):
+        n = 1 + max([int(e.get("panel", 0)) for e in spec.get("series") or []] or [0])
+    elif kind == "th":
         n = cells
-    elif kind in ENTRIES:
-        ents = spec.get(ENTRIES[kind], [])
+    elif kind in ENTRIES or xsec_cards(spec) is not None:
+        ents = spec.get(ENTRIES.get(kind, "sections"), [])
         n = 1 + max([int(e.get("panel", 0)) for e in ents] or [0])
     else:
         dims = [d for d in grid_axes(spec) if d != "none"]
@@ -105,12 +130,31 @@ def npanels(spec):
     return min(n, cells)
 
 
+def th_cards(spec):
+    """Whether a time-height figure is made of cards (spec["runs_as"] "cards"): each
+    series entry one panel's, at its "panel" with its one run ("runs" [k]); else (an
+    older figure) a panel per series and run (th_grid)."""
+    return spec.get("kind") == "th" and spec.get("runs_as") == "cards"
+
+
 def th_grid(spec):
     """(rows, cols, cells) of a time-height figure: a panel per series and run of that
     series (its "runs"; blank: every run of the figure).  The runs any series uses are
     the columns (runs_as "cols", rows the series) or the rows; cells lists (run index,
-    series index) row by row, None where a series skips that run."""
+    series index) row by row, None where a series skips that run.  A figure of cards
+    (th_cards): its rows and columns, each panel the first card with its number (None:
+    no card there, or its run is not one of the figure's)."""
     nr, ents = len(spec.get("runs") or [None]), spec.get("series", [])
+    if th_cards(spec):
+        r, c = int(spec["rows"]), int(spec["cols"])
+        cells, seen = [None] * (r * c), set()
+        for e, ent in enumerate(ents):
+            p, k = int(ent.get("panel", 0)), int((ent.get("runs") or [0])[0])
+            if p in seen or not 0 <= p < r * c:
+                continue
+            seen.add(p)
+            cells[p] = (k, e) if 0 <= k < nr else None
+        return r, c, cells
     own = [[int(k) for k in (e.get("runs") or range(nr)) if 0 <= int(k) < nr]
            or list(range(nr)) for e in ents]
     ks = sorted({k for ks in own for k in ks}) or [0]
@@ -210,7 +254,14 @@ def panel_ref(spec, i):
 def form_ref(spec, i):
     """(run index, model time in s) of panel i as the layout says, or None for an
     empty cell: the run and time of its row or column (grid_cell), else the figure's
-    one run (spec["run"]) and time (spec["time_s"])."""
+    one run (spec["run"]) and time (spec["time_s"]); a section figure of cards: the
+    panel's card's run and time (blank: the figure's time)."""
+    if xsec_cards(spec) is not None:
+        kc = xsec_card(spec, i)
+        if kc is None:
+            return None
+        ts = kc[1].get("time_s")
+        return int(kc[1].get("run") or 0), float(spec["time_s"] if ts is None else ts)
     cell = grid_cell(spec, i)
     if cell is None:
         return None
@@ -286,6 +337,8 @@ def _v1_panel(spec, i):
     titles = spec.get("titles") or []
     p = dict(kind=kind, cell=[r, c, 1, 1], run=None, time_s=None,
              title=titles[i] if i < len(titles) and titles[i] else "", layers=[])
+    if not p["title"] and xsec_cards(spec) is not None:  # (a section card's label)
+        p["title"] = ((xsec_card(spec, i) or (0, {}))[1].get("label") or "").strip()
     if kind == "th":
         ref = series_ref(spec, i)
         if ref is None:

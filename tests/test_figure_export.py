@@ -9,6 +9,11 @@ from cm1view.figures import spec as fg
 from conftest import txt, wait, render, difference_layer, swath_layer
 
 
+def script_of(base):
+    """The script saved with the figure saved as `base` (in scripts/ next to it)."""
+    return fg.bundle_paths({}, base)["script"]
+
+
 @pytest.mark.parametrize("start", ["plan", "series", "soundings", "dists", "difference",
                                    "swath", "dark"])
 def test_script_redraws_the_identical_image(ed, tmp_path, start):
@@ -36,10 +41,10 @@ def test_script_redraws_the_identical_image(ed, tmp_path, start):
     ed._save_job(ed.collect(), True, base)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     os.rename(base + ".png", base + "_viewer.png")
-    with open(base + ".py") as f:  # (short: the drawing code is in _src/)
+    with open(script_of(base)) as f:  # (short: the drawing code is in _src/)
         assert "def _draw2" not in f.read()
     assert os.path.isfile(str(tmp_path / "_src" / f"{start}_draw.py"))
-    r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, "-I", script_of(base)], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
@@ -134,7 +139,7 @@ def test_own_code_runs_saves_and_reports_errors(ed, tmp_path):
     base = str(tmp_path / "code")
     ed.path.value = base
     ed._save_job(ed.collect(), True, base)
-    r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-I", script_of(base)], capture_output=True, text=True)
     assert r.returncode == 0 and "stopped" not in r.stdout, r.stderr[-500:]
     ed.code_on.value = False
     ed.spec_path.value = base  # (finds the spec saved with it)
@@ -168,10 +173,10 @@ def test_figure_of_parts(ed, tmp_path):
     ed._save_job(ed.collect_all(), True, base)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     os.rename(base + ".png", base + "_viewer.png")
-    with open(base + ".py") as f:  # (short: the drawing code is in _src/)
+    with open(script_of(base)) as f:  # (short: the drawing code is in _src/)
         assert "def _draw2" not in f.read()
     assert os.path.isfile(str(tmp_path / "_src" / "parts_draw.py"))
-    r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, "-I", script_of(base)], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
@@ -249,7 +254,7 @@ def test_provenance_records_namelists_and_settings(ed, tmp_path):
         h = hashlib.sha256(f.read()).hexdigest()[:16]
     assert made["runs"][0]["namelist_sha256"] == h
     assert {"output_glob", "track_dirs", "track_patterns"} <= set(made["settings"])
-    with open(base + ".py") as f:
+    with open(script_of(base)) as f:
         assert h in f.read(2000)
 
 
@@ -275,10 +280,10 @@ def test_figure_of_parts_with_a_series_part(ed, tmp_path):
     ed._save_job(spec, True, base)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     os.rename(base + ".png", base + "_viewer.png")
-    with open(base + ".py") as f:  # (short: the drawing code is in _src/)
+    with open(script_of(base)) as f:  # (short: the drawing code is in _src/)
         assert "def _draw2" not in f.read()
     assert os.path.isfile(str(tmp_path / "_src" / "withseries_draw.py"))
-    r = subprocess.run([sys.executable, "-I", base + ".py"], capture_output=True, text=True,
+    r = subprocess.run([sys.executable, "-I", script_of(base)], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))

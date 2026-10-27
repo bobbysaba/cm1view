@@ -1,6 +1,8 @@
-"""The cross-sections of a figure: spec["sections"], a list of named sections that each
-section panel picks from (its panel edit "section", else its row's or column's in a
-grid of sections, else the first).
+"""The cross-sections of a figure: spec["sections"], a list of named sections.  In a
+section figure of cards (each entry with a "panel": figdraw.xsec_cards) each entry is
+one panel's: its section, "run" (index) and "time_s" (None: the figure's time); in
+an older one each section panel picks one (its panel edit "section", else its row's
+or column's in a grid of sections, else the first), and to_cards turns it into cards.
 
 A section is {label ("": automatic), orient, pos, avg (width averaged across, km)}
 plus the keys of its orientation:
@@ -35,6 +37,7 @@ SEC_DEFAULTS = dict(label="", orient="x", pos="storm", half=10.0, off=0.0, y=Non
                     x0=None, x1=None, x=None, y0=None, y1=None, angle=90.0,
                     offset=[0.0, 0.0], cx=None, cy=None, ahead=0.0, right=0.0, mwin=0.0, a=None,
                     b=None, avg=0.0)
+CARD_KEYS = ("run", "time_s", "panel")  # (a card's, besides its section)
 XSEC_DEFAULTS = dict(ztop=6.0, dz=0.025, coords="storm")
 
 
@@ -81,14 +84,47 @@ def upgrade_sections(spec):
 
 
 def panel_section(spec, i):
-    """(index, section) of panel i: its panel edit's "section", else its row's or
+    """(index, section) of panel i: in a figure of cards its card's (the first card
+    when the panel has none); else its panel edit's "section", else its row's or
     column's (a grid of sections), else the first."""
     secs = sections(spec)
+    if figdraw.xsec_cards(spec) is not None:
+        kc = figdraw.xsec_card(spec, i)
+        return (kc[0], secs[kc[0]]) if kc is not None else (0, secs[0])
     k = figdraw.panel_edit(spec, i).get("section")
     if k is None:
         k = (figdraw.grid_cell(spec, i) or {}).get("section")
     k = int(k) if k is not None and 0 <= int(k) < len(secs) else 0
     return k, secs[k]
+
+
+def card_section(sec):
+    """A card without its run, time and panel (what its arrays depend on)."""
+    return {k: v for k, v in sec.items() if k not in CARD_KEYS}
+
+
+def to_cards(spec):
+    """spec (and its section parts) as a section figure of cards, in place: one card
+    per panel with the panel's section, run and time (an older figure's grid and
+    panel edits), the grid none × none (its rows and columns kept), the panel edits
+    without the run, time and section the cards now hold.  A figure of cards, or not
+    a section figure, stays as it is."""
+    for s in [spec] + list(spec.get("parts") or []):
+        if s.get("kind") != "xsec" or figdraw.xsec_cards(s) is not None:
+            continue
+        cards = []
+        for i in range(figdraw.npanels(s)):
+            ref = figdraw.panel_ref(s, i)
+            if ref is not None:
+                cards.append(dict(panel_section(s, i)[1], run=int(ref[0]),
+                                  time_s=float(ref[1]), panel=i))
+        s["sections"] = cards or [dict(sections(s)[0], run=int(s.get("run", 0)),
+                                       time_s=None, panel=0)]
+        for e in (s.get("edits") or {}).values():
+            for k in ("run", "time_s", "section"):
+                e.pop(k, None)
+        s["grid"] = dict(rows="none", cols="none", runs=[])
+    return spec
 
 
 def is_storm(sec):

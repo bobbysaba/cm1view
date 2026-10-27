@@ -1,6 +1,8 @@
 """Time-series, time-height, sounding, distribution, profile, joint distribution and
 azimuthal mean panels."""
 
+import os
+
 import numpy as np
 
 from ...core import azim, dist, joint, series as ser, thermo, track as trk
@@ -30,7 +32,7 @@ def series_defaults(F, recipe, n=0, label=""):
                 op="", cmap=cmap, reverse=False, white_first=white, vmin=float(lo),
                 vmax=float(hi), nlevels=0, style="mesh", mask_below=None, extend="auto",
                 units=units, base_units=units, color=LINE_COLORS[n % len(LINE_COLORS)],
-                lw=1.5, marker="", panel=0, axis="auto", ylabel="", runs=None, ens="",
+                lw=1.5, ls="-", t0_min=0.0, marker="", panel=0, axis="auto", ylabel="", runs=None, ens="",
                 ens_mid="mean", ens_members="faint", ens_alpha=0.25)
 
 
@@ -96,9 +98,16 @@ def series_arrays(run, ds, entry, t0_min=0.0):
     return tm / 60.0 - t0_min, v, z, P
 
 
+def series_t0(spec, entry):
+    """Time zero (min) of a series: the figure's (Style: panel labels) plus the
+    series' own (e.g. its run's initiation, so runs line up)."""
+    return float(spec.get("time_label", {}).get("t0_min", 0.0)) + \
+        float(entry.get("t0_min") or 0.0)
+
+
 def th_panel(run, ds, entry, spec):
     """Arrays of a time-height panel."""
-    t0 = float(spec.get("time_label", {}).get("t0_min", 0.0))
+    t0 = series_t0(spec, entry)
     t, v, z, P = series_arrays(run, ds, entry, t0)
     if P is None:
         return dict(missing="time–height panels need a layer series (Vertical: Layer)"
@@ -162,13 +171,16 @@ def ensemble_band(members, how="minmax", mid="mean"):
 
 
 def ensemble_label(ent, n):
-    """Legend text of an ensemble band: the entry's label, its centre and band, the
-    number of members."""
-    band = {"minmax": "min–max", "p10p90": "10–90%", "p25p75": "25–75%",
-            "sd": "±1 sd"}.get(ent.get("ens"), "")
-    mid = ent.get("ens_mid", "mean")
-    what = f"{mid}, {band}" if mid else band
-    return f"{ent.get('label', '')} ({what}, {n} runs)".strip()
+    """Legend text of an ensemble band: the entry's label (its card's, as it is)."""
+    return ent.get("label", "")
+
+
+def run_folder(spec, k):
+    """Run k's folder name (a series of several runs tells its lines apart by it)."""
+    runs = spec.get("runs") or []
+    r = runs[k] if 0 <= k < len(runs) else {}
+    return os.path.basename(str(r.get("path", "")).rstrip("/")) or r.get("label", "") \
+        or f"run {k + 1}"
 
 
 def line_panel(spec, i, get):
@@ -178,13 +190,10 @@ def line_panel(spec, i, get):
     "hidden") and one line more of the ensemble (S<n>_ens: the number of members,
     S<n>_r -1, S<n>_v the centre, S<n>_lo / S<n>_hi the band)."""
     ents, runs = spec.get("series", []), spec.get("runs") or []
-    t0 = float(spec.get("time_label", {}).get("t0_min", 0.0))
     ts = spec.get("ts", {})
     lines = [(e, k) for e, ent in enumerate(ents) if int(ent.get("panel", 0)) == i
              for k in _entry_runs(ent, len(runs))]
     out, n, lo, hi, why = {}, 0, np.inf, -np.inf, ""
-    one_e = len({e for e, _ in lines}) == 1
-    one_r = len({k for _, k in lines}) == 1
     members = {}  # (entry index: [(t, v)] of its runs, with an ensemble band)
     for e, k in lines:
         got = get(k, e)
@@ -192,7 +201,7 @@ def line_panel(spec, i, get):
             why = "not computed yet"
             continue
         run, ds = got
-        t, v, _, _ = series_arrays(run, ds, ents[e], t0)
+        t, v, _, _ = series_arrays(run, ds, ents[e], series_t0(spec, ents[e]))
         if v is None or not np.isfinite(v).any():
             why = why or ("d/dz applies to time–height panels" if ents[e].get("op") == "ddz"
                           else "not computed yet")
@@ -205,11 +214,11 @@ def line_panel(spec, i, get):
             members.setdefault(e, []).append((t[sl], v[sl]))
             if ents[e].get("ens_members", "faint") == "hidden":
                 continue
-        rl, el = runs[k].get("label", ""), ents[e].get("label", "")
+        el = ents[e].get("label", "")
         out[f"S{n}_t"], out[f"S{n}_v"] = t[sl], v[sl]
         out[f"S{n}_e"], out[f"S{n}_r"] = e, k
-        out[f"S{n}_label"] = rl if one_e and not one_r else (
-            el if one_r else f"{el} · {rl}")
+        out[f"S{n}_label"] = el if len(_entry_runs(ents[e], len(runs))) == 1 else \
+            f"{el} · {run_folder(spec, k)}"  # (a series of several runs: a line each)
         if ens:
             out[f"S{n}_mem"] = 1
         n += 1
@@ -554,9 +563,10 @@ def joint_label(entry, run_label, F, multi, times):
     return " · ".join([x for x in ((run_label if multi else ""), when) if x] + [lab])
 
 
-def joint_compute(run, F, entry, fixes):
+def joint_compute(run, F, entry, fixes, cancelled=None):
     """joint.summarize result of a joint distribution entry (every pair of its time or
-    time window), or a string (why there is none)."""
+    time window), or a string (why there is none); None when cancelled() turned true
+    between two times of the window."""
     ts = profile_times(run, entry)
     if not ts:
         return f"no output at {float(entry['time_s']) / 60:g} min in this run"
@@ -572,9 +582,11 @@ def joint_compute(run, F, entry, fixes):
     storm = {t: storm_motion(run, fixes, t) for t in ts} \
         if F[r["field"]].storm or F[r["yfield"]].storm else None
     try:
-        st = joint.compute(run, F, r, ts, storm, centers)
+        st = joint.compute(run, F, r, ts, storm, centers, cancelled)
     except ValueError as e:
         return str(e)
+    if st is None:
+        return None
     return st if st["n"] else "no values in the region (or the value limits)"
 
 
@@ -628,9 +640,10 @@ def azim_label(entry, run_label, F, multi, times):
     return " · ".join([x for x in ((run_label if multi else ""), when) if x] + [lab])
 
 
-def azim_compute(run, F, entry, fixes):
+def azim_compute(run, F, entry, fixes, cancelled=None):
     """azim.compute result of an azimuthal mean entry (its time, or a composite of its
-    time window), or a string (why there is none).  Azimuth 0 follows the tracked
+    time window), or a string (why there is none); None when cancelled() turned true
+    between two times of the window.  Azimuth 0 follows the tracked
     motion at each time (else the domain motion; north when that is nil)."""
     ts = profile_times(run, entry)
     if not ts:
@@ -652,9 +665,11 @@ def azim_compute(run, F, entry, fixes):
     refs = {t: azim.bearing(*motion[t]) if r["ref"] == "motion" else 0.0 for t in ts}
     try:
         res = azim.compute(run, F, r, ts, centers, refs,
-                           motion if F[r["field"]].storm else None)
+                           motion if F[r["field"]].storm else None, cancelled)
     except ValueError as e:
         return str(e)
+    if res is None:
+        return None
     return res if int(res["n"].sum()) else "no values within the radius and sector"
 
 

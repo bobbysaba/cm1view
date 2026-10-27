@@ -161,6 +161,8 @@ class FigureSources:
         c.up.on_click(lambda ev: self._move_ser(c, -1))
         c.down.on_click(lambda ev: self._move_ser(c, 1))
         c.rm.on_click(lambda ev: self._remove_ser(c))
+        c.dup.on_click(lambda ev: self._dup_series(c))
+        c.per_run.on_click(lambda ev: self._per_run_series(c))
         return c
 
     def _show_series(self):
@@ -177,10 +179,122 @@ class FigureSources:
 
     def _series_changed(self):
         self._show_series()
-        if self.kind.value == "th":
-            self._th_grid()
         self._fit_grid()
         self.request()
+
+    def _free_ser_panel(self):
+        """The first panel number no series card is in."""
+        used = {int(c.w["panel"].value or 1) - 1 for c in self.ser_cards}
+        return next(p for p in range(len(used) + 1) if p not in used)
+
+    def _new_series(self, ents, at=None, wide=True):
+        """Cards for series entries ents (after card `at`, else after the others; wide:
+        a grid of one row widens for them, else it grows down)."""
+        new = [self._ser_card(e) for e in ents]
+        i = self.ser_cards.index(at) + 1 if at in self.ser_cards else len(self.ser_cards)
+        self.ser_cards[i:i] = new
+        self._show_series()
+        self._fit_grid(wide=wide)
+        self._build_titles()
+        self.request()
+
+    def _dup_series(self, c):
+        """A copy of card c in a new panel."""
+        self._new_series([dict(c.collect(), panel=self._free_ser_panel())], at=c)
+
+    def _per_run_series(self, c):
+        """Time series: card c of several runs (or every run) becomes a card per run in
+        its panel, each in the run's colour; of one run, a copy for each other run of
+        the figure in its panel.  Time-height: a copy for each other run down c's column
+        (run j's in row j after c's, or the next free panel).  A run with the same
+        series in that panel (time-height: anywhere) already is skipped."""
+        s, names = c.collect(), self._run_names()
+        line = self.kind.value == "line"
+        runs = sorted(names.values())
+        spec = dict(runs=self._runs_collect())  # (the runs' colours)
+        if line and (s["runs"] is None or len(s["runs"]) > 1):  # (several runs)
+            ks = s["runs"] or runs
+            if len(ks) < 2:
+                self._msg("The figure has one run: add others first (pick one in a "
+                          "card's <b>Run</b> list).", True)
+                return
+            ents = [dict(s, runs=[k], ens="", color=figdraw.run_color(spec, k))
+                    for k in ks]
+            i = self.ser_cards.index(c)
+            self.ser_cards.remove(c)
+            self.ser_cards[i:i] = [self._ser_card(e) for e in ents]
+            self._series_changed()
+            self._build_titles()
+            return
+        k0 = s["runs"][0]
+        others = [k for k in runs if k != k0]
+        if not others:
+            self._msg("The figure has one run: add others first (pick one in a card's "
+                      "<b>Run</b> list).", True)
+            return
+        key = json.dumps(s["recipe"], sort_keys=True, default=float)
+        have = {(x["runs"][0] if x["runs"] else -1,
+                 x["panel"] if line else -1, json.dumps(x["recipe"], sort_keys=True,
+                                                         default=float))
+                for x in (y.collect() for y in self.ser_cards)}
+        C = int(self.cols.value or 1)
+        row, col = divmod(s["panel"], C)
+        taken = {int(x.w["panel"].value or 1) - 1 for x in self.ser_cards}
+        new = []
+        for j, k in enumerate(others):
+            if (k, s["panel"] if line else -1, key) in have:
+                continue
+            if line:  # (in the run's colour)
+                new.append(dict(s, runs=[k], color=figdraw.run_color(spec, k)))
+                continue
+            p = (row + j + 1) * C + col
+            while p in taken:
+                p += 1
+            taken.add(p)
+            new.append(dict(s, runs=[k], panel=p))
+        if not new:
+            self._msg("Every run has this series already.", True)
+            return
+        self._new_series(new, at=c, wide=line)  # (time-height: down the column)
+
+    def _th_cards_from_line(self):
+        """Time series become time-height panels: a card per series and run (a card of
+        every run or several runs: one for each), each in a panel of its own: a row
+        per run when the series split all have the same runs, else its panel when no
+        card before it is there (else the next free one)."""
+        names = sorted(self._run_names().values())
+        ents = [c.collect() for c in self.ser_cards]
+        own = [e["runs"] or names for e in ents]
+        split = any(len(ks) > 1 for ks in own)
+        alike = split and all(r == own[0] for r in own)
+        out, taken = [], set()
+        for n, (e, ks) in enumerate(zip(ents, own)):
+            for j, k in enumerate(ks):
+                p = j * len(ents) + n if alike else int(e["panel"])
+                while p in taken:
+                    p += 1
+                taken.add(p)
+                out.append(dict(e, runs=[k], panel=p))  # (its band: back as time series)
+        if out != ents:
+            self.ser_cards = [self._ser_card(e) for e in out]
+
+    def _line_cards_from_th(self):
+        """Time-height panels become time series: the cards of one series (alike but
+        for their run and panel) one card of their runs (every run: All runs), a panel
+        per series."""
+        if not any(c._kind == "th" for c in self.ser_cards):
+            return
+        names = sorted(self._run_names().values())
+        groups = {}
+        for e in (c.collect() for c in self.ser_cards):
+            key = json.dumps({k: v for k, v in e.items() if k not in ("runs", "panel")},
+                             sort_keys=True, default=float)
+            groups.setdefault(key, (e, []))[1].extend(e["runs"] or names)
+        out = []
+        for n, (e, ks) in enumerate(groups.values()):
+            ks = sorted(set(ks))
+            out.append(dict(e, runs=None if ks == names and len(ks) > 1 else ks, panel=n))
+        self.ser_cards = [self._ser_card(e) for e in out]
 
     def _move_ser(self, c, d):
         i = self.ser_cards.index(c)
@@ -204,7 +318,10 @@ class FigureSources:
         key = self.ser_from.value
         if not key or key not in getattr(self.v, "series", {}):
             return
-        self.ser_cards.append(self._ser_card(self._tab_series(key)))
+        e = self._tab_series(key)
+        if self.kind.value == "th":  # (a panel of its own, of the figure's own run)
+            e.update(panel=self._free_ser_panel(), runs=[self._own_index()])
+        self.ser_cards.append(self._ser_card(e))
         self._series_changed()
 
     def _new_recipe(self):
@@ -218,25 +335,36 @@ class FigureSources:
 
     def _add_series(self):
         e = fg.series_defaults(self.F, self._new_recipe(), len(self.ser_cards))
-        if self.kind.value == "line":
-            e["panel"] = len({c.collect()["panel"] for c in self.ser_cards})
+        e["panel"] = self._free_ser_panel()
+        if self.kind.value == "th":  # (the last card's run, else the figure's own)
+            last = self.ser_cards[-1].run_list() if self.ser_cards else None
+            e["runs"] = [last[0] if last else self._own_index()]
         self.ser_cards.append(self._ser_card(e))
         self._series_changed()
 
-    def _fit_grid(self, reset=False):
-        """Time-series / sounding / distribution figures: enough grid cells for the
-        highest panel number of the cards (reset: a column of up to 3, else 2 columns;
-        else the grid only grows, keeping the rows and columns the user set)."""
+    def _fit_grid(self, reset=False, wide=False):
+        """Time-series / sounding / distribution / section figures: enough grid cells
+        for the highest panel number of the cards (reset: a column of up to 3, else 2
+        columns; sections of several runs, as many alike: a row per run; else the grid
+        only grows, keeping the rows and columns the user set; wide: a grid of one row
+        widens, up to 3 columns)."""
         kind = self.kind.value
-        if kind not in ("line", "sounding", "dist", "profile", "joint", "azim"):
+        if kind not in ("line", "th", "sounding", "dist", "profile", "joint", "azim",
+                        "xsec"):
             return
-        cards = {"line": self.ser_cards, "sounding": self.snd_cards,
+        cards = {"line": self.ser_cards, "th": self.ser_cards, "sounding": self.snd_cards,
                  "dist": self.dist_cards, "profile": self.prof_cards,
-                 "joint": self.joint_cards, "azim": self.azim_cards}[kind]
+                 "joint": self.joint_cards, "azim": self.azim_cards,
+                 "xsec": self.sec_cards}[kind]
         n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
-        if reset:
+        runs = len({c.w["run"].value for c in cards}) if kind in ("xsec", "th") else 1
+        if reset and runs > 1 and n % runs == 0:
+            r, c = runs, n // runs
+        elif reset:
             r, c = (n, 1) if n <= 3 else ((n + 1) // 2, 2)
+        elif wide and r == 1 and n <= 3:
+            c = max(c, n)
         elif r * c < n:
             r = -(-n // c)
         if (r, c) != (self.rows.value, self.cols.value):
@@ -291,22 +419,6 @@ class FigureSources:
                 self.size_preset.value = ""
             finally:
                 self._hold = hold
-
-    def _th_grid(self):
-        """Time-height grid: a row (column) per series and a column (row) per run that
-        a series uses (figdraw.th_grid)."""
-        ser = [dict(runs=[int(k) for k in c.w["runs"].value if not isinstance(k, str)])
-               for c in self.ser_cards]
-        r, c, _ = figdraw.th_grid(dict(runs=self.run_rows, series=ser,
-                                       runs_as=self.runs_as.value))
-        if (self.rows.value, self.cols.value) != (r, c):
-            hold, self._hold = self._hold, True
-            try:
-                self.rows.value, self.cols.value = r, c
-            finally:
-                self._hold = hold
-            self._fit_size()
-            self._build_titles()
 
     # ------------------------------------------------------------ sounding cards
     def _snd_card(self, e):
@@ -585,6 +697,7 @@ class FigureSources:
         sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
                                 for t, f in fx.items())) if track else ""
         key = (run.path, json.dumps(r, sort_keys=True), sig)
+        self._ser_touch.add(key)
         ds = self._ser_mem.get(key)
         if ds is None:
             d = F[r["field"]]
@@ -592,6 +705,7 @@ class FigureSources:
             self._ser_mem[key] = ds
         if key not in self._ser_state and int(ds["computed"].sum()) < len(run.times):
             self._ser_state[key] = "running"
+            self._ser_live = self._ser_live | {key}
             storm = ({t: fg.storm_motion(run, fx, t) for t in range(len(run.times))}
                      if F[r["field"]].storm else None)
             self.v.pools["figser"].submit(self._ser_compute, key, run, F, r, ds, centers, storm,
@@ -601,7 +715,18 @@ class FigureSources:
         return run, ds
 
     def _ser_compute(self, key, run, F, recipe, ds, centers, storm, what):
+        """Compute series `key` in the background; it stops (its times so far kept, to
+        go on from when it is needed again) once the shown figure no longer needs it,
+        e.g. its region changed from around the storm to the whole domain."""
         g0, last = self.v.gen["figser"], [_time.time()]
+
+        def stale():
+            return self.v.gen["figser"] != g0 or key not in self._ser_live
+
+        if stale():  # (queued behind another, and changed meanwhile: not started)
+            self._ser_state.pop(key, None)
+            self._ser_prog.pop(key, None)
+            return
 
         def on_result(ds_, done, total):
             self._ser_prog[key] = f"{what[:60]} {done}/{total}"
@@ -611,8 +736,11 @@ class FigureSources:
 
         try:
             ser.compute(run, F, recipe, ds, centers, storm, on_result=on_result,
-                        cancelled=lambda: self.v.gen["figser"] != g0)
-            self._ser_state[key] = "done"
+                        cancelled=stale)
+            if stale():  # (computed again from where it stopped when it is wanted)
+                self._ser_state.pop(key, None)
+            else:
+                self._ser_state[key] = "done"
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             self._ser_state[key] = f"error: {e}"
@@ -643,7 +771,7 @@ class FigureSources:
                      fg.th_panel(r[0], r[1], spec["series"][ref[1]], spec))
                 d["run"] = ref[0]
                 if multi:
-                    d["run_label"] = spec["runs"][ref[0]].get("label", "")
+                    d["run_label"] = fg.run_folder(spec, ref[0])
             else:
                 d = fg.line_panel(spec, i, get)
             if busy and d.get("missing") == "not computed yet":
@@ -778,7 +906,10 @@ class FigureSources:
                 if res[e] is None:
                     if progress:
                         progress(e, len(ents))
-                    res[e] = fg.joint_compute(run, F, ent, fx)
+                    res[e] = fg.joint_compute(run, F, ent, fx, cancelled)
+                    if res[e] is None:  # (stopped for a newer preview: not kept)
+                        res[e] = "cancelled"
+                        return res[e]
                     self.dist_cache[key] = res[e]
                     while len(self.dist_cache) > 60:
                         self.dist_cache.popitem(last=False)
@@ -831,7 +962,10 @@ class FigureSources:
                 if res[e] is None:
                     if progress:
                         progress(e, len(ents))
-                    res[e] = fg.azim_compute(run, F, ent, fx)
+                    res[e] = fg.azim_compute(run, F, ent, fx, cancelled)
+                    if res[e] is None:  # (stopped for a newer preview: not kept)
+                        res[e] = "cancelled"
+                        return res[e]
                     self.dist_cache[key] = res[e]
                     while len(self.dist_cache) > 60:
                         self.dist_cache.popitem(last=False)

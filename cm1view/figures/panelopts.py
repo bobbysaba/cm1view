@@ -4,13 +4,15 @@ heights, the size, the panel kind, the area and automatic titles.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
+import json
+
 import numpy as np
 import panel as pn
 
 from .. import config
 from . import draw as figdraw, spec as fg
 from .cards import (EXTEND, FIG_CMAPS, FIG_LOCS, GRID_DIMS, LEVEL_MODES, LOCS, NONE,
-                    SectionCard, _f, _grid, _hint)
+                    SectionCard, _f, _grid, _hint, _keep_shown)
 from .times import _heights
 
 
@@ -25,8 +27,8 @@ class FigurePanelOpts:
     # ------------------------------------------------------------ rows and columns
     def _axes(self):
         """(rows, columns): what each steps through (figdraw.grid_axes; "none" for
-        panels other than plan views and sections)."""
-        if self.kind.value not in ("plan", "xsec"):
+        panels other than plan views: sections have a card per panel)."""
+        if self.kind.value != "plan":
             return "none", "none"
         return self.g_rows.value, self.g_cols.value
 
@@ -122,11 +124,21 @@ class FigurePanelOpts:
                 self._hold = hold
         self._on_vary()
         typed = [w.value.strip() for w in self.title_ws + self.row_ws]
-        if "none" not in self._axes() and (not any(typed) or [x for x in typed if x] == getattr(
-                self, "_auto_typed", None)):  # (nothing typed, or what was written so)
+        was = getattr(self, "_auto_typed", None)  # (row labels go with the grid of two: what
+        auto = not any(typed) or (was is not None  # is left of them still counts as written so)
+                                  and set(x for x in typed if x) <= set(was))
+        if "none" not in self._axes() and auto:  # (nothing typed, or what was written so)
+            rl = self.rl_on.value
             self._auto_titles()  # (a grid of rows and columns: label them, as a start)
             self._auto_typed = [x for x in (w.value.strip() for w in self.title_ws
                                             + self.row_ws) if x]
+            self._rl_auto = getattr(self, "_rl_auto", False) or (rl and not self.rl_on.value)
+        elif "none" in self._axes() and getattr(self, "_auto_typed", None) is not None:
+            if auto:  # (no longer a grid of two: its automatic labels go, run names back)
+                self._set_titles([])
+                if getattr(self, "_rl_auto", False):
+                    self.rl_on.value = True
+            self._auto_typed, self._rl_auto = None, False
 
     # ------------------------------------------------------------ panel fields
     def _pf_fill(self):
@@ -310,20 +322,19 @@ class FigurePanelOpts:
         """New panel arrangement."""
         if self._hold:
             return
-        if self.kind.value == "th":
-            self._th_grid()
         self._on_layout()
 
     def _show_vary(self):
         """The Panels tab's lists for what the rows and columns step through."""
         kind = self.kind.value
         maps = kind in ("plan", "xsec")
-        if maps:
+        if kind == "plan":
             self._valid_axes()
         rd, cd = self._axes()
         both = rd != "none" and cd != "none"
-        self.g_rows.visible = self.g_cols.visible = self.grid_hint.visible = maps
-        self.times_sec.visible = maps
+        self.g_rows.visible = self.g_cols.visible = self.grid_hint.visible = kind == "plan"
+        self.times_sec.visible = kind == "plan"  # (sections: each card's run and time)
+        self.xsec_col.visible = kind == "xsec"
         times, runs = self._uses("times"), self._uses("runs")
         words = (["runs"] if runs else []) + ["times" if times else "time"] + \
             [d for d in ("fields", "heights") if self._uses(d)]
@@ -344,9 +355,8 @@ class FigurePanelOpts:
         self.zl_on.visible = hz and maps
         self.pf_box.visible = self._uses("fields")
         self._pf_show()
-        self.runs_as.visible = kind == "th"
         self.run_sel.visible = (len(self.run_rows) > 1 or bool(self._other_runs())) and \
-            not runs and maps
+            not runs and kind == "plan"
         self.plan_layers.visible = self.area_sec.visible = maps
         self.series_col.visible = self.ts_sec.visible = kind in ("th", "line")
         self.ts_sec.title = "Time and height axes" if kind == "th" else "Time and value axes"
@@ -355,6 +365,8 @@ class FigurePanelOpts:
                   self.ts_legncol, self.ts_legframe, self.ts_mark, self.ts_mark_legend):
             w.visible = kind == "line"
         self.ext_sec.visible = kind in ("plan", "xsec", "th")
+        if hasattr(self, "cb_sec"):  # (Style tab: no colorbar on lines and soundings)
+            self.cb_sec.visible = kind not in ("line", "sounding", "dist", "profile")
         self.snd_col.visible = kind == "sounding"
         self.dist_col.visible = kind == "dist"
         self.prof_col.visible = kind == "profile"
@@ -368,7 +380,19 @@ class FigurePanelOpts:
         for c in self.cards:
             c.show(kind)
             c._set_title()
+        if hasattr(self, "runs_sec"):  # (series: the cards pick runs and tracks)
+            self.runs_sec.visible = kind not in ("th", "line")
+        self._show_sections()
         self._show_region()
+
+    def _keep_tabs(self):
+        """The Layers and Panels tabs hold only what is shown (the figure kind's columns
+        and sections)."""
+        if hasattr(self, "layers_tab"):
+            _keep_shown(self.layers_tab, self.layers_all)
+        if hasattr(self, "panels_tab"):
+            _keep_shown(self.panels_tab, self.panels_all)
+            _keep_shown(self.area_body, self.area_all)
 
     def _show_dist_opts(self):
         """The distribution plot settings the chosen kind of plot uses."""
@@ -504,7 +528,6 @@ class FigurePanelOpts:
                     self.ylabel.value = "height (km)" if kind == "th" else ""
                     self.tl_on.value = False
                     if kind == "th":
-                        self.runs_as.value = "cols"
                         self.cb_mode.value, self.cb_loc.value = "row", "right"
                     else:
                         self.cb_mode.value = "none"
@@ -538,6 +561,12 @@ class FigurePanelOpts:
                 self._add_joint()
             if kind == "azim" and not self.azim_cards:
                 self._add_azim()
+            grid = kind == "xsec" and (self._quick_xsec  # (the quick start: its own)
+                                       or self._cards_from_grid())
+            if kind == "th":  # (a card per panel: one run each)
+                self._th_cards_from_line()
+            elif kind == "line":  # (a series' cards: one card of their runs)
+                self._line_cards_from_th()
             self._show_series()
             self._show_soundings()
             self._show_dists()
@@ -545,10 +574,7 @@ class FigurePanelOpts:
             self._show_joints()
             self._show_azims()
             self._auto_size = True
-            if kind == "th":
-                self._th_grid()
-            else:
-                self._fit_grid(reset=True)
+            self._fit_grid(reset=not grid)  # (cards from the plan views: their grid)
             self._fit_size()
             self._show_vary()
             self._fit_axes()
@@ -594,26 +620,110 @@ class FigurePanelOpts:
         c = SectionCard(self, e)
         c.rm.on_click(lambda ev: self._remove_section(c))
         c.ab.on_click(lambda ev: self._use_ab(c))
+        c.dup.on_click(lambda ev: self._dup_section(c))
+        c.per_run.on_click(lambda ev: self._per_run_section(c))
         return c
 
+    def _sec_cards(self, ents):
+        """Section cards for entries ents: the cards there are, then the ones left over
+        before (the browser may still have their widgets), show the first ones; new
+        cards the rest."""
+        old = self.sec_cards + [c for c in self._sec_spare if c not in self.sec_cards]
+        for c, e in zip(old, ents):
+            c.load(e)
+        self._sec_spare = old[len(ents):][:12]
+        return old[:len(ents)] + [self._sec_card(e) for e in ents[len(old):]]
+
+    def _cards_from_grid(self):
+        """Plan views become sections: their one section (or a new one) as a card for
+        each panel of their grid, at its run and time (sections.to_cards); True if so
+        (several sections: they are the cards, as they are)."""
+        if len(self.sec_cards) > 1:
+            return False
+        s = self.collect()  # (kind "xsec" already: the plan views' grid back)
+        g = (self.g_rows.value, self.g_cols.value)
+        s.update(grid=dict(rows=g[0], cols=g[1],
+                           runs=self._grid_runs() if "runs" in g else []),
+                 sections=[fg.card_section(c.collect()) for c in self.sec_cards]
+                 or [fg.section_defaults()])
+        fg.to_cards(s)
+        self.sec_cards = self._sec_cards(s["sections"])
+        return True
+
     def _show_sections(self):
+        """The section cards: a section figure's in Layers (one per panel), a plan
+        view's (its Section line layer's) in Panels → Area."""
         runs = self._runs_collect() if self.run_rows else self.spec.get("runs") or []
         tracked = any(e.get("track") for e in runs)
         for c in self.sec_cards:
             c.rm.visible = len(self.sec_cards) > 1
             c.tracked(tracked)
-        self.sec_box.objects = [c.panel for c in self.sec_cards]
+        objs = [c.panel for c in self.sec_cards]
+        box, other = (self.xsec_box, self.sec_box) if self.kind.value == "xsec" \
+            else (self.sec_box, self.xsec_box)
+        if list(other.objects):
+            other.objects = []
+        if list(box.objects) != objs:
+            box.objects = objs
+
+    def _free_panel(self, start=0):
+        """The first panel number from `start` no section card is in."""
+        used = {int(c.w["panel"].value or 1) - 1 for c in self.sec_cards}
+        p = start
+        while p in used:
+            p += 1
+        return p
+
+    def _new_sections(self, ents, wide=False):
+        """Cards for section entries ents, after the others (wide: a grid of one row
+        widens for them)."""
+        self.sec_cards += [self._sec_card(e) for e in ents]
+        self._show_sections()
+        self._show_region()
+        self._fit_grid(wide=wide)
+        self._build_titles()
+        self.request()
 
     def _add_section(self):
         """A new section like the last (an x–z one's y–z twin, along the motion's across
-        one, and back)."""
+        one, and back); in a section figure at its run and time, in a new panel."""
         last = self.sec_cards[-1].collect() if self.sec_cards else fg.section_defaults()
         swap = {"x": "y", "y": "x", "along": "across", "across": "along"}
-        e = dict(last, label="", orient=swap.get(last["orient"], last["orient"]))
-        self.sec_cards.append(self._sec_card(e))
-        self._show_sections()
-        self._show_region()
-        self._sections_changed()
+        e = dict(last, label="", orient=swap.get(last["orient"], last["orient"]),
+                 panel=self._free_panel())
+        self._new_sections([e], wide=True)
+
+    def _dup_section(self, c):
+        """A copy of card c in a new panel."""
+        self._new_sections([dict(c.collect(), panel=self._free_panel())], wide=True)
+
+    def _per_run_section(self, c):
+        """A copy of card c for each other run of the figure (one with the same
+        section there already: skipped), down c's column: run j's in row j after c's
+        (or the next free panel)."""
+        s = c.collect()
+        others = [k for k in self._run_names().values() if k != s["run"]]
+        if not others:
+            self._msg("The figure has one run: add others first (a card's <b>Run</b> list, "
+                      "or <b>Layers → Runs used → + Add run</b>).", True)
+            return
+        have = {(x["run"], json.dumps(fg.card_section(x), sort_keys=True, default=float))
+                for x in (y.collect() for y in self.sec_cards)}
+        C = int(self.cols.value or 1)
+        row, col = divmod(s["panel"], C)
+        new, taken = [], {int(x.w["panel"].value or 1) - 1 for x in self.sec_cards}
+        for j, k in enumerate(others):
+            if (k, json.dumps(fg.card_section(s), sort_keys=True, default=float)) in have:
+                continue
+            p = (row + j + 1) * C + col
+            while p in taken:
+                p += 1
+            taken.add(p)
+            new.append(dict(s, run=k, panel=p))  # (its time: the run's nearest)
+        if not new:
+            self._msg("Every run has this section already.", True)
+            return
+        self._new_sections(new)
 
     def _remove_section(self, c):
         """Remove section c; panels showing a later one keep it (their index moves)."""
@@ -629,8 +739,13 @@ class FigurePanelOpts:
         self._sections_changed()
 
     def _sections_changed(self):
-        """Sections added or removed: a row or column of sections follows."""
-        if self._uses("sections"):
+        """Sections added or removed: a row or column of sections follows (a section
+        figure: its grid)."""
+        if self.kind.value == "xsec":
+            self._fit_grid()
+            self._build_titles()
+            self.request()
+        elif self._uses("sections"):
             self._on_layout()
         else:
             self.request()
@@ -641,17 +756,20 @@ class FigurePanelOpts:
         if c is None and len(self.sec_cards) == 1:
             c = self.sec_cards[0]
         if c is None:
-            c = self._sec_card(fg.section_defaults(orient="ab", pos="fixed"))
+            last = self.sec_cards[-1].collect() if self.sec_cards else {}
+            c = self._sec_card(fg.section_defaults(
+                orient="ab", pos="fixed", run=last.get("run", 0), time_s=last.get("time_s"),
+                panel=self._free_panel()))
             self.sec_cards.append(c)
             self._show_sections()
+            self._fit_grid(wide=True)
         return c
 
     def _use_ab(self, c=None):
         pts = self.v.xs_pts
         if len(pts) != 2:
-            self.xs_html.object = ('<div class="cv-status" style="color:#f87171">Draw a '
-                                   'cross-section on the map first (Cross-section click '
-                                   'mode, points A and B).</div>')
+            self._msg("Draw a cross-section on the map first (Cross-section click mode, "
+                      "points A and B).", True)
             return
         (c or self._ab_card()).set_ab(pts[0], pts[1])
         self._show_region()
@@ -664,14 +782,18 @@ class FigurePanelOpts:
         line = any(c.type == "line" and c.w["on"].value for c in self.cards)
         self.area_plan.visible = kind == "plan"
         self.area_xs.visible = kind == "xsec" or (kind == "plan" and line)
-        self.area_sec.title = "Sections" if kind == "xsec" else (
+        self.sec_box.visible = self.sec_add.visible = kind == "plan"  # (sections: Layers)
+        self.area_sec.title = "Section heights and axis" if kind == "xsec" else (
             "Area and section line" if line else "Area")
         self.half.visible = self.dom.value == "storm"
         for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
             w.visible = self.dom.value == "box"
         if self.dom.value != "box":
             self.box_html.object = ""
-        if self._uses("sections"):
+        if kind == "xsec":
+            text = ("The sections themselves, one card per panel: <b>Layers → "
+                    "Sections</b>.")
+        elif self._uses("sections"):
             rd, cd = self._axes()
             where = "row" if rd == "sections" and cd != "none" else \
                 "column" if cd == "sections" and rd != "none" else "panel"
@@ -684,6 +806,7 @@ class FigurePanelOpts:
         else:
             text = ""
         self.xs_html.object = f'<div class="cv-hint">{text}</div>' if text else ""
+        self._keep_tabs()
 
     def _auto_titles(self):
         s = self.collect()
@@ -694,6 +817,22 @@ class FigurePanelOpts:
                 ts.append(f"{s['runs'][ref[0]]['label']} – {s['series'][ref[1]]['label']}"
                           if ref else "")
             self.rl_on.value = False
+            self._set_titles(ts)
+            return
+        if figdraw.xsec_cards(s) is not None:  # (a card's label or section, and run)
+            multi = len({int(c.get("run") or 0) for c in s["sections"]}) > 1
+            ts = []
+            for i in range(fg.npanels(s)):
+                kc = figdraw.xsec_card(s, i)
+                if kc is None:
+                    ts.append("")
+                    continue
+                words = [kc[1].get("label") or fg.describe(kc[1])]
+                if multi:
+                    words.insert(0, s["runs"][int(kc[1].get("run") or 0)]["label"])
+                ts.append(" – ".join(words))
+            if multi:
+                self.rl_on.value = False  # (the titles name the runs now)
             self._set_titles(ts)
             return
         if s["kind"] in figdraw.ENTRIES:

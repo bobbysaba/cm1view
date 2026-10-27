@@ -9,7 +9,7 @@ from ...core import vectors
 from .base import (
     FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, AZ_REFS,
     AZ_CENTERS, _hex, _f, _grid, _hint, _checks, _fold, _near, _nice, _panels_parse, _panels_text,
-    _chk,
+    _chk, _load_widgets,
 )
 
 ENS_STATS = {"Mean": "mean", "Median": "median", "Spread (sd)": "sd", "Min": "min",
@@ -22,6 +22,7 @@ class LayerCard:
 
     def __init__(self, ed, lay, collapsed=False):
         self.ed, self.type = ed, lay["type"]
+        self._loading = False  # (load: the widgets take another layer's settings)
         F, g = ed.fields, ed.fields.groups()
         self.lay = dict(lay)
         self.w = w = {}
@@ -117,8 +118,9 @@ class LayerCard:
             w["ens_on"].param.watch(self._on_ens, "value")
             w["ens_stat"].param.watch(self._on_ens, "value")
             w["ens_runs"].param.watch(self._on_ens_runs, "value")
-            w["minus_run"].param.watch(lambda e: self._minus_times(w["minus_time"].value or None),
-                                       "value")
+            w["minus_run"].param.watch(
+                lambda e: None if self._loading else
+                self._minus_times(w["minus_time"].value or None), "value")
         if t == "contour":
             w["levels"] = pn.widgets.TextInput(name="Levels (e.g. 10, 20 or -6:6:2)",
                                                value=str(lay["levels"]))
@@ -224,11 +226,26 @@ class LayerCard:
                                        self.rm], self._layout(), collapsed)
         self.show(ed.kind.value)
 
+    def load(self, lay, collapsed=False):
+        """Show layer lay (of this card's type) in these widgets: a new figure keeps its
+        cards, which the browser already has, instead of building new ones."""
+        new = LayerCard(self.ed, lay, collapsed)  # (never shown: its settings)
+        self._loading = True
+        try:
+            _load_widgets(self.w, new.w)
+        finally:
+            self._loading = False
+        self.lay = new.lay
+        if self.body.visible == collapsed:
+            self.panel.objects[0].objects[0].clicks += 1  # (the chevron: fold / unfold)
+        self.show(self.ed.kind.value)
+        self._set_title()
+
     def _layout(self):
         return [_grid(self.w["run"])] + self._rows()
 
     def _on_run(self, ev):
-        if self.ed._hold:
+        if self.ed._hold or self._loading:
             return
         if isinstance(ev.new, str):  # a run not in the figure yet
             self.ed._pick_other(self.w["run"], ev.old)
@@ -357,11 +374,15 @@ class LayerCard:
         """Another vector: arrows scaled for its magnitudes (a key arrow of its typical
         one, when there is a key)."""
         d, w = vectors.VECTORS[ev.new], self.w
+        if self._loading:
+            return
         w["scale"].value = vectors.FIG_SCALE * d.ref
         if w["key"].value:
             w["key"].value = d.ref
 
     def _changed(self):
+        if self._loading:
+            return
         self.show(self.ed.kind.value)
         self._set_title()
         if self.type == "line":
@@ -409,6 +430,8 @@ class LayerCard:
 
     def _on_fill_field(self, ev):
         """New fill field: its default colours, range and units."""
+        if self._loading:
+            return
         d = fg.layer_defaults("fill", self.ed.fields, ev.new)
         self.lay["units"] = d["units"]
         self.ed._hold = True
@@ -442,6 +465,8 @@ class LayerCard:
         """Difference on: a diverging colormap centred on 0, nothing blanked; off: the
         field's own colours."""
         w = self.w
+        if self._loading:
+            return
         d = fg.layer_defaults("fill", self.ed.fields, w["field"].value)
         self.ed._hold = True
         try:
@@ -463,7 +488,7 @@ class LayerCard:
         """Ensemble on or another statistic: its colours (a probability 0–100 %, a
         spread or range from 0, else the field's own); off: the field's own."""
         w = self.w
-        if self.ed._hold:
+        if self.ed._hold or self._loading:
             return
         if ev is not None and ev.obj is w["ens_stat"] and not w["ens_on"].value:
             self._changed()
@@ -496,7 +521,7 @@ class LayerCard:
 
     def _on_ens_runs(self, ev):
         """A run not in the figure picked (its path): add it, and keep it picked."""
-        if self.ed._hold:
+        if self.ed._hold or self._loading:
             return
         new = [v for v in ev.new if isinstance(v, str)]
         if new:

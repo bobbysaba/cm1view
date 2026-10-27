@@ -13,11 +13,11 @@ distributions of two fields at the same points (spec["joints"]), and azimuthal m
 of a field in radius and height around the storm or a point (spec["azims"]).  Panels can come from
 different runs (e.g. tornadic vs non-tornadic): spec["runs"] lists the runs with a
 label and a storm track each, and panels refer to them by index, with times in model
-seconds so they match across runs.  Section panels pick one of the figure's
-cross-sections (spec["sections"]).
+seconds so they match across runs.  Each section panel has a section card
+(spec["sections"]): its run, time and cross-section.
 
-Exporting writes the image and, optionally, a stand-alone script (figdraw's code +
-the spec as a Python dict), the plotted arrays (.npz) and the spec (.json), so the
+Exporting writes the image and, optionally, a stand-alone script in scripts/ (figdraw's
+code + the spec as a Python dict), the plotted arrays (.npz) and the spec (.json), so the
 figure can be redrawn or restyled later without the viewer.
 """
 

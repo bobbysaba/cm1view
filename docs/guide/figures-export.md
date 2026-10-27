@@ -74,15 +74,15 @@ runs makes a side-by-side loop.
 | File | Contents |
 |---|---|
 | `<name>.<fmt>` | The image. |
-| `<name>.py` | The script. It redraws the identical image without the viewer. |
+| `scripts/<name>.py` | The script. It redraws the identical image without the viewer. |
 | `_src/<name>_data.npz` | The plotted arrays. |
 | `_src/<name>_spec.json` | The figure's settings (the spec). |
 | `_src/<name>_draw.py` | The drawing code, which the script imports. |
 
 The script is short: `SPEC` (the figure's settings, as in the editor) and
 `my_changes()`, where your own matplotlib goes (`fig`, `axs` by panel, `data`, `spec`, as
-in *Your own code*). It finds the files relative to itself, so the folder can be moved or
-copied.
+in *Your own code*). It finds the files relative to itself (`../_src/`, and writes the image back
+next to `scripts/`), so the folder can be moved or copied.
 
 The spec and the script's header record the cm1view version and, from a git checkout, its
 commit, and a hash (sha256) of each run's `namelist.input`. The spec also records the

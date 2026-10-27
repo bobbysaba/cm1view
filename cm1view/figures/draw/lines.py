@@ -9,21 +9,20 @@ from matplotlib.patches import Patch, Rectangle
 from matplotlib.ticker import MaxNLocator
 
 from .base import (SND_COLORS, by_run, colormap, font_size, panel_legend, run_color,
-                   run_style, several_runs, _levels)
+                   run_style, _levels)
 
 def _lines(ax, d, spec, fs):
     """Time-series panel: one line per (series, run).  Series in other units get
-    their own y axis on the right.  One series (from one run of a figure with
-    several_runs, or from several runs): colour = run's; several series: colour =
-    series', line style = run's (with several_runs, or from several runs).  An
-    ensemble (S<n>_ens): its band shaded and centre drawn in the series' colour, its
-    members (S<n>_mem) thin and pale ("faint") or as other lines ("full")."""
+    their own y axis on the right.  A series of one run: its own colour and line
+    style.  A series of several runs: alone in the panel, a line per run in the run's
+    colour and the series' line style; with other series, the series' colour and a
+    line style per run.  An ensemble (S<n>_ens): its band shaded and centre drawn in
+    the series' colour and line style, its members (S<n>_mem) thin and pale ("faint")
+    or as other lines ("full")."""
     ents = spec.get("series", [])
     n = int(d.get("nlines", 0))
     es = {int(d[f"S{j}_e"]) for j in range(n)}
-    rs = {int(d[f"S{j}_r"]) for j in range(n)}
-    multi = len(rs) > 1 or several_runs(spec)
-    one_series = len(es) == 1 and multi  # (coloured by run)
+    nr = len(spec.get("runs") or [])
     ts = spec.get("ts", {})
     mark = ts.get("mark") or ""
     axes, items, handles = {}, {}, []
@@ -43,11 +42,13 @@ def _lines(ax, d, spec, fs):
                 axes[key] = tw
         ens, faint = f"S{j}_ens" in d, f"S{j}_mem" in d and \
             e.get("ens_members", "faint") == "faint"
-        if ens:  # (an ensemble's centre and band: the series' colour)
-            color, ls = e.get("color", "k"), "-"
-        else:
-            color = run_color(spec, k) if one_series else e.get("color", "k")
-            ls = "-" if one_series or not multi else run_style(spec, k)
+        color, ls = e.get("color", "k"), e.get("ls") or "-"
+        rs = e.get("runs")
+        if not ens and (rs is None and nr > 1 or rs is not None and len(rs) > 1):
+            if len(es) == 1:  # (several runs, alone: a colour per run)
+                color = run_color(spec, k)
+            else:
+                ls = run_style(spec, k)
         t, v = d[f"S{j}_t"], d[f"S{j}_v"]
         ext = [] if faint else series_extremes(t, v, mark, ts)
         label = str(d[f"S{j}_label"])

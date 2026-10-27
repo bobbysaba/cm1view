@@ -64,6 +64,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
         self.prof_cards, self.joint_cards, self.azim_cards = [], [], []
         self.sec_cards = []
+        self._sec_spare = []  # (section cards a new figure left over: _sec_cards)
         self.tm_rows, self.title_ws, self.row_ws = [], [], []
         self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
         # undo / redo: (figure JSON with all its parts, part in the widgets) before each
@@ -74,6 +75,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         # series of time-height / time-series figures: (run path, recipe, track) ->
         # dataset (filled in place while it is computed); state "running" / "done"
         self._ser_mem, self._ser_state, self._ser_prog = {}, {}, {}
+        # the series keys the shown figure needs (its last whole preview's, and any
+        # started since): a series job of one no longer needed stops
+        self._ser_live, self._ser_touch = set(), set()
         self.snd_cache = OrderedDict()  # sounding (run, time, where, track) -> analysis
         self.dist_cache = OrderedDict()  # distribution (run, time, recipe, track) -> summary
         from concurrent.futures import ThreadPoolExecutor
@@ -115,17 +119,25 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._build_click()
 
         panels_tab = self._panels_tab()
-        layers_tab = pn.Column(self.plan_layers, self.series_col, self.snd_col, self.dist_col,
-                               self.prof_col, self.joint_col, self.azim_col, self.ext_sec,
-                               self.runs_sec,
-                               sizing_mode="stretch_width")
+        # (the Layers tab holds the figure kind's columns only: _keep_tabs)
+        self.layers_all = [self.xsec_col, self.plan_layers, self.series_col, self.snd_col,
+                           self.dist_col, self.prof_col, self.joint_col, self.azim_col,
+                           self.ext_sec, self.runs_sec]
+        self.layers_tab = layers_tab = pn.Column(*self.layers_all,
+                                                 sizing_mode="stretch_width")
         style_tab = self._style_tab()
         annotate_tab, export_tab = self._more_tabs()
-        self.tabs = pn.Tabs(("Panels", panels_tab), ("Layers", layers_tab),
-                            ("Tree", self.tree_tab), ("Style", style_tab),
-                            ("Annotate", annotate_tab), ("Export", export_tab),
+        # a tab is sent to the browser the first time it is opened, and then kept (not
+        # dynamic: that sends it again at each switch)
+        self.tab_list = [("Panels", panels_tab), ("Layers", layers_tab),
+                         ("Tree", self.tree_tab), ("Style", style_tab),
+                         ("Annotate", annotate_tab), ("Export", export_tab)]
+        self.tabs = pn.Tabs(*[(n, o if i == 0 else pn.Spacer())
+                              for i, (n, o) in enumerate(self.tab_list)],
                             dynamic=False, sizing_mode="stretch_width")
-        self.tabs.param.watch(lambda e: self._tree_sync() if e.new == 2 else None, "active")
+        self.tabs.param.watch(lambda e: self._open_tab(e.new), "active")
+        self.tabs.param.watch(lambda e: self._tree_sync(force=True) if e.new == 2 else None,
+                              "active")
         self.tabs.param.watch(lambda e: self._refresh_saved() if e.new == 5 else None,
                               "active")
         self.editor = pn.Column(
@@ -144,7 +156,14 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             scroll="y-auto",
             sizing_mode="stretch_both", styles={"min-width": "0"})
         self.panel = pn.Row(self.preview, self.editor, sizing_mode="stretch_both", margin=0)
+        self._keep_tabs()
         self._wire()
+
+    def _open_tab(self, i):
+        """Tab i's widgets into the tabs (the first time it is opened)."""
+        name, obj = self.tab_list[i]
+        if self.tabs.objects[i] is not obj:
+            self.tabs[i] = (name, obj)
 
     def _wire(self):
         rq = lambda *e: self.request()  # noqa: E731
@@ -186,7 +205,6 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.code_plain.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code_box.param.watch(lambda e: self._show_code(True), "value")
-        self.runs_as.param.watch(lambda e: self._on_vary(), "value")
         self.gg_runs.param.watch(self._on_gg_runs, "value")
         self.size_preset.param.watch(self._on_preset, "value")
         self.fit_btn.on_click(lambda e: self._refit())
@@ -195,6 +213,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
             w.param.watch(lambda e: self._on_box(), "value")
         self.sec_add.on_click(lambda e: self._add_section())
+        self.sec_new.on_click(lambda e: self._add_section())
         self.tfill.on_click(lambda e: self._fill_times())
         self.auto_titles.on_click(lambda e: self._auto_titles())
         self.clear_titles.on_click(lambda e: self._set_titles([]))
@@ -247,9 +266,16 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
 
     # ------------------------------------------------------------ layers
     def _build_cards(self, layers):
-        # a long list starts folded: the first layer open, the rest by their titles
-        self.cards = [self._card(lay, collapsed=len(layers) > 2 and j > 0)
-                      for j, lay in enumerate(layers)]
+        # a long list starts folded: the first layer open, the rest by their titles; a
+        # card of the same type in the same place is kept (the browser has its widgets)
+        old, self.cards = self.cards, []
+        for j, lay in enumerate(layers):
+            fold = len(layers) > 2 and j > 0
+            if j < len(old) and old[j].type == lay["type"]:
+                old[j].load(lay, fold)
+                self.cards.append(old[j])
+            else:
+                self.cards.append(self._card(lay, collapsed=fold))
         self._show_cards()
 
     def _card(self, lay, collapsed=False):
@@ -456,9 +482,11 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                                                    f'{i + 1}/{n}…</span>'))
 
         try:
+            self._ser_touch = set()
             data = self.panel_data(spec, progress, cancelled)
             if data is None:
                 return
+            self._ser_live = self._ser_touch  # (a series no longer shown: its job stops)
             self._lims = {i: (d["xlim"], d["ylim"]) for i, d in data.items()
                           if "xlim" in d and "ylim" in d and not d.get("missing")}
             fig = figdraw.draw(spec, data)

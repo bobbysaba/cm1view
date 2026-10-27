@@ -1,5 +1,6 @@
 """The figure spec: defaults, panels and layer groups, times and animation."""
 
+import copy
 import json
 import os
 import warnings
@@ -9,7 +10,7 @@ import numpy as np
 from ... import config
 from ...core import track as trk
 from .. import draw as figdraw
-from .sections import panel_section, section_defaults, upgrade_sections
+from .sections import panel_section, section_defaults, to_cards, upgrade_sections
 
 def layer_defaults(kind, F, field=None, z=1.0):
     """A new layer of `kind` with sensible defaults for `field`."""
@@ -195,9 +196,13 @@ def group_spec(spec, i, ref, keep):
     lays = [dict(lay, panels=[], on=lay.get("on", True) and j in keep)
             for j, lay in enumerate(figdraw.spec_layers(spec, i))]
     edits = {"0": {"section": panel_section(spec, i)[0]}}  # (the panel's cross-section)
-    return dict(spec, vary="custom", grid=None, rows=1, cols=1, layers=lays, edits=edits,
-                titles=[],
-                panel_fills=[], panels=[dict(run=int(ref[0]), time_s=float(ref[1]))])
+    out = dict(spec, vary="custom", grid=None, rows=1, cols=1, layers=lays, edits=edits,
+               titles=[],
+               panel_fills=[], panels=[dict(run=int(ref[0]), time_s=float(ref[1]))])
+    if figdraw.xsec_cards(spec) is not None:  # (a figure of cards: the panel's, at ref)
+        out.update(edits={}, sections=[dict(panel_section(spec, i)[1], run=int(ref[0]),
+                                            time_s=float(ref[1]), panel=0)])
+    return out
 
 
 def merge_group(d, dd, js, layers):
@@ -341,7 +346,8 @@ def tindex(run, time_s):
 def normalize(spec, run, track="viewer"):
     """Fill in what an older spec (cm1view figures before multi-run panels) lacks:
     times in seconds from the time indices of `run`, `run` (with `track`) as the
-    only run, and its one cross-section (spec["xsec"]) as the list of sections."""
+    only run, its one cross-section (spec["xsec"]) as the list of sections, and a
+    section figure as one section card per panel (sections.to_cards)."""
     nt = len(run.times)
     if "times_s" not in spec:
         spec["times_s"] = [None if t is None else float(run.times[min(int(t), nt - 1)])
@@ -353,6 +359,51 @@ def normalize(spec, run, track="viewer"):
     upgrade_sections(spec)  # (one section before: spec["xsec"])
     for s in [spec] + list(spec.get("parts") or []):
         upgrade_grid(s)
+        th_to_cards(s)  # (time-height figures: a card per panel)
+        series_looks(s)  # (time series: a run's line style on its series)
+    return to_cards(spec)  # (section figures: a card per panel)
+
+
+def th_to_cards(spec):
+    """An older time-height figure (a panel per series and run, figdraw.th_grid) as a
+    figure of cards, in place: each panel's series with its one run and panel number,
+    the grid as it was.  A figure of cards, or not a time-height figure, stays."""
+    if spec.get("kind") != "th" or figdraw.th_cards(spec):
+        return spec
+    r, c, cells = figdraw.th_grid(spec)
+    ents = spec.get("series") or []
+    spec["series"] = [dict(copy.deepcopy(ents[ref[1]]), runs=[int(ref[0])], panel=i)
+                      for i, ref in enumerate(cells) if ref is not None]
+    spec.update(rows=r, cols=c, runs_as="cards")
+    return spec
+
+
+def series_looks(spec):
+    """An older figure's time series (without "ls"), in place: a series of one run
+    takes the line style and colour it was drawn in (the run's line style when its
+    panel had several runs; the run's colour when alone in a panel of a figure of
+    several runs).  The series of a newer figure stay."""
+    ents, runs = spec.get("series") or [], spec.get("runs") or []
+    nr = len(runs)
+
+    def runs_of(e):
+        rs = e.get("runs")
+        return list(range(nr)) if rs is None else [int(k) for k in rs if int(k) < nr]
+
+    for e in ents:
+        if "ls" in e:
+            continue
+        e["ls"] = "-"
+        ks = runs_of(e)
+        if len(ks) != 1 or spec.get("kind") != "line":
+            continue
+        mates = [x for x in ents if int(x.get("panel", 0)) == int(e.get("panel", 0))
+                 and runs_of(x)]
+        multi = nr > 1 or len({k for x in mates for k in runs_of(x)}) > 1
+        if len(mates) == 1 and multi:
+            e["color"] = figdraw.run_color(spec, ks[0])
+        elif multi:
+            e["ls"] = figdraw.run_style(spec, ks[0])
     return spec
 
 
@@ -410,6 +461,9 @@ def shift_times(spec, dt_s):
         s["time_s"] = float(s["time_s"]) + dt_s
     for p in s.get("panels") or []:
         p["time_s"] = float(p["time_s"]) + dt_s
+    for sec in s.get("sections") or []:  # (section cards with their own time)
+        if sec.get("time_s") is not None:
+            sec["time_s"] = float(sec["time_s"]) + dt_s
     for e in [e for key in ("soundings", "dists", "profiles", "joints", "azims")
               for e in s.get(key) or []]:
         e["time_s"] = float(e["time_s"]) + dt_s

@@ -32,8 +32,8 @@ KEYS = [
         "Optional: a run opened when cm1view starts without a run argument.",
         kind="dir"),
     Key("figures_dir", "paths", "~/cm1view/figures", "Figures",
-        "Exported figures go to <this>/<parent>_<run>/ (image and script; data and "
-        "spec in _src/).", kind="outdir"),
+        "Exported figures go to <this>/<parent>_<run>/ (image; script in scripts/, data "
+        "and spec in _src/).", kind="outdir"),
     Key("exports_dir", "paths", "~/cm1view/exports", "Saved data",
         "Saved series go to <this>/<parent>_<run>/series; tracks go to .../tracks "
         "when no track folder exists.",

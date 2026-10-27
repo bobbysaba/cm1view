@@ -42,6 +42,8 @@ edges of the panel, or above its left or right corner), *Size*, *Bold* and *Whit
 
 ### Colorbar
 
+Hidden for time series, soundings, distributions and vertical profiles, which have no colorbar.
+
 | Setting | Meaning |
 |---|---|
 | **Colorbars** | *One for the figure*, *per row*, *per column*, *per panel*, or *None*. |

@@ -102,8 +102,12 @@ class FigureTree:
 
     def _tree_sync(self, force=False):
         """Show the current panels (the selected one's settings again when what it
-        draws changed, or force)."""
+        draws changed, or force).  Only while the Tree tab is open: opening it shows
+        them afresh."""
         if not hasattr(self, "tree_list"):
+            return
+        if hasattr(self, "tabs") and self.tabs.active != 2:
+            self._tree_sig = None
             return
         s = self._tree_spec()
         n = figdraw.npanels(s)
@@ -278,7 +282,8 @@ class FigureTree:
         sec = pn.widgets.Select(name="Section", options=sopts,
                                 value=int(e["section"]) if e.get("section") is not None and
                                 int(e["section"]) in sopts.values() else -1)
-        sec.visible = s["kind"] == "xsec" or len(secs) > 1  # (plans: their Section line)
+        sec.visible = s["kind"] == "plan" and len(secs) > 1  # (their Section line; a
+        #                                                        section panel: its card)
 
         def on_sec(ev):
             self._tree_edit(i)["section"] = None if ev.new == -1 else int(ev.new)
@@ -516,8 +521,8 @@ class FigureTree:
         panel)."""
         kind = s["kind"]
         if kind == "th":
-            return [_hint("A time-height panel draws its series (<b>Layers</b>): its run "
-                          "and series follow from its place in the grid.")]
+            return [_hint("A time-height panel draws its series card (<b>Layers</b>): "
+                          "the card picks its run and panel number.")]
         ents = s.get(figdraw.ENTRIES[kind]) or []
         mine = [(n, e) for n, e in enumerate(ents) if int(e.get("panel", 0)) == i]
         what = {"line": "line", "sounding": "sounding", "dist": "distribution",

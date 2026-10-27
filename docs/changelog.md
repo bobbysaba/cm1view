@@ -7,8 +7,48 @@ has a matching git tag.
 
 ### Figures
 
-- **Time–height panels follow each series' Runs**: a series is drawn for the runs it
-  picks (blank: every run), and a run no series uses gets no column
+- **A quicker figure editor**: the browser gets far fewer widgets. Hidden settings are
+  not sent until shown, nor a folded card's or section's settings until it is opened; the Layers and
+  Panels tabs hold only what the figure kind uses; a tab is sent the first time it is
+  opened (the panel tree is built then). A new figure keeps the layer and section cards
+  it can and fills them in, so making one sends about 20–30 new widgets instead of
+  about 300 (a plan view after the quick start: about 75 widgets until other tabs and
+  sections are opened, 980 before).
+- **Time zero per series**: each time series and time–height card has a **Time zero
+  (min)**, so runs line up on a common stage (e.g. initiation at 0 min in one run and
+  30 min in another) ([Time series](guide/figures-panels.md#time-series)).
+- **A time series' look is on its card**: the card's **Line** style (new) and colour
+  apply to its line, also in a figure of several runs (before, a panel's only series
+  took its run's colour, and a run's line style came from *Runs used*). *Runs used*
+  no longer has a line style. A card of several runs draws a line per run in the runs'
+  colours when alone in its panel, else in its colour with a line style per run. Saved
+  figures open looking as before (a one-run series takes the colour and line style it
+  was drawn in).
+- **No *Runs used* in time series and time–height figures**: the series cards hold all
+  of it. A card around the tracked storm shows its runs' storm tracks; runs are added
+  from a card's **Run** list. The legend shows a card's **Label** as it is (no run
+  labels; a card of several runs adds each run's folder name, an ensemble band no
+  longer adds "(mean, min–max, n runs)"), and a time–height panel's run name is the
+  run's folder name. Older figures' legends change accordingly.
+- Settings that don't apply are hidden again: a time-series card no longer shows the
+  time–height colormap and colorbar settings (and the reverse). The same fix applies to
+  *Style → Colorbar* with *Colorbars: none* and to the combine dialog's size row.
+- Time–height series cards no longer offer *Vertical: At a height*, which can't make a
+  time–height panel: a card there is always a layer. *Style → Colorbar* is hidden for
+  time series, soundings, distributions and profiles.
+- **A series you change stops computing**: changing a series (e.g. its region from
+  around the storm to the whole domain) or leaving the figure stops the old series'
+  computation at its next output time, so the new one starts at once (its times so far
+  are kept for when it is wanted again). Joint distributions and azimuthal means over a
+  time window stop the same way for a newer preview.
+- **Series cards like sounding and section cards**: each card in *Layers → Series*
+  starts with its **Run** and **Panel**, with **Duplicate** (a copy in a new panel) and
+  **One per run**. A time-series card can also draw *All runs* or *Several runs…* (for
+  an ensemble band); *One per run* splits it into a card per run in the run's colour.
+  **Time–height figures** have one card per panel, like cross-sections: *One per run*
+  copies a card down its column, and *Grid and size → Runs are* is gone. Older
+  time–height figures open as the same panels, a card each; switching between time
+  series and time–height splits or merges the cards
   ([Panels](guide/figures-panels.md#timeheight-series)).
 - **Hatching and stippling**: a shading layer's *Pattern* hatches, cross-hatches or
   stipples its area ([Layers](guide/figures-layers.md)).
@@ -16,6 +56,8 @@ has a matching git tag.
 - **Strip-averaged cross-sections**: *Average across* (km) averages the sections within
   a strip along the line; a *Section line* layer shows the strip.
 - Reopening a saved figure says when a run's `namelist.input` changed since it was saved.
+- **+ script & data** saves the script in a `scripts/` folder next to `_src/` (no longer
+  beside the image); a script's path still opens the figure.
 - **Vertical profile panels**: a field's maximum, minimum, mean or percentile over the
   domain, a box or around the storm, against height, one line per run and time (or the
   mean over a time window); computed like a layer series and cached with them
@@ -55,6 +97,13 @@ has a matching git tag.
 - **Sections along and across the storm motion**: they turn with the tracked motion
   at each time (or its mean over a few minutes), centred on the storm or ahead of / right
   of it ([Panels](guide/figures-panels.md)).
+- **Section cards, one per panel**: cross-section figures now work like soundings.
+  *Layers → Sections* has a card per panel with its run, time, section and panel number
+  (*Duplicate*, *One per run*: runs × sections in a few clicks); the Panels tab keeps only
+  what the figure shares, and drops the sections list and *Rows are* / *Columns are* for
+  sections. A card's label is its panel's title. Older section figures open as the same
+  panels, a card each; a *Section line* layer draws each section once
+  ([Panels](guide/figures-panels.md#vertical-cross-sections)).
 
 ### The viewer
 

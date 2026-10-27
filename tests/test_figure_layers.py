@@ -98,7 +98,7 @@ def test_distribution_spec_upgrades_to_panels(ed):
     assert [[lay["type"] for lay in p["layers"]] for p in v2["panels"]] == [["dist"], ["dist"]]
     assert int(d2[1]["D0_e"]) == 0  # (counted within its panel)
     figdraw.draw(s, data)
-    ed._tree_sync(force=True)
+    ed.tabs.active = 2  # (the tree is built while its tab is open)
     assert ed.tree_list.objects[0].name.startswith("a  Distribution")
 
 
@@ -148,7 +148,7 @@ def test_profile_spec_upgrades_to_panels(ed):
     assert [p["kind"] for p in v2["panels"]] == ["profile", "profile"]
     assert int(d2[1]["P0_e"]) == 0  # (counted within its panel)
     figdraw.draw(s, data)
-    ed._tree_sync(force=True)
+    ed.tabs.active = 2  # (the tree is built while its tab is open)
     assert ed.tree_list.objects[0].name.startswith("a  Profile")
 
 
@@ -199,7 +199,7 @@ def test_joint_spec_upgrades_to_panels(ed):
     assert [p["kind"] for p in v2["panels"]] == ["joint", "joint"]
     assert int(d2[1]["J0_e"]) == 0  # (counted within its panel)
     figdraw.draw(s, data)
-    ed._tree_sync(force=True)
+    ed.tabs.active = 2  # (the tree is built while its tab is open)
     assert ed.tree_list.objects[0].name.startswith("a  Joint")
 
 
@@ -249,7 +249,7 @@ def test_azim_spec_upgrades_to_panels(ed):
     assert [p["kind"] for p in v2["panels"]] == ["azim", "azim"]
     assert int(d2[1]["A0_e"]) == 0  # (counted within its panel)
     figdraw.draw(s, data)
-    ed._tree_sync(force=True)
+    ed.tabs.active = 2  # (the tree is built while its tab is open)
     assert ed.tree_list.objects[0].name.startswith("a  Azimuthal")
 
 

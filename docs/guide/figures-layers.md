@@ -15,7 +15,7 @@ On plan views and cross-sections the layer types are
 | **Shading** | A translucent colour over the area where a field is above (or below) a *threshold*, with its own colour and opacity and an optional outline at the threshold. Its *Pattern* hatches, cross-hatches or stipples the area instead (in the layer's colour, over the fields below), e.g. where a difference is significant. |
 | **Vectors** | Arrows, wind barbs (plan views; in knots or m/s: half barb 5, full 10, flag 50) or streamlines of the wind, horizontal vorticity or baroclinic generation ([The map](map.md#vectors)). |
 | **Storm track** | The run's track (needs a track). |
-| **Section line** | The lines of the figure's sections on a plan view, labelled in turn from *End labels* (A–A′, B–B′, …; a longer label is numbered), or with *Sections: The panel's own* only the panel's (dashed edges: the strip a strip-averaged section averages). |
+| **Section line** | The lines of the figure's sections on a plan view (cards alike but for their run, time or panel: one line), labelled in turn from *End labels* (A–A′, B–B′, …; a longer label is numbered), or with *Sections: The panel's own* only the panel's (dashed edges: the strip a strip-averaged section averages). |
 | **Sector** | The sector of an [azimuthal mean](figures-panels.md#azimuthal-means) on a plan view: azimuths clockwise from the storm's motion or north, out to a radius, around the track (with an offset) or a fixed point, at each panel's time. |
 
 Time–height and time-series figures have **Series** layers; sounding figures have
@@ -74,8 +74,10 @@ plan views, cross-sections and time–height panels.
 
 ## Series layers
 
-Under *Layers → Series* (time–height and time-series figures): each series has a field,
-height or layer, region, reduction, its panel number and its runs. **A series from the
+Under *Layers → Series* (time–height and time-series figures): each card starts with its
+run and panel number (as the sounding and section cards), then the series' field, height
+or layer, region and reduction; *Duplicate* and *One per run* copy it (time–height: one
+card per panel). **A series from the
 Series tool** copies one of the viewer's computed series (the shown one is picked), and
 **+ New series** starts from the maximum updraft in 0–10 km. Series are computed once for
 the figure and cached, so restyling is instant; the figure waits for any that are still

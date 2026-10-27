@@ -157,7 +157,7 @@ def test_viewer_follows_saved_settings(fresh, reg, demo_root):
 
 
 def test_figure_bundle_runs_anywhere(fresh, reg, demo_root):
-    """Image and script side by side, data and spec in _src/; the script redraws the
+    """Image, script in scripts/, data and spec in _src/; the script redraws the
     image from a copied folder.  Several runs: no folder of their own until chosen."""
     from cm1view.viewer import app as A
     from cm1view.figures import spec as fg
@@ -177,7 +177,7 @@ def test_figure_bundle_runs_anywhere(fresh, reg, demo_root):
         os.remove(paths["image"])
         copy = fresh / "moved"
         subprocess.run(["cp", "-r", ed._fig_dir, str(copy)], check=True)
-        r = subprocess.run([sys.executable, str(copy / "refl.py")], capture_output=True,
+        r = subprocess.run([sys.executable, str(copy / "scripts" / "refl.py")], capture_output=True,
                            text=True)
         assert r.returncode == 0, r.stderr[-500:]
         assert (copy / "refl.png").is_file()

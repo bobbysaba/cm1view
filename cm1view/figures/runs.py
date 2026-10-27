@@ -16,8 +16,6 @@ from ..core.fields import GROUP_ORDER, Fields
 from ..core.run import CM1Run
 from .cards import CARD, _hex, _row
 
-RUN_LINES = {"solid": "-", "dashed": "--", "dotted": ":", "dash-dot": "-."}
-
 
 class AllFields:
     """The fields of every run of a figure (the viewer's run's first), for the field
@@ -102,8 +100,6 @@ class FigureRuns:
         r["color"] = pn.widgets.ColorPicker(
             name="Colour", width=70, value=_hex(e.get("color") or
                                                  figdraw.RUN_COLORS[k % len(figdraw.RUN_COLORS)]))
-        r["ls"] = pn.widgets.Select(name="Line", width=90, options=RUN_LINES, value=e.get(
-            "ls") or figdraw.RUN_STYLES[k % len(figdraw.RUN_STYLES)])
         r["rm"] = pn.widgets.Button(name="✕", description="Remove the run", width=32, height=28,
                                     margin=(2, 1), button_type="default", button_style="outline")
         r["info"] = pn.pane.HTML(margin=(0, 4))
@@ -117,25 +113,26 @@ class FigureRuns:
             r["track"].disabled = r["tab"].value
             self._run_info(r)
             self._show_sections()  # (through the storm: needs a track)
+            for c in getattr(self, "ser_cards", []):  # (their track rows)
+                c.refresh_tracks()
             self.request()
 
         r["label"].param.watch(on_label, "value")
         r["tab"].param.watch(on_track, "value")
         r["track"].param.watch(on_track, "value")
-        for w in (r["color"], r["ls"]):
-            w.param.watch(lambda ev: self.request(), "value")
+        r["color"].param.watch(lambda ev: self.request(), "value")
         r["rm"].on_click(lambda ev: self._remove_run(r))
         r["panel"] = pn.Column(
             pn.Row(r["head"], pn.Spacer(), r["rm"], margin=0, sizing_mode="stretch_width"),
-            _row(r["label"], r["color"], r["ls"], r["tab"], r["track"]), r["info"], styles=CARD,
+            _row(r["label"], r["color"], r["tab"], r["track"]), r["info"],
+            styles=CARD,
             sizing_mode="stretch_width", margin=(2, 0))
         self._run_info(r)
         return r
 
     def _run_entry(self, r):
         tr = "viewer" if r["tab"].visible and r["tab"].value else r["track"].value.strip()
-        return dict(path=r["path"], label=r["label"].value, track=tr, color=r["color"].value,
-                    ls=r["ls"].value)
+        return dict(path=r["path"], label=r["label"].value, track=tr, color=r["color"].value)
 
     def _runs_collect(self):
         return [self._run_entry(r) for r in self.run_rows]
@@ -150,20 +147,7 @@ class FigureRuns:
         except Exception as e:  # noqa: BLE001
             r["info"].object = f'<div class="cv-status" style="color:#f87171">{e}</div>'
             return
-        e = self._run_entry(r)
-        fx = self.run_fixes(e, run)
-        tr = e["track"]
-        path = os.path.abspath(os.path.expanduser(os.path.expandvars(tr))) \
-            if tr and tr != "viewer" else ""
-        if path in self._track_err:
-            tnote = f'<span style="color:#f87171">track: {self._track_err[path]}</span>'
-        elif tr:
-            tnote = f"track: {len(fx)} fix{'es' if len(fx) != 1 else ''}"
-            if fx:
-                ts = sorted(fx)
-                tnote += f" ({run.times[ts[0]] / 60:g}–{run.times[ts[-1]] / 60:g} min)"
-        else:
-            tnote = "no track (storm-centred panels stay empty)"
+        tnote = self._track_note(r, run)
         try:
             unused = k < len(self.run_rows) and k not in self._runs_used()
         except AttributeError:  # (the editor is still being built)
@@ -174,6 +158,28 @@ class FigureRuns:
             f'<div class="cv-hint">{len(run.times)} outputs, {run.times[0] / 60:g}–'
             f'{run.times[-1] / 60:g} min · {run.ni}×{run.nj}×{run.nk}, dx {run.dx:g} m · '
             f'{tnote}</div>')
+
+    def _track_note(self, r, run=None):
+        """What run row r's storm track gives (HTML): its fixes and times, or why none."""
+        if run is None:
+            try:
+                run, _ = self.open_run(r["path"])
+            except Exception as e:  # noqa: BLE001
+                return f'<span style="color:#f87171">{e}</span>'
+        e = self._run_entry(r)
+        fx = self.run_fixes(e, run)
+        tr = e["track"]
+        path = os.path.abspath(os.path.expanduser(os.path.expandvars(tr))) \
+            if tr and tr != "viewer" else ""
+        if path in self._track_err:
+            return f'<span style="color:#f87171">track: {self._track_err[path]}</span>'
+        if not tr:
+            return "no track (storm-centred panels stay empty)"
+        note = f"track: {len(fx)} fix{'es' if len(fx) != 1 else ''}"
+        if fx:
+            ts = sorted(fx)
+            note += f" ({run.times[ts[0]] / 60:g}–{run.times[ts[-1]] / 60:g} min)"
+        return note
 
     def _show_runs(self):
         for r in self.run_rows:
@@ -298,16 +304,14 @@ class FigureRuns:
         try:
             for w in [self.run_sel] + \
                     [c.w["run"] for c in self.snd_cards + self.dist_cards + self.prof_cards
-                     + self.joint_cards + self.azim_cards]:
+                     + self.joint_cards + self.azim_cards + self.sec_cards]:
                 self._set_runs_of(w, w.value)
             opts = self._series_run_opts(names)
             v = [k for k in self.gg_runs.value if k in names.values()] or [0]
             self.gg_runs.options = opts
             self.gg_runs.value = v
             for c in self.ser_cards:
-                v = [k for k in c.w["runs"].value if k in names.values()]
-                c.w["runs"].options = opts
-                c.w["runs"].value = v
+                c.refresh_runs(names)
             for c in self.cards:  # (a layer's run)
                 if "run" in c.w:
                     v = c.w["run"].value
@@ -325,7 +329,7 @@ class FigureRuns:
         finally:
             self._hold = hold
         self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \
-            not self._uses("runs") and self.kind.value in ("plan", "xsec")
+            not self._uses("runs") and self.kind.value == "plan"  # (sections: cards')
 
     def _refresh_fields(self):
         """The field lists offer the fields of every run of the figure."""
@@ -389,6 +393,8 @@ class FigureRuns:
         used, maps = set(), self.kind.value in ("plan", "xsec")
         if maps and self._uses("runs"):
             used |= set(self._grid_runs())
+        elif self.kind.value == "xsec":  # (a card per panel)
+            used |= {c.w["run"].value or 0 for c in self.sec_cards}
         elif maps:
             used.add(self.run_sel.value or 0)
         for c in self.cards:
@@ -403,8 +409,8 @@ class FigureRuns:
                 self.azim_cards:
             used.add(c.w["run"].value or 0)
         for c in self.ser_cards:
-            ks = [int(k) for k in c.w["runs"].value if not isinstance(k, str)]
-            used |= set(ks) if ks else set(range(n))
+            ks = c.run_list()
+            used |= set(range(n)) if ks is None else set(ks)
         used |= {int(e["run"]) for e in self._edit_runs()}
         return {k for k in used if isinstance(k, int) and 0 <= k < n}
 
@@ -470,14 +476,24 @@ class FigureRuns:
                     keep.append(c)
                 cards[:] = keep
             keep = []
+            for c in self.sec_cards:  # (a section figure's cards of it go)
+                j = int(c.w["run"].value or 0)
+                if j == k and self.kind.value == "xsec" and len(self.sec_cards) > 1:
+                    gone.append("section")
+                    continue
+                if j >= k:
+                    c.set_run(max(0, j - 1))
+                keep.append(c)
+            self.sec_cards = keep
+            keep = []
             for c in self.ser_cards:
-                old = [int(j) for j in c.w["runs"].value]
-                new = [j - (j > k) for j in old if j != k]
+                old = c.run_list()
+                new = None if old is None else [j - (j > k) for j in old if j != k]
                 if old and not new:  # it was of that run only
                     gone.append("series")
                     continue
-                c.w["runs"].value = new
-                c.w["runs"].options = self._series_run_opts(names)
+                c.refresh_runs(names)
+                c.set_runs(new)
                 keep.append(c)
             self.ser_cards = keep
         finally:
@@ -489,6 +505,7 @@ class FigureRuns:
         self._show_joints()
         self._show_azims()
         self._show_series()
+        self._show_sections()
         if gone:
             n = {w: gone.count(w) for w in dict.fromkeys(gone)}
             self._runs_msg("Removed the run and its " + " and ".join(
@@ -498,3 +515,5 @@ class FigureRuns:
     def _runs_msg(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""
         self.runs_msg.object = f'<div class="cv-status"{col}>{html}</div>'
+        if self.kind.value in ("th", "line"):  # (Runs used hidden: the editor's line)
+            self._msg(html, err)

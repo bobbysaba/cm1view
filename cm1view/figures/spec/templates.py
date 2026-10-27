@@ -24,8 +24,15 @@ def template(spec, name=""):
             p["grid"] = dict(p["grid"], runs=[])
         for key in ("soundings", "dists", "profiles", "joints", "azims"):
             p[key] = [e for e in p.get(key) or [] if int(e.get("run", 0)) == 0]
-        for e in p.get("series") or []:
-            e["runs"] = None
+        if p.get("kind") == "xsec" and p.get("sections"):  # (cards: the first run's)
+            p["sections"] = [e for e in p["sections"] if int(e.get("run") or 0) == 0] or \
+                [dict(p["sections"][0], run=0)]
+        if p.get("kind") == "th" and p.get("series"):  # (cards: the first run's)
+            p["series"] = [e for e in p["series"] if (e.get("runs") or [0])[0] == 0] or \
+                [dict(p["series"][0], runs=[0])]
+        else:  # (a series of the first run only stays so, the others: every run)
+            for e in p.get("series") or []:
+                e["runs"] = [0] if e.get("runs") == [0] else None
         for lay in p.get("layers") or []:
             if (lay.get("minus") or {}).get("run") not in (None, 0):
                 lay.pop("minus")
@@ -59,6 +66,8 @@ def from_template(tpl, run, t):
         p["time_s"] = near(p.get("time_s", tt[t]))
         p["times"] = [None if ts is None else tindex(run, ts) for ts in p["times_s"]]
         p["time"] = tindex(run, p["time_s"])
+        for e in [e for e in p.get("sections") or [] if e.get("time_s") is not None]:
+            e["time_s"] = near(e["time_s"])  # (section cards)
         for e in (p.get("panels") or []) + (p.get("soundings") or []) + \
                 (p.get("dists") or []) + (p.get("profiles") or []) + (p.get("joints") or []) + \
                 (p.get("azims") or []):

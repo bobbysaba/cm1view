@@ -86,70 +86,101 @@ def test_cross_section_hides_plan_settings(ed, viewer):
     render(ed)
 
 
-def test_sections_list_and_a_section_per_panel(ed):
-    """Section panels pick one of the figure's sections (panel tree: Section); removing
-    a section keeps the panels on theirs."""
+def test_section_cards_one_per_panel(ed):
+    """A section figure has a card per panel in Layers (run, time, section, panel);
+    + Section puts the y–z twin beside the x–z one; the card's label is the panel's
+    title; the Panels tab keeps only what the figure shares."""
     from cm1view.figures import spec as fg
+    ed.rows.value, ed.cols.value = 1, 1  # (one plan view: one card)
     ed.kind.value = "xsec"
-    ed.rows.value, ed.cols.value = 1, 2
+    assert len(ed.sec_cards) == 1 and ed.xsec_col.visible
+    assert list(ed.xsec_box.objects) == [ed.sec_cards[0].panel] and not ed.sec_box.objects
+    assert ed.sec_cards[0].where.visible and not ed.g_cols.visible
+    assert not ed.times_sec.visible and not ed.sec_add.visible
     ed.sec_cards[0].w["pos"].value = "fixed"  # x–z at the domain's centre
-    ed._add_section()  # its y–z twin
+    ed._add_section()  # its y–z twin, in a new panel beside it
     assert [c.w["orient"].value for c in ed.sec_cards] == ["x", "y"]
+    assert [c.w["panel"].value for c in ed.sec_cards] == [1, 2]
+    assert (ed.rows.value, ed.cols.value) == (1, 2)
     ed.sec_cards[1].w["y0"].value = 5.0
-    ed._tree_edit(1)["section"] = 1
+    ed.sec_cards[1].w["label"].value = "North half"
     spec, data, fig = render(ed)
     assert [s["orient"] for s in spec["sections"]] == ["x", "y"]
+    assert [s["panel"] for s in spec["sections"]] == [0, 1]
+    assert spec["grid"]["rows"] == spec["grid"]["cols"] == "none"
     x0, x1, y0, y1 = fg.domain_box(ed.run)
     assert np.allclose(data[0]["xlim"], (x0, x1), atol=0.3)  # (fixed: the model's x, y)
     assert np.allclose(data[1]["xlim"], (5.0, y1), atol=0.3)
     assert data[0]["xname"] == "x (km)" and data[1]["xname"] == "y (km)"
+    assert fig._cv_axes[1].get_title() == "North half"  # (the label: the panel's title)
     ed.set_spec(json.loads(json.dumps(spec)))  # round trip
     assert json.dumps(ed.collect(), sort_keys=True) == json.dumps(spec, sort_keys=True)
-    ed._remove_section(ed.sec_cards[0])
-    assert ed.collect()["edits"]["1"]["section"] == 0 and len(ed.sec_cards) == 1
-    assert not ed.sec_cards[0].rm.visible  # (the last one stays)
+    ed._dup_section(ed.sec_cards[0])  # a copy in a new panel
+    assert ed.sec_cards[2].w["panel"].value == 3 and ed.cols.value == 3
+    assert ed.sec_cards[2].collect()["orient"] == "x"
+    ed._remove_section(ed.sec_cards[2])
+    ed._remove_section(ed.sec_cards[1])
+    assert len(ed.sec_cards) == 1 and not ed.sec_cards[0].rm.visible  # (the last stays)
 
 
-def test_a_grid_of_runs_by_sections(ed, demo_root):
-    """Rows of runs and columns of sections (untracked runs: fixed sections); the
-    lists set the rows and columns, a panel edit still picks its own section."""
+def test_runs_by_sections_with_one_per_run(ed, demo_root):
+    """Runs × sections: an x–z and a y–z card side by side, each copied down its
+    column for the other run (untracked runs: fixed sections); titles name each
+    panel's run and section; removing a run takes its cards."""
     import os
-    from cm1view.figures import draw as figdraw, spec as fg
+    from cm1view.figures import spec as fg
+    ed.rows.value, ed.cols.value = 1, 1
     ed.kind.value = "xsec"
+    ed.sec_cards[0].w["pos"].value = "fixed"
+    ed._per_run_section(ed.sec_cards[0])  # (one run: nothing to copy to)
+    assert len(ed.sec_cards) == 1 and "one run" in txt(ed.msg.object)
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
     ed._add_run()
-    ed.sec_cards[0].w["pos"].value = "fixed"  # x–z at the domain's centre
-    ed._add_section()  # its y–z twin
-    ed.gg_runs.value = [0, 1]
-    ed.g_rows.value, ed.g_cols.value = "runs", "sections"
-    assert (ed.rows.value, ed.cols.value) == (2, 2) and ed.rows.disabled and ed.cols.disabled
-    assert ed.time1.visible and not ed.tm_box.visible and ed.gg_runs.visible
+    ed._add_section()  # y–z beside x–z
+    for c in list(ed.sec_cards):
+        ed._per_run_section(c)
+    assert (ed.rows.value, ed.cols.value) == (2, 2)
     spec, data, fig = render(ed)
-    assert spec["grid"] == dict(rows="runs", cols="sections", runs=[0, 1])
     assert [fg.panel_ref(spec, i)[0] for i in range(4)] == [0, 0, 1, 1]
-    assert [fg.panel_section(spec, i)[0] for i in range(4)] == [0, 1, 0, 1]
+    assert [fg.panel_section(spec, i)[1]["orient"] for i in range(4)] == ["x", "y", "x", "y"]
+    t1 = fg.panel_ref(spec, 2)[1]
+    assert t1 in [float(t) for t in ed.open_run(spec["runs"][1]["path"])[0].times]
     x0, x1, y0, y1 = fg.domain_box(ed.run)
     assert np.allclose(data[0]["xlim"], (x0, x1), atol=0.3)  # (the viewer's run)
     assert np.allclose(data[1]["xlim"], (y0, y1), atol=0.3)
-    # (labelled as the grid was made: sections over the columns, runs left of the rows)
-    assert "x–z" in spec["titles"][0] and "y–z" in spec["titles"][1] and len(spec["titles"]) == 2
-    assert spec["row_titles"] == [r["label"] for r in spec["runs"]]
-    assert not spec["run_label"]["on"]
-    assert [p.get("rowlabel") for p in figdraw.upgrade(spec)[0]["panels"]] == \
-        [spec["runs"][0]["label"], None, spec["runs"][1]["label"], None]
-    assert any(t.get_text() == spec["runs"][1]["label"] and t.get_rotation() == 90
-               for ax in fig.axes for t in ax.texts)
-    xl = [fig._cv_axes[i].get_xlabel() for i in (2, 3)]  # (outer: on the bottom row)
-    assert xl == ["x (km)", "y (km)"]
+    ed._per_run_section(ed.sec_cards[0])  # (every run has it already)
+    assert len(ed.sec_cards) == 4
+    ed._auto_titles()
+    titles = ed.collect()["titles"]
+    assert titles[2].startswith(spec["runs"][1]["label"]) and "x–z" in titles[2]
+    assert not ed.rl_on.value
     ed.set_spec(json.loads(json.dumps(ed.collect())))  # round trip
-    assert (ed.g_rows.value, ed.g_cols.value, ed.cols.value) == ("runs", "sections", 2)
-    ed._add_section()  # a column more
-    assert ed.cols.value == 3
-    ed._tree_edit(0)["section"] = 2  # (a panel's own section wins)
-    assert fg.panel_section(ed.collect(), 0)[0] == 2
-    ed.kind.value = "plan"  # plan views have no sections: a column per time
-    assert ed.g_cols.value == "times" and "sections" not in ed.g_cols.options.values()
-    assert not ed.cols.disabled
+    assert len(ed.sec_cards) == 4 and ed.cols.value == 2
+    ed._remove_run(ed.run_rows[1])
+    assert [c.w["panel"].value for c in ed.sec_cards] == [1, 2]
+    ed.kind.value = "plan"  # plan views: the grid chooser again
+    assert ed.g_cols.visible and "sections" not in ed.g_cols.options.values()
+
+
+def test_plan_views_become_section_cards(ed):
+    """Switching plan views at several times to sections: a card per panel at its
+    time; older figures (sections × times) open as a card per panel."""
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.rows.value, ed.cols.value = 1, 2
+    times = ed.collect()["times_s"]
+    ed.kind.value = "xsec"
+    assert [c.collect()["time_s"] for c in ed.sec_cards] == times
+    assert (ed.rows.value, ed.cols.value) == (1, 2)
+    old = ed.collect()
+    old.update(sections=[fg.card_section(c) for c in old["sections"]] * 2,
+               grid=dict(rows="sections", cols="times", runs=[]), rows=2, cols=2,
+               times_s=times)
+    old["sections"][1] = dict(old["sections"][1], orient="y")
+    ed.set_spec(json.loads(json.dumps(old)))
+    s = ed.collect()
+    assert [(c["orient"], c["time_s"], c["panel"]) for c in s["sections"]] == \
+        [("x", times[0], 0), ("x", times[1], 1), ("y", times[0], 2), ("y", times[1], 3)]
+    assert figdraw.grid_axes(s) == ("none", "none")
 
 
 def test_old_cross_section_spec_converts(ed):
@@ -164,6 +195,7 @@ def test_old_cross_section_spec_converts(ed):
     assert len(c["sections"]) == 1
     sec = c["sections"][0]
     assert sec["orient"] == "ab" and sec["a"] == [-5.0, 0.0] and sec["avg"] == 1.0
+    assert sec["panel"] == 0 and sec["run"] == 0  # (a plan view's: no card yet)
     from cm1view.figures import spec as fg
     old = fg.from_xsec(dict(mode="storm", angle=30.0, half=10.0, offset=[1.0, 1.0]))
     assert old["orient"] == "angle" and old["angle"] == 60.0  # (clockwise from north)
@@ -174,13 +206,13 @@ def test_old_cross_section_spec_converts(ed):
 def test_section_x_axes_follow_how_each_section_runs(ed):
     """x–z through the storm: x from the storm's (or the model's x); angled: the
     distance along it; the x label follows each panel's section unless one is typed."""
+    ed.rows.value, ed.cols.value = 1, 1  # (one plan view: one card)
     ed.kind.value = "xsec"
     assert ed.xlabel.value == ""
     ed.sec_cards[0].w["orient"].value = "x"
     ed.sec_cards[0].w["half"].value = 8.0
-    ed._add_section()
+    ed._add_section()  # (a card in panel b)
     ed.sec_cards[1].w["orient"].value = "angle"
-    ed.g_rows.value, ed.g_cols.value = "none", "sections"
     spec, data, fig = render(ed)
     if data[0].get("missing"):
         pytest.skip("no track position at the panel time")
@@ -205,8 +237,13 @@ def test_section_line_layer_draws_every_section(ed):
     ed.sec_cards[0].w["pos"].value = "fixed"
     ed._add_section()
     ed._add_layer("line")
+    assert list(ed.sec_box.objects) == [c.panel for c in ed.sec_cards]  # (Panels → Area)
+    assert not ed.sec_cards[0].where.visible  # (no run, time or panel in a plan view)
+    ed._dup_section(ed.sec_cards[0])  # (alike but for its panel: one line)
     spec, data, fig = render(ed)
     assert data[0]["lines"].shape == (2, 6)
+    ed._remove_section(ed.sec_cards[2])
+    spec, data, fig = render(ed)
     texts = [t.get_text() for t in fig.axes[0].texts]
     assert all(x in texts for x in ("A", "A′", "B", "B′"))
     assert figdraw.end_labels("X, X′", 2) == ("Z", "Z′")
@@ -253,6 +290,7 @@ def test_motion_section_ends_turn_with_the_motion():
 
 def test_motion_sections_in_the_editor(ed):
     """The card shows the motion options; + Section after an along one is across."""
+    ed.rows.value, ed.cols.value = 1, 1  # (one plan view: one card)
     ed.kind.value = "xsec"
     c = ed.sec_cards[0]
     c.w["orient"].value = "along"
@@ -260,7 +298,6 @@ def test_motion_sections_in_the_editor(ed):
     assert not c.w["pos"].visible and not c.w["off"].visible
     ed._add_section()
     assert ed.sec_cards[1].w["orient"].value == "across"
-    ed.g_rows.value, ed.g_cols.value = "none", "sections"
     spec, data, fig = render(ed)
     assert [s["orient"] for s in spec["sections"]] == ["along", "across"]
     if data[0].get("missing"):
@@ -291,6 +328,65 @@ def test_undo_and_redo(ed):
     assert ed.kind.value == "plan"
 
 
+def test_new_figure_keeps_cards_of_the_same_type(ed):
+    from cm1view.figures import spec as fg
+    s = json.loads(json.dumps(ed.collect()))
+    old = list(ed.cards)
+    j = next(j for j, c in enumerate(old) if c.type == "fill")
+    lay = s["layers"][j]
+    field = next(f for f in ed.fields.defs if f != lay["field"])
+    s["layers"][j] = dict(lay, field=field, vmax=float(lay["vmax"]) + 7.0, cmap="Blues",
+                          minus=dict(run=None, time_s=None, grid="refuse"), panels=[1])
+    s["layers"].append(fg.layer_defaults("shade", ed.fields, field, 1.0))
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert ed.cards[:len(old)] == old and ed.cards[-1] not in old  # (the shade is new)
+    fresh = ed._card(s["layers"][j]).collect()  # (what a card built for it collects)
+    got = ed.cards[j].collect()
+    assert got == fresh and got["field"] == field and got["cmap"] == "Blues"
+    assert got["minus"]["grid"] == "refuse" and got["panels"] == [1]
+    assert "panel b" in ed.cards[j].title.object
+    ed.set_spec(ed._default())  # (and back: the cards show the example again)
+    assert [c.collect() for c in ed.cards] == [ed._card(x).collect()
+                                               for x in ed.collect()["layers"]]
+
+
+def test_new_section_figure_keeps_section_cards(ed):
+    def quick():
+        ed._started = False
+        ed.opened()
+        ed.qs_kind.value = "xsec"
+        ed._quick_make()
+    quick()
+    cards = list(ed.sec_cards)
+    cards[0].w["orient"].value = "angle"
+    quick()  # (the same cards, showing the new figure's sections)
+    assert ed.sec_cards == cards and len(cards) > 1
+    assert [c.collect()["orient"] for c in cards[:2]] == ["x", "y"]
+    assert [c.collect()["panel"] for c in cards] == list(range(len(cards)))
+
+
+def test_hidden_settings_are_not_sent(ed):
+    import panel as pn
+    c = next(c for c in ed.cards if c.type == "fill")
+
+    def sent(w):
+        return any(x is w for x in c.panel.select(pn.widgets.Widget))
+    assert not c.w["minus_on"].value and not sent(c.w["minus_run"])
+    c.w["minus_on"].value = True  # (shown: in the card again)
+    assert sent(c.w["minus_run"])
+    assert ed.tabs.objects[0] is ed.tab_list[0][1]  # (a tab: sent when first opened)
+    assert ed.tabs.objects[3] is not ed.tab_list[3][1]
+    ed.tabs.active = 3
+    ed.tabs.active = 0
+    assert ed.tabs.objects[3] is ed.tab_list[3][1]  # (and kept)
+    assert all(x is not ed.series_col for x in ed.layers_tab.objects)  # (a plan view)
+    sec = ed.anim_sec  # (a folded section: its widgets sent when first opened, then kept)
+    assert sec.collapsed and not sec.objects
+    sec.collapsed = False
+    sec.collapsed = True
+    assert len(sec.objects) > 1
+
+
 def test_quick_start(ed, viewer):
     ed._started = False
     ed.auto.value = True  # (renders, so that Undo has the example)
@@ -298,8 +394,8 @@ def test_quick_start(ed, viewer):
     viewer.workspace.value = "Map"
     viewer.workspace.value = "Figure"  # the first time: the quick start
     assert ed.quick.open and ed._started
-    ed.qs_kind.value = "xsec"
-    assert "heights" not in ed.qs_vary.options.values() and ed.qs_rows.visible
+    ed.qs_kind.value = "xsec"  # (a section card per panel)
+    assert not ed.qs_vary.visible and ed.qs_rows.visible and ed.qs_field.visible
     ed.qs_kind.value = "sounding"  # (rows and columns for every kind but time-height)
     assert ed.qs_rows.visible and not ed.qs_field.visible
     ed.qs_kind.value = "th"
@@ -339,8 +435,10 @@ def test_saved_bundle_reopens(ed, tmp_path):
     import os
     import subprocess
     import sys
+    from cm1view.figures import spec as fg
     os.remove(base + ".png")  # the script redraws it, with the new options
-    subprocess.run([sys.executable, base + ".py"], check=True, capture_output=True)
+    script = fg.bundle_paths({}, base)["script"]
+    subprocess.run([sys.executable, script], check=True, capture_output=True)
     assert os.path.getsize(base + ".png") > 1000
     ed.let_box.value = False
     ed.spec_path.value = base + ".png"  # the image's path finds the spec
@@ -372,6 +470,41 @@ def test_saved_figures_listed(ed, tmp_path):
         assert ed.path.value == os.path.join(ed._fig_dir, "fig")
     finally:
         ed._fig_dir = own
+
+
+def test_a_series_no_longer_shown_stops(ed, monkeypatch):
+    """A series job whose recipe the figure no longer needs (e.g. its region changed
+    from around the storm to the whole domain) stops, and one queued behind another
+    does not start; both start again (from the times kept) when needed again."""
+    from cm1view.figures import sources
+    calls = []
+
+    def compute(run, F, recipe, ds, centers, storm, on_result=None, cancelled=None):
+        calls.append(recipe["region"])
+        ed._ser_live = set()  # (the figure changed meanwhile)
+        assert cancelled()
+        return ds, {}
+
+    monkeypatch.setattr(sources.ser, "compute", compute)
+    old, new = ("p", "storm", ""), ("p", "domain", "")
+    ed._ser_state[old] = "running"
+    ed._ser_live = {new}  # queued, not needed by the time it is reached: not started
+    ed._ser_compute(old, ed.run, ed.F, dict(region="track"), None, None, None, "w")
+    assert calls == [] and old not in ed._ser_state
+    ed._ser_state[new] = "running"
+    ed._ser_live = {new}  # started, then no longer needed: stopped, to start again
+    ed._ser_compute(new, ed.run, ed.F, dict(region="domain"), None, None, None, "w")
+    assert calls == ["domain"] and new not in ed._ser_state
+    assert not ed.series_pending()
+
+
+def test_time_windows_stop_for_a_newer_preview(ed):
+    from cm1view.core import azim, joint
+    ts = list(range(len(ed.run.times)))
+    stop = lambda: True  # noqa: E731
+    assert joint.compute(ed.run, ed.F, dict(field="winterp"), ts, cancelled=stop) is None
+    r = azim.normalize(ed._new_azim_recipe())
+    assert azim.compute(ed.run, ed.F, r, ts, {}, {}, cancelled=stop) is None
 
 
 def test_series_without_the_series_tool(ed):
@@ -574,8 +707,8 @@ def test_panels_at_heights(ed):
     s = ed.collect()
     ed.set_spec(json.loads(json.dumps(s)))
     assert ed.collect()["panel_z"] == [1.0, 3.0, 6.0]
-    ed.kind.value = "xsec"  # sections have no heights to vary
-    assert ed.g_cols.value == "times" and "heights" not in ed.g_cols.options.values()
+    ed.kind.value = "xsec"  # sections: a card per panel (no heights)
+    assert not ed.g_cols.visible and len(ed.sec_cards) == 3
 
 
 def test_clicks_on_the_preview_place_things(ed):

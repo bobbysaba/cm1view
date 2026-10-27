@@ -152,6 +152,11 @@ class FigureStyle:
         self.cb_opts = _grid(self.cb_loc, self.cb_shrink, self.cb_fraction, (self.cb_label, 2),
                              self.cb_lbold, self.cb_lside, self.cb_lsize, self.cb_pad,
                              self.cb_ticks, self.cb_fmt, self.cb_tsize)
+        self.cb_sec = _section("Colorbar", _grid(self.cb_mode), self.cb_opts, _hint(
+            "With several colorbars, give each its own label and ticks where its "
+            "colours are set: the fill layer (Layers), each time–height series "
+            "(Layers → Series) or each panel's field (Panels, when panels differ in "
+            "field). The label and ticks here are for the others."))
         style_tab = pn.Column(
             _section("Text", _grid(self.font, self.math, self.fsize, self.fs_tick,
                                    self.fs_label, self.fs_title, self.fs_sup, self.fs_legend),
@@ -164,11 +169,7 @@ class FigureStyle:
                       "labels on outer panels only when the panels share their ranges.")),
             _section("Panel labels", let, tl, _grid(self.tl_t0), zl, rl,
                      _checks(self.let_on, self.tl_on, self.zl_on, self.rl_on)),
-            _section("Colorbar", _grid(self.cb_mode), self.cb_opts, _hint(
-                "With several colorbars, give each its own label and ticks where its "
-                "colours are set: the fill layer (Layers), each time–height series "
-                "(Layers → Series) or each panel's field (Panels, when panels differ in "
-                "field). The label and ticks here are for the others.")),
+            self.cb_sec,
             _section("Legend", _grid(self.lg_where, self.lg_loc, self.lg_anchor,
                                      self.lg_panel, self.lg_from, self.lg_ncol, self.lg_title),
                      _checks(self.lg_frame, self.lg_own),

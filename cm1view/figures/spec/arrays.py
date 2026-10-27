@@ -8,8 +8,8 @@ from ...core import azim, render, series as ser, swath, vectors
 from .. import draw as figdraw
 from ...core.run import FileBusy, MissingAtTime
 from .base import panel_ref, tindex, storm_motion
-from .sections import (domain_box, is_storm, panel_section, section_ends, section_motion,
-                       sections, x_axis)
+from .sections import (card_section, domain_box, is_storm, panel_section, section_ends,
+                       section_motion, sections, x_axis)
 
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame",  # -> data
              "style", "reduce", "vector", "which")
@@ -33,12 +33,13 @@ def data_key(spec, i, center, path=""):
     layers = figdraw.spec_layers(spec, i)
     lk = [{k: lay.get(k) for k in DATA_KEYS if k in lay} | {"on": lay.get("on", True)}
           for lay in layers]
+    line = any(lay["type"] == "line" for lay in layers)  # (the sections: all of them)
     return json.dumps(dict(kind=spec["kind"], ref=panel_ref(spec, i), path=path,
                            dom=spec["domain"],
                            coords=spec["coords"],
-                           xsec=[spec["xsec"], panel_section(spec, i)[1], sections(spec)]
-                           if spec["kind"] == "xsec" or any(lay["type"] == "line"
-                                                            for lay in layers) else None,
+                           xsec=[spec["xsec"], card_section(panel_section(spec, i)[1]),
+                                 [card_section(sec) for sec in sections(spec)] if line else None]
+                           if spec["kind"] == "xsec" or line else None,
                            layers=lk, center=center), sort_keys=True, default=float)
 
 
@@ -123,9 +124,14 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
             if t in fixes:
                 out["now_x"], out["now_y"] = fixes[t]["x"] - ox, fixes[t]["y"] - oy
         elif lay["type"] == "line":  # (every section, or with which "panel" its own)
-            secs = list(enumerate(sections(spec)))
             if lay.get("which", "all") == "panel":
                 secs = [panel_section(spec, i)]
+            else:  # (cards alike but for their run, time or panel: one line, numbered on)
+                seen = []
+                for sec in sections(spec):
+                    if card_section(sec) not in seen:
+                        seen.append(card_section(sec))
+                secs = list(enumerate(seen))
             rows = []
             for k, sec in secs:
                 ends = section_ends(run, sec, center, section_motion(run, fixes, t, sec))

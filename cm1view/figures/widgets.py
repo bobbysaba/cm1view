@@ -41,8 +41,6 @@ class FigureWidgets:
         self.g_rows = pn.widgets.Select(name="Rows are", options=GRID_DIMS, value="none")
         self.g_cols = pn.widgets.Select(name="Columns are", options=GRID_DIMS, value="times")
         self.run_sel = pn.widgets.Select(name="Run (every panel)", options={})
-        self.runs_as = pn.widgets.Select(name="Runs are", options={
-            "Rows": "rows", "Columns": "cols"})  # (time-height panels)
         self.gg_runs = pn.widgets.MultiChoice(  # (a row or column of runs)
             name="Runs, in order", options={f"1. {os.path.basename(run.path)}": 0}, value=[0])
         self.grid_hint = _hint(
@@ -106,6 +104,17 @@ class FigureWidgets:
         self.sec_add = pn.widgets.Button(name="+ Section", height=32, button_type="light",
                                          button_style="outline")
         self.xs_html = pn.pane.HTML(margin=(2, 4))
+        # (a section figure's cards: Layers tab, one per panel)
+        self.xsec_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.sec_new = pn.widgets.Button(name="+ Section", button_type="primary",
+                                         button_style="outline", height=32)
+        self.xsec_col = pn.Column(
+            _hint("Each card is one panel: its run, time and cross-section (the layers "
+                  "below are drawn in every section panel). <b>Duplicate</b> copies a card "
+                  "into a new panel (e.g. an x–z card's y–z twin beside it); <b>One per "
+                  "run</b> copies it down its column for each other run (runs × sections: "
+                  "two cards and two clicks)."),
+            _row(self.sec_new), self.xsec_box, sizing_mode="stretch_width", margin=0)
         # ---- Panels: runs
         self.runs_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.run_rows = []
@@ -136,11 +145,13 @@ class FigureWidgets:
         self.ser_new = pn.widgets.Button(name="+ New series", button_type="light",
                                          button_style="outline", height=32)
         self.series_col = pn.Column(
-            _hint('Each series is computed for every run of the figure (<b>Layers → Runs used</b>; '
-                  'regions around the storm use each run’s track) and cached, like the Series '
-                  'tool. Time–height panels: a row per series and a column per run. Time '
-                  'series: series with the same <b>Panel</b> number share a panel; other units '
-                  'get their own axis.'),
+            _hint('Each card picks its <b>Run</b> and <b>Panel</b>, like the sounding and '
+                  'section cards; regions around the storm use each run’s track, and every '
+                  'series is cached, like the Series tool. Time series: cards with the same '
+                  'panel number share a panel (other units get their own axis), and a card '
+                  'can draw <b>All runs</b> or <b>Several runs…</b> (with an ensemble band). '
+                  'Time–height: one card per panel; <b>One per run</b> copies a card down '
+                  'its column for the other runs.'),
             _grid((self.ser_from, 2), self.ser_add, self.ser_new), self.ser_box,
             sizing_mode="stretch_width", margin=0)
         # soundings
@@ -466,8 +477,8 @@ class FigureWidgets:
         self.save_all = pn.widgets.Button(
             name="+ script & data", button_type="primary", button_style="outline",
             height=32, margin=(5, 3),
-            description="Also writes <name>.py (redraws the figure without the viewer) and, "
-                        "in _src/, <name>_data.npz and <name>_spec.json")
+            description="Also writes scripts/<name>.py (redraws the figure without the viewer) "
+                        "and, in _src/, <name>_data.npz and <name>_spec.json")
         self.dl = pn.widgets.FileDownload(callback=self._download, filename="figure.png",
                                           label="Download", icon="download",
                                           button_type="primary", button_style="outline",
@@ -491,7 +502,7 @@ class FigureWidgets:
     def _panels_tab(self):
         """The Panels tab's sections (and the parts and tree builders)."""
         self.grid_sec = _section(
-            "Grid and size", _grid(self.kind, self.g_rows, self.g_cols, self.runs_as),
+            "Grid and size", _grid(self.kind, self.g_rows, self.g_cols),
             self.grid_hint, _grid(self.rows, self.cols, self.fit_btn),
             _grid(self.size_preset, self.width, self.height),
             _hint("The height follows the panels (grid, colorbar, titles) until you type "
@@ -508,7 +519,9 @@ class FigureWidgets:
         self.area_xs = pn.Column(self.sec_box, _grid(self.sec_add, self.xs_top, self.xs_coords),
                                  self.xs_html,
                                  margin=0, sizing_mode="stretch_width")
-        self.area_sec = _section("Area", self.area_plan, self.area_xs)
+        self.area_body = pn.Column(self.area_plan, self.area_xs, margin=0,
+                                   sizing_mode="stretch_width")
+        self.area_sec = _section("Area", self.area_body)
         self.ts_sec = _section("Time and value axes", _grid(
             self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax, self.ts_ymin,
             self.ts_ymax, self.ts_legloc, self.ts_legncol, self.ts_mark),
@@ -517,11 +530,11 @@ class FigureWidgets:
                   "labels → Minutes counted from</b>."))
         self.runs_sec = _section(
             "Runs used", _hint(
-                "Each layer, sounding, distribution and series picks its run in its own "
-                "<b>Run</b> list (a run not in the figure yet is added by picking it); a "
-                "run nothing uses any more is dropped.  Here: each run's name, colour, "
-                "line style and storm track (for storm-centred panels and storm-relative "
-                "fields: the viewer's track for this run, or a track file; "
+                "Each layer, section, sounding, distribution and series picks its run in its "
+                "own <b>Run</b> list (a run not in the figure yet is added by picking it); a "
+                "run nothing uses any more is dropped.  Here: each run's name, colour and "
+                "storm track (for storm-centred panels and storm-relative fields and "
+                "regions: the viewer's track for this run, or a track file; "
                 "storm_tracks/*.csv is found automatically)."),
             self.runs_box,
             _hint("<b>Add a run</b> here if you want it before using it: your recent runs, "
@@ -530,10 +543,12 @@ class FigureWidgets:
             self.add_pick.body, self.runs_msg)
         self._build_combo()
         self._build_tree()
-        panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.times_sec,
-                               self.titles_sec, self.area_sec, self.ts_sec,
-                               sizing_mode="stretch_width")
-        return panels_tab
+        # (the sections the figure kind uses only, and the area's: _keep_tabs)
+        self.panels_all = [self.parts_sec, self.grid_sec, self.times_sec, self.titles_sec,
+                           self.area_sec, self.ts_sec]
+        self.area_all = [self.area_plan, self.area_xs]
+        self.panels_tab = pn.Column(*self.panels_all, sizing_mode="stretch_width")
+        return self.panels_tab
 
     def _more_tabs(self):
         """The Annotate and Export tabs."""

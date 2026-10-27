@@ -120,16 +120,19 @@ def at_time(run, F, recipe, t, center, ref, storm=None):
     return s.reshape(nz, nr), n
 
 
-def compute(run, F, recipe, ts, centers, refs, storm=None):
+def compute(run, F, recipe, ts, centers, refs, storm=None, cancelled=None):
     """The recipe at the outputs ts together (dict: r (bin centres, km), z (levels,
     km), v (levels x bins; nan where a bin has no value), n (counts), nt (outputs)).
     centers: {t: (x, y)}; refs: {t: bearing of azimuth 0}; storm: {t: storm motion}
-    of storm-relative fields.  Raises ValueError as at_time()."""
+    of storm-relative fields.  Raises ValueError as at_time(); None when cancelled()
+    turns true before a time."""
     r = recipe
     dr, nr = bins(run, r)
     ks = ser.levels(run, r)
     S = N = None
     for t in ts:
+        if cancelled and cancelled():
+            return None
         s, n = at_time(run, F, r, t, centers[t], refs[t], (storm or {}).get(t))
         if S is None:
             S, N = s, n

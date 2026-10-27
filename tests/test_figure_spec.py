@@ -239,7 +239,7 @@ def _w(col, kind, name):
 def test_tree_widgets_change_one_panel(ed):
     import panel as pn
     ed.rows.value, ed.cols.value = 1, 2
-    ed._tree_sync(force=True)
+    ed.tabs.active = 2  # (the tree is built while its tab is open)
     assert len(ed.tree_list.objects) == 2 and "✎" not in ed.tree_list.objects[1].name
     ed._tree_pick(1)
     _w(ed.tree_detail, pn.widgets.TextInput, "Title").value = "Later"
@@ -262,7 +262,7 @@ def test_tree_widgets_change_one_panel(ed):
 
 def test_tree_lists_soundings_of_each_panel(ed):
     ed.from_soundings()
-    ed._tree_sync(force=True)
+    ed.tabs.active = 2  # (the tree is built while its tab is open)
     assert ed.tree_list.objects and ed.tree_list.objects[0].name.startswith("a  Sounding")
     ed._tree_pick(0)
     assert "<li>" in "".join(str(getattr(o, "object", "")) for o in ed.tree_detail.objects)
@@ -294,3 +294,153 @@ def test_annotation_in_several_panels():
     a = dict(kind="text", panel=[0, 2])
     assert [ann_on(a, i) for i in range(4)] == [True, False, True, False]
     assert all(ann_on(dict(panel=-1), i) for i in range(4))
+
+
+# ------------------------------------------------------------------ section cards
+def _xsec_grid_v1():
+    """A version 1 section figure of two runs (rows) by two sections (columns), the
+    last panel at its own time."""
+    from cm1view.figures import spec as fg
+    fill = dict(type="fill", on=True, field="w", mode="height", z=1.0, cmap="RdBu_r",
+                vmin=-10.0, vmax=10.0, extend="both")
+    return dict(version=1, kind="xsec", rows=2, cols=2, time_s=600.0, times_s=[600.0],
+                run=0, layers=[fill], titles=["", ""], row_titles=["a", "b"],
+                grid=dict(rows="runs", cols="sections", runs=[0, 1]), vary="grid",
+                runs=[dict(path="/a", label="a"), dict(path="/b", label="b")], size=[8, 6],
+                sections=[fg.section_defaults(orient="x", pos="fixed"),
+                          fg.section_defaults(orient="y", pos="fixed")],
+                xsec=dict(ztop=6.0, dz=0.025, coords="storm"), domain=dict(mode="full"),
+                coords="grid", edits={"3": dict(time_s=900.0, title="late")})
+
+
+def test_section_cards_give_each_panel_its_run_time_and_section():
+    """A section figure of cards: each card is one panel's section, run and time (blank:
+    the figure's); panels without a card are empty, the grid fits the last card."""
+    from cm1view.figures import draw as figdraw, spec as fg
+    s = _xsec_grid_v1()
+    s.update(grid=dict(rows="none", cols="none", runs=[]), edits={}, rows=2, cols=3,
+             sections=[dict(fg.section_defaults(orient="x"), run=0, time_s=None, panel=0),
+                       dict(fg.section_defaults(orient="y"), run=1, time_s=900.0, panel=1),
+                       dict(fg.section_defaults(orient="angle"), run=1, time_s=300.0,
+                            panel=4),
+                       dict(fg.section_defaults(orient="x"), run=7, time_s=None, panel=5)])
+    assert figdraw.xsec_cards(s) is not None and figdraw.xsec_cards(dict(s, kind="plan")) is None
+    assert fg.npanels(s) == 6
+    assert [fg.panel_ref(s, i) for i in range(6)] == [(0, 600.0), (1, 900.0), None, None,
+                                                    (1, 300.0), None]  # (run 7: none)
+    assert [fg.panel_section(s, i)[1]["orient"] for i in (0, 1, 4)] == ["x", "y", "angle"]
+    sh = fg.shift_times(s, 60.0)  # (an animation frame: the cards' own times move too)
+    assert [fg.panel_ref(sh, i) for i in (0, 1, 4)] == [(0, 660.0), (1, 960.0), (1, 360.0)]
+    g = fg.group_spec(s, 1, (0, 120.0), [0])  # (one panel's layers at another run, time)
+    assert fg.panel_ref(g, 0) == (0, 120.0) and fg.panel_section(g, 0)[1]["orient"] == "y"
+    v2, _ = figdraw.upgrade(s)
+    assert [(p["id"], p["run"], p["time_s"]) for p in v2["panels"]] == \
+        [(0, 0, 600.0), (1, 1, 900.0), (4, 1, 300.0)]
+    k0 = fg.data_key(s, 0, None)  # (another card changing leaves panel 0's arrays)
+    s["sections"][1]["half"] = 3.0
+    assert fg.data_key(s, 0, None) == k0
+
+
+def test_older_section_figures_become_cards():
+    """to_cards: an older grid of runs × sections becomes a card per panel with its
+    run, time (its panel edit's) and section; panel titles stay; cards stay cards."""
+    from cm1view.figures import spec as fg
+    s = _xsec_grid_v1()
+    before = [(fg.panel_ref(s, i), fg.panel_section(s, i)[1]["orient"]) for i in range(4)]
+    fg.to_cards(s)
+    assert [(c["run"], c["time_s"], c["panel"], c["orient"]) for c in s["sections"]] == \
+        [(0, 600.0, 0, "x"), (0, 600.0, 1, "y"), (1, 600.0, 2, "x"), (1, 900.0, 3, "y")]
+    assert [(fg.panel_ref(s, i), fg.panel_section(s, i)[1]["orient"])
+            for i in range(4)] == before
+    assert s["edits"] == {"3": dict(title="late")}
+    assert s["grid"] == dict(rows="none", cols="none", runs=[])
+    again = json.loads(json.dumps(s))
+    assert fg.to_cards(again) == s
+    one = dict(_xsec_grid_v1(), rows=1, cols=1, grid=None, vary="time", edits={})
+    one.pop("sections")  # (an older figure's one section: spec["xsec"])
+    one["xsec"] = dict(mode="storm", angle=0.0, half=8.0, offset=[0.0, 0.0])
+    fg.to_cards(one)
+    assert [(c["orient"], c["half"], c["panel"], c["run"]) for c in one["sections"]] == \
+        [("x", 8.0, 0, 0)]
+    plan = dict(_xsec_grid_v1(), kind="plan")
+    assert fg.to_cards(json.loads(json.dumps(plan))) == plan  # (not a section figure)
+
+
+def test_older_time_height_figures_become_cards():
+    """th_to_cards: an older time-height grid (a panel per series and run) becomes a
+    card per panel with its one run and panel number; the panels show the same; cards
+    stay cards; a template keeps the first run's cards."""
+    from cm1view.figures import draw as figdraw, spec as fg
+    s = dict(kind="th", runs=[dict(path="/a"), dict(path="/b"), dict(path="/c")],
+             runs_as="cols", rows=1, cols=1, titles=["A", "", "", "", "", "F"],
+             series=[dict(label="w", runs=None, panel=0), dict(label="q", runs=[2], panel=0)])
+    before = [(lambda r: r and (r[0], s["series"][r[1]]["label"]))(figdraw.series_ref(s, i))
+              for i in range(6)]
+    fg.th_to_cards(s)
+    assert s["runs_as"] == "cards" and (s["rows"], s["cols"]) == (2, 3)
+    assert [(e["label"], e["runs"], e["panel"]) for e in s["series"]] == \
+        [("w", [0], 0), ("w", [1], 1), ("w", [2], 2), ("q", [2], 5)]
+    assert figdraw.npanels(s) == 6
+    assert [(lambda r: r and (r[0], s["series"][r[1]]["label"]))(figdraw.series_ref(s, i))
+            for i in range(6)] == before
+    again = json.loads(json.dumps(s))
+    assert fg.th_to_cards(again) == s
+    s["series"].append(dict(label="dup", runs=[0], panel=0))  # (first card per panel)
+    assert figdraw.series_ref(s, 0) == (0, 0)
+    s["series"].append(dict(label="bad", runs=[7], panel=3))  # (not one of the runs)
+    assert figdraw.series_ref(s, 3) is None
+    line = dict(s, kind="line")
+    assert fg.th_to_cards(json.loads(json.dumps(line))) == line  # (not time-height)
+    t = fg.template(s, "t")
+    assert [(e["label"], e["runs"]) for e in t["series"]] == [("w", [0]), ("dup", [0])]
+
+
+def test_parts_share_sections_and_keep_the_cards():
+    """A plan-view part's sections changed: the section part's cards take the new
+    sections but keep their runs, times and panels (one more: a new panel); the
+    section part's cards go to the plan part as they are."""
+    from cm1view.figures import spec as fg
+    from cm1view.figures.combo import share_sections
+    xs = _xsec_grid_v1()
+    fg.to_cards(xs)
+    plan = dict(_xsec_grid_v1(), kind="plan",
+                sections=[fg.section_defaults(orient="angle", pos="fixed", angle=45.0)]
+                + [fg.card_section(c) for c in xs["sections"][1:]]
+                + [fg.section_defaults(orient="ab", pos="fixed", a=[0, 0], b=[1, 1])])
+    share_sections([plan, xs], plan)
+    assert [(c["orient"], c["run"], c["time_s"], c["panel"]) for c in xs["sections"]] == \
+        [("angle", 0, 600.0, 0), ("y", 0, 600.0, 1), ("x", 1, 600.0, 2),
+         ("y", 1, 900.0, 3), ("ab", 1, 900.0, 4)]
+    xs["sections"][0]["half"] = 4.0
+    share_sections([plan, xs], xs)
+    assert plan["sections"] == xs["sections"]
+
+
+# ------------------------------------------------------------------ series time zero
+def test_each_series_has_its_own_time_zero():
+    """Run B's series shifted by its card's time zero (30 min) lines up with run A's,
+    in time series and time-height panels; the figure's time zero adds to both."""
+    from types import SimpleNamespace
+    import xarray as xr
+    from cm1view.figures import spec as fg
+    times = np.arange(0.0, 5401.0, 600.0)  # 0-90 min
+    nt = times.size
+    run = SimpleNamespace(times=times)
+    ds = xr.Dataset(dict(value=("time", np.arange(nt, dtype=float)),
+                         computed=("time", np.ones(nt, np.int8)),
+                         profile=(("time", "z"), np.ones((nt, 2)))), coords=dict(z=[1.0, 2.0]))
+    a = dict(recipe=dict(z0=0.0, z1=3.0), op="", panel=0, runs=[0], label="w")
+    b = dict(a, runs=[1], t0_min=30.0)
+    spec = dict(kind="line", series=[a, b], ts={}, runs=[dict(label="A"), dict(label="B")])
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    assert d["S0_t"][0] == 0.0 and d["S1_t"][0] == -30.0 and d["S1_t"][3] == 0.0
+    spec["time_label"] = dict(t0_min=10.0)
+    assert fg.line_panel(spec, 0, lambda k, e: (run, ds))["S1_t"][0] == -40.0
+    assert fg.th_panel(run, ds, b, spec)["x"][0] == -40.0
+    assert fg.th_panel(run, ds, a, spec)["x"][0] == -10.0
+    # the legend: a series' own label; a series of several runs adds each run's folder
+    assert [d["S0_label"], d["S1_label"]] == ["w", "w"]
+    spec["runs"] = [dict(label="A", path="/x/run_a"), dict(label="B", path="/x/run_b/")]
+    spec["series"] = [dict(a, runs=None)]
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    assert [d["S0_label"], d["S1_label"]] == ["w · run_a", "w · run_b"]

@@ -50,7 +50,7 @@ HATCHES = {"Solid": "", "Hatching /": "///", "Hatching \\": "\\\\\\", "Cross-hat
 GRID_DIMS = {"— (fill row by row)": "none", "Runs": "runs", "Sections": "sections",
              "Times": "times", "Fields": "fields", "Heights": "heights"}  # (rows / columns)
 QUICK_VARY = {"Time": "times", "Field (one time)": "fields", "Height (one time)": "heights",
-              "Section (one time)": "sections", "Run (one time)": "runs",
+              "Run (one time)": "runs",
               "Nothing (alike panels)": "none"}  # (the quick start: panels fill the grid)
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
@@ -133,9 +133,13 @@ def _grid(*objs, n=3):
         if isinstance(o, pn.widgets.Checkbox):
             o.margin = (5, 6, 12, 6)
         items.append(o)
-    return pn.Column(*items, sizing_mode="stretch_width", margin=0, styles={
+    grid = pn.Column(*items, sizing_mode="stretch_width", margin=0, styles={
         "display": "grid", "grid-template-columns": f"repeat({n}, minmax(0, 1fr))",
         "column-gap": "2px"})
+    _follow_shown(grid, items)  # (a hidden widget is not sent to the browser)
+    # (inside a plain column: bokeh hides with a ":host {display: none}" stylesheet,
+    # which the grid's inline display would override, so .visible = False did nothing)
+    return pn.Column(grid, sizing_mode="stretch_width", margin=0)
 
 
 def _checks(*groups, title="Show", n=2):
@@ -152,6 +156,7 @@ def _checks(*groups, title="Show", n=2):
         grid = pn.Column(*bs, sizing_mode="stretch_width", margin=0, styles={
             "display": "grid", "grid-template-columns": f"repeat({n}, minmax(0, 1fr))",
             "column-gap": "2px"})
+        _follow_shown(grid, bs)
         part = pn.Column(_label(head), grid, margin=(2, 0, 0, 12),
                          sizing_mode="stretch_width") if head else grid
         parts.append((part, bs))
@@ -177,8 +182,47 @@ def _label(text, strong=False):
 
 
 def _section(title, *objs, collapsed=True):
-    """A collapsible section of the editor, closed until clicked."""
-    return pn.Card(*objs, title=title, collapsed=collapsed, **SECTION)
+    """A collapsible section of the editor, closed until clicked: its contents are sent
+    to the browser the first time it is opened (and kept)."""
+    card = pn.Card(*([] if collapsed else objs), title=title, collapsed=collapsed,
+                   **SECTION)
+    if collapsed:
+        def opened(e):
+            if not e.new and not card.objects:
+                card.objects = list(objs)
+        card.param.watch(opened, "collapsed")
+    return card
+
+
+def _keep_shown(col, objs):
+    """col holds those of objs that are visible: a hidden one is left out (its widgets
+    are not sent to the browser) until it is shown again."""
+    keep = [o for o in objs if o.visible]
+    if [id(o) for o in keep] != [id(o) for o in col.objects]:
+        col.objects = keep
+
+
+LOAD = ("groups", "options", "disabled_options", "name", "placeholder", "start", "end")
+
+
+def _load_widgets(w, src):
+    """Widgets w (a dict) take the settings and values of src's (a card of the same kind
+    built for other settings, never shown): a card the browser has shows them."""
+    for k, x in src.items():
+        y = w[k]
+        upd = {p: getattr(x, p) for p in LOAD
+               if p in x.param and getattr(x, p) != getattr(y, p)}
+        if "groups" in upd:  # (a grouped list: its groups make the options)
+            upd.pop("options", None)
+        y.param.update(**upd, value=x.value)
+
+
+def _follow_shown(col, objs):
+    """_keep_shown(col, objs) now and whenever one of objs is shown or hidden."""
+    objs = list(objs)
+    for o in objs:
+        o.param.watch(lambda e: _keep_shown(col, objs), "visible")
+    _keep_shown(col, objs)
 
 
 def _hint(text, margin=(4, 4, 2, 4)):
@@ -197,7 +241,7 @@ def _when(chk, *objs):
 
 def _fold(head, body, collapsed=False):
     """A card: a header row (a chevron that shows / hides the body, then `head`) over
-    `body`.  Returns (card, body column)."""
+    `body` (only in the card while shown).  Returns (card, body column)."""
     col = pn.Column(*body, margin=0, sizing_mode="stretch_width", visible=not collapsed)
     chev = pn.widgets.Button(name="", icon="chevron-right" if collapsed else "chevron-down",
                              width=28, height=28, margin=(2, 0), button_type="light",
@@ -210,6 +254,7 @@ def _fold(head, body, collapsed=False):
     chev.on_click(flip)
     card = pn.Column(pn.Row(chev, *head, margin=0, sizing_mode="stretch_width"), col,
                      styles=CARD, sizing_mode="stretch_width", margin=(2, 0))
+    _follow_shown(card, card.objects)
     return card, col
 
 

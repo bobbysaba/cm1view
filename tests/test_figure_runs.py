@@ -227,17 +227,97 @@ def test_run_colours_and_line_styles(ed, demo_root):
     assert "#00aa00" in {to_hex(ln.get_color()) for ln in fig.axes[0].get_lines()}
 
 
-def test_series_runs_list_offers_other_runs(ed, demo_root):
+def test_series_run_list_offers_other_runs(ed, demo_root):
     import os
+    from cm1view.figures.cards.seriescard import SOME_RUNS
     weak = os.path.join(demo_root, "demo", "supercell_weak")
     ed.from_series()
     ed.kind.value = "line"
     c = ed.ser_cards[0]
-    assert weak in c.w["runs"].options.values()
-    c.w["runs"].value = [0, weak]  # picking it adds it to the figure
+    assert weak in c._run_values() and weak in c.w["runs"].options.values()
+    c.w["run"].value = weak  # picking it adds it to the figure, and picks it
     assert [r["path"] for r in ed.run_rows][-1] == weak
-    assert c.w["runs"].value == [0, 1] and ed.collect()["series"][0]["runs"] == [0, 1]
-    assert weak not in c.w["runs"].options.values()
+    assert c.w["run"].value == 1 and ed.collect()["series"][0]["runs"] == [1]
+    assert weak not in c._run_values()
+    c.w["run"].value = SOME_RUNS  # (starts from every run)
+    assert c.w["runs"].visible and c.w["runs"].value == [0, 1]
+    c.w["runs"].value = [1]
+    assert ed.collect()["series"][0]["runs"] == [1]
+
+
+def test_series_card_settings_follow_the_panel_kind(ed):
+    ed.kind.value = "line"
+    ed._add_series()
+    c = ed.ser_cards[-1]
+    c.w["vmode"].value = "height"
+    assert c.line_row.visible and not c.th_row.visible and c.w["vmode"].visible
+    assert c.recipe()["vmode"] == "height" and not ed.cb_sec.visible
+    ed.kind.value = "th"  # (a time-height card is always a layer: no Vertical choice)
+    c = ed.ser_cards[-1]
+    assert c.th_row.visible and not c.line_row.visible and not c.w["vmode"].visible
+    assert c.w["z0"].visible and not c.w["z"].visible
+    assert c.recipe()["vmode"] == "layer" and ed.cb_sec.visible
+
+
+def test_series_card_picks_its_run_like_a_sounding(ed, demo_root):
+    import os
+    from cm1view.figures.cards.seriescard import ALL_RUNS, SOME_RUNS
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    ed.from_series()
+    ed.kind.value = "line"  # (the time-height cards of one series: one card again)
+    assert len(ed.ser_cards) == 1
+    c = ed.ser_cards[0]
+    assert c.w["run"].value == ALL_RUNS and not c.w["runs"].visible and c.w["ens"].visible
+    assert ed.collect()["series"][0]["runs"] is None
+    c.w["run"].value = 1
+    assert ed.collect()["series"][0]["runs"] == [1] and not c.w["ens"].visible
+    c.w["run"].value = SOME_RUNS
+    assert c.w["runs"].visible and ed.collect()["series"][0]["runs"] == [0, 1]
+    ed.kind.value = "th"  # a time-height card has one run: no All / Several
+    assert ALL_RUNS not in ed.ser_cards[0]._run_values()
+
+
+def test_series_cards_hold_the_runs_tracks(ed, demo_root):
+    """Time series hide Runs used; a card around the tracked storm shows a track row
+    per run, which edits the run's (shared) track."""
+    import os
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    ed.from_series()
+    ed.kind.value = "line"
+    assert not ed.runs_sec.visible
+    c = ed.ser_cards[0]
+    c.w["region"].value = "domain"
+    assert not c.trk_box.visible
+    c.w["region"].value = "track"
+    assert c.trk_box.visible
+    c.w["run"].value = 1
+    assert list(c.trk_w) == [1] and not c.trk_w[1][0].visible  # (not the viewer's run)
+    c.trk_w[1][1].value = "no_such_track.csv"
+    assert ed.run_rows[1]["track"].value == "no_such_track.csv"
+    assert ed.collect()["runs"][1]["track"] == "no_such_track.csv"
+    ed.kind.value = "plan"
+    assert ed.runs_sec.visible
+
+
+def test_one_per_run_splits_a_time_series_card(ed, demo_root):
+    import os
+    from cm1view.figures import draw as figdraw
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    ed.from_series()
+    ed.kind.value = "line"
+    ed._per_run_series(ed.ser_cards[0])  # every run: a card per run, in the run's colour
+    s = ed.collect()
+    assert [(e["runs"], e["panel"]) for e in s["series"]] == [([0], 0), ([1], 0)]
+    assert [e["color"] for e in s["series"]] == [figdraw.run_color(s, 0),
+                                                figdraw.run_color(s, 1)]
+    ed._per_run_series(ed.ser_cards[1])  # (run 1 has it in this panel already)
+    assert len(ed.ser_cards) == 2 and "already" in txt(ed.msg.object)
+    ed._dup_series(ed.ser_cards[0])  # a copy in a new panel
+    assert [e["panel"] for e in ed.collect()["series"]] == [0, 1, 0]
+    assert ed.rows.value * ed.cols.value >= 2
 
 
 def test_run_lists_without_other_runs_have_no_heading(ed):
@@ -342,16 +422,50 @@ def test_a_run_keeps_its_colour_in_every_panel():
                            dict(nsnd=2, N0_e=0, N1_e=1))
     assert len(set(same)) == 2  # two of one run: told apart by colour, not the run's
     t = np.arange(3.0)
-    ax = Figure().subplots()
+    ax = Figure().subplots()  # a series of every run, alone: run 1's line in its colour
     _lines(ax, dict(nlines=1, S0_e=0, S0_r=1, S0_t=t, S0_v=t, S0_label="w"),
-           dict(runs=runs, series=[dict(color="#0000ff")]), 10)
+           dict(runs=runs, series=[dict(color="#0000ff", ls=":")]), 10)
     assert to_hex(ax.lines[0].get_color()) == "#aa0000"
-    ax = Figure().subplots()  # two series of run 1: the series' colours, run 1's line style
+    assert ax.lines[0].get_linestyle() == ":"  # (the series' line style)
+    ax = Figure().subplots()  # two series of every run: the series' colours, run 1's style
     _lines(ax, dict(nlines=2, S0_e=0, S0_r=1, S0_t=t, S0_v=t, S0_label="a",
                     S1_e=1, S1_r=1, S1_t=t, S1_v=t, S1_label="b"),
            dict(runs=runs, series=[dict(color="#0000ff"), dict(color="#ff00ff")]), 10)
     assert [to_hex(ln.get_color()) for ln in ax.lines] == ["#0000ff", "#ff00ff"]
     assert {ln.get_linestyle() for ln in ax.lines} == {"--"}
+
+
+def test_a_series_of_one_run_draws_in_its_own_colour_and_style():
+    """A card's colour and line style apply to its line in a figure of several runs,
+    alone in a panel or not; an older figure opens looking as it was drawn."""
+    from matplotlib.colors import to_hex
+    from matplotlib.figure import Figure
+    from cm1view.figures.draw.lines import _lines
+    from cm1view.figures.spec.base import series_looks
+    runs = [dict(color="#00aa00", ls="-"), dict(color="#aa0000", ls=":")]
+    t = np.arange(3.0)
+    ax = Figure().subplots()
+    _lines(ax, dict(nlines=1, S0_e=0, S0_r=1, S0_t=t, S0_v=t, S0_label="w"),
+           dict(runs=runs, series=[dict(color="#0000ff", ls="--", runs=[1])]), 10)
+    assert to_hex(ax.lines[0].get_color()) == "#0000ff"
+    assert ax.lines[0].get_linestyle() == "--"
+    ax = Figure().subplots()
+    _lines(ax, dict(nlines=2, S0_e=0, S0_r=0, S0_t=t, S0_v=t, S0_label="a",
+                    S1_e=1, S1_r=1, S1_t=t, S1_v=t, S1_label="b"),
+           dict(runs=runs, series=[dict(color="#0000ff", ls="-", runs=[0]),
+                                   dict(color="#ff00ff", ls="-.", runs=[1])]), 10)
+    assert [to_hex(ln.get_color()) for ln in ax.lines] == ["#0000ff", "#ff00ff"]
+    assert [ln.get_linestyle() for ln in ax.lines] == ["-", "-."]
+    # older figures (no "ls" on the series): the look they were drawn with
+    old = dict(kind="line", runs=runs, series=[
+        dict(color="k", runs=[1], panel=0),  # alone: run 1's colour
+        dict(color="b", runs=[0], panel=1), dict(color="r", runs=[1], panel=1)])
+    series_looks(old)
+    a, b, c = old["series"]
+    assert (a["color"], a["ls"]) == ("#aa0000", "-")
+    assert (b["color"], b["ls"]) == ("b", "-") and (c["color"], c["ls"]) == ("r", ":")
+    series_looks(old)  # (a newer figure stays)
+    assert old["series"][0]["color"] == "#aa0000"
 
 
 def test_time_height_panels_follow_each_series_runs():
@@ -371,16 +485,33 @@ def test_time_height_panels_follow_each_series_runs():
     assert figdraw.series_ref(dict(s, runs_as="cols"), 9) is None
 
 
-def test_time_height_grid_grows_with_a_series_run(ed, demo_root):
+def test_time_height_cards_one_per_panel(ed, demo_root):
     import os
+    from cm1view.figures import draw as figdraw
     weak = os.path.join(demo_root, "demo", "supercell_weak")
     ed.from_series()
     ed.kind.value = "th"
-    assert (ed.rows.value, ed.cols.value) == (len(ed.ser_cards), 1)
-    ed.ser_cards[0].w["runs"].value = [0, weak]  # a column for the run it adds
-    assert (ed.rows.value, ed.cols.value) == (len(ed.ser_cards), 2)
-    from cm1view.figures import draw as figdraw
-    assert figdraw.series_ref(ed.collect(), 1) == (1, 0)
+    s = ed.collect()
+    assert s["runs_as"] == "cards" and [(e["runs"], e["panel"]) for e in s["series"]] == \
+        [([0], 0)]
+    c = ed.ser_cards[0]
+    c.w["run"].value = weak  # (adds the run; the card is of it now)
+    assert ed.collect()["series"][0]["runs"] == [1]
+    c.w["run"].value = 0
+    ed._per_run_series(c)  # a copy for the other run, down the column
+    s = ed.collect()
+    assert [(e["runs"], e["panel"]) for e in s["series"]] == [([0], 0), ([1], 1)]
+    assert (ed.rows.value, ed.cols.value) == (2, 1)
+    assert [figdraw.series_ref(s, i) for i in range(2)] == [(0, 0), (1, 1)]
+    ed._add_series()  # a new card: a panel of its own, of the last card's run
+    s = ed.collect()
+    assert (s["series"][-1]["runs"], s["series"][-1]["panel"]) == ([1], 2)
+    assert ed.rows.value * ed.cols.value >= 3
+    ed.kind.value = "line"  # the cards of one series: one card of both runs
+    s = ed.collect()
+    assert [(e["runs"], e["panel"]) for e in s["series"]] == [(None, 0), ([1], 1)]
+    ed.kind.value = "th"  # and back: a card per run
+    assert [e["runs"] for e in ed.collect()["series"]] == [[0], [1], [1]]
 
 
 def test_ensemble_band_of_a_series_over_runs(ed, demo_root):
@@ -399,7 +530,8 @@ def test_ensemble_band_of_a_series_over_runs(ed, demo_root):
     spec, data, fig = render(ed)
     d = data[0]
     j = next(j for j in range(d["nlines"]) if f"S{j}_ens" in d)
-    assert d[f"S{j}_ens"] == 2 and d[f"S{j}_r"] == -1 and "2 runs" in d[f"S{j}_label"]
+    assert d[f"S{j}_ens"] == 2 and d[f"S{j}_r"] == -1
+    assert d[f"S{j}_label"] == c.collect()["label"]  # (the card's label, as it is)
     ok = np.isfinite(d[f"S{j}_v"])
     assert ok.any() and np.all(d[f"S{j}_lo"][ok] <= d[f"S{j}_v"][ok] + 1e-6)
     assert np.all(d[f"S{j}_v"][ok] <= d[f"S{j}_hi"][ok] + 1e-6)

@@ -34,7 +34,6 @@ class FigureSpecIO:
             self.g_rows.value, self.g_cols.value = figdraw.grid_axes(s)
             self.gg_runs.value = figdraw.grid_runs(s)
             self.run_sel.value = min(int(s.get("run", 0)), len(s["runs"]) - 1)
-            self.runs_as.value = s.get("runs_as", "rows")
             self.rows.value, self.cols.value = int(s["rows"]), int(s["cols"])
             self.width.value, self.height.value = float(s["size"][0]), float(s["size"][1])
             self.size_preset.value = ""
@@ -47,7 +46,8 @@ class FigureSpecIO:
             self.coords.value = s.get("coords", "grid")
             self.xs_top.value = float(s["xsec"].get("ztop", 6.0))
             self.xs_coords.value = s["xsec"].get("coords", "storm")
-            self.sec_cards = [self._sec_card(e) for e in fg.sections(s)]
+            self.sec_cards = self._sec_cards(  # (a plan view's: a panel each)
+                [dict({"panel": k}, **e) for k, e in enumerate(fg.sections(s))])
             self._show_sections()
             a = s["axes"]
             self.xlabel.value, self.ylabel.value = a.get("xlabel", ""), a.get("ylabel", "")
@@ -250,10 +250,11 @@ class FigureSpecIO:
         row_titles = [w.value for w in self.row_ws]
         while row_titles and not row_titles[-1].strip():
             row_titles.pop()
+        rd, cd = ("none", "none") if self.kind.value == "xsec" else (  # (a card per panel)
+            self.g_rows.value, self.g_cols.value)
         s.update(
-            kind=self.kind.value, vary=fg.legacy_vary(self.g_rows.value, self.g_cols.value),
-            grid=dict(rows=self.g_rows.value, cols=self.g_cols.value,
-                      runs=self._grid_runs() if self._uses("runs") else []),
+            kind=self.kind.value, vary=fg.legacy_vary(rd, cd),
+            grid=dict(rows=rd, cols=cd, runs=self._grid_runs() if self._uses("runs") else []),
             rows=int(self.rows.value or 1),
             cols=int(self.cols.value or 1),
             size=[float(self.width.value or 8), float(self.height.value or 6)],
@@ -262,7 +263,7 @@ class FigureSpecIO:
             time=self._index_of(float(self.time1.value), one=True),
             times_s=times_s, time_s=float(self.time1.value),
             runs=self._runs_collect(), run=int(self.run_sel.value or 0),
-            runs_as=self.runs_as.value,
+            runs_as="cards" if self.kind.value == "th" else "rows",
             panels=[],
             layers=pf + [c.collect() for c in self.cards],
             panel_fills=[self._pf_collect(r) for r in self.pf_rows],
