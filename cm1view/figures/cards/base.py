@@ -47,9 +47,11 @@ MATH_FONTS = {"DejaVu Sans": "dejavusans", "Like the text font": "custom",
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
 HATCHES = {"Solid": "", "Hatching /": "///", "Hatching \\": "\\\\\\", "Cross-hatching": "xxx",
            "Stippling": "..", "Dense stippling": "...", "Circles": "oo"}  # (shade layers)
-VARY = {"Time (one run)": "time", "Field (one run, one time)": "field",
-        "Height (one run, one time)": "height",
-        "Each panel: own run & time": "custom"}
+GRID_DIMS = {"— (fill row by row)": "none", "Runs": "runs", "Sections": "sections",
+             "Times": "times", "Fields": "fields", "Heights": "heights"}  # (rows / columns)
+QUICK_VARY = {"Time": "times", "Field (one time)": "fields", "Height (one time)": "heights",
+              "Section (one time)": "sections", "Run (one time)": "runs",
+              "Nothing (alike panels)": "none"}  # (the quick start: panels fill the grid)
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
               "track": "Storm track", "line": "Section line", "sector": "Sector"}

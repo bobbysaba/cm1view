@@ -174,17 +174,6 @@ def time_text(t_s, opts):
         min=round(mins, 2), s=s, hms=f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}")
 
 
-def z_text(spec, i):
-    """The height label of panel i of a figure of panels at heights (spec["z_label"];
-    {z}: the height in km, {k}: the model level), or "" for none."""
-    zs = spec.get("panel_z") or []
-    if spec.get("vary") != "height" or i >= len(zs) or zs[i] is None:
-        return ""
-    level = spec.get("panel_zmode", "height") == "level"
-    fmt = spec.get("z_label", {}).get("fmt") or ("k = {k}" if level else "z = {z:g} km")
-    return fmt.format(z=float(zs[i]), k=int(round(float(zs[i]))))
-
-
 def _new_fig(spec):
     gap = spec.get("spacing", {})
     fig = Figure(figsize=tuple(float(v) for v in spec["size"]), layout="constrained",

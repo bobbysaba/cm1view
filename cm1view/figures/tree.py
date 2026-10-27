@@ -30,7 +30,7 @@ class _PanelEditor:
     def __init__(self, ed, kind, changed):
         self.v, self.fields = ed.v, ed.fields
         self.kind = SimpleNamespace(value=kind)
-        self.vary = SimpleNamespace(value="custom")  # (its height is the layer's)
+        self._uses = lambda d: False  # (no row or column of heights: its height is the layer's)
         self._hold = False
         self._changed = changed
         self._run_names, self._time_opts = ed._run_names, ed._time_opts  # (Difference)
@@ -154,9 +154,8 @@ class FigureTree:
             what = ", ".join(self._layer_name(lay) for lay in lays[:3]) + \
                 (f" +{len(lays) - 3}" if len(lays) > 3 else "")
             z = figdraw.panel_edit(s, i).get("z")
-            zs = s.get("panel_z") or []
-            if z is None and s.get("vary") == "height" and i < len(zs):
-                z = zs[i]
+            if z is None:
+                z = (figdraw.grid_cell(s, i) or {}).get("z")
             zt = f" · {float(z):g} km" if z is not None else ""
             return (f"{letter}  {'Plan' if kind == 'plan' else 'Section'} · "
                     f"{rn.get(k, k + 1)} · {ts / 60:g} min{zt} — {what or 'no layers'}"
@@ -273,6 +272,17 @@ class FigureTree:
                                  value="" if e.get("z") is None else f"{float(e['z']):g}",
                                  placeholder="e.g. 1")
         z.visible = s["kind"] == "plan"
+        secs = fg.sections(s)
+        sopts = {LAYOUT: -1} | {f"{k + 1}: {c['label'] or fg.describe(c)}": k
+                                for k, c in enumerate(secs)}
+        sec = pn.widgets.Select(name="Section", options=sopts,
+                                value=int(e["section"]) if e.get("section") is not None and
+                                int(e["section"]) in sopts.values() else -1)
+        sec.visible = s["kind"] == "xsec" or len(secs) > 1  # (plans: their Section line)
+
+        def on_sec(ev):
+            self._tree_edit(i)["section"] = None if ev.new == -1 else int(ev.new)
+            self._tree_changed()
 
         def on_run(ev):
             self._tree_edit(i)["run"] = None if ev.new == -1 else int(ev.new)
@@ -310,7 +320,8 @@ class FigureTree:
         run.param.watch(on_run, "value")
         time.param.watch(on_time, "value")
         z.param.watch(on_z, "value")
-        objs = [_grid(run, time, z), _grid((title, 3)), _grid(*labels)]
+        sec.param.watch(on_sec, "value")
+        objs = [_grid(run, time, z, (sec, 2)), _grid((title, 3)), _grid(*labels)]
         base = self._tree_base(s, i)
         objs.append(pn.pane.HTML("<b>Layers</b>", margin=(8, 4, 0, 4)))
         if not base:

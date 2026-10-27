@@ -9,7 +9,7 @@ import re
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from .cards import FONTS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num, _xy, _xy_text
+from .cards import FONTS, GRID_DIMS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num, _xy, _xy_text
 from .times import _heights
 
 
@@ -29,7 +29,10 @@ class FigureSpecIO:
         try:
             s = spec
             self._build_runs(s["runs"])
-            self.kind.value, self.vary.value = s["kind"], s["vary"]
+            self.kind.value = s["kind"]
+            self.g_rows.options = self.g_cols.options = dict(GRID_DIMS)  # (all, then the kind's)
+            self.g_rows.value, self.g_cols.value = figdraw.grid_axes(s)
+            self.gg_runs.value = figdraw.grid_runs(s)
             self.run_sel.value = min(int(s.get("run", 0)), len(s["runs"]) - 1)
             self.runs_as.value = s.get("runs_as", "rows")
             self.rows.value, self.cols.value = int(s["rows"]), int(s["cols"])
@@ -42,13 +45,14 @@ class FigureSpecIO:
                             d.get("box") or [None] * 4):
                 w.value = v
             self.coords.value = s.get("coords", "grid")
-            x = s["xsec"]
-            self.xs_mode.value, self.xs_angle.value = x["mode"], float(x["angle"])
-            self.xs_half.value, self.xs_top.value = float(x["half"]), float(x["ztop"])
-            self.xs_avg.value = float(x.get("avg") or 0.0)
-            self.xs_offx.value, self.xs_offy.value = (float(v) for v in x["offset"])
+            self.xs_top.value = float(s["xsec"].get("ztop", 6.0))
+            self.xs_coords.value = s["xsec"].get("coords", "storm")
+            self.sec_cards = [self._sec_card(e) for e in fg.sections(s)]
+            self._show_sections()
             a = s["axes"]
             self.xlabel.value, self.ylabel.value = a.get("xlabel", ""), a.get("ylabel", "")
+            self.xlabel.placeholder = "blank: as each section runs" \
+                if s.get("kind") == "xsec" else ""
             self.ticklabels.value = a.get("ticklabels", "all")
             self.share.value = a.get("share", "none")
             self.ticks.value, self.minor.value = a.get("ticks", True), a.get("minor", False)
@@ -190,8 +194,7 @@ class FigureSpecIO:
             self._build_pf(s.get("panel_fills", []))
             self.pz_mode.value = s.get("panel_zmode", "height")
             self.pz.value = ", ".join(f"{float(z):g}" for z in s.get("panel_z") or [1, 3, 6])
-            self._build_pc(s.get("panels", []))
-            self._build_titles(s.get("titles", []))
+            self._build_titles(s.get("titles", []), s.get("row_titles", []))
             self.ser_cards = [self._ser_card(e) for e in s.get("series", [])]
             self.snd_cards = [self._snd_card(e) for e in s.get("soundings", [])]
             self.dist_cards = [self._dist_card(e) for e in s.get("dists", [])]
@@ -211,6 +214,7 @@ class FigureSpecIO:
         self._show_region()
         self._on_kind(render_=False)
         self._show_vary()
+        self._fit_axes()  # (rows / columns a list sets cannot be typed)
         self._show_cbar()
         self._show_storm()
         self._show_code()
@@ -223,7 +227,7 @@ class FigureSpecIO:
         a 'field' figure's first fill is the panels' fill (self._pf_base), not a card."""
         layers = list(s["layers"])
         self._pf_base, k = None, None
-        if s.get("vary") == "field":
+        if "fields" in figdraw.grid_axes(s):
             k = next((j for j, lay in enumerate(layers) if lay["type"] == "fill"), None)
             self._pf_base = layers.pop(k) if k is not None else self._pf_fill()
 
@@ -243,8 +247,14 @@ class FigureSpecIO:
         titles = [w.value for w in self.title_ws]
         while titles and not titles[-1].strip():
             titles.pop()
+        row_titles = [w.value for w in self.row_ws]
+        while row_titles and not row_titles[-1].strip():
+            row_titles.pop()
         s.update(
-            kind=self.kind.value, vary=self.vary.value, rows=int(self.rows.value or 1),
+            kind=self.kind.value, vary=fg.legacy_vary(self.g_rows.value, self.g_cols.value),
+            grid=dict(rows=self.g_rows.value, cols=self.g_cols.value,
+                      runs=self._grid_runs() if self._uses("runs") else []),
+            rows=int(self.rows.value or 1),
             cols=int(self.cols.value or 1),
             size=[float(self.width.value or 8), float(self.height.value or 6)],
             size_auto=bool(self._auto_size),
@@ -253,23 +263,18 @@ class FigureSpecIO:
             times_s=times_s, time_s=float(self.time1.value),
             runs=self._runs_collect(), run=int(self.run_sel.value or 0),
             runs_as=self.runs_as.value,
-            panels=[dict(run=int(r["run"].value), time_s=float(r["time"].value))
-                    for r in self.pc_rows if r["time"].value is not None],
+            panels=[],
             layers=pf + [c.collect() for c in self.cards],
             panel_fills=[self._pf_collect(r) for r in self.pf_rows],
             panel_z=_heights(self.pz.value), panel_zmode=self.pz_mode.value,
             share=_num(self.part_share.value),
-            suptitle=self.suptitle.value, titles=titles,
+            suptitle=self.suptitle.value, titles=titles, row_titles=row_titles,
             coords=self.coords.value, background=self.bg.value,
             mplstyle=self.mplstyle.value.strip())
         s["domain"] = dict(s["domain"], mode=self.dom.value, half=float(self.half.value or 12.5))
-        s["xsec"] = dict(s["xsec"], mode=self.xs_mode.value,
-                         angle=float(self.xs_angle.value or 0.0),
-                         half=float(self.xs_half.value or 10.0),
-                         offset=[float(self.xs_offx.value or 0.0),
-                                 float(self.xs_offy.value or 0.0)],
-                         ztop=float(self.xs_top.value or 6.0),
-                         avg=float(self.xs_avg.value or 0.0))
+        s["xsec"] = dict(s["xsec"], ztop=float(self.xs_top.value or 6.0),
+                         coords=self.xs_coords.value)
+        s["sections"] = [c.collect() for c in self.sec_cards] or fg.sections(s)
         s["axes"] = dict(s["axes"], xlabel=self.xlabel.value, ylabel=self.ylabel.value,
                          ticklabels=self.ticklabels.value, share=self.share.value, ticks=self.ticks.value,
                          minor=self.minor.value, equal=self.equal.value,

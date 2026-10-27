@@ -282,12 +282,7 @@ class FigureClick:
         d = self._place_origin.get(j, (0.0, 0.0))
         a = [round(p1[0] + d[0], 2), round(p1[1] + d[1], 2)]
         b = [round(p2[0] + d[0], 2), round(p2[1] + d[1], 2)]
-        self.spec["xsec"] = dict(self.spec["xsec"], a=a, b=b)
-        hold, self._hold = self._hold, True
-        try:
-            self.xs_mode.value = "fixed"
-        finally:
-            self._hold = hold
+        self._ab_card().set_ab(a, b)  # (the first A–B section, or a new one)
         self._show_region()
         line = any(c.type == "line" and c.w["on"].value for c in self.cards)
         self._status(f"Section A ({a[0]:g}, {a[1]:g}) → B ({b[0]:g}, {b[1]:g}) km."

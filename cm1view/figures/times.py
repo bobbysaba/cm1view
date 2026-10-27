@@ -1,5 +1,5 @@
-"""Figure editor: the panels' times (the time grid, each panel's run and time) and
-titles.
+"""Figure editor: the panels' times (a picker per panel, row or column of times), the
+runs of a grid of runs, and the titles.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
@@ -39,60 +39,15 @@ def _place(times, t_s, snap):
 
 
 class FigureTimes:
-    """The time grid and each panel's run and time, and the titles."""
+    """The panels' times, a grid's runs, and the titles."""
 
-    # ------------------------------------------------------------ panels: own run & time
+    # ------------------------------------------------------------ runs and times
     def _time_opts(self, k):
         try:
             run, _ = self.open_run(self.run_rows[k]["path"])
         except Exception:  # noqa: BLE001
             return {}
         return {_tlabel(t): float(t) for t in run.times}
-
-    def _build_pc(self, panels):
-        n = int(self.rows.value or 1) * int(self.cols.value or 1)
-        rows = []
-        for i in range(n if self.vary.value == "custom" else 0):
-            if i < len(panels):
-                p = panels[i]
-            elif self.pc_rows and i < len(self.pc_rows):
-                p = dict(run=self.pc_rows[i]["run"].value, time_s=self.pc_rows[i]["time"].value)
-            else:  # new panels: the runs in turn, at the shown time
-                p = dict(run=i % max(1, len(self.run_rows)),
-                         time_s=float(self.run.times[self.v.t]))
-            rows.append(self._pc_row(i, p))
-        self.pc_rows = rows
-        self.pc_box.objects = [r["panel"] for r in rows]
-
-    def _pc_row(self, i, p):
-        names = self._run_names()
-        k = int(p["run"]) if int(p["run"]) in names.values() else 0
-        r = dict(run=pn.widgets.Select(name=f"Panel {figdraw.panel_letter(i, '{a}')}: run",
-                                       value=k, **self._run_choices(names)))
-        opts = self._time_opts(k)
-        ts = p.get("time_s")
-        r["time"] = pn.widgets.Select(name="time", options=opts, value=self._nearest(opts, ts))
-
-        def on_run(ev):
-            if self._hold:
-                return
-            if isinstance(ev.new, str):  # a run not in the figure yet
-                self._pick_other(r["run"], ev.old)
-                return
-            o = self._time_opts(ev.new)
-            cur = r["time"].value
-            self._hold = True
-            try:
-                r["time"].options = o
-                r["time"].value = self._nearest(o, cur)
-            finally:
-                self._hold = False
-            self.request()
-
-        r["run"].param.watch(on_run, "value")
-        r["time"].param.watch(lambda e: self.request(), "value")
-        r["panel"] = _grid(r["run"], r["time"], n=2)
-        return r
 
     @staticmethod
     def _nearest(opts, ts):
@@ -105,11 +60,8 @@ class FigureTimes:
 
     # ------------------------------------------------------------ panel times and titles
     def _slots(self):
-        """How many times to choose: one per panel (panels in time), else none."""
-        if self.kind.value not in ("plan", "xsec"):
-            return 0
-        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
-        return r * c if self.vary.value == "time" else 0
+        """How many times to choose: one per row, column or panel of times."""
+        return self._dim_count("times")
 
     def _time_values(self):
         """Model time (s) of each time picker (NONE: an empty panel)."""
@@ -119,8 +71,8 @@ class FigureTimes:
         return float(self.run.times[self.v.t])
 
     def _sel_run(self):
-        """The run of "Run" (panels in time or in field)."""
-        k = int(self.run_sel.value or 0)
+        """The run of "Run" (every panel's), or the first of a grid of runs."""
+        k = self._grid_runs()[0] if self._uses("runs") else int(self.run_sel.value or 0)
         try:
             return self.open_run(self.run_rows[k]["path"])[0]
         except Exception:  # noqa: BLE001
@@ -128,8 +80,18 @@ class FigureTimes:
 
     def _panel_times(self):
         """(model times in s, those some runs lack) the time pickers offer: the outputs
-        of the panels' run."""
-        return [float(t) for t in self._sel_run().times], set()
+        of the panels' run (a grid of runs: of its first run, marked where another of
+        its runs has no output)."""
+        tl = [float(t) for t in self._sel_run().times]
+        if not self._uses("runs"):
+            return tl, set()
+        others = []
+        for k in self._grid_runs()[1:]:
+            try:
+                others.append([float(t) for t in self.open_run(self.run_rows[k]["path"])[0].times])
+            except Exception:  # noqa: BLE001
+                continue
+        return tl, {t for t in tl if any(_match(o, t) is None for o in others)}
 
     def _topts(self, values=()):
         """Time picker options: the outputs, plus any chosen time that has none (a
@@ -186,7 +148,7 @@ class FigureTimes:
         opts = {"— empty —": NONE} | self._topts(vals)
         rows = []
         for i in range(n):
-            name = f"Panel {figdraw.panel_letter(i, '{a}')}"
+            name = self._step_name("times", i)
             v = vals[i] if vals[i] in opts.values() else NONE
             w = pn.widgets.Select(name=name, options=opts, value=v)
             w.param.watch(lambda e: self.request(), "value")
@@ -218,48 +180,30 @@ class FigureTimes:
         self._build_times()  # (the new run's outputs)
         self.request()
 
-    def _on_gg_runs(self, ev):
-        """A run not in the figure picked in Fill a grid (its path): add it, keep it
-        picked."""
-        new = [v for v in ev.new if isinstance(v, str)]
-        if self._hold or not new:
-            return
-        keep = [v for v in ev.new if not isinstance(v, str)]
-        for p in new:
-            k = self._add_run(p)
-            if k is not None:
-                keep.append(k)
-        hold, self._hold = self._hold, True
-        try:
-            self.gg_runs.value = sorted(set(keep))
-        finally:
-            self._hold = hold
+    def _grid_runs(self):
+        """The runs of a grid of runs, in the order picked (none: every run)."""
+        n = len(self.run_rows)
+        return [k for k in self.gg_runs.value if isinstance(k, int) and k < n] or \
+            list(range(max(1, n)))
 
-    def _fill_grid(self):
-        """Panels of runs x times: the chosen runs (rows or columns) and `Times` times
-        from the shown time, every `Every … outputs` outputs of the first run; each
-        panel takes the nearest output of its own run."""
-        ks = sorted(k for k in self.gg_runs.value if isinstance(k, int)
-                    and k < len(self.run_rows)) or [0]
-        runs = [self.open_run(self.run_rows[k]["path"])[0] for k in ks]
-        base = [float(t) for t in runs[0].times]
-        step, p0 = int(self.gg_step.value or 1), base.index(_nearest_t(base, self._shown_s()))
-        times = [base[q] for q in range(p0, len(base), step)][:int(self.gg_n.value or 1)]
-        by_rows = self.gg_as.value == "rows"
-        nr, nc = (len(ks), len(times)) if by_rows else (len(times), len(ks))
-        panels = []
-        for r in range(nr):
-            for c in range(nc):
-                k, j = (r, c) if by_rows else (c, r)
-                panels.append(dict(run=ks[k], time_s=_nearest_t(
-                    [float(t) for t in runs[k].times], times[j])))
-        self._hold = True
-        try:
-            self.vary.value = "custom"
-            self.rows.value, self.cols.value = nr, nc
-        finally:
-            self._hold = False
-        self._on_layout(panels)
+    def _on_gg_runs(self, ev):
+        """The runs of a grid of runs changed (a run not in the figure picked, its
+        path: added to the figure, and kept in its place)."""
+        if self._hold:
+            return
+        new = [v for v in ev.new if isinstance(v, str)]
+        if new:
+            keep = []
+            for v in ev.new:
+                k = self._add_run(v) if isinstance(v, str) else v
+                if k is not None and k not in keep:
+                    keep.append(k)
+            hold, self._hold = self._hold, True
+            try:
+                self.gg_runs.value = keep
+            finally:
+                self._hold = hold
+        self._on_layout()
 
     def _fill_times(self):
         """The time pickers from the shown time, every `tstep` outputs."""
@@ -276,25 +220,37 @@ class FigureTimes:
             self._hold = hold
         self.request()
 
-    def _build_titles(self, titles=None):
-        """A title box per grid cell, keeping what is typed."""
+    def _build_titles(self, titles=None, row_titles=None):
+        """A title box per grid cell, and in a grid of rows and columns (runs ×
+        sections, ...) a label box per row, keeping what is typed."""
         vals = [w.value for w in self.title_ws] if titles is None else list(titles)
-        n = int(self.rows.value or 1) * int(self.cols.value or 1)
+        rvals = [w.value for w in self.row_ws] if row_titles is None else list(row_titles)
+        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
         ws = []
-        for i in range(n):
+        for i in range(r * c):
             w = pn.widgets.TextInput(name=f"Panel {figdraw.panel_letter(i, '{a}')}",
                                      value=vals[i] if i < len(vals) else "",
                                      placeholder="no title")
             w.param.watch(lambda e: self.request(), "value")
             ws.append(w)
-        self.title_ws = ws
-        self.titles_box.objects = [_grid(*ws)] if ws else []
+        rws = []
+        if "none" not in self._axes():
+            for k in range(r):
+                w = pn.widgets.TextInput(name=f"Row {k + 1} label (left)",
+                                         value=rvals[k] if k < len(rvals) else "",
+                                         placeholder="no label")
+                w.param.watch(lambda e: self.request(), "value")
+                rws.append(w)
+        self.title_ws, self.row_ws = ws, rws
+        self.titles_box.objects = [_grid(*ws)] * bool(ws) + [_grid(*rws)] * bool(rws)
 
-    def _set_titles(self, titles):
+    def _set_titles(self, titles, row_titles=()):
         hold, self._hold = self._hold, True
         try:
             for i, w in enumerate(self.title_ws):
                 w.value = titles[i] if i < len(titles) else ""
+            for k, w in enumerate(self.row_ws):
+                w.value = row_titles[k] if k < len(row_titles) else ""
         finally:
             self._hold = hold
         self.request()

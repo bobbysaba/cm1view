@@ -9,6 +9,7 @@ import numpy as np
 from ... import config
 from ...core import track as trk
 from .. import draw as figdraw
+from .sections import panel_section, section_defaults, upgrade_sections
 
 def layer_defaults(kind, F, field=None, z=1.0):
     """A new layer of `kind` with sensible defaults for `field`."""
@@ -39,7 +40,8 @@ def layer_defaults(kind, F, field=None, z=1.0):
         return dict(type="track", on=True, color="k", run_color=True, lw=1.0, ls="-",
                     marker=True, legend="")
     if kind == "line":
-        return dict(type="line", on=True, color="k", lw=2.0, labels="X, X′", legend="")
+        return dict(type="line", on=True, color="k", lw=2.0, labels="A, A′", which="all",
+                    legend="")
     if kind == "sector":  # (as an azimuthal mean's: azimuths clockwise from the motion)
         return dict(type="sector", on=True, color="k", lw=1.5, ls="-", az0=0.0, az1=360.0,
                     rmax=20.0, ref="motion", center="track", offx=0.0, offy=0.0, cx=0.0,
@@ -94,14 +96,14 @@ def default_spec(run, F, t=0):
     rows, cols = (1, len(times)) if len(times) <= 3 else (2, (len(times) + 1) // 2)
     return dict(
         version=1, kind="plan", size=[8.0, 6.0 if rows > 1 else 3.2], size_auto=True,
-        rows=rows, cols=cols, vary="time",
+        rows=rows, cols=cols, vary="time", grid=dict(rows="none", cols="times", runs=[]),
         times=times, time=t, panel_fills=[], panel_z=[1.0, 3.0, 6.0], panel_zmode="height",
         layers=layers,
         times_s=[float(run.times[k]) for k in times], time_s=float(run.times[t]),
         runs=[run_entry(run, "viewer")], run=0, runs_as="rows", panels=[],
         domain=dict(mode="storm", half=12.5, box=None), coords="grid",
-        xsec=dict(mode="storm", a=None, b=None, angle=0.0, half=10.0, offset=[0.0, 0.0],
-                  ztop=6.0, dz=0.025, avg=0.0),
+        xsec=dict(ztop=6.0, dz=0.025, coords="storm"),
+        sections=[section_defaults()],
         axes=dict(xlabel="x (km)", ylabel="y (km)", ticks=True, ticklabels="outer",
                   equal=True, minor=False, title_bold=True),
         letters=dict(on=True, fmt="{a}", loc="lower left", size=12, bold=True),
@@ -192,7 +194,9 @@ def group_spec(spec, i, ref, keep):
     (indices) and the others off, to read the layers of another run or time."""
     lays = [dict(lay, panels=[], on=lay.get("on", True) and j in keep)
             for j, lay in enumerate(figdraw.spec_layers(spec, i))]
-    return dict(spec, vary="custom", rows=1, cols=1, layers=lays, edits={}, titles=[],
+    edits = {"0": {"section": panel_section(spec, i)[0]}}  # (the panel's cross-section)
+    return dict(spec, vary="custom", grid=None, rows=1, cols=1, layers=lays, edits=edits,
+                titles=[],
                 panel_fills=[], panels=[dict(run=int(ref[0]), time_s=float(ref[1]))])
 
 
@@ -210,7 +214,7 @@ def merge_group(d, dd, js, layers):
             d[f"L{j}_cx"], d[f"L{j}_cy"] = dd["x"], dd["y"]
         t = layers[j]["type"]
         keys = ("track_x", "track_y", "now_x", "now_y") if t == "track" else \
-            ("line",) if t == "line" else ("sector",) if t == "sector" else ()
+            ("lines",) if t == "line" else ("sector",) if t == "sector" else ()
         for key in keys:
             if key in dd:
                 d[key] = dd[key]
@@ -336,8 +340,8 @@ def tindex(run, time_s):
 
 def normalize(spec, run, track="viewer"):
     """Fill in what an older spec (cm1view figures before multi-run panels) lacks:
-    times in seconds from the time indices of `run`, and `run` (with `track`) as the
-    only run."""
+    times in seconds from the time indices of `run`, `run` (with `track`) as the
+    only run, and its one cross-section (spec["xsec"]) as the list of sections."""
     nt = len(run.times)
     if "times_s" not in spec:
         spec["times_s"] = [None if t is None else float(run.times[min(int(t), nt - 1)])
@@ -346,13 +350,41 @@ def normalize(spec, run, track="viewer"):
         spec["time_s"] = float(run.times[min(int(spec["time"]), nt - 1)])
     if not spec.get("runs"):
         spec["runs"] = [run_entry(run, track)]
-    if spec.get("vary") == "grid":  # (a run x time grid is panels with their own run & time)
-        spec["panels"] = [
-            dict(run=ref[0], time_s=ref[1]) if ref else
-            dict(run=0, time_s=float(spec["time_s"]))
-            for ref in (panel_ref(spec, i) for i in range(npanels(spec)))]
-        spec["vary"] = "custom"
+    upgrade_sections(spec)  # (one section before: spec["xsec"])
+    for s in [spec] + list(spec.get("parts") or []):
+        upgrade_grid(s)
     return spec
+
+
+def upgrade_grid(spec):
+    """spec with spec["grid"] (what its rows and columns step through) from an older
+    spec's "vary", in place.  A panel-by-panel run and time ("custom") becomes a grid
+    of alike panels, each with its run and time as a panel edit."""
+    g = spec.get("grid") or {}
+    if g.get("rows") or g.get("cols") or spec.get("kind", "plan") not in ("plan", "xsec"):
+        return spec
+    rd, cd = figdraw.grid_axes(spec)
+    if cd == "custom":
+        edits = spec.setdefault("edits", {})
+        for i in range(npanels(spec)):
+            ref = panel_ref(spec, i)
+            if ref is not None:
+                e = edits.setdefault(str(i), {})
+                e.setdefault("run", ref[0])
+                e.setdefault("time_s", ref[1])
+        rd = cd = "none"
+    spec["grid"] = dict(rows=rd, cols=cd, runs=[])
+    spec["vary"] = legacy_vary(rd, cd)
+    return spec
+
+
+def legacy_vary(rd, cd):
+    """The "vary" an older spec had for grid axes (rd, cd) (for older readers of the
+    spec: "time", "field", "height", else "grid"; spec["grid"] says what it is)."""
+    dims = [d for d in (rd, cd) if d != "none"]
+    if len(dims) == 1 and dims[0] in ("times", "fields", "heights"):
+        return dims[0][:-1]
+    return "grid"
 
 
 def storm_motion(run, fixes, t):

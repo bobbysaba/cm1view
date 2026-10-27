@@ -15,7 +15,8 @@ time each one uses. The layers drawn in them are in [Figure layers](figures-laye
   panel number grows the grid; it never shrinks the rows and columns you set.
 - The **titles** of the figure and of each panel, and the **area** (plan views) or
   **section** (cross-sections) shown.
-- **Fill a grid** makes a grid of runs × times ([below](#fill-a-grid)).
+- **Rows are** and **Columns are** (plan views and cross-sections) say what the rows
+  and columns step through ([below](#rows-and-columns)).
 
 The time lists offer the output times of the panel's run. A panel's time can be left
 empty in any cell.
@@ -24,23 +25,43 @@ empty in any cell.
 
 ### Plan views and vertical cross-sections
 
-Panels that differ in
-
-- **time**: the same field at several times of one run;
-- **field**: several fields at one time;
-- **height**: at several heights or model levels (plan views: e.g. 1, 3 and 6 km, or
-  levels 5, 10 and 20). A layer can keep its own height. *Style → Panel labels → Height
-  label* names each panel's height or level;
-- **each panel with its own run and time**.
+Their panels step through runs, sections, times, fields or heights along the rows and
+columns ([Rows and columns](#rows-and-columns)), e.g. the same field at several times,
+several fields at one time, or plan views at several heights or model levels (e.g. 1, 3
+and 6 km, or levels 5, 10 and 20; a layer can keep its own height, and *Style → Panel
+labels → Height label* names each panel's height or level).
 
 **Plan-view area** is *Centred on tracked storm* (with a *Half-width*, default 12.5 km),
 a *Fixed box* (x and y minimum and maximum, in grid km) or the *Whole domain*. *Axis
-coordinates* are the model grid's x, y or relative to the storm. A cross-section is
-*Through tracked storm* (with a direction in degrees from east, a half-length, offsets and
-a top) or a *Fixed A–B from the map*. **Average across** (km) makes it a strip-averaged
-section: the mean of the sections parallel to the line within half that width either
-side (0: the line alone). A plan view can draw the section's line as a
+coordinates* are the model grid's x, y or relative to the storm.
+
+**Sections** lists the figure's cross-sections (*+ Section* adds one; an x–z section's
+next is its y–z twin, an along-motion one's the across one). Each has a *Label*, an
+*Orientation* — *x–z*, *y–z*, *Angled* (a direction in degrees clockwise from north),
+*Along the storm motion*, *Across the storm motion* or *A–B points* — and a *Position*:
+*Through the storm* (a half-length and an offset from the tracked storm; needs a run
+with a track) or *Fixed* (x–z: at a y, from x to x; y–z: at an x, from y to y; blank:
+the domain's centre and edges; angled: a centre). Along and across the motion
+sections are always through the storm and turn with its tracked ground-relative motion
+at each time (behind → ahead, or left → right of it; the domain's motion where the track
+has none): a *Half-length*, the centre *ahead of* and *right of* the storm (km), and
+*Motion averaged over* (minutes about the panel time; 0: the motion at that time) to
+steady a wobbly track. *Use map A–B* takes the section drawn
+on the map; clicking the ends in a plan-view panel (*Place: section*) sets the first A–B
+section. **Average across** (km) makes it a strip-averaged section: the mean of the
+sections parallel to the line within half that width either side (0: the line alone).
+*Top* (km) is the figure's. Every section panel shows the first section, unless the
+rows or columns are the sections; pick another for a panel in the panel tree
+(*Section*). A plan view can draw the sections' lines as a
 *Section line* layer ([Figure layers](figures-layers.md)).
+
+A section panel's x axis follows its section: x–z and y–z sections are drawn against x
+or y — from the storm's for those through the storm (*x–z, y–z x axis*: *From the
+storm*), or the model's (*Model grid x, y*, and always for fixed ones) — angled,
+motion-relative and A–B sections against the distance along them (0 at the section's
+centre, or at A). With *Style → x
+label* blank each panel is labelled so (*x (km)*, *y from storm (km)*, *distance
+(km)*); a label typed there is every panel's.
 
 *Layers → Maximum and minimum* writes a layer's maximum and/or minimum over what each
 panel shows in a corner (e.g. "max 32.1 m/s"), with + and × where they are.
@@ -213,21 +234,40 @@ soundings, distributions, profiles, joint distributions and azimuthal means with
 those of the runs
 after it stay on their runs.
 
-## Fill a grid
+## Rows and columns
 
-**Fill a grid** makes panels of runs × times. Pick
+For plan views and cross-sections, *Grid and size* → **Rows are** and **Columns are**
+each step through one of
 
-- the runs,
-- how many times from the shown time, and every how many outputs, and
-- whether the runs are rows or columns.
+- **Runs**: the runs picked (*Runs, one per row / column*), in the order picked;
+- **Sections** (cross-sections): the figure's sections, in their order (*Sections*);
+- **Times**: a time per row or column (*Fill from the shown time* fills them every
+  *Every … outputs*); in a grid of runs the times are the first run's outputs, marked
+  *not in every run* where another run has none;
+- **Fields**: a fill per row or column (its colorbar per row or column);
+- **Heights** (plan views): the heights or model levels typed;
+- **—**: nothing.
 
-Every panel then has its own run and time, which you can change one by one. A figure
-saved with the older *Run × time grid* opens this way.
+E.g. runs as rows and sections as columns gives a panel for each run's x–z and y–z
+section. Runs, sections and heights set their number of rows (columns) themselves; times
+and fields take as many as you set. With only one of them set (the other *—*), its
+panels fill the grid row by row (the older *Panels differ in*); with neither, every
+panel is alike, and the panel tree changes one panel's run, time, height or section.
+What the rows and columns do not step through is the figure's: one *Run (every panel)*
+and one *Time (every panel)*.
+
+When both are set the figure is labelled as the grid is made, until you type titles:
+the top row's titles name the columns (e.g. the section labels) and *Titles → Row …
+label* names each row at its left (e.g. the run names; the run labels in the panels go
+off). *Fill in from fields, times or runs* labels them so again. Figures saved with *Panels differ in*, *Fill a grid* or a
+run and time for each panel open as the same panels (the last as panel-tree changes).
 
 ## Figure parts
 
 At the top of Panels: a figure can have **parts** with different kinds of panels, e.g.
 plan views beside soundings, or a plan view with its A–B line above the cross-section.
+The plan-view and cross-section parts share the list of sections: a section changed in
+one part is the others' too.
 
 - Each part has its own panels, runs, layers and style, and keeps its own size.
 - The parts are side by side or stacked, and the panel letters run on from part to part.

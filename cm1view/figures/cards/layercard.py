@@ -192,7 +192,12 @@ class LayerCard:
             w["marker"] = pn.widgets.Checkbox(name="Dot at the panel time",
                                               value=lay.get("marker", True))
         if t == "line":
-            w["labels"] = pn.widgets.TextInput(name="End labels", value=lay.get("labels", ""))
+            w["labels"] = pn.widgets.TextInput(
+                name="End labels", value=lay.get("labels", ""),
+                description="The first section's ends; the others step on (A, A′ → B, B′)")
+            w["which"] = pn.widgets.Select(name="Sections", options={
+                "All, labelled in turn": "all", "The panel's own": "panel"},
+                value=lay.get("which", "all"))
         if t in ("contour", "shade", "track", "line", "sector"):
             w["legend"] = pn.widgets.TextInput(name="Legend entry (blank: none)",
                                                value=lay.get("legend", ""),
@@ -286,7 +291,8 @@ class LayerCard:
                           "azimuths clockwise from the storm's motion (its track's) or "
                           "from north, from the first to the second (0 to 360: a circle). "
                           "Give it the settings of the azimuthal mean it shows.")]
-        return [_grid(w["color"], w["lw"], w["labels"], (w["legend"], 3), (w["panels"], 3))]
+        return [_grid(w["which"], w["color"], w["lw"], w["labels"], (w["legend"], 3),
+                      (w["panels"], 3))]
 
     def _reduce_row(self):
         w = self.w
@@ -296,7 +302,7 @@ class LayerCard:
         """Only the settings that matter for this layer in `kind` panels (a section
         samples the fields along the section, at every height)."""
         w, t, xs = self.w, self.type, kind == "xsec"
-        by_z = self.ed.vary.value == "height" and not xs  # panels at their own heights
+        by_z = self.ed._uses("heights") and not xs  # panels at their own heights
         if "mode" in w:
             m = w["mode"].value
             w["mode"].visible = not xs
@@ -371,7 +377,7 @@ class LayerCard:
             m = w["mode"].value
             if self.ed.kind.value != "xsec":
                 z = w["z"].value or 0
-                own = self.ed.vary.value == "height" and not w["z_fixed"].value
+                own = self.ed._uses("heights") and not w["z_fixed"].value
                 sub += {"height": " · the panel's height" if own else f" · {z:g} km",
                         "level": f" · k = {z:g}",
                         "colmax": " · column max", "colmin": " · column min"}.get(m, "")

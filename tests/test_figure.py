@@ -86,6 +86,189 @@ def test_cross_section_hides_plan_settings(ed, viewer):
     render(ed)
 
 
+def test_sections_list_and_a_section_per_panel(ed):
+    """Section panels pick one of the figure's sections (panel tree: Section); removing
+    a section keeps the panels on theirs."""
+    from cm1view.figures import spec as fg
+    ed.kind.value = "xsec"
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.sec_cards[0].w["pos"].value = "fixed"  # x–z at the domain's centre
+    ed._add_section()  # its y–z twin
+    assert [c.w["orient"].value for c in ed.sec_cards] == ["x", "y"]
+    ed.sec_cards[1].w["y0"].value = 5.0
+    ed._tree_edit(1)["section"] = 1
+    spec, data, fig = render(ed)
+    assert [s["orient"] for s in spec["sections"]] == ["x", "y"]
+    x0, x1, y0, y1 = fg.domain_box(ed.run)
+    assert np.allclose(data[0]["xlim"], (x0, x1), atol=0.3)  # (fixed: the model's x, y)
+    assert np.allclose(data[1]["xlim"], (5.0, y1), atol=0.3)
+    assert data[0]["xname"] == "x (km)" and data[1]["xname"] == "y (km)"
+    ed.set_spec(json.loads(json.dumps(spec)))  # round trip
+    assert json.dumps(ed.collect(), sort_keys=True) == json.dumps(spec, sort_keys=True)
+    ed._remove_section(ed.sec_cards[0])
+    assert ed.collect()["edits"]["1"]["section"] == 0 and len(ed.sec_cards) == 1
+    assert not ed.sec_cards[0].rm.visible  # (the last one stays)
+
+
+def test_a_grid_of_runs_by_sections(ed, demo_root):
+    """Rows of runs and columns of sections (untracked runs: fixed sections); the
+    lists set the rows and columns, a panel edit still picks its own section."""
+    import os
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.kind.value = "xsec"
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    ed.sec_cards[0].w["pos"].value = "fixed"  # x–z at the domain's centre
+    ed._add_section()  # its y–z twin
+    ed.gg_runs.value = [0, 1]
+    ed.g_rows.value, ed.g_cols.value = "runs", "sections"
+    assert (ed.rows.value, ed.cols.value) == (2, 2) and ed.rows.disabled and ed.cols.disabled
+    assert ed.time1.visible and not ed.tm_box.visible and ed.gg_runs.visible
+    spec, data, fig = render(ed)
+    assert spec["grid"] == dict(rows="runs", cols="sections", runs=[0, 1])
+    assert [fg.panel_ref(spec, i)[0] for i in range(4)] == [0, 0, 1, 1]
+    assert [fg.panel_section(spec, i)[0] for i in range(4)] == [0, 1, 0, 1]
+    x0, x1, y0, y1 = fg.domain_box(ed.run)
+    assert np.allclose(data[0]["xlim"], (x0, x1), atol=0.3)  # (the viewer's run)
+    assert np.allclose(data[1]["xlim"], (y0, y1), atol=0.3)
+    # (labelled as the grid was made: sections over the columns, runs left of the rows)
+    assert "x–z" in spec["titles"][0] and "y–z" in spec["titles"][1] and len(spec["titles"]) == 2
+    assert spec["row_titles"] == [r["label"] for r in spec["runs"]]
+    assert not spec["run_label"]["on"]
+    assert [p.get("rowlabel") for p in figdraw.upgrade(spec)[0]["panels"]] == \
+        [spec["runs"][0]["label"], None, spec["runs"][1]["label"], None]
+    assert any(t.get_text() == spec["runs"][1]["label"] and t.get_rotation() == 90
+               for ax in fig.axes for t in ax.texts)
+    xl = [fig._cv_axes[i].get_xlabel() for i in (2, 3)]  # (outer: on the bottom row)
+    assert xl == ["x (km)", "y (km)"]
+    ed.set_spec(json.loads(json.dumps(ed.collect())))  # round trip
+    assert (ed.g_rows.value, ed.g_cols.value, ed.cols.value) == ("runs", "sections", 2)
+    ed._add_section()  # a column more
+    assert ed.cols.value == 3
+    ed._tree_edit(0)["section"] = 2  # (a panel's own section wins)
+    assert fg.panel_section(ed.collect(), 0)[0] == 2
+    ed.kind.value = "plan"  # plan views have no sections: a column per time
+    assert ed.g_cols.value == "times" and "sections" not in ed.g_cols.options.values()
+    assert not ed.cols.disabled
+
+
+def test_old_cross_section_spec_converts(ed):
+    """An older spec's one spec["xsec"] becomes the list of sections."""
+    s = ed.collect()
+    del s["sections"]
+    s["xsec"] = dict(mode="fixed", a=[-5.0, 0.0], b=[5.0, 0.0], angle=0.0, half=10.0,
+                     offset=[0.0, 0.0], ztop=5.0, dz=0.025, avg=1.0)
+    ed.set_spec(s)
+    c = ed.collect()
+    assert c["xsec"] == dict(ztop=5.0, dz=0.025, coords="storm")
+    assert len(c["sections"]) == 1
+    sec = c["sections"][0]
+    assert sec["orient"] == "ab" and sec["a"] == [-5.0, 0.0] and sec["avg"] == 1.0
+    from cm1view.figures import spec as fg
+    old = fg.from_xsec(dict(mode="storm", angle=30.0, half=10.0, offset=[1.0, 1.0]))
+    assert old["orient"] == "angle" and old["angle"] == 60.0  # (clockwise from north)
+    assert fg.from_xsec(dict(mode="storm", angle=90.0, half=8.0, offset=[2.0, 0.0])) \
+        == fg.section_defaults(orient="y", half=8.0, off=2.0)
+
+
+def test_section_x_axes_follow_how_each_section_runs(ed):
+    """x–z through the storm: x from the storm's (or the model's x); angled: the
+    distance along it; the x label follows each panel's section unless one is typed."""
+    ed.kind.value = "xsec"
+    assert ed.xlabel.value == ""
+    ed.sec_cards[0].w["orient"].value = "x"
+    ed.sec_cards[0].w["half"].value = 8.0
+    ed._add_section()
+    ed.sec_cards[1].w["orient"].value = "angle"
+    ed.g_rows.value, ed.g_cols.value = "none", "sections"
+    spec, data, fig = render(ed)
+    if data[0].get("missing"):
+        pytest.skip("no track position at the panel time")
+    assert np.allclose(data[0]["xlim"], (-8.0, 8.0), atol=0.3)
+    assert data[0]["xname"] == "x from storm (km)"
+    assert data[1]["xname"] == "distance from storm (km)"
+    assert [ax.get_xlabel() for ax in fig.axes[:2]] == ["x from storm (km)",
+                                                       "distance from storm (km)"]
+    ed.xs_coords.value = "grid"  # the model's x
+    spec, data, fig = render(ed)
+    assert data[0]["xname"] == "x (km)"
+    assert np.isclose(data[0]["xlim"][1] - data[0]["xlim"][0], 16.0, atol=0.3)
+    ed.xlabel.value = "along x (km)"  # (typed: every panel)
+    spec, data, fig = render(ed)
+    assert [ax.get_xlabel() for ax in fig.axes[:2]] == ["along x (km)"] * 2
+
+
+def test_section_line_layer_draws_every_section(ed):
+    """A Section line layer on a plan view: every section, labelled A–A′, B–B′; with
+    "The panel's own" only the panel's.  Parts of a figure share the sections."""
+    from cm1view.figures import draw as figdraw
+    ed.sec_cards[0].w["pos"].value = "fixed"
+    ed._add_section()
+    ed._add_layer("line")
+    spec, data, fig = render(ed)
+    assert data[0]["lines"].shape == (2, 6)
+    texts = [t.get_text() for t in fig.axes[0].texts]
+    assert all(x in texts for x in ("A", "A′", "B", "B′"))
+    assert figdraw.end_labels("X, X′", 2) == ("Z", "Z′")
+    assert figdraw.end_labels("start, end", 1) == ("start 2", "end 2")
+    next(c for c in ed.cards if c.type == "line").w["which"].value = "panel"
+    spec, data, fig = render(ed)
+    assert data[0]["lines"].shape == (1, 6)
+    ed._add_part()  # part 2: sections
+    ed.kind.value = "xsec"
+    ed.sec_cards[1].w["orient"].value = "angle"
+    whole = ed.collect_all()
+    assert [s["orient"] for s in whole["parts"][0]["sections"]] == ["x", "angle"]
+    ed.part_sel.value = 0
+    assert [c.w["orient"].value for c in ed.sec_cards] == ["x", "angle"]
+
+
+def test_motion_section_ends_turn_with_the_motion():
+    """Along / across the storm motion: behind -> ahead and left -> right of the
+    tracked motion, centred ahead / right of the storm; mwin: a mean motion."""
+    from types import SimpleNamespace
+    from cm1view.figures import spec as fg
+    run = SimpleNamespace(umove=0.0, vmove=0.0, dx=1000.0, dy=1000.0,
+                          xh=np.arange(100.0) + 0.5, yh=np.arange(100.0) + 0.5,
+                          times=np.array([0.0, 300.0, 600.0, 900.0]))
+    fixes = {t: dict(x=20.0 + 3.0 * t, y=50.0 + 3.0 * t * (t >= 2)) for t in range(4)}
+    along = fg.section_defaults(orient="along", half=10.0, ahead=2.0, right=1.0)
+    m = fg.section_motion(run, fixes, 0, along)
+    assert np.allclose(m, (10.0, 0.0))  # (eastward: the first fixes)
+    a, b = fg.section_ends(run, along, (20.0, 50.0), m)
+    assert np.allclose(a, (12.0, 49.0)) and np.allclose(b, (32.0, 49.0))  # (right: south)
+    across = dict(along, orient="across")
+    a, b = fg.section_ends(run, across, (20.0, 50.0), m)
+    assert np.allclose(a, (22.0, 59.0)) and np.allclose(b, (22.0, 39.0))  # (north -> south)
+    assert fg.is_storm(across) and fg.uses_motion(across) and not fg.uses_motion(
+        fg.section_defaults())
+    assert fg.section_ends(run, along, None, m) is None  # (no track position)
+    mean = fg.section_motion(run, fixes, 2, dict(along, mwin=10.0))  # (fixes 1–3)
+    assert np.allclose(mean, np.mean([fg.section_motion(run, fixes, t, along)
+                                      for t in (1, 2, 3)], axis=0))
+    assert fg.section_motion(run, None, 0, along) == (0.0, 0.0)  # (no track: the domain's)
+    assert fg.x_axis(along, "storm", (20.0, 50.0))[0] is None  # (the distance along)
+    assert fg.describe(along) == "along the storm motion, +2 km ahead, +1 km right"
+
+
+def test_motion_sections_in_the_editor(ed):
+    """The card shows the motion options; + Section after an along one is across."""
+    ed.kind.value = "xsec"
+    c = ed.sec_cards[0]
+    c.w["orient"].value = "along"
+    assert c.w["ahead"].visible and c.w["mwin"].visible and c.w["half"].visible
+    assert not c.w["pos"].visible and not c.w["off"].visible
+    ed._add_section()
+    assert ed.sec_cards[1].w["orient"].value == "across"
+    ed.g_rows.value, ed.g_cols.value = "none", "sections"
+    spec, data, fig = render(ed)
+    assert [s["orient"] for s in spec["sections"]] == ["along", "across"]
+    if data[0].get("missing"):
+        pytest.skip("no track position at the panel time")
+    assert data[0]["xname"] == data[1]["xname"] == "distance from storm (km)"
+    assert np.allclose(data[0]["xlim"], (-10.0, 10.0), atol=0.3)
+
+
 def test_soundings_render(ed):
     ed.from_soundings()
     assert ed.kind.value == "sounding"
@@ -116,7 +299,7 @@ def test_quick_start(ed, viewer):
     viewer.workspace.value = "Figure"  # the first time: the quick start
     assert ed.quick.open and ed._started
     ed.qs_kind.value = "xsec"
-    assert "height" not in ed.qs_vary.options.values() and ed.qs_rows.visible
+    assert "heights" not in ed.qs_vary.options.values() and ed.qs_rows.visible
     ed.qs_kind.value = "sounding"  # (rows and columns for every kind but time-height)
     assert ed.qs_rows.visible and not ed.qs_field.visible
     ed.qs_kind.value = "th"
@@ -124,13 +307,14 @@ def test_quick_start(ed, viewer):
     ed.qs_kind.value = "plan"
     f = next(v for g in ed.qs_field.groups.values() for v in g.values()
              if v != ed.cards[0].collect()["field"])
-    ed.qs_vary.value, ed.qs_field.value = "field", f
+    ed.qs_vary.value, ed.qs_field.value = "fields", f
     ed.qs_rows.value, ed.qs_cols.value = 1, 2
     ed.qs_size.value = "6.5"
     ed.qs_go.clicks += 1
     s = ed.collect()
     assert not ed.quick.open
     assert (s["vary"], s["rows"], s["cols"], s["size"][0]) == ("field", 1, 2, 6.5)
+    assert s["grid"]["cols"] == "fields" and s["grid"]["rows"] == "none"
     assert s["layers"][0]["field"] == f
     render(ed)
     ed.undo()  # the example again
@@ -224,7 +408,7 @@ def test_time_height_range_is_the_layer():
 
 def test_each_colorbar_has_its_own_label(ed):
     ed.rows.value, ed.cols.value = 1, 2
-    ed.vary.value = "field"
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"
     ed.cb_mode.value = "each"
     ed.pf_rows[0]["cbar_label"].value = "first bar"
     ed.pf_rows[0]["cbar_ticks"].value = "0, 10"
@@ -242,7 +426,7 @@ def test_field_panels_own_their_fill(ed):
     from cm1view.figures import draw as figdraw
     ed.rows.value, ed.cols.value = 1, 2
     fills = sum(c.type == "fill" for c in ed.cards)
-    ed.vary.value = "field"  # (Time and fields sets the fill: not a Layers card)
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"  # (Time and fields sets the fill: not a Layers card)
     assert sum(c.type == "fill" for c in ed.cards) == fills - 1
     ed.pf_rows[1]["extend"].value = "max"
     ed.pf_rows[1]["z"].value = 3.0
@@ -254,7 +438,7 @@ def test_field_panels_own_their_fill(ed):
     ed.set_spec(json.loads(json.dumps(s)))  # (opened again: still no card)
     assert sum(c.type == "fill" for c in ed.cards) == fills - 1
     assert ed.collect()["layers"][0] == s["layers"][0]
-    ed.vary.value = "time"  # back: a fill card again, as panel a had it
+    ed.g_rows.value, ed.g_cols.value = "none", "times"  # back: a fill card again, as panel a had it
     assert ed.cards[0].type == "fill" and ed.cards[0].collect()["z"] == 1.0
 
 
@@ -374,7 +558,7 @@ def test_hodograph_marks_each_storm_motion_on_its_own(ed):
 
 def test_panels_at_heights(ed):
     from cm1view.figures import draw as figdraw
-    ed.vary.value = "height"
+    ed.g_rows.value, ed.g_cols.value = "none", "heights"
     ed.pz.value = "1, 3, 6"
     assert (ed.rows.value, ed.cols.value) == (1, 3) and ed.pz.visible
     ed.time1.value = ed._shown_s()  # (the storm's first time)
@@ -391,7 +575,7 @@ def test_panels_at_heights(ed):
     ed.set_spec(json.loads(json.dumps(s)))
     assert ed.collect()["panel_z"] == [1.0, 3.0, 6.0]
     ed.kind.value = "xsec"  # sections have no heights to vary
-    assert ed.vary.value == "time" and "height" not in ed.vary.options.values()
+    assert ed.g_cols.value == "times" and "heights" not in ed.g_cols.options.values()
 
 
 def test_clicks_on_the_preview_place_things(ed):
@@ -411,7 +595,8 @@ def test_clicks_on_the_preview_place_things(ed):
     for n, f in enumerate((0.2, 0.8)):
         ed.image.click = [left + f * (right - left), top + 0.5 * (bottom - top), 2 + n]
     s = ed.collect()
-    assert s["xsec"]["mode"] == "fixed" and s["xsec"]["a"][0] < s["xsec"]["b"][0]
+    sec = s["sections"][0]  # (the only section becomes the A–B one)
+    assert len(s["sections"]) == 1 and sec["orient"] == "ab" and sec["a"][0] < sec["b"][0]
     assert not any(lay["type"] == "line" for lay in s["layers"])  # (no layer added)
     ed.image.click = [0.999, 0.999, 9]  # outside the panels
     assert "inside a panel" in txt(ed.status.object)
@@ -554,7 +739,7 @@ def test_parts_size_share_and_one_colorbar(ed):
 
 def test_panels_at_model_levels_with_height_labels(ed):
     from cm1view.figures import draw as figdraw
-    ed.vary.value = "height"
+    ed.g_rows.value, ed.g_cols.value = "none", "heights"
     ed.pz.value = "1, 3"
     ed.time1.value = ed._shown_s()
     ed.pz_mode.value = "level"  # the heights become the nearest levels

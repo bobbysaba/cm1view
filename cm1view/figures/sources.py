@@ -147,9 +147,10 @@ class FigureSources:
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
         s.update(kind="xsec", rows=1, cols=1, size=[7.0, 3.5], layers=layers, vary="time")
-        s["xsec"] = dict(s["xsec"], mode="fixed", a=list(v.xs_pts[0]), b=list(v.xs_pts[1]),
-                         ztop=float(v.xs_ztop.value))
-        s["axes"] = dict(s["axes"], xlabel="distance (km)", ylabel="height (km)",
+        s["xsec"] = dict(s["xsec"], ztop=float(v.xs_ztop.value))
+        s["sections"] = [fg.section_defaults(orient="ab", pos="fixed", a=list(v.xs_pts[0]),
+                                             b=list(v.xs_pts[1]))]
+        s["axes"] = dict(s["axes"], xlabel="", ylabel="height (km)",
                          ticklabels="all")
         s["colorbar"] = dict(s["colorbar"], mode="each", orientation="vertical", shrink=0.9)
         self.set_spec(s)

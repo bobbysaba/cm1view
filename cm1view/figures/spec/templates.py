@@ -20,6 +20,8 @@ def template(spec, name=""):
         p.pop("runs", None)
         p["run"] = 0
         p["panels"] = [q for q in p.get("panels") or [] if int(q.get("run", 0)) == 0]
+        if p.get("grid"):  # (a grid of runs: of the new figure's runs)
+            p["grid"] = dict(p["grid"], runs=[])
         for key in ("soundings", "dists", "profiles", "joints", "azims"):
             p[key] = [e for e in p.get(key) or [] if int(e.get("run", 0)) == 0]
         for e in p.get("series") or []:

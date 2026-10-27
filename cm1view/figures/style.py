@@ -141,7 +141,7 @@ class FigureStyle:
         _when(self.tl_on, tl)
         _when(self.rl_on, rl)
 
-        def zl_show(*e):  # (Panels → vary hides zl_on unless the panels vary in height)
+        def zl_show(*e):  # (Panels hides zl_on unless a row or column steps through heights)
             zl.visible = self.zl_on.visible and self.zl_on.value
         self.zl_on.param.watch(zl_show, ["value", "visible"])
         zl_show()

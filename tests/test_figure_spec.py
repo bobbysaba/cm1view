@@ -11,7 +11,7 @@ from conftest import render, edited_v1
 # ------------------------------------------------------------------ spec version 2
 def _setup(ed, how):
     if how == "height":
-        ed.vary.value = "height"
+        ed.g_rows.value, ed.g_cols.value = "none", "heights"
         ed.pz.value = "1, 3, 6"
     elif how == "xsec":
         ed.kind.value = "xsec"

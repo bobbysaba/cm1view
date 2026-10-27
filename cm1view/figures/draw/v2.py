@@ -4,27 +4,104 @@ import copy
 
 from .base import FILL_KEYS, ENTRIES, part_shares
 
+GRID_DIMS = ("runs", "sections", "times", "fields", "heights")  # (or "none")
+LEGACY_VARY = {"time": "times", "field": "fields", "height": "heights", "custom": "custom"}
+
+
+def grid_axes(spec):
+    """(rows, columns) of a plan-view or section figure: what each steps through,
+    "runs", "sections", "times", "fields", "heights" or "none" (spec["grid"]; an older
+    spec: its "vary", the panels filling the grid row by row).  With one of them
+    "none" the other's panels fill the grid row by row; with both "none" every panel
+    is alike (but for its panel edits)."""
+    g = spec.get("grid") or {}
+    if g.get("rows") or g.get("cols"):
+        return g.get("rows") or "none", g.get("cols") or "none"
+    vary = spec.get("vary", "time")
+    if vary == "grid":
+        return ("runs", "times") if spec.get("runs_as", "rows") == "rows" else ("times", "runs")
+    return "none", LEGACY_VARY.get(vary, "times")
+
+
+def grid_runs(spec):
+    """The run indices a grid of runs steps through (spec["grid"]["runs"]; blank:
+    every run of the figure)."""
+    nr = len(spec.get("runs") or [None])
+    ks = [int(k) for k in (spec.get("grid") or {}).get("runs") or [] if 0 <= int(k) < nr]
+    return ks or list(range(nr))
+
+
+def dim_items(spec, d):
+    """What each step of grid dimension d gives its panels (a dict of "run",
+    "time_s", "fill", "z" and "section"; None: an empty cell)."""
+    nr = len(spec.get("runs") or [None])
+    if d == "runs":
+        return [dict(run=k) for k in grid_runs(spec)]
+    if d == "times":
+        return [None if t is None else dict(time_s=float(t)) for t in spec.get("times_s") or []]
+    if d == "fields":
+        return [dict(fill=pf) for pf in spec.get("panel_fills") or []]
+    if d == "heights":
+        return [None if z is None else dict(z=float(z)) for z in spec.get("panel_z") or []]
+    if d == "sections":
+        return [dict(section=k) for k in range(len(spec.get("sections") or [None]))]
+    if d == "custom":  # (an older spec: a run and time per panel)
+        return [dict(run=int(p["run"]), time_s=float(p["time_s"])) if int(p["run"]) < nr
+                else None for p in spec.get("panels", [])]
+    return []
+
+
+def grid_cell(spec, i):
+    """What panel i of a plan-view or section figure takes from its row and column
+    (grid_axes, dim_items: a dict, {} for nothing), or None for an empty cell.  A
+    figure of fields or heights without any yet draws its one panel as it is."""
+    rd, cd = grid_axes(spec)
+    if rd != "none" and cd != "none":
+        r, c = divmod(i, int(spec["cols"]))
+        idx = ((rd, r), (cd, c))
+    else:
+        idx = tuple((d, i) for d in (rd, cd) if d != "none")
+    out = {}
+    for d, j in idx:
+        items = dim_items(spec, d)
+        if not items and d in ("fields", "heights"):
+            continue
+        if j >= len(items) or items[j] is None:
+            return None
+        out.update(items[j])
+    return out
+
+
+def z_text(spec, i):
+    """The height label of panel i of a figure with a row or column of heights
+    (spec["z_label"]; {z}: the height in km, {k}: the model level), or "" for none."""
+    z = (grid_cell(spec, i) or {}).get("z")
+    if z is None:
+        return ""
+    level = spec.get("panel_zmode", "height") == "level"
+    fmt = spec.get("z_label", {}).get("fmt") or ("k = {k}" if level else "z = {z:g} km")
+    return fmt.format(z=float(z), k=int(round(float(z))))
+
+
 def npanels(spec):
     """Number of panel slots (grid cells; empty ones are hidden)."""
     if spec.get("kind") == "combo":
         return sum(npanels(p) for p in spec["parts"])
     cells = int(spec["rows"]) * int(spec["cols"])
-    kind, vary = spec.get("kind", "plan"), spec.get("vary", "time")
+    kind = spec.get("kind", "plan")
     if kind == "th":
         n = cells
     elif kind in ENTRIES:
         ents = spec.get(ENTRIES[kind], [])
         n = 1 + max([int(e.get("panel", 0)) for e in ents] or [0])
-    elif vary == "time":
-        n = len(spec.get("times_s") or spec.get("times") or [])
-    elif vary == "field":
-        n = max(1, len(spec.get("panel_fills", [])))
-    elif vary == "height":
-        n = max(1, len(spec.get("panel_z") or []))
-    elif vary == "grid":
-        n = cells
     else:
-        n = len(spec.get("panels", []))
+        dims = [d for d in grid_axes(spec) if d != "none"]
+        if len(dims) == 1:  # (one list filling the grid row by row)
+            n = len(dim_items(spec, dims[0]))
+            if dims[0] in ("fields", "heights"):
+                n = max(1, n)
+        else:
+            n = cells
     return min(n, cells)
 
 
@@ -55,11 +132,11 @@ def series_ref(spec, i):
 
 
 def spec_layers(spec, i):
-    """Layers of panel i: the shared layers, with the per-panel fill of a 'field'
-    figure replacing the first fill layer, and in a 'height' figure the panel's height
-    (spec["panel_z"], km) for the layers at a height (but those with "z_fixed"), or
-    with spec["panel_zmode"] "level" the panel's model level for the layers at a
-    height or level (time-height panels: the fill of the panel's series).  A layer
+    """Layers of panel i: the shared layers, with the fill of the panel's row or
+    column of fields (grid_cell) replacing the first fill layer, and in a row or
+    column of heights the panel's height (spec["panel_z"], km) for the layers at a
+    height (but those with "z_fixed"), or with spec["panel_zmode"] "level" the
+    panel's model level for the layers at a height or level (time-height panels: the fill of the panel's series).  A layer
     with a "panels" list is off in the other panels (so layer j stays layer j
     everywhere)."""
     if spec.get("kind") == "th":
@@ -70,25 +147,23 @@ def spec_layers(spec, i):
         return [dict({k: e[k] for k in FILL_KEYS if k in e}, type="fill", on=True)]
     layers = [dict(lay) if not lay.get("panels") or i in lay["panels"] else
               dict(lay, on=False) for lay in spec["layers"]]
-    if spec.get("vary") == "height":
-        zs = spec.get("panel_z") or []
+    cell = grid_cell(spec, i) or {}
+    if cell.get("z") is not None:
+        z = float(cell["z"])
         level = spec.get("panel_zmode", "height") == "level"
-        if i < len(zs) and zs[i] is not None:
-            for j, lay in enumerate(layers):
-                if lay.get("z_fixed") or "z" not in lay:
-                    continue
-                mode = lay.get("mode", "height")
-                if level and (lay["type"] == "vectors" or mode in ("height", "level")):
-                    layers[j] = dict(lay, mode="level", z=float(round(float(zs[i]))))
-                elif not level and (lay["type"] == "vectors" or mode == "height"):
-                    layers[j] = dict(lay, z=float(zs[i]))
-    if spec.get("vary") == "field":
-        pf = spec.get("panel_fills", [])
-        if i < len(pf):
-            for j, lay in enumerate(layers):
-                if lay["type"] == "fill":
-                    layers[j] = dict(lay, **pf[i])
-                    break
+        for j, lay in enumerate(layers):
+            if lay.get("z_fixed") or "z" not in lay:
+                continue
+            mode = lay.get("mode", "height")
+            if level and (lay["type"] == "vectors" or mode in ("height", "level")):
+                layers[j] = dict(lay, mode="level", z=float(round(z)))
+            elif not level and (lay["type"] == "vectors" or mode == "height"):
+                layers[j] = dict(lay, z=z)
+    if cell.get("fill"):
+        for j, lay in enumerate(layers):
+            if lay["type"] == "fill":
+                layers[j] = dict(lay, **cell["fill"])
+                break
     return edited_layers(layers, panel_edit(spec, i))
 
 
@@ -96,8 +171,9 @@ def panel_edit(spec, i):
     """The changes made to panel i alone (spec["edits"][str(i)], the panel tree): its
     "run", "time_s", "z" (km), "title", "xlabel", "ylabel" (" ": none), "layers"
     ({str(j): the keys layer j has in this panel only, its own "run", "time_s" and "z"
-    among them}), "extra" (layers of this panel only, drawn after the others) and
-    "legend" (its own legend: legend_opts)."""
+    among them}), "extra" (layers of this panel only, drawn after the others),
+    "legend" (its own legend: legend_opts) and "section" (the index of its
+    cross-section in spec["sections"])."""
     return (spec.get("edits") or {}).get(str(i)) or {}
 
 
@@ -132,32 +208,20 @@ def panel_ref(spec, i):
 
 
 def form_ref(spec, i):
-    """(run index, model time in s) of panel i as the layout says, or None.  vary:
-    "time" (one run, a time per panel), "field" (one run and time, a fill per panel),
-    "height" (one run and time, a height per panel:
-    spec["panel_z"]), "grid" (runs x times: rows are runs when runs_as == "rows", else
-    columns) or "custom" (spec["panels"]: a run and time per panel)."""
-    vary, nr = spec["vary"], len(spec.get("runs") or [None])
-    if vary == "time":  # (a time of None: an empty grid cell)
-        ts = spec["times_s"]
-        return (int(spec.get("run", 0)), float(ts[i])) if i < len(ts) and ts[i] is not None \
-            else None
-    if vary in ("field", "height"):
-        return int(spec.get("run", 0)), float(spec["time_s"])
-    if vary == "grid":
-        r, c = divmod(i, int(spec["cols"]))
-        k, j = (r, c) if spec.get("runs_as", "rows") == "rows" else (c, r)
-        ts = spec["times_s"]
-        return (k, float(ts[j])) if k < nr and j < len(ts) and ts[j] is not None else None
-    pans = spec.get("panels", [])
-    if i < len(pans) and int(pans[i]["run"]) < nr:
-        return int(pans[i]["run"]), float(pans[i]["time_s"])
-    return None
+    """(run index, model time in s) of panel i as the layout says, or None for an
+    empty cell: the run and time of its row or column (grid_cell), else the figure's
+    one run (spec["run"]) and time (spec["time_s"])."""
+    cell = grid_cell(spec, i)
+    if cell is None:
+        return None
+    return (int(cell["run"]) if "run" in cell else int(spec.get("run", 0)),
+            float(cell["time_s"]) if "time_s" in cell else float(spec["time_s"]))
 
 
 V1_PANEL_KEYS = ("version", "kind", "rows", "cols", "vary", "times", "time", "times_s",
                  "time_s", "panel_fills", "panel_z", "panel_zmode", "layers", "run",
-                 "runs_as", "panels", "titles", "series", "soundings", "dists", "edits",
+                 "runs_as", "panels", "grid", "titles", "row_titles", "series", "soundings",
+                 "dists", "edits",
                  "form")
 FIG_ONLY = ("version", "kind", "arrange", "parts", "blocks", "panels", "size", "size_set",
             "size_auto", "share", "suptitle", "export", "made_with", "code")
@@ -238,14 +302,17 @@ def _v1_panel(spec, i):
             return None
         p["run"], p["time_s"] = ref
         p["layers"] = copy.deepcopy(spec_layers(spec, i))
-        zs = spec.get("panel_z") or []
-        if spec.get("vary") == "height" and i < len(zs) and zs[i] is not None:
-            p["z"], p["zmode"] = float(zs[i]), spec.get("panel_zmode", "height")
+        z = (grid_cell(spec, i) or {}).get("z")
+        if z is not None:
+            p["z"], p["zmode"] = float(z), spec.get("panel_zmode", "height")
         e = panel_edit(spec, i)
         if e.get("z") is not None:
             p["z"], p["zmode"] = float(e["z"]), "height"
     if panel_edit(spec, i).get("title") is not None:
         p["title"] = panel_edit(spec, i)["title"]
+    rt = spec.get("row_titles") or []
+    if c == 0 and r < len(rt) and rt[r]:
+        p["rowlabel"] = rt[r]
     own = legend_opts(kind, panel_edit(spec, i).get("legend"))
     labels = {k: v for k, v in panel_edit(spec, i).items()
               if k in ("xlabel", "ylabel") and v is not None}

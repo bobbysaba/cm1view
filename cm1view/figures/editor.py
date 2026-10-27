@@ -63,7 +63,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._pf_base = None  # a 'field' figure's fill (Panels → Time and fields), not a card
         self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
         self.prof_cards, self.joint_cards, self.azim_cards = [], [], []
-        self.tm_rows, self.title_ws = [], []
+        self.sec_cards = []
+        self.tm_rows, self.title_ws, self.row_ws = [], [], []
         self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
         # undo / redo: (figure JSON with all its parts, part in the widgets) before each
         # change, and the ones undone
@@ -148,8 +149,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
     def _wire(self):
         rq = lambda *e: self.request()  # noqa: E731
         for w in (self.kind, self.width, self.height, self.time1, self.suptitle,
-                  self.half, self.coords, self.xs_mode, self.xs_angle,
-                  self.xs_half, self.xs_offx, self.xs_offy, self.xs_top, self.xs_avg,
+                  self.half, self.coords, self.xs_top, self.xs_coords,
                   self.font, self.math,
                   self.fsize, self.fs_tick, self.fs_label, self.fs_title, self.fs_sup,
                   self.fs_legend, self.xlabel, self.ylabel, self.ticklabels, self.share, self.tickdir,
@@ -173,7 +173,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.lg_where.param.watch(lambda e: self._show_legend(), "value")
         for w in (self.rows, self.cols):
             w.param.watch(lambda e: self._on_layout(), "value")
-        self.vary.param.watch(lambda e: self._on_vary(), "value")
+        self.g_rows.param.watch(lambda e: self._on_axis(self.g_cols, e.new), "value")
+        self.g_cols.param.watch(lambda e: self._on_axis(self.g_rows, e.new), "value")
         self.pz.param.watch(lambda e: self._on_heights(), "value")
         self.pz_mode.param.watch(lambda e: self._on_zmode(), "value")
         self.sk["storm"].param.watch(lambda e: self._show_storm(), "value")
@@ -186,7 +187,6 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.code.param.watch(lambda e: self._sync_code(e.new), "value")
         self.code_box.param.watch(lambda e: self._show_code(True), "value")
         self.runs_as.param.watch(lambda e: self._on_vary(), "value")
-        self.gg_go.on_click(lambda e: self._fill_grid())
         self.gg_runs.param.watch(self._on_gg_runs, "value")
         self.size_preset.param.watch(self._on_preset, "value")
         self.fit_btn.on_click(lambda e: self._refit())
@@ -194,7 +194,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.dom.param.watch(self._on_dom, "value")
         for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
             w.param.watch(lambda e: self._on_box(), "value")
-        self.xs_ab.on_click(lambda e: self._use_ab())
+        self.sec_add.on_click(lambda e: self._add_section())
         self.tfill.on_click(lambda e: self._fill_times())
         self.auto_titles.on_click(lambda e: self._auto_titles())
         self.clear_titles.on_click(lambda e: self._set_titles([]))
@@ -375,9 +375,13 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             t = fg.tindex(run, ts)
             c = centers.get(t) if t is not None else None
             key = fg.data_key(s, i, c, run.path)
+            lays = figdraw.spec_layers(s, i)
             if any(lay["type"] in ("track", "sector") or (lay.get("reduce") or {}).get(
-                    "op") == "composite" for lay in figdraw.spec_layers(s, i)):
-                key += sig  # (a composite follows the whole track; a sector its motion)
+                    "op") == "composite" for lay in lays) or \
+                    (s["kind"] == "xsec" and fg.uses_motion(fg.panel_section(s, i)[1])) or \
+                    (any(lay["type"] == "line" for lay in lays)
+                     and any(fg.uses_motion(x) for x in fg.sections(s))):
+                key += sig  # (a composite follows the whole track; a sector, section its motion)
             d = self.cache.get(key)
             if d is None:
                 if progress:
@@ -491,7 +495,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                 note += (f" · no data in panel{'s' if len(miss) > 1 else ''} "
                          + ", ".join(panel_name(spec, i) for i in miss))
                 storm = (spec["kind"] == "plan" and spec["domain"]["mode"] == "storm") or \
-                    (spec["kind"] == "xsec" and spec["xsec"]["mode"] == "storm")
+                    (spec["kind"] == "xsec" and any(fg.is_storm(fg.panel_section(spec, i)[1])
+                                                    for i in miss))
                 if storm and any(not e.get("track") for e in spec["runs"]):
                     note += (" · storm-centred panels need a track for each run (see "
                              "<b>Runs</b>)")

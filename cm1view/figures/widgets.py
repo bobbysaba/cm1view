@@ -14,7 +14,7 @@ from .cards import (
     ANN_KINDS, DIST_BAR_LABELS, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS,
     DIST_STATS_AT, DIST_WHIS, FIG_CMAPS, JOINT_PLOTS, LOCS, MARK_EXTREMES, SIZE_PRESETS,
     SND_LAYOUTS, STORM_MOTIONS,
-    TYPE_LABEL, VARY, _auto, _checks, _chk, _f, _grid, _hint, _row, _section,
+    TYPE_LABEL, GRID_DIMS, _auto, _checks, _chk, _f, _grid, _hint, _row, _section,
 )
 from .times import _tlabel
 
@@ -37,19 +37,19 @@ class FigureWidgets:
             "Distributions": "dist", "Vertical profiles": "profile",
             "Joint distributions (x vs y)": "joint",
             "Azimuthal means (radius–height)": "azim"})
-        self.vary = pn.widgets.Select(name="Panels differ in", options=VARY)
-        self.run_sel = pn.widgets.Select(name="Run", options={})
+        # what the rows and the columns step through (plan views and sections)
+        self.g_rows = pn.widgets.Select(name="Rows are", options=GRID_DIMS, value="none")
+        self.g_cols = pn.widgets.Select(name="Columns are", options=GRID_DIMS, value="times")
+        self.run_sel = pn.widgets.Select(name="Run (every panel)", options={})
         self.runs_as = pn.widgets.Select(name="Runs are", options={
             "Rows": "rows", "Columns": "cols"})  # (time-height panels)
-        # Fill a grid: panels of runs x times (each panel gets its own run and time)
-        self.gg_runs = pn.widgets.MultiChoice(
-            name="Runs", options={f"1. {os.path.basename(run.path)}": 0}, value=[0])
-        self.gg_as = pn.widgets.Select(name="Runs are", options={
-            "Rows": "rows", "Columns": "cols"})
-        self.gg_n = pn.widgets.IntInput(name="Times", value=3, start=1, end=12)
-        self.gg_step = pn.widgets.IntInput(name="Every … outputs", value=5, start=1)
-        self.gg_go = pn.widgets.Button(name="Fill the grid", height=32, button_type="primary",
-                                       button_style="outline")
+        self.gg_runs = pn.widgets.MultiChoice(  # (a row or column of runs)
+            name="Runs, in order", options={f"1. {os.path.basename(run.path)}": 0}, value=[0])
+        self.grid_hint = _hint(
+            "Rows and columns each step through runs, sections, times, fields or heights "
+            "(e.g. runs down, sections across); the lists are below and under <b>Area</b>. "
+            "With only one of them set its panels fill the grid row by row; with neither, "
+            "every panel is alike (change one in the panel tree).")
         self.rows = pn.widgets.IntInput(name="Rows", start=1, end=8)
         self.cols = pn.widgets.IntInput(name="Columns", start=1, end=8)
         self.size_preset = pn.widgets.Select(name="Size", options=SIZE_PRESETS, value="")
@@ -74,8 +74,6 @@ class FigureWidgets:
         self.tm_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.pf_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.pf_rows = []
-        self.pc_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.pc_rows = []
         # ---- Panels: titles
         self.suptitle = pn.widgets.TextInput(name="Figure title (blank: none)",
                                              sizing_mode="stretch_width")
@@ -97,16 +95,16 @@ class FigureWidgets:
         self.box_html = pn.pane.HTML(margin=(2, 4))
         self.coords = pn.widgets.Select(name="Axis coordinates", options={
             "Model grid x, y": "grid", "Relative to the storm": "storm"})
-        self.xs_mode = pn.widgets.Select(name="Section", options={
-            "Through tracked storm": "storm", "Fixed A–B from the map": "fixed"})
-        self.xs_angle = _f("Direction (° from east)", 0.0, step=15)
-        self.xs_half = _f("Half-length (km)", 10.0, step=1, start=0.5)
-        self.xs_offx = _f("Offset x (km)", 0.0, step=0.5)
-        self.xs_offy = _f("Offset y (km)", 0.0, step=0.5)
         self.xs_top = _f("Top (km)", 6.0, step=0.5, start=0.5)
-        self.xs_avg = _f("Average across (km)", 0.0, step=0.5, start=0.0)  # (0: the line)
-        self.xs_ab = pn.widgets.Button(name="Use map A–B", height=32, button_type="light",
-                                       button_style="outline")
+        self.xs_coords = pn.widgets.Select(
+            name="x–z, y–z x axis", options={"From the storm": "storm",
+                                             "Model grid x, y": "grid"},
+            description="The x axis of x–z and y–z sections through the storm: x (or y) "
+                        "from the storm's, or the model's. Fixed ones: the model's; angled "
+                        "and A–B ones: the distance along them")
+        self.sec_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.sec_add = pn.widgets.Button(name="+ Section", height=32, button_type="light",
+                                         button_style="outline")
         self.xs_html = pn.pane.HTML(margin=(2, 4))
         # ---- Panels: runs
         self.runs_box = pn.Column(sizing_mode="stretch_width", margin=0)
@@ -493,30 +491,23 @@ class FigureWidgets:
     def _panels_tab(self):
         """The Panels tab's sections (and the parts and tree builders)."""
         self.grid_sec = _section(
-            "Grid and size", _grid(self.kind, self.vary, self.run_sel, self.runs_as),
-            _grid(self.rows, self.cols, self.fit_btn),
+            "Grid and size", _grid(self.kind, self.g_rows, self.g_cols, self.runs_as),
+            self.grid_hint, _grid(self.rows, self.cols, self.fit_btn),
             _grid(self.size_preset, self.width, self.height),
             _hint("The height follows the panels (grid, colorbar, titles) until you type "
                   "a size; <b>Fit height</b> makes it follow again."), collapsed=False)
-        self.grid_fill_sec = _section(
-            "Fill a grid", _hint(
-                "One panel per run and time: pick the runs, how many times (from the shown "
-                "time, every … outputs) and whether the runs are rows or columns.  This "
-                "sets the rows and columns and gives every panel its own run and time "
-                "(<b>Panels differ in → Each panel: own run &amp; time</b>)."),
-            _grid((self.gg_runs, 2), self.gg_as, self.gg_n, self.gg_step), self.gg_go)
-        self.times_sec = _section("Times", _grid(self.time1, self.tstep, self.tfill),
-                                  _grid(self.pz_mode, (self.pz, 2)), self.tm_box, self.pf_box,
-                                  self.pc_box)
+        self.times_sec = _section("Times", _grid(self.run_sel, (self.gg_runs, 2)),
+                                  _grid(self.time1, self.tstep, self.tfill),
+                                  _grid(self.pz_mode, (self.pz, 2)), self.tm_box, self.pf_box)
         self.titles_sec = _section("Titles", self.suptitle, self.titles_box,
                                    _row(self.auto_titles, self.clear_titles))
         self.area_plan = pn.Column(_grid(self.dom, self.half, self.coords),
                                    _grid(self.box_x0, self.box_x1, self.box_y0, self.box_y1,
                                          n=2),
                                    self.box_html, margin=0, sizing_mode="stretch_width")
-        self.area_xs = pn.Column(_grid(self.xs_mode, self.xs_angle, self.xs_half, self.xs_offx,
-                                       self.xs_offy, self.xs_top, self.xs_avg, self.xs_ab),
-                                 self.xs_html, margin=0, sizing_mode="stretch_width")
+        self.area_xs = pn.Column(self.sec_box, _grid(self.sec_add, self.xs_top, self.xs_coords),
+                                 self.xs_html,
+                                 margin=0, sizing_mode="stretch_width")
         self.area_sec = _section("Area", self.area_plan, self.area_xs)
         self.ts_sec = _section("Time and value axes", _grid(
             self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax, self.ts_ymin,
@@ -539,7 +530,7 @@ class FigureWidgets:
             self.add_pick.body, self.runs_msg)
         self._build_combo()
         self._build_tree()
-        panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.grid_fill_sec, self.times_sec,
+        panels_tab = pn.Column(self.parts_sec, self.grid_sec, self.times_sec,
                                self.titles_sec, self.area_sec, self.ts_sec,
                                sizing_mode="stretch_width")
         return panels_tab

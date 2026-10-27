@@ -1,5 +1,5 @@
 """Figure workspace with several runs: grids of runs, run lists and pickers, panel times
-from each panel's run, run colours, and templates applied to another run."""
+from the panels' run, run colours, and templates applied to another run."""
 import json
 
 import numpy as np
@@ -7,38 +7,68 @@ import numpy as np
 from conftest import txt, wait, render
 
 
-def test_fill_a_grid_of_runs_and_times(ed, demo_root):
+def test_a_grid_of_runs_and_times(ed, demo_root):
     import os
+    from cm1view.figures import spec as fg
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
     ed._add_run()
-    assert len(ed.run_rows) == 2 and ed.vary.value == "time"  # (adding a run keeps the panels)
-    ed.gg_runs.value, ed.gg_n.value, ed.gg_step.value = [0, 1], 3, 1
-    ed._fill_grid()
-    assert ed.vary.value == "custom" and ed.rows.value == 2 and ed.cols.value == 3
-    assert [r["run"].value for r in ed.pc_rows] == [0, 0, 0, 1, 1, 1]
-    assert ed.pc_rows[0]["time"].value < ed.pc_rows[1]["time"].value
+    assert len(ed.run_rows) == 2 and ed.g_cols.value == "times"  # (adding a run keeps the panels)
+    ed.gg_runs.value = [0, 1]
+    ed.g_rows.value = "runs"  # a row per run, a column per time
+    ed.cols.value, ed.tstep.value = 3, 1
+    ed._fill_times()
+    assert ed.rows.value == 2 and ed.rows.disabled and not ed.cols.disabled
+    assert len(ed.tm_rows) == 3 and ed.tm_rows[0].value < ed.tm_rows[1].value
+    assert ed.tm_rows[0].name == "Column 1" and ed.gg_runs.visible and not ed.run_sel.visible
     s = ed.collect()
-    assert s["vary"] == "custom" and [p["run"] for p in s["panels"]] == [0, 0, 0, 1, 1, 1]
+    assert s["grid"] == dict(rows="runs", cols="times", runs=[0, 1])
+    assert [fg.panel_ref(s, i)[0] for i in range(6)] == [0, 0, 0, 1, 1, 1]
     spec, data, fig = render(ed)
     assert {d.get("run_label") for d in data.values()} == {"supercell", "supercell_weak"}
-    ed.gg_as.value = "cols"  # runs as columns: a row per time
-    ed._fill_grid()
-    assert ed.rows.value == 3 and ed.cols.value == 2
-    assert [r["run"].value for r in ed.pc_rows] == [0, 1, 0, 1, 0, 1]
+    ed.g_cols.value = "runs"  # runs as columns (the rows step through nothing now) …
+    assert ed.g_rows.value == "none" and (ed.rows.value, ed.cols.value) == (1, 2)
+    ed.g_rows.value = "times"  # … and a row per time
+    ed.rows.value = 3
+    s = ed.collect()
+    assert (s["rows"], s["cols"]) == (3, 2)
+    assert [fg.panel_ref(s, i)[0] for i in range(6)] == [0, 1, 0, 1, 0, 1]
+    ed.gg_runs.value = [1, 0]  # in the order picked
+    assert [fg.panel_ref(ed.collect(), i)[0] for i in range(2)] == [1, 0]
 
 
-def test_an_older_run_by_time_grid_opens_as_panels_with_their_own_run(ed, demo_root):
+def test_an_older_run_by_time_grid_opens_as_a_grid_of_runs(ed, demo_root):
     import os
+    from cm1view.figures import spec as fg
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
     ed._add_run()
     s = ed.collect()
+    s.pop("grid")
     t0, t1 = float(ed.run.times[0]), float(ed.run.times[1])
     s.update(vary="grid", runs_as="rows", rows=2, cols=2, times_s=[t0, t1], panels=[])
     old = render_spec(ed, s)
     ed.set_spec(json.loads(json.dumps(s)))
     got = ed.collect()
-    assert got["vary"] == "custom" and [p["run"] for p in got["panels"]] == [0, 0, 1, 1]
-    assert [p["time_s"] for p in got["panels"][:2]] == [t0, t1]
+    assert got["grid"]["rows"] == "runs" and got["grid"]["cols"] == "times"
+    assert [fg.panel_ref(got, i) for i in range(4)] == [(0, t0), (0, t1), (1, t0), (1, t1)]
+    assert old == render_spec(ed, got)
+
+
+def test_an_older_figure_of_own_runs_and_times_opens_as_panel_edits(ed, demo_root):
+    import os
+    from cm1view.figures import spec as fg
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    s = ed.collect()
+    s.pop("grid")
+    t0, t1 = float(ed.run.times[0]), float(ed.run.times[1])
+    s.update(vary="custom", rows=1, cols=2, panels=[dict(run=1, time_s=t1),
+                                                    dict(run=0, time_s=t0)])
+    old = render_spec(ed, s)
+    ed.set_spec(json.loads(json.dumps(s)))
+    got = ed.collect()
+    assert (got["grid"]["rows"], got["grid"]["cols"]) == ("none", "none")
+    assert [fg.panel_ref(got, i) for i in range(2)] == [(1, t1), (0, t0)]
+    assert got["edits"]["0"]["run"] == 1 and got["edits"]["1"]["time_s"] == t0
     assert old == render_spec(ed, got)
 
 
@@ -105,7 +135,7 @@ def test_removing_a_run_keeps_soundings_and_series_on_their_runs(ed, demo_root, 
 def test_panel_times_come_from_the_panels_run(ed, coarse_run):
     ed.add_path.value = coarse_run
     ed._add_run()
-    ed.vary.value = "time"
+    ed.g_rows.value, ed.g_cols.value = "none", "times"
     ed.run_sel.value = 1
     crun = ed.open_run(coarse_run)[0]
     s = ed.collect()
@@ -114,17 +144,23 @@ def test_panel_times_come_from_the_panels_run(ed, coarse_run):
     assert len(set(ts)) == min(len(ts), len(crun.times))  # the run has outputs)
     spec, data, fig = render(ed)
     assert not any(d.get("missing") for d in data.values())
-    ed.vary.value = "field"
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"
     assert ed.time1.value in list(crun.times)
-    ed.gg_runs.value, ed.gg_n.value = [0, 1], 2  # a grid: each panel's own run's outputs
-    ed._fill_grid()
-    assert all(r["time"].value in list(crun.times) for r in ed.pc_rows[2:])
+    ed.gg_runs.value = [1, 0]  # a grid of runs: the first one's outputs, marked where
+    ed.g_rows.value, ed.g_cols.value = "runs", "times"  # the other has none
+    from cm1view.figures.cards import NONE  # (pickers past its last output: empty)
+    assert all(w.value in list(crun.times) for w in ed.tm_rows if w.value != NONE)
+    assert any(w.value != NONE for w in ed.tm_rows)
+    base = [float(t) for t in ed.run.times]
+    ed.gg_runs.value = [0, 1]
+    assert len(base) > len(crun.times) and any(
+        "not in every run" in k for k in ed.tm_rows[0].options)
 
 
 def test_reopened_spec_keeps_times_of_another_run(ed, coarse_run):
     ed.add_path.value = coarse_run
     ed._add_run()
-    ed.vary.value = "time"
+    ed.g_rows.value, ed.g_cols.value = "none", "times"
     ed.run_sel.value = 1
     s = ed.collect()
     ed.set_spec(json.loads(json.dumps(s)))
@@ -142,7 +178,7 @@ def test_run_lists_offer_runs_to_add(ed, demo_root):
     assert weak in ed.run_sel.groups["Other runs (adds it)"].values()
     assert ed.run_sel.visible  # (one run in the figure, but others to pick)
     ed.run_sel.value = weak  # picking it adds it, with its track, and shows it
-    assert len(ed.run_rows) == 2 and ed.run_sel.value == 1 and ed.vary.value == "time"
+    assert len(ed.run_rows) == 2 and ed.run_sel.value == 1 and ed.g_cols.value == "times"
     assert ed.collect()["runs"][1]["track"].endswith("demo_supercell_weak.csv")
     assert weak not in ed._other_runs().values()
     spec, data, fig = render(ed)
@@ -238,8 +274,8 @@ def test_run_colours_are_the_default(ed, demo_root):
     from matplotlib.colors import to_hex
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
     ed._add_run()
-    ed.gg_runs.value = [0, 1]  # a grid of the two runs
-    ed._fill_grid()
+    ed.gg_runs.value = [0, 1]  # a column of the two runs (each panel names its run)
+    ed.g_rows.value, ed.g_cols.value = "runs", "none"
     ed.run_rows[1]["color"].value = "#00aa00"
     ed._add_layer("track")  # a new track layer: each panel's run's colour
     spec, data, fig = render(ed)

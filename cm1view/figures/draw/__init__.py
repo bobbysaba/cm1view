@@ -10,12 +10,14 @@ import each other's names only with "from .<module> import ..." lines, which sou
 leaves out.
 
 data: {panel index: {name: array}} with, per panel,
-  x, y          1D coordinates (km): plan x / y, or section distance / height
+  x, y          1D coordinates (km): plan x / y, or section x, y or distance / height
+  xname         a section panel's automatic x label (x (km), distance (km), ...)
   L<j>          2D field of layer j (fill, contour, shade)
   L<j>_x, L<j>_y, L<j>_u, L<j>_v   vectors of layer j
   L<j>_gx, L<j>_gy, L<j>_gu, L<j>_gv   grid and winds of a streamline layer j
   track_x, track_y, now_x, now_y   storm track (plan views)
-  line          [xa, ya, xb, yb] cross-section line (plan views)
+  lines         rows [xa, ya, xb, yb, width averaged across, section index]: the
+                cross-section lines (plan views; older data: line [xa, ya, xb, yb])
   sector        [x, y, bearing] centre of a Sector layer (track centres; nan: none) and
                 the storm motion's direction (deg clockwise from north) (plan views)
   time_s        model time (s)
@@ -75,7 +77,8 @@ Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts
   blocks   [{rows, cols, share, size, opts}]: grids of panels side by side (arrange
            "row") or stacked ("col"); opts: settings of the block's own
   panels   [{id, block, cell [row, col, rowspan, colspan], kind (plan, xsec, th, line,
-           sounding, dist, profile, joint, azim), run, time_s, z, zmode, title, letter, opts,
+           sounding, dist, profile, joint, azim), run, time_s, z, zmode, title,
+           rowlabel (left of the panel: its row's label), letter, opts,
            colorbar {show},
            layers}]: data[id] is the panel's data; opts: settings of the panel's own
   layers   a plan or section panel's map layers (as version 1), a time-height panel's

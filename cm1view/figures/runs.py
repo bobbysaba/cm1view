@@ -116,6 +116,7 @@ class FigureRuns:
         def on_track(ev):
             r["track"].disabled = r["tab"].value
             self._run_info(r)
+            self._show_sections()  # (through the storm: needs a track)
             self.request()
 
         r["label"].param.watch(on_label, "value")
@@ -179,6 +180,7 @@ class FigureRuns:
             r["rm"].visible = len(self.run_rows) > 1
             self._run_info(r)
         self.runs_box.objects = [r["panel"] for r in self.run_rows]
+        self._show_sections()
         self._find_runs()
         self._refresh_run_names()
         self._refresh_fields()
@@ -294,7 +296,7 @@ class FigureRuns:
         names = self._run_names()
         hold, self._hold = self._hold, True
         try:
-            for w in [self.run_sel] + [r["run"] for r in self.pc_rows] + \
+            for w in [self.run_sel] + \
                     [c.w["run"] for c in self.snd_cards + self.dist_cards + self.prof_cards
                      + self.joint_cards + self.azim_cards]:
                 self._set_runs_of(w, w.value)
@@ -323,7 +325,7 @@ class FigureRuns:
         finally:
             self._hold = hold
         self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \
-            self.vary.value in ("time", "field") and self.kind.value in ("plan", "xsec")
+            not self._uses("runs") and self.kind.value in ("plan", "xsec")
 
     def _refresh_fields(self):
         """The field lists offer the fields of every run of the figure."""
@@ -349,7 +351,7 @@ class FigureRuns:
     def _add_run(self, path=None, grid=False):
         """Add the run in `path` (default: the box) with its storm track (a
         storm_tracks file found for it).  Returns its index, or None.  (`grid` is
-        kept for older callers: a grid of runs is made by Panels -> Fill a grid.)"""
+        kept for older callers: a grid of runs is Panels -> Rows / Columns are: Runs.)"""
         path = config.expand((path or self.add_path.value).strip())
         if not registry.is_run(path):
             self._runs_msg(f"No cm1out_*.nc files in <code>{path}</code>", True)
@@ -380,13 +382,13 @@ class FigureRuns:
 
     def _runs_used(self):
         """Indices of the runs something in the figure draws from: the panels' run
-        (or each panel's own), layers, difference runs, soundings, distributions,
+        (or the runs of a grid of runs), layers, difference runs, soundings, distributions,
         profiles, joint distributions, azimuthal means, series (blank: every run) and the
         panel tree's edits."""
         n = len(self.run_rows)
         used, maps = set(), self.kind.value in ("plan", "xsec")
-        if maps and self.vary.value == "custom":
-            used |= {r["run"].value for r in self.pc_rows}
+        if maps and self._uses("runs"):
+            used |= set(self._grid_runs())
         elif maps:
             used.add(self.run_sel.value or 0)
         for c in self.cards:
@@ -437,13 +439,8 @@ class FigureRuns:
         try:
             if self.run_sel.value is not None and self.run_sel.value >= k:
                 self.run_sel.value = max(0, self.run_sel.value - (self.run_sel.value > k))
-            keep = []
-            for p in self.pc_rows:
-                if p["run"].value != k:
-                    if p["run"].value > k:  # (the lists follow in _show_runs)
-                        p["run"].value -= 1
-                    keep.append(p)
-            self.pc_rows = keep
+            self.gg_runs.value = [j - (j > k) for j in self.gg_runs.value  # (a grid of runs)
+                                  if isinstance(j, int) and j != k]
             for c in self.cards:  # (layers: the removed run's go back to the panel's)
                 for key in ("run", "minus_run"):
                     if key in c.w and c.w[key].value is not None and c.w[key].value >= k:

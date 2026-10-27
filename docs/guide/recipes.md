@@ -29,12 +29,13 @@ Short walkthroughs that combine the tools. Each uses only what the other pages d
 
 ## A storm-centred comparison of two runs
 
-1. In the Figure workspace, use the quick start: *Plan views*, *Each panel: own run &
-   time*, 2 rows × 3 columns. Press **Make the figure**.
+1. In the Figure workspace, use the quick start: *Plan views*, *Time*, 2 rows × 3
+   columns. Press **Make the figure**.
 2. In *Layers → Runs used*, add the second run (type to filter, or paste a folder) and
    give each run a label and a colour. Check that each has a storm track.
-3. In *Panels*, use **Fill a grid** with both runs and a few times (rows = runs), then
-   set *Plan-view area* to *Centred on tracked storm*.
+3. In *Panels → Grid and size*, set *Rows are* to *Runs* and *Columns are* to *Times*;
+   pick both runs (*Runs, one per row*) and fill the times from the shown time. Set
+   *Plan-view area* to *Centred on tracked storm*.
 4. Put a reflectivity fill and a w contour in *Layers*, and set *Colorbars* to *One for
    the figure* in *Style*.
 5. **Save as** a name, choose the format and DPI, and press **+ script & data** to keep the

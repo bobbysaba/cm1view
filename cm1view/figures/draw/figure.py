@@ -164,6 +164,8 @@ def _block(fig, spec, k, bv, data, fs, ext):
         letter = p.get("letter")
         _decorate(ax, d, V, fs, p.get("title") or "",
                   order[id(p)] if letter is None else int(letter), _z_text(V, p), p["id"])
+        if p.get("rowlabel"):
+            _row_label(ax, p["rowlabel"], V, fs)
         placed.append((p, ax, V))
         if getattr(ax, "_cv_hodo", False) and cols > 1:
             # equal axes are squares in the middle of a wider cell: pack the outer columns
@@ -198,6 +200,16 @@ def _block(fig, spec, k, bv, data, fs, ext):
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
                  code["text"])
+
+
+def _row_label(ax, text, V, fs):
+    """A row's label left of its first panel (beyond the y label), bold as the titles
+    are."""
+    bold = V.get("axes", {}).get("title_bold", True)
+    ax.annotate(text, xy=(0, 0.5), xycoords=ax.yaxis.label,
+                xytext=(-ax.yaxis.labelpad - 0.4 * fs, 0), textcoords="offset points",
+                ha="right", va="center", rotation=90, fontsize=font_size(V, "title"),
+                weight="bold" if bold else "normal")
 
 
 def _style_key(h):
@@ -345,26 +357,8 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                 if xy is not None:
                     ax.plot(*xy, color=lay.get("color", "k"), lw=float(lay.get("lw", 1.5)),
                             ls=lay.get("ls", "-"))
-            elif t == "line" and "line" in d:
-                xa, ya, xb, yb = d["line"]
-                ax.plot([xa, xb], [ya, yb], color=lay.get("color", "k"),
-                        lw=float(lay.get("lw", 2.0)))
-                hw = 0.5 * float(d.get("line_w", 0.0))
-                if hw > 0:  # a strip-averaged section: the strip's edges
-                    n = np.hypot(xb - xa, yb - ya) or 1.0
-                    px, py = -(yb - ya) / n * hw, (xb - xa) / n * hw
-                    for sg in (-1, 1):
-                        ax.plot([xa + sg * px, xb + sg * px], [ya + sg * py, yb + sg * py],
-                                color=lay.get("color", "k"), lw=0.6 * float(lay.get("lw", 2.0)),
-                                ls="--")
-                la, lb = ([s.strip() for s in str(lay.get("labels", "")).split(",")]
-                          + ["", ""])[:2]
-                yl = d.get("ylim", (np.nanmin(y), np.nanmax(y)))
-                off = 0.02 * (yl[1] - yl[0])  # labels just above the line ends
-                for (px, py, txt) in ((xa, ya, la), (xb, yb, lb)):
-                    ax.text(px, py + off, txt, fontsize=fs * 1.1,
-                            weight="bold", color=lay.get("color", "k"), ha="center",
-                            va="bottom", clip_on=True)
+            elif t == "line" and ("lines" in d or "line" in d):
+                _section_lines(ax, d, lay, y, fs)
             if lay.get("legend") and t in ("contour", "shade", "track", "line", "sector"):
                 legend[lay["legend"]] = (
                     Patch(facecolor="none" if lay.get("hatch") else lay.get("color", "magenta"),
@@ -376,6 +370,47 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                            lw=float(lay.get("lw", 1.0))))
         _extremes(ax, d, spec, layers, fs)
     return ax, m
+
+
+def _section_lines(ax, d, lay, y, fs):
+    """A Section line layer: each section's line (d["lines"] rows [xa, ya, xb, yb,
+    width averaged across, section index]; older data: d["line"], d["line_w"]), the
+    edges of the strip a section averages, and its end labels (end_labels: A–A′,
+    B–B′ ...)."""
+    rows = np.atleast_2d(d["lines"]) if "lines" in d else \
+        np.array([list(d["line"]) + [float(d.get("line_w", 0.0)), 0]])
+    col, lw = lay.get("color", "k"), float(lay.get("lw", 2.0))
+    yl = d.get("ylim", (np.nanmin(y), np.nanmax(y)))
+    off = 0.02 * (yl[1] - yl[0])  # labels just above the line ends
+    for xa, ya, xb, yb, wd, k in rows:
+        ax.plot([xa, xb], [ya, yb], color=col, lw=lw)
+        hw = 0.5 * float(wd)
+        if hw > 0:  # a strip-averaged section: the strip's edges
+            n = np.hypot(xb - xa, yb - ya) or 1.0
+            px, py = -(yb - ya) / n * hw, (xb - xa) / n * hw
+            for sg in (-1, 1):
+                ax.plot([xa + sg * px, xb + sg * px], [ya + sg * py, yb + sg * py],
+                        color=col, lw=0.6 * lw, ls="--")
+        for (px, py, txt) in zip((xa, xb), (ya, yb), end_labels(lay.get("labels", ""), int(k))):
+            ax.text(px, py + off, txt, fontsize=fs * 1.1, weight="bold", color=col,
+                    ha="center", va="bottom", clip_on=True)
+
+
+def end_labels(labels, k):
+    """The end labels of section k: the layer's "labels" ("A, A′") for the first; for
+    the others a one-letter label steps on k letters (B, B′; C, C′ ...), a longer one
+    is numbered ("start 2")."""
+    a, b = ([t.strip() for t in str(labels or "").split(",")] + ["", ""])[:2]
+
+    def step(t):
+        letters = [ch for ch in t if ch.isalpha()]
+        if len(letters) != 1:
+            return f"{t} {k + 1}" if t else t
+        ch = letters[0]
+        base = ord("A") if ch.isupper() else ord("a")
+        return t.replace(ch, chr(base + (ord(ch) - base + k) % 26)) \
+            if ch.isascii() else f"{t} {k + 1}"
+    return (step(a), step(b)) if k else (a, b)
 
 
 EXTREME_TYPES = ("fill", "contour", "shade")
@@ -439,6 +474,9 @@ def _extremes(ax, d, spec, layers, fs):
                     color=ex.get("color", "k"), zorder=5, clip_on=True)
 
 
+AUTO_XSEC_X = ("", "distance (km)", "distance from storm (km)")  # (" ": none)
+
+
 def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
     """Limits, axis labels, title, the panel's letter (number `letter`), time, height
     (ztxt) and run labels, and the annotations of panel `key`."""
@@ -451,8 +489,11 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
     if kind == "plan" and ax_opts.get("equal", True):
         ax.set_aspect("equal")
     if not getattr(ax, "_cv_hodo", False):  # (a hodograph panel labels its rings)
-        if ax_opts.get("xlabel") or kind not in ("dist", "profile", "joint", "azim"):
-            ax.set_xlabel(ax_opts.get("xlabel", ""))  # (dist, ...: the field's)
+        xl = ax_opts.get("xlabel", "")
+        if kind == "xsec" and xl in AUTO_XSEC_X and d.get("xname"):
+            xl = d["xname"]  # (x, y or the distance, as the panel's section runs)
+        if xl or kind not in ("dist", "profile", "joint", "azim"):
+            ax.set_xlabel(xl)  # (dist, ...: the field's)
         if ax_opts.get("ylabel") or kind not in ("line", "dist", "joint", "azim"):
             ax.set_ylabel(ax_opts.get("ylabel", ""))  # (time series: units)
             ax.set_ylabel(ax_opts.get("ylabel", ""))

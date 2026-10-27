@@ -37,6 +37,24 @@ has a matching git tag.
 - **Ensemble fills**: a fill layer as the mean, median, spread, min, max, range or
   probability of exceeding a threshold over several runs
   ([Layers](guide/figures-layers.md#ensembles)).
+- **Several cross-sections in a figure**: *Panels → Sections* lists named sections,
+  each x–z, y–z, angled (clockwise from north) or A–B, through the storm or fixed
+  (fixed x–z / y–z default to the domain's centre and full length), and a section panel
+  picks its own in the panel tree. Older figures' one section opens as the list's first
+  ([Panels](guide/figures-panels.md)).
+- **Rows × columns**: *Rows are* and *Columns are* each step through runs, sections,
+  times, fields or heights (e.g. 3 runs × an x–z and a y–z section), replacing *Panels
+  differ in* and *Fill a grid*; older figures open as the same panels
+  ([Panels](guide/figures-panels.md#rows-and-columns)).
+- **Sections labelled and drawn as they run**: an x–z or y–z section panel's x axis is
+  x or y (from the storm's, or the model's), an angled or A–B one's the distance along
+  it, each labelled so unless an x label is typed; a grid of rows and columns is
+  labelled with column titles on the top row and a label left of each row (*Titles →
+  Row … label*); a *Section line* layer draws every section, A–A′, B–B′ …; figure parts
+  share their sections.
+- **Sections along and across the storm motion**: they turn with the tracked motion
+  at each time (or its mean over a few minutes), centred on the storm or ahead of / right
+  of it ([Panels](guide/figures-panels.md)).
 
 ### The viewer
 

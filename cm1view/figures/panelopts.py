@@ -1,6 +1,6 @@
-"""Figure editor: what follows the Panels tab's choices: the fields of each panel, the
-heights, the layout and what panels differ in, the size, the panel kind, the area
-and automatic titles.
+"""Figure editor: what follows the Panels tab's choices: what the rows and columns
+step through (runs, sections, times, fields, heights), the fields of each, the
+heights, the size, the panel kind, the area and automatic titles.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
@@ -9,15 +9,124 @@ import panel as pn
 
 from .. import config
 from . import draw as figdraw, spec as fg
-from .cards import EXTEND, FIG_CMAPS, FIG_LOCS, LEVEL_MODES, LOCS, NONE, VARY, _f, _grid, _hint
+from .cards import (EXTEND, FIG_CMAPS, FIG_LOCS, GRID_DIMS, LEVEL_MODES, LOCS, NONE,
+                    SectionCard, _f, _grid, _hint)
 from .times import _heights
 
 
 PF_KEYS = ("field", "cmap", "vmin", "vmax", "mode", "z", "extend")  # (a new panel's: the fill's)
+NOT_IN = {"plan": "sections", "xsec": "heights"}  # (a plan view has no section, a section
+#                                                    every height)
 
 
 class FigurePanelOpts:
-    """Reacting to the Panels tab: fields, heights, layout, size, kind, area."""
+    """Reacting to the Panels tab: grid, fields, heights, layout, size, kind, area."""
+
+    # ------------------------------------------------------------ rows and columns
+    def _axes(self):
+        """(rows, columns): what each steps through (figdraw.grid_axes; "none" for
+        panels other than plan views and sections)."""
+        if self.kind.value not in ("plan", "xsec"):
+            return "none", "none"
+        return self.g_rows.value, self.g_cols.value
+
+    def _uses(self, d):
+        """Whether the rows or the columns step through d ("runs", "times", ...)."""
+        return d != "none" and d in self._axes()
+
+    def _dim_count(self, d):
+        """How many steps of d the grid has room for: the rows (or columns) it is,
+        or every panel when the other is "none"; 0 when the grid does not use it."""
+        rd, cd = self._axes()
+        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
+        if not self._uses(d):
+            return 0
+        if rd != "none" and cd != "none":
+            return r if d == rd else c
+        return r * c
+
+    def _step_name(self, d, i):
+        """The name of step i of d's list: its row, its column, or its panel."""
+        rd, cd = self._axes()
+        if rd != "none" and cd != "none":
+            return f"{'Row' if d == rd else 'Column'} {i + 1}"
+        return f"Panel {figdraw.panel_letter(i, '{a}')}"
+
+    def _forced(self, d):
+        """The number of steps of d its own list sets (runs picked, sections,
+        heights typed), or None (times and fields: as many as the grid has room for)."""
+        if d == "runs":
+            return len(self._grid_runs())
+        if d == "sections":
+            return max(1, len(self.sec_cards))
+        if d == "heights":
+            try:
+                return len(_heights(self.pz.value)) or None
+            except ValueError:
+                return None  # (the status line says what is wrong)
+        return None
+
+    def _fit_axes(self):
+        """Rows and columns for the lists that set their own number: as many rows
+        (columns) as runs, sections or heights; one list filling the grid row by row:
+        a grid with a cell for each (and no empty row).  Those set so cannot be typed."""
+        rd, cd = self._axes()
+        r0, c0 = int(self.rows.value or 1), int(self.cols.value or 1)
+        r, c = r0, c0
+        both = rd != "none" and cd != "none"
+        if both:
+            r, c = self._forced(rd) or r, self._forced(cd) or c
+        else:
+            d = rd if rd != "none" else cd
+            n = self._forced(d) if d != "none" else None
+            if n and (r * c < n or r * c - n >= c):
+                r, c = (1, n) if n <= 4 else (-(-n // 3), 3)
+        r, c = min(r, 8), min(c, 8)
+        if (r, c) != (r0, c0):
+            hold, self._hold = self._hold, True
+            try:
+                self.rows.value, self.cols.value = r, c
+            finally:
+                self._hold = hold
+        self.rows.disabled = both and self._forced(rd) is not None
+        self.cols.disabled = both and self._forced(cd) is not None
+
+    def _valid_axes(self):
+        """Rows and columns this kind of panel can step through (a plan view: no
+        sections; a section: no heights; those become times, or none)."""
+        bad = NOT_IN.get(self.kind.value)
+        opts = {k: v for k, v in GRID_DIMS.items() if v != bad}
+        r, c = self.g_rows.value, self.g_cols.value  # (before new options reset them)
+        if r == bad:
+            r = "times" if c != "times" else "none"
+        if c == bad:
+            c = "times" if r != "times" else "none"
+        hold, self._hold = self._hold, True
+        try:
+            for w, v in ((self.g_rows, r), (self.g_cols, c)):
+                if list(w.options) != list(opts):
+                    w.options = opts
+                w.value = v
+        finally:
+            self._hold = hold
+
+    def _on_axis(self, other, new):
+        """Rows or columns now step through `new`: the other no longer does."""
+        if self._hold:
+            return
+        if new != "none" and other.value == new:
+            hold, self._hold = self._hold, True
+            try:
+                other.value = "none"
+            finally:
+                self._hold = hold
+        self._on_vary()
+        typed = [w.value.strip() for w in self.title_ws + self.row_ws]
+        if "none" not in self._axes() and (not any(typed) or [x for x in typed if x] == getattr(
+                self, "_auto_typed", None)):  # (nothing typed, or what was written so)
+            self._auto_titles()  # (a grid of rows and columns: label them, as a start)
+            self._auto_typed = [x for x in (w.value.strip() for w in self.title_ws
+                                            + self.row_ws) if x]
 
     # ------------------------------------------------------------ panel fields
     def _pf_fill(self):
@@ -30,7 +139,7 @@ class FigurePanelOpts:
         not a Layers card (the Layers tab adds what goes over it): going to 'field'
         takes the first fill card out of Layers, going back puts it back first, as
         panel a had it."""
-        field = self.vary.value == "field"
+        field = self._uses("fields")
         if field and self._pf_base is None:
             c = next((c for c in self.cards if c.type == "fill"), None)
             if c is not None:
@@ -45,14 +154,14 @@ class FigurePanelOpts:
         self._show_cards()
 
     def _build_pf(self, fills):
-        n = int(self.rows.value or 1) * int(self.cols.value or 1)
+        n = self._dim_count("fields")
         base = self._pf_base or self._pf_fill()
         new = {k: base.get(k) for k in PF_KEYS}
         rows = [self._pf_row(i, dict(new, **(fills[i] if i < len(fills) else {})))
-                for i in range(n if self.vary.value == "field" else 0)]
+                for i in range(n)]
         self.pf_rows = rows
-        head = [_hint("The fill of each panel. The Layers tab adds what is drawn over it "
-                      "(contours, vectors, another fill …).")] if rows else []
+        head = [_hint("The fill of each panel (row, column). The Layers tab adds what is "
+                      "drawn over it (contours, vectors, another fill …).")] if rows else []
         self.pf_box.objects = head + [r["panel"] for r in rows]
         self._pf_show()
 
@@ -68,7 +177,7 @@ class FigurePanelOpts:
     def _pf_row(self, i, pf):
         F = self.fields
         r = dict(
-            field=pn.widgets.Select(name=f"Panel {figdraw.panel_letter(i, '{a}')}: field",
+            field=pn.widgets.Select(name=f"{self._step_name('fields', i)}: field",
                                     groups=F.groups(), value=pf["field"]),
             cmap=pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
                                    value=pf["cmap"] if pf["cmap"] in FIG_CMAPS else "viridis"),
@@ -117,24 +226,11 @@ class FigurePanelOpts:
                     cbar_ticks=r["cbar_ticks"].value)
 
     # ------------------------------------------------------------ panel heights
-    def _on_heights(self, layout=False):
-        """New panel heights: a grid with a cell for each (and no empty row)."""
+    def _on_heights(self):
+        """New panel heights: a row, column or cell for each (_fit_axes)."""
         if self._hold:
             return
-        try:
-            n = len(_heights(self.pz.value))
-        except ValueError:
-            n = 0  # (the status line says what is wrong)
-        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
-        if n and (r * c < n or r * c - n >= c):
-            r, c = (1, n) if n <= 4 else (-(-n // 3), 3)
-            hold, self._hold = self._hold, True
-            try:
-                self.rows.value, self.cols.value = r, c
-            finally:
-                self._hold = hold
-            layout = True
-        if layout:
+        if self._uses("heights"):
             self._on_layout()
         else:
             self.request()
@@ -192,19 +288,21 @@ class FigurePanelOpts:
             config.set_state("figure_code_plain", "1" if plain else "")
 
     # ------------------------------------------------------------ events
-    def _on_layout(self, panels=None):
-        """New grid of panels (panels: the {run, time_s} of each, for vary = custom)."""
+    def _on_layout(self):
+        """New grid of panels: rows and columns for the lists, then a picker per
+        time and field."""
         if self._hold:
             return
-        field = self.vary.value == "field"
+        self._fit_axes()
         self._pf_sync()
         self._show_vary()
         self._build_times()
         self._build_pf([self._pf_collect(r) for r in self.pf_rows])
-        self._build_pc(panels or [])
         self._build_titles()
-        if field and self.cb_mode.value == "shared":
-            self.cb_mode.value = "each"
+        if self._uses("fields") and self.cb_mode.value == "shared":  # (a colorbar a field)
+            rd, cd = self._axes()
+            self.cb_mode.value = "row" if rd == "fields" and cd != "none" else \
+                "col" if cd == "fields" and rd != "none" else "each"
         self._fit_size()
         self.request()
 
@@ -214,43 +312,41 @@ class FigurePanelOpts:
             return
         if self.kind.value == "th":
             self._th_grid()
-            self._on_layout()
-            return
-        if self.vary.value == "height":
-            self._on_heights(layout=True)
-            return
         self._on_layout()
 
     def _show_vary(self):
-        vary, kind = self.vary.value, self.kind.value
+        """The Panels tab's lists for what the rows and columns step through."""
+        kind = self.kind.value
         maps = kind in ("plan", "xsec")
-        self.vary.visible = maps
+        if maps:
+            self._valid_axes()
+        rd, cd = self._axes()
+        both = rd != "none" and cd != "none"
+        self.g_rows.visible = self.g_cols.visible = self.grid_hint.visible = maps
         self.times_sec.visible = maps
-        self.times_sec.title = {
-            "time": "Times (one per panel)", "field": "Time and fields",
-            "height": "Time and heights",
-            "custom": "Run and time of each panel"}.get(vary, "Times")
-        self.tm_box.visible = self.tstep.visible = self.tfill.visible = \
-            vary == "time"
-        self.time1.visible = vary in ("field", "height")
-        self.pz.visible = self.pz_mode.visible = vary == "height"
-        self.pz.name = ("Model levels (k), one per panel" if self.pz_mode.value == "level"
-                        else "Heights (km), one per panel")
-        self.zl_on.visible = vary == "height" and maps
-        self.pf_box.visible = vary == "field"
+        times, runs = self._uses("times"), self._uses("runs")
+        words = (["runs"] if runs else []) + ["times" if times else "time"] + \
+            [d for d in ("fields", "heights") if self._uses(d)]
+        title = ", ".join(words[:-1]) + " and " + words[-1] if len(words) > 1 else words[0]
+        self.times_sec.title = title[0].upper() + title[1:]
+
+        def per(d):  # (one per row / column / panel)
+            return "row" if both and d == rd else "column" if both else "panel"
+        self.tm_box.visible = self.tstep.visible = self.tfill.visible = times
+        self.time1.visible = not times
+        self.gg_runs.visible = runs
+        self.gg_runs.name = f"Runs, one per {per('runs')}"
+        hz = self._uses("heights")
+        self.pz.visible = self.pz_mode.visible = hz
+        self.pz.name = (f"Model levels (k), one per {per('heights')}"
+                        if self.pz_mode.value == "level"
+                        else f"Heights (km), one per {per('heights')}")
+        self.zl_on.visible = hz and maps
+        self.pf_box.visible = self._uses("fields")
         self._pf_show()
-        self.pc_box.visible = vary == "custom"
         self.runs_as.visible = kind == "th"
-        self.grid_fill_sec.visible = maps
         self.run_sel.visible = (len(self.run_rows) > 1 or bool(self._other_runs())) and \
-            vary in ("time", "field", "height") and maps
-        opts = VARY if kind != "xsec" else {k: v for k, v in VARY.items() if v != "height"}
-        if list(self.vary.options) != list(opts):  # (sections have no heights to vary)
-            hold, self._hold = self._hold, True
-            try:
-                self.vary.options = opts
-            finally:
-                self._hold = hold
+            not runs and maps
         self.plan_layers.visible = self.area_sec.visible = maps
         self.series_col.visible = self.ts_sec.visible = kind in ("th", "line")
         self.ts_sec.title = "Time and height axes" if kind == "th" else "Time and value axes"
@@ -376,6 +472,8 @@ class FigurePanelOpts:
             gy += 1.6 * line
         if s.get("suptitle"):
             top += 2.2 * line
+        if s.get("row_titles"):
+            left += 1.6 * line
         cb = s["colorbar"]
         mode = cb.get("mode", "shared") if s["kind"] in ("plan", "xsec", "th") else "none"
         side = (cb.get("location") or ("bottom" if cb.get("orientation", "horizontal")
@@ -395,12 +493,10 @@ class FigurePanelOpts:
         if render_ and not self._hold:
             self._hold = True
             try:
-                if kind == "xsec" and self.vary.value == "height":
-                    self.vary.value = "time"
-                if kind == "xsec":
-                    self.xlabel.value = ("distance from storm (km)"
-                                         if self.xs_mode.value == "storm" else "distance (km)")
-                    self.ylabel.value = "height (km)"
+                self.xlabel.placeholder = ""
+                if kind == "xsec":  # (blank: x, y or the distance, as each section runs)
+                    self.xlabel.value, self.ylabel.value = "", "height (km)"
+                    self.xlabel.placeholder = "blank: as each section runs"
                 elif kind == "plan":
                     self.xlabel.value, self.ylabel.value = "x (km)", "y (km)"
                 elif kind in ("th", "line"):
@@ -455,6 +551,7 @@ class FigurePanelOpts:
                 self._fit_grid(reset=True)
             self._fit_size()
             self._show_vary()
+            self._fit_axes()
             self._build_times()
             self._build_titles()
             self._show_cbar()
@@ -492,15 +589,71 @@ class FigurePanelOpts:
             self.spec["domain"] = dict(self.spec["domain"], box=[float(v) for v in b])
             self.request()
 
-    def _use_ab(self):
+    # ------------------------------------------------------------ sections
+    def _sec_card(self, e):
+        c = SectionCard(self, e)
+        c.rm.on_click(lambda ev: self._remove_section(c))
+        c.ab.on_click(lambda ev: self._use_ab(c))
+        return c
+
+    def _show_sections(self):
+        runs = self._runs_collect() if self.run_rows else self.spec.get("runs") or []
+        tracked = any(e.get("track") for e in runs)
+        for c in self.sec_cards:
+            c.rm.visible = len(self.sec_cards) > 1
+            c.tracked(tracked)
+        self.sec_box.objects = [c.panel for c in self.sec_cards]
+
+    def _add_section(self):
+        """A new section like the last (an x–z one's y–z twin, along the motion's across
+        one, and back)."""
+        last = self.sec_cards[-1].collect() if self.sec_cards else fg.section_defaults()
+        swap = {"x": "y", "y": "x", "along": "across", "across": "along"}
+        e = dict(last, label="", orient=swap.get(last["orient"], last["orient"]))
+        self.sec_cards.append(self._sec_card(e))
+        self._show_sections()
+        self._show_region()
+        self._sections_changed()
+
+    def _remove_section(self, c):
+        """Remove section c; panels showing a later one keep it (their index moves)."""
+        k = self.sec_cards.index(c)
+        self.sec_cards.remove(c)
+        for e in self.edits.values():
+            if e.get("section") is not None:
+                n = int(e["section"])
+                e["section"] = None if n == k else (n - 1 if n > k else n)
+        self._show_sections()
+        self._show_region()
+        self._tree_sync(force=True)
+        self._sections_changed()
+
+    def _sections_changed(self):
+        """Sections added or removed: a row or column of sections follows."""
+        if self._uses("sections"):
+            self._on_layout()
+        else:
+            self.request()
+
+    def _ab_card(self):
+        """The first A–B section (the only section, or a new one, if there is none)."""
+        c = next((c for c in self.sec_cards if c.w["orient"].value == "ab"), None)
+        if c is None and len(self.sec_cards) == 1:
+            c = self.sec_cards[0]
+        if c is None:
+            c = self._sec_card(fg.section_defaults(orient="ab", pos="fixed"))
+            self.sec_cards.append(c)
+            self._show_sections()
+        return c
+
+    def _use_ab(self, c=None):
         pts = self.v.xs_pts
         if len(pts) != 2:
             self.xs_html.object = ('<div class="cv-status" style="color:#f87171">Draw a '
                                    'cross-section on the map first (Cross-section click '
                                    'mode, points A and B).</div>')
             return
-        self.spec["xsec"] = dict(self.spec["xsec"], a=list(pts[0]), b=list(pts[1]))
-        self.xs_mode.value = "fixed"
+        (c or self._ab_card()).set_ab(pts[0], pts[1])
         self._show_region()
         self.request()
 
@@ -511,25 +664,26 @@ class FigurePanelOpts:
         line = any(c.type == "line" and c.w["on"].value for c in self.cards)
         self.area_plan.visible = kind == "plan"
         self.area_xs.visible = kind == "xsec" or (kind == "plan" and line)
-        self.area_sec.title = "Section" if kind == "xsec" else (
+        self.area_sec.title = "Sections" if kind == "xsec" else (
             "Area and section line" if line else "Area")
         self.half.visible = self.dom.value == "storm"
         for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
             w.visible = self.dom.value == "box"
         if self.dom.value != "box":
             self.box_html.object = ""
-        x = self.spec["xsec"]
-        storm = self.xs_mode.value == "storm"
-        for w in (self.xs_angle, self.xs_half, self.xs_offx, self.xs_offy):
-            w.visible = storm
-        self.xs_ab.visible = not storm
-        self.xs_html.object = (
-            '<div class="cv-hint">A ({:.1f}, {:.1f}) → B ({:.1f}, {:.1f}) km</div>'.format(
-                *x["a"], *x["b"]) if not storm and x.get("a") else
-            '<div class="cv-hint">Direction: 0° runs west → east, 90° south → north; the '
-            'section is centred on the tracked storm (plus the offset).</div>' if storm else
-            '<div class="cv-hint">Draw a section on the map (Section tool), then use its '
-            'A–B.</div>')
+        if self._uses("sections"):
+            rd, cd = self._axes()
+            where = "row" if rd == "sections" and cd != "none" else \
+                "column" if cd == "sections" and rd != "none" else "panel"
+            text = (f"A {where} for each section, in this order (a panel can show another: "
+                    "panel tree → <b>Section</b>).")
+        elif len(self.sec_cards) > 1:
+            text = ("Each section panel shows the first section; pick another for a panel "
+                    "in the panel tree (<b>Section</b>), or make the sections the rows or "
+                    "columns (<b>Grid and size</b>).")
+        else:
+            text = ""
+        self.xs_html.object = f'<div class="cv-hint">{text}</div>' if text else ""
 
     def _auto_titles(self):
         s = self.collect()
@@ -551,19 +705,46 @@ class FigurePanelOpts:
                           else "")
             self._set_titles(ts)
             return
-        if s["vary"] == "field":
-            ts = [self.fields[pf["field"]].label for pf in s["panel_fills"]]
-        elif s["vary"] == "height":
-            ts = [f"k = {int(round(z))}" if s.get("panel_zmode") == "level" else f"{z:g} km"
-                  for z in s["panel_z"]]
-        elif s["vary"] in ("grid", "custom"):
-            ts = []
-            for i in range(fg.npanels(s)):
-                ref = fg.panel_ref(s, i)
-                ts.append(s["runs"][ref[0]]["label"] if ref else "")
+        rd, cd = self._axes()
+        if "none" not in (rd, cd):  # column titles on the top row, row labels at the left
+            if self._uses("runs"):
+                self.rl_on.value = False  # the labels name the runs now
+            self._set_titles([self._item_words(s, item, True) if item else ""
+                              for item in figdraw.dim_items(s, cd)][:int(s["cols"])],
+                             [self._item_words(s, item, True) if item else ""
+                              for item in figdraw.dim_items(s, rd)][:int(s["rows"])])
+            return
+        fill = next((lay for lay in s["layers"] if lay["type"] == "fill"), None)
+        ts = []
+        for i in range(fg.npanels(s)):
+            cell = figdraw.grid_cell(s, i)
+            if cell is None or fg.panel_ref(s, i) is None:
+                ts.append("")
+                continue
+            words = self._item_words(s, cell)
+            if not words and fill:  # (panels in time: the field; the time is labelled)
+                words = self.fields[fill["field"]].label
+            ts.append(words)
+        if self._uses("runs"):
             self.rl_on.value = False  # the titles name the runs now
-        else:
-            fill = next((lay for lay in s["layers"] if lay["type"] == "fill"), None)
-            ts = [self.fields[fill["field"]].label if fill and t is not None else ""
-                  for t in s["times_s"]]
         self._set_titles(ts)
+
+    def _item_words(self, s, cell, times=False):
+        """The title words of a grid cell's (or a row's or column's) run, section,
+        field and height (and with `times`, alone, its time)."""
+        secs = fg.sections(s)
+        words = []
+        if "run" in cell:
+            words.append(s["runs"][int(cell["run"])]["label"])
+        if "section" in cell:
+            sec = secs[int(cell["section"])]
+            words.append(sec.get("label") or fg.describe(sec))
+        if cell.get("fill"):
+            words.append(self.fields[cell["fill"]["field"]].label)
+        if cell.get("z") is not None:
+            z = float(cell["z"])
+            words.append(f"k = {int(round(z))}" if s.get("panel_zmode") == "level"
+                         else f"{z:g} km")
+        if times and not words and cell.get("time_s") is not None:
+            words.append(figdraw.time_text(float(cell["time_s"]), s["time_label"]))
+        return " – ".join(words)

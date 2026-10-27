@@ -9,7 +9,7 @@ import panel as pn
 
 from . import spec as fg
 from ..theme import DIALOG_DARK
-from .cards import SIZE_PRESETS, VARY, _grid, _hint
+from .cards import QUICK_VARY, SIZE_PRESETS, _grid, _hint
 
 MAPS = ("plan", "xsec")  # (the kinds with a fill field, a grid and panels that differ)
 
@@ -20,7 +20,8 @@ class FigureQuick:
     def _build_quick(self):
         self.qs_kind = pn.widgets.Select(name="Panels show", options=dict(self.kind.options),
                                          value="plan")
-        self.qs_vary = pn.widgets.Select(name="Panels differ in", options=VARY, value="time")
+        self.qs_vary = pn.widgets.Select(name="Panels differ in", options=QUICK_VARY,
+                                         value="times")
         self.qs_rows = pn.widgets.IntInput(name="Rows", start=1, end=8, value=2)
         self.qs_cols = pn.widgets.IntInput(name="Columns", start=1, end=8, value=3)
         self.qs_field = pn.widgets.Select(name="Colour fill")
@@ -74,8 +75,9 @@ class FigureQuick:
         self.qs_field.value = fill if fill in names else (names[0] if names else None)
         self.qs_kind.value = self.kind.value
         self._quick_show()  # (the panels' choices of this kind first)
-        vary = self.vary.value
-        self.qs_vary.value = vary if vary in self.qs_vary.options.values() else "time"
+        dims = [d for d in self._axes() if d != "none"]
+        vary = dims[0] if len(dims) == 1 else "times"
+        self.qs_vary.value = vary if vary in self.qs_vary.options.values() else "times"
         self.qs_rows.value, self.qs_cols.value = int(self.rows.value), int(self.cols.value)
         self._refresh_saved()
         self.qs_load_note.visible = False
@@ -87,8 +89,8 @@ class FigureQuick:
         for w in (self.qs_vary, self.qs_field):
             w.visible = maps
         self.qs_rows.visible = self.qs_cols.visible = kind != "th"  # (th: series × runs)
-        self.qs_vary.options = VARY if kind != "xsec" else \
-            {k: v for k, v in VARY.items() if v != "height"}
+        bad = "sections" if kind != "xsec" else "heights"
+        self.qs_vary.options = {k: v for k, v in QUICK_VARY.items() if v != bad}
         note = {
             "th": "Time–height panels: one per run and series (Panels → Grid and size → "
                   "Runs are: rows or columns).  It starts with no series, so nothing is "
@@ -109,11 +111,15 @@ class FigureQuick:
             "azim": "Every panel starts with w around the tracked storm (else the middle "
                     "of the map's view) at the shown time, the whole ring out to 20 km, to "
                     "change in Layers → Azimuthal means."}.get(kind) or (maps and {
-            "field": "Every panel starts with this fill: pick each panel's field in "
-                     "Panels → Time and fields.",
-            "height": "Pick each panel's height in Panels → Time and heights.",
-            "custom": "Pick each panel's run and time in Panels → Run and time of each "
-                      "panel, or make a grid of runs × times with Panels → Fill a grid."}.get(vary)) or ""
+            "fields": "Every panel starts with this fill: pick each panel's field in "
+                      "Panels → Time and fields.",
+            "heights": "Pick each panel's height in Panels → Time and heights.",
+            "sections": "A panel per section: add and set them in Panels → Sections.",
+            "runs": "A panel per run: add runs in Panels → Runs, times.  For a grid such "
+                    "as runs × sections, set Panels → Grid and size → Rows are / "
+                    "Columns are.",
+            "none": "Every panel is alike: change one in the panel tree (its run, time, "
+                    "height …)."}.get(vary)) or ""
         self.qs_note.object = f'<div class="cv-hint">{note}</div>'
         self.qs_note.visible = bool(note)
 
@@ -140,7 +146,7 @@ class FigureQuick:
             self.set_parts(s)
             self.kind.value = kind  # (its own labels, colorbar and series / sounding cards)
             if kind in MAPS:
-                self.vary.value = vary
+                self.g_rows.value, self.g_cols.value = "none", vary
             if kind != "th":
                 self.rows.value = int(self.qs_rows.value)
                 self.cols.value = int(self.qs_cols.value)

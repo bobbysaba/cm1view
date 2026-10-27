@@ -1,6 +1,7 @@
 """Figure editor: figures made of parts.  Each part is a figure of its own (its own kind
 of panels, runs, layers and style: e.g. plan views beside soundings, or a plan view
-with its A–B line above the cross-section), and the parts are drawn side by side or
+with its A–B line above the cross-section; the plan-view and section parts share one
+list of cross-sections), and the parts are drawn side by side or
 stacked as one figure (figdraw: kind "combo").  The editor shows one part at a time;
 the preview, saving and the download take the whole figure.
 
@@ -91,6 +92,7 @@ class FigureCombo:
         if self._hold or not self._multi_part() or k == self.part_i:
             return
         self.parts[self.part_i] = self.collect()
+        share_sections(self.parts, self.parts[self.part_i])
         self.part_i = int(k)
         self.set_spec(json.loads(json.dumps(self.parts[self.part_i], default=float)))
         self._show_parts()
@@ -153,6 +155,7 @@ class FigureCombo:
         if not self._multi_part():
             return cur
         parts = [cur if k == self.part_i else p for k, p in enumerate(self.parts)]
+        share_sections(parts, cur)
         return combine(parts, self.part_arr.value, self.part_title.value, cur,
                        size=[_num(self.part_w.value), _num(self.part_h.value)],
                        one_colorbar=bool(self.part_cb.value))
@@ -166,6 +169,17 @@ class FigureCombo:
             for i, v in d.items():
                 data[k * 1000 + int(i)] = v
         return data
+
+
+def share_sections(parts, src):
+    """The plan-view and section parts of a figure of parts take part src's list of
+    cross-sections (when src is one of those kinds), in place: they share one list."""
+    if src.get("kind") not in ("plan", "xsec") or not src.get("sections"):
+        return parts
+    for p in parts:
+        if p is not src and p.get("kind") in ("plan", "xsec"):
+            p["sections"] = json.loads(json.dumps(src["sections"], default=float))
+    return parts
 
 
 def combine(parts, arrange="row", title="", like=None, size=None, one_colorbar=False):
