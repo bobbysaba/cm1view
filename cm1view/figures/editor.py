@@ -228,6 +228,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             self.ds[k].param.watch(lambda e: self._show_dist_opts(), "value")
         self.prof_tab.on_click(lambda e: self._add_tab_profiles())
         self.prof_new.on_click(lambda e: self._add_profile())
+        self.prof_data.on_click(lambda e: self._add_prof_data())
         self.joint_new.on_click(lambda e: self._add_joint())
         self.azim_new.on_click(lambda e: self._add_azim())
         self.jo["plot"].param.watch(lambda e: self._show_joint_opts(), "value")

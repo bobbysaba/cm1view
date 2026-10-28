@@ -51,6 +51,24 @@ components. Vectors can be shown ground-, grid- or storm-relative
 Other derived fields are defined in `cm1view/core/fields.py` (`_make_fields`); see
 [Developing](../developing.md) for how to add one.
 
+### Derivatives of any field
+
+The **Derivative** select beside a Field (the map's fill, and a figure's fill, contour and
+shading layers on plan views and cross-sections) plots a derivative of that field instead,
+per km:
+
+| Derivative | Name | What |
+|---|---|---|
+| ∂/∂z | `ddz.<field>` | on each model level, centred between the levels above and below (one-sided at the bottom and top), on the stretched levels; at a height, interpolated between the two levels' values. 3-D fields only. |
+| ∂/∂x, ∂/∂y | `ddx.<field>`, `ddy.<field>` | centred differences on the grid's x and y (stretched grids too), at the level shown |
+| \|∇h\| | `gradh.<field>` | √((∂/∂x)² + (∂/∂y)²) |
+
+Units are the field's per km; a wind's (m/s per km) read 10⁻³ s⁻¹, so ∂w/∂z of 5 is
+5 × 10⁻³ s⁻¹. Column max / min are of the derivative (the largest ∂w/∂z in the column), and
+a cross-section's derivative is taken on the 3-D grid, so it agrees with the map at the
+same level. Derivatives of derived fields work the same way (∂θ′/∂x, ∂B/∂z, ...). The
+starting colour range is half the field's own per km; use Auto range on the map.
+
 ### Streamwise and crosswise vorticity
 
 These are relative to the **tracked storm motion** at that time when the track has a fix

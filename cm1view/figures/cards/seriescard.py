@@ -19,6 +19,19 @@ SER_STYLES = {"Solid": "-", "Dashed": "--", "Dotted": ":", "Dash-dot": "-."}
 ALL_RUNS, SOME_RUNS = -1, -2  # (a time series' Run list: every run / the runs picked)
 
 
+def several_run_choices(ed, names=None):
+    """A Run list's choices with every run and the runs picked: the figure's runs,
+    All runs, Several runs…, and the others (picking one adds it)."""
+    names = names or ed._run_names()
+    more = {"All runs": ALL_RUNS, "Several runs…": SOME_RUNS}
+    ch = ed._run_choices(names)
+    if ch["groups"]:
+        return dict(options={}, groups={"In this figure": names, "Several": more,
+                                        **{k: v for k, v in ch["groups"].items()
+                                           if k != "In this figure"}})
+    return dict(groups=None, options=names | more)
+
+
 class SeriesCard:
     """One series of a time-height / time-series figure, like a sounding card: its
     run (a time series: also every run, or the runs picked), panel, a Series-tab
@@ -213,14 +226,7 @@ class SeriesCard:
         the runs picked), and the others (picking one adds it)."""
         if self._kind == "th":
             return self.ed._run_choices(names)
-        names = names or self.ed._run_names()
-        more = {"All runs": ALL_RUNS, "Several runs…": SOME_RUNS}
-        ch = self.ed._run_choices(names)
-        if ch["groups"]:
-            return dict(options={}, groups={"In this figure": names, "Several": more,
-                                            **{k: v for k, v in ch["groups"].items()
-                                               if k != "In this figure"}})
-        return dict(groups=None, options=names | more)
+        return several_run_choices(self.ed, names)
 
     def _run_values(self):
         o = self.w["run"].groups or {"": self.w["run"].options}

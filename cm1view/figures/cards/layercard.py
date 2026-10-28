@@ -6,6 +6,7 @@ import panel as pn
 
 from .. import draw as figdraw, spec as fg
 from ...core import vectors
+from ...core.fields import DERIVS, deriv_name, deriv_options, split_deriv
 from .base import (
     FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, AZ_REFS,
     AZ_CENTERS, _hex, _f, _grid, _hint, _checks, _fold, _near, _nice, _panels_parse, _panels_text,
@@ -23,6 +24,7 @@ class LayerCard:
     def __init__(self, ed, lay, collapsed=False):
         self.ed, self.type = ed, lay["type"]
         self._loading = False  # (load: the widgets take another layer's settings)
+        self._syncing = False  # (the Derivative list following the Field)
         F, g = ed.fields, ed.fields.groups()
         self.lay = dict(lay)
         self.w = w = {}
@@ -34,7 +36,16 @@ class LayerCard:
         self.rm = pn.widgets.Button(name="✕", description="Remove the layer", **btn)
         t = self.type
         if t in ("fill", "contour", "shade"):
-            w["field"] = pn.widgets.Select(name="Field", groups=g, value=lay["field"])
+            op, base = split_deriv(lay["field"])
+            w["field"] = pn.widgets.Select(name="Field", groups=g, value=base)
+            dopts = self._deriv_opts(base)
+            w["deriv"] = pn.widgets.Select(
+                name="Derivative", options=dopts, value=op if op in dopts.values() else "",
+                width=100, description="Plot a derivative of the field (per km): ∂/∂z on "
+                "the model levels, ∂/∂x, ∂/∂y or the horizontal gradient's size on the "
+                "grid")
+            # (watched before the fill's colours: a 2D field has no ∂/∂z)
+            w["field"].param.watch(self._on_base_field, "value")
             w["mode"] = pn.widgets.Select(name="Level", options=LEVEL_MODES,
                                           value=lay.get("mode", "height"))
             w["z"] = _f("Height (km)", lay.get("z", 1.0), step=0.25)
@@ -114,6 +125,7 @@ class LayerCard:
             w["ens_grid"] = pn.widgets.Select(name="If the grids differ", options=GRIDS,
                                               value=en.get("grid", "ask"))
             w["field"].param.watch(self._on_fill_field, "value")
+            w["deriv"].param.watch(self._on_fill_field, "value")
             w["minus_on"].param.watch(self._on_minus, "value")
             w["ens_on"].param.watch(self._on_ens, "value")
             w["ens_stat"].param.watch(self._on_ens, "value")
@@ -217,7 +229,7 @@ class LayerCard:
             w["vector"].param.watch(self._on_vector, "value")
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
-            if k != "run" and (k not in ("field", "minus_on", "ens_on", "ens_stat",
+            if k != "run" and (k not in ("field", "deriv", "minus_on", "ens_on", "ens_stat",
                                          "ens_runs") or t != "fill"):
                 x.param.watch(lambda e: self._changed(), "value")
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
@@ -244,6 +256,30 @@ class LayerCard:
     def _layout(self):
         return [_grid(self.w["run"])] + self._rows()
 
+    def _deriv_opts(self, base):
+        F = self.ed.fields
+        return deriv_options(F[base]) if base in F else {"None": ""} | \
+            {v: k for k, v in DERIVS.items()}
+
+    def field_name(self):
+        """The layer's field: the Field, or its Derivative (fields.deriv_name)."""
+        return deriv_name(self.w["deriv"].value, self.w["field"].value)
+
+    def _on_base_field(self, ev):
+        """Another Field: the derivatives it has (a 2D field: no ∂/∂z)."""
+        if self._loading:
+            return
+        dw = self.w["deriv"]
+        opts = self._deriv_opts(ev.new)
+        if opts != dw.options:
+            self._syncing = True
+            try:
+                v = dw.value
+                dw.options = opts
+                dw.value = v if v in opts.values() else ""
+            finally:
+                self._syncing = False
+
     def _on_run(self, ev):
         if self.ed._hold or self._loading:
             return
@@ -267,8 +303,8 @@ class LayerCard:
     def _rows(self):
         w, t = self.w, self.type
         if t == "fill":
-            return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["style"],
-                          w["mask_below"]),
+            return [_grid((w["field"], 2), w["deriv"], w["mode"], w["z"], w["z_fixed"],
+                          w["style"], w["mask_below"]),
                     _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
                           (w["cbar_label"], 2), w["cbar_ticks"], (w["panels"], 3)),
@@ -281,12 +317,14 @@ class LayerCard:
                           "without output at that time are left out."),
                     self._reduce_row()]
         if t == "contour":
-            return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], (w["levels"], 2),
+            return [_grid((w["field"], 2), w["deriv"], w["mode"], w["z"], w["z_fixed"],
+                          (w["levels"], 2),
                           w["color"], w["lw"], w["clabel_size"], w["clabel_fmt"],
                           (w["legend"], 3), (w["panels"], 3)),
                     self._reduce_row(), _checks(w["clabel"], w["neg_dashed"], title="Options")]
         if t == "shade":
-            return [_grid((w["field"], 2), w["mode"], w["z"], w["z_fixed"], w["threshold"],
+            return [_grid((w["field"], 2), w["deriv"], w["mode"], w["z"], w["z_fixed"],
+                          w["threshold"],
                           w["above"], w["hatch"], w["hatch_lw"],
                           w["color"], w["alpha"], w["outline_on"], w["outline"], w["lw"],
                           (w["legend"], 3), (w["panels"], 3)),
@@ -393,7 +431,7 @@ class LayerCard:
         t, w = self.type, self.w
         sub = ""
         if "field" in w:
-            d = self.ed.fields[w["field"].value]
+            d = self.ed.fields[self.field_name()]
             sub = f" · {d.label}"
             m = w["mode"].value
             if self.ed.kind.value != "xsec":
@@ -432,7 +470,9 @@ class LayerCard:
         """New fill field: its default colours, range and units."""
         if self._loading:
             return
-        d = fg.layer_defaults("fill", self.ed.fields, ev.new)
+        if self._syncing:  # (the Derivative list following the Field)
+            return
+        d = fg.layer_defaults("fill", self.ed.fields, self.field_name())
         self.lay["units"] = d["units"]
         self.ed._hold = True
         try:
@@ -467,7 +507,7 @@ class LayerCard:
         w = self.w
         if self._loading:
             return
-        d = fg.layer_defaults("fill", self.ed.fields, w["field"].value)
+        d = fg.layer_defaults("fill", self.ed.fields, self.field_name())
         self.ed._hold = True
         try:
             if ev.new:
@@ -493,7 +533,7 @@ class LayerCard:
         if ev is not None and ev.obj is w["ens_stat"] and not w["ens_on"].value:
             self._changed()
             return
-        d = fg.layer_defaults("fill", self.ed.fields, w["field"].value)
+        d = fg.layer_defaults("fill", self.ed.fields, self.field_name())
         own = dict(cmap=d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis", reverse=False,
                    vmin=d["vmin"], vmax=d["vmax"],
                    mask_below="" if d["mask_below"] is None else f"{d['mask_below']:g}")
@@ -543,6 +583,8 @@ class LayerCard:
             if k in ("outline_on",) or k.startswith(("minus_", "reduce_", "ens_")):
                 continue
             lay[k] = x.value
+        if "deriv" in lay:
+            lay["field"] = deriv_name(lay.pop("deriv"), lay["field"])
         lay.pop("run", None)
         if w["run"].value != -1:
             lay["run"] = int(w["run"].value)

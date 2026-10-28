@@ -134,12 +134,17 @@ def _cell(s):
     return v if np.isfinite(v) else None
 
 
-def parse_table(text):
-    """Your own data as text: two columns, time (min) and value, split by commas, tabs,
-    semicolons or spaces; an optional header line first; lines starting with # and
-    empty ones skipped; a missing value (blank, nan, -) leaves a gap.  Returns
-    (table {"t", "v", and "names" of a header}, notes); ValueError says what is wrong
-    (with its line number)."""
+TABLE_AXES = {"time": ("time in min", "times"), "height": ("height in km", "heights")}
+
+
+def parse_table(text, axis="time"):
+    """Your own data as text: two columns, time (min) and value (axis "height": height
+    (km) and value), split by commas, tabs, semicolons or spaces; an optional header
+    line first; lines starting with # and empty ones skipped; a missing value (blank,
+    nan, -) leaves a gap.  Returns (table {"t" (the times or heights), "v", and
+    "names" of a header}, notes); ValueError says what is wrong (with its line
+    number)."""
+    first, many = TABLE_AXES[axis]
     t, v, names, notes, extra = [], [], None, [], False
     for n, line in enumerate(str(text or "").splitlines(), 1):
         s = line.strip()
@@ -149,7 +154,7 @@ def parse_table(text):
         cells = [c.strip() for c in re.split(r"[,;\t]", raw)] if re.search(r"[,;\t]", raw) \
             else s.split()  # (spaces split only a line without commas, tabs or ;)
         if len(cells) < 2:
-            raise ValueError(f"line {n}: two columns wanted (time in min, value): {s[:40]!r}")
+            raise ValueError(f"line {n}: two columns wanted ({first}, value): {s[:40]!r}")
         try:
             a = _cell(cells[0])
             b = _cell(cells[1])
@@ -159,18 +164,18 @@ def parse_table(text):
             names = cells[:2]  # (a header)
             continue
         if a is None:
-            raise ValueError(f"line {n}: no time: {s[:40]!r}")
+            raise ValueError(f"line {n}: no {axis}: {s[:40]!r}")
         extra = extra or len(cells) > 2
         t.append(a)
         v.append(b)
         if len(t) > TABLE_MAX:
             raise ValueError(f"more than {TABLE_MAX} points: thin the data first")
     if not t:
-        raise ValueError("no data lines (time in min, value)")
+        raise ValueError(f"no data lines ({first}, value)")
     if extra:
         notes.append("columns after the second left out")
     if any(b < a for a, b in zip(t, t[1:])):
-        notes.append("times not in order: drawn in time order")
+        notes.append(f"{many} not in order: drawn in {axis} order")
     if not any(x is not None for x in v):
         notes.append("every value is missing")
     out = dict(t=t, v=v)
@@ -179,10 +184,10 @@ def parse_table(text):
     return out, notes
 
 
-def table_text(table):
+def table_text(table, axis="time"):
     """A table of your own as CSV text (parse_table reads it back)."""
     tab = table or {}
-    names = tab.get("names") or ["time_min", "value"]
+    names = tab.get("names") or ["time_min" if axis == "time" else "z_km", "value"]
     rows = [f"{float(a):g},{'' if b is None else format(float(b), '.8g')}"
             for a, b in zip(tab.get("t", []), tab.get("v", [])) if a is not None]
     return "\n".join([",".join(names)] + rows)
@@ -196,22 +201,28 @@ def table_defaults(n=0, label="My data", units=""):
                 marker="o", panel=0, axis="auto", ylabel="", ens="")
 
 
+EDIT_TOL = 0.5  # (s: a series' edit is at the model time within this)
+EDIT_ZTOL = 1e-3  # (km: a profile's edit is at the level within this)
+
+
 def edit_key(t_s):
-    """The key of a hand edit at model time t_s (s): entry["edits"][str(run)][key]."""
+    """The key of a hand edit at model time t_s (s), or a profile's at height z (km):
+    entry["edits"][str(run)][key]."""
     return f"{float(t_s):.6g}"
 
 
-def apply_edits(v, times_s, entry, k):
-    """Values v (at the run's model times times_s, s) of series entry for run k with
-    its hand edits (entry["edits"] {str(run): {edit_key(time s): value, or None to
-    blank it}}): (values, how many applied, how many at a time the run lacks)."""
+def apply_edits(v, times_s, entry, k, tol=EDIT_TOL):
+    """Values v (at the run's model times times_s, s; a profile: at its heights, km,
+    tol EDIT_ZTOL) of series entry for run k with its hand edits (entry["edits"]
+    {str(run): {edit_key(time s): value, or None to blank it}}): (values, how many
+    applied, how many at a time the run lacks)."""
     eds = (entry.get("edits") or {}).get(str(k)) or {}
     if not eds:
         return v, 0, 0
     v, tm = np.array(v, dtype=np.float64), np.asarray(times_s, dtype=np.float64)
     used = gone = 0
     for key, val in eds.items():
-        j = np.flatnonzero(np.abs(tm - float(key)) < 0.5)
+        j = np.flatnonzero(np.abs(tm - float(key)) < tol)
         if not j.size:
             gone += 1
             continue
@@ -273,8 +284,10 @@ def ensemble_band(members, how="minmax", mid="mean"):
     for m, (t, v) in enumerate(members):
         t, v = np.asarray(t, dtype=float), np.asarray(v, dtype=float)
         ok = np.isfinite(t) & np.isfinite(v)
-        if ok.any():
-            V[m] = np.interp(T, t[ok], v[ok], left=np.nan, right=np.nan)
+        if ok.any():  # (inside its own range to the rounding of T: e.g. float32 heights)
+            t, v = t[ok], v[ok]
+            inside = (T >= t.min() - 1e-6) & (T <= t.max() + 1e-6)
+            V[m] = np.where(inside, np.interp(T, t, v), np.nan)
     have = np.isfinite(V).sum(axis=0) >= 2
     if not have.any():
         return None
@@ -605,13 +618,26 @@ def dist_panel(spec, i, get, auto_label=None, value_label=None):
 
 def profile_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
     """A spec["profiles"] entry: a layer series recipe (ser.normalize) at a run and time
-    (time_s1: the end of a time window it is averaged over; None: one time)."""
+    (time_s1: the end of a time window it is averaged over; None: one time).  Its runs:
+    "runs" (None: every run of the figure; "run": the first of them); ens: an
+    ensemble band of its runs (ENS_BANDS; "": a line each); op: "ddz" plots d/dz of
+    the profile (per m), "" its values."""
     r = dict(recipe, vmode="layer")
     r.setdefault("z0", 0.0)
     r.setdefault("z1", 10.0)
-    return dict(run=int(run_index), time_s=float(time_s), time_s1=None, panel=0,
-                label=label, recipe=ser.normalize(r), color="", ls="",  # ("": automatic)
-                lw=1.5)
+    return dict(run=int(run_index), runs=[int(run_index)], time_s=float(time_s),
+                time_s1=None, panel=0, label=label, recipe=ser.normalize(r), color="",
+                ls="", lw=1.5,  # ("": automatic)
+                ens="", ens_mid="mean", ens_members="faint", ens_alpha=0.25, op="")
+
+
+def profile_runs(entry, nr=None):
+    """A profile entry's runs: None for every run (nr given: then range(nr)), else
+    run indices (below nr).  An entry from before "runs": its "run"."""
+    runs = entry["runs"] if "runs" in entry else [int(entry.get("run", 0))]
+    if nr is None:
+        return None if runs is None else [int(k) for k in runs]
+    return list(range(nr)) if runs is None else [int(k) for k in runs if int(k) < nr]
 
 
 def profile_times(run, entry):
@@ -638,6 +664,34 @@ def profile_values(ds, ts):
     return z, v, len(ok)
 
 
+def profile_table_defaults(n=0, label="My data"):
+    """A spec["profiles"] entry of your own data (heights, km, and values in
+    entry["table"] "t" and "v"; empty: the card fills it), drawn as it is."""
+    return dict(source="table", table=dict(t=[], v=[]), recipe={}, run=0, runs=[],
+                time_s=0.0, time_s1=None, panel=0, label=label, xlabel="",
+                color=LINE_COLORS[n % len(LINE_COLORS)], ls="-", lw=1.5, marker="o")
+
+
+def profile_op(z, v, op):
+    """Profile values v on heights z (km) with the derivative op applied: "ddz" (d/dz
+    per m), else as they are."""
+    v = np.asarray(v, dtype=np.float64)
+    if op != "ddz":
+        return v
+    if v.size < 2:
+        return np.full(v.size, np.nan)
+    return np.gradient(v, np.asarray(z, dtype=np.float64) * 1000.0)
+
+
+def profile_value_label(F, entry):
+    """Value axis label of a profile: its field's label and units, or of d/dz."""
+    f, op = entry["recipe"]["field"], entry.get("op", "")
+    if not op or f not in F:
+        return dist_value_label(F, f)
+    d = F[f]
+    return f"{d.label} · d/dz ({op_units(d.units, op)})"
+
+
 def profile_when(entry):
     """'90 min', or '60–90 min mean' for a time window."""
     t0, t1 = float(entry["time_s"]) / 60.0, entry.get("time_s1")
@@ -653,6 +707,8 @@ def profile_label(entry, run_label, F, multi, times):
     r = entry["recipe"]
     d = F[r["field"]] if r["field"] in F else None
     lab = ser.describe(dict(r, vmode="2d"), d.label if d else "")
+    if entry.get("op") == "ddz":
+        lab += " · d/dz"
     window = entry.get("time_s1") is not None and \
         float(entry["time_s1"]) > float(entry["time_s"])
     when = profile_when(entry) if times or window else ""
@@ -660,25 +716,71 @@ def profile_label(entry, run_label, F, multi, times):
 
 
 def profile_panel(spec, i, get, auto_label=None, value_label=None):
-    """Arrays of profile panel i.  get(entry index) -> (z, values) or a string (why
-    there is none); auto_label(entry index) -> legend text when it has no label of its
-    own; value_label(entry index) -> its value axis label."""
-    out, n, why, times = {}, 0, "", set()
-    for e, ent in enumerate(spec.get("profiles", [])):
+    """Arrays of profile panel i: a line per (profile, run).  get(entry index, run
+    index) -> (z, values) or a string (why there is none); auto_label(entry index, run
+    index) -> legend text when the entry has no label of its own; value_label(entry
+    index) -> its value axis label.  Hand edits (entry["edits"] {str(run): {edit_key(z
+    km): value or None}}) are applied.  A profile with an ensemble band (its "ens") and
+    two runs or more: its runs' lines as members (P<n>_mem 1; none when its
+    ens_members is "hidden") and one line more of the ensemble (P<n>_ens: the number
+    of members, P<n>_r -1, P<n>_v the centre, P<n>_lo / P<n>_hi the band, on the
+    members' heights P<n>_z)."""
+    ents, nr = spec.get("profiles", []), len(spec.get("runs") or [])
+    flag = spec.get("prof", {}).get("mark_edited", True)
+    out, n, why, times, members, edited = {}, 0, "", set(), {}, set()
+    for e, ent in enumerate(ents):
         if int(ent.get("panel", 0)) != i:
             continue
-        r = get(e)
-        if isinstance(r, str) or r is None:
-            why = r or why
+        if is_table(ent):  # (your own data: no run, as it is)
+            z, v = table_arrays(ent)
+            if not np.isfinite(v).any():
+                why = why or "no values in your data"
+                continue
+            out[f"P{n}_z"], out[f"P{n}_v"] = z.astype(np.float32), v.astype(np.float32)
+            out[f"P{n}_e"], out[f"P{n}_r"] = e, -1
+            out[f"P{n}_label"] = (ent.get("label") or "").strip()
+            out[f"P{n}_xl"] = ent.get("xlabel") or ""
+            n += 1
             continue
-        z, v = r
-        out[f"P{n}_z"] = np.asarray(z, dtype=np.float32)
-        out[f"P{n}_v"] = np.asarray(v, dtype=np.float32)
-        out[f"P{n}_e"] = e
-        out[f"P{n}_r"] = int(ent.get("run", 0))
-        out[f"P{n}_label"] = (ent.get("label") or (auto_label(e) if auto_label else "")).strip()
+        ks = profile_runs(ent, nr) if nr else [int(ent.get("run", 0))]
+        ens = ent.get("ens") in ENS_BANDS and len(ks) > 1
+        for k in ks:
+            r = get(e, k)
+            if isinstance(r, str) or r is None:
+                why = r or why
+                continue
+            z, v = r
+            v, used, _ = apply_edits(v, z, ent, k, EDIT_ZTOL)  # (edits at heights
+            if used:  # the profile lacks wait, not moved: the card says so)
+                edited.add(e)
+            times.add((round(float(ent["time_s"]), 1), ent.get("time_s1")))
+            if ens:
+                members.setdefault(e, []).append((z, v))
+                if ent.get("ens_members", "faint") == "hidden":
+                    continue
+            el = (ent.get("label") or "").strip()
+            lab = el or (auto_label(e, k) if auto_label else "")
+            if el and len(ks) > 1:  # (several runs: a line each)
+                lab = " · ".join(x for x in (el, run_folder(spec, k)) if x)
+            out[f"P{n}_z"] = np.asarray(z, dtype=np.float32)
+            out[f"P{n}_v"] = np.asarray(v, dtype=np.float32)
+            out[f"P{n}_e"], out[f"P{n}_r"] = e, int(k)
+            out[f"P{n}_label"] = lab.strip() + (EDITED if used and flag else "")
+            out[f"P{n}_xl"] = value_label(e) if value_label else ""
+            if ens:
+                out[f"P{n}_mem"] = 1
+            n += 1
+    for e, ms in members.items():
+        b = ensemble_band(ms, ents[e]["ens"], ents[e].get("ens_mid", "mean"))
+        if b is None:  # (one run: its line alone, as without a band)
+            continue
+        out[f"P{n}_z"], out[f"P{n}_v"], out[f"P{n}_lo"], out[f"P{n}_hi"] = \
+            (np.asarray(a, dtype=np.float32) for a in b)
+        out[f"P{n}_e"], out[f"P{n}_r"], out[f"P{n}_ens"] = e, -1, len(ms)
+        out[f"P{n}_label"] = ((ents[e].get("label") or "").strip() or
+                              (auto_label(e, -1) if auto_label else "")) + \
+            (EDITED if e in edited and flag else "")
         out[f"P{n}_xl"] = value_label(e) if value_label else ""
-        times.add((round(float(ent["time_s"]), 1), ent.get("time_s1")))
         n += 1
     if not n:
         return dict(missing=why or "no profile in this panel")

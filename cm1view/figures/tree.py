@@ -535,7 +535,13 @@ class FigureTree:
                 runs = ent.get("runs")
                 src = "every run" if runs is None else ", ".join(
                     names.get(int(k), str(k)) for k in runs) or "no run"
-            elif kind in ("profile", "joint", "azim"):  # (joint: the window's pairs, no mean)
+            elif kind == "profile":
+                runs = fg.profile_runs(ent)
+                src = "your data" if fg.is_table(ent) else (
+                    "every run" if runs is None else ", ".join(
+                        names.get(int(k), str(k)) for k in runs)) + \
+                    f" · {fg.profile_when(ent)}"
+            elif kind in ("joint", "azim"):  # (joint: the window's pairs, no mean)
                 when = fg.profile_when(ent)
                 src = f"{names.get(int(ent.get('run', 0)), '')} · " + \
                     (when.replace(" mean", "") if kind == "joint" else when)

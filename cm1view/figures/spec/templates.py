@@ -23,7 +23,13 @@ def template(spec, name=""):
         if p.get("grid"):  # (a grid of runs: of the new figure's runs)
             p["grid"] = dict(p["grid"], runs=[])
         for key in ("soundings", "dists", "profiles", "joints", "azims"):
-            p[key] = [e for e in p.get(key) or [] if int(e.get("run", 0)) == 0]
+            p[key] = [e for e in p.get(key) or [] if int(e.get("run", 0)) == 0
+                      or key == "profiles" and "runs" in e
+                      and (e["runs"] is None or len(e["runs"]) > 1)]
+        for e in p["profiles"]:  # (of several runs: every run of the new figure)
+            if "runs" in e and e.get("source") != "table":
+                e["runs"] = [0] if e["runs"] == [0] else None
+                e["run"] = 0
         if p.get("kind") == "xsec" and p.get("sections"):  # (cards: the first run's)
             p["sections"] = [e for e in p["sections"] if int(e.get("run") or 0) == 0] or \
                 [dict(p["sections"][0], run=0)]

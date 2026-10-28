@@ -8,7 +8,7 @@ import panel as pn
 
 from .. import config, pdecomp
 from ..core import sounding_plot as sp, track as trk, vectors
-from ..core.fields import CMAPS
+from ..core.fields import CMAPS, deriv_options
 from .numinput import FloatInput
 from .picker import RunPicker
 from .settings import ConfirmOverwrite, Settings
@@ -320,6 +320,10 @@ class Widgets:
         fd = F[default_fill]
         self.fill_var = pn.widgets.Select(groups=g_all, value=default_fill, width=220,
                                           height=32, margin=(4, 2))
+        self.fill_op = pn.widgets.Select(
+            options=deriv_options(fd), value="", width=80, height=32, margin=(4, 2),
+            description="A derivative of the field (per km): ∂/∂z on the model levels, "
+                        "∂/∂x, ∂/∂y or the horizontal gradient's size")
         self.fill_mode, self.fill_lvl = self._level_pair("height", 1.0, compact=True)
         self.fill_style = pn.widgets.RadioButtonGroup(
             options={"Pixels": "image", "Filled contours": "contourf"}, value="image",

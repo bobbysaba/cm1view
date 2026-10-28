@@ -152,6 +152,98 @@ def test_profile_spec_upgrades_to_panels(ed):
     assert ed.tree_list.objects[0].name.startswith("a  Profile")
 
 
+def test_profile_of_every_run_with_a_band(ed, demo_root):
+    import os
+    from cm1view.figures import spec as fg
+    ed.kind.value = "profile"
+    c = ed.prof_cards[0]
+    c.w["region"].value, c.w["z1"].value = "domain", 4.0
+    old = {k: v for k, v in c.collect().items() if k != "runs"}  # (a figure before "runs")
+    assert fg.profile_runs(old) == [0]
+    k = ed._add_run(os.path.join(demo_root, "demo", "supercell_weak"))
+    assert k == 1
+    c.w["run"].value = -1  # (All runs)
+    c.w["ens"].value = "minmax"
+    assert c.collect()["runs"] is None and c.w["ens_mid"].visible
+    spec, data, fig = render(ed)
+    d = data[0]
+    assert d["nprof"] == 3 and [int(d[f"P{j}_r"]) for j in range(3)] == [0, 1, -1]
+    assert "P2_ens" in d and "P0_mem" in d
+    lo, hi = np.nanmin([d["P0_v"], d["P1_v"]], axis=0), np.nanmax([d["P0_v"], d["P1_v"]], axis=0)
+    assert np.allclose(d["P2_lo"], lo) and np.allclose(d["P2_hi"], hi)
+    assert len(fig.axes[0].collections) == 1  # (the band)
+    ed._per_run_prof(c)  # (a card per run, each in its run's colour)
+    assert [x.collect()["runs"] for x in ed.prof_cards] == [[0], [1]]
+    assert all(x.collect()["color"] for x in ed.prof_cards)
+    ed._per_run_prof(ed.prof_cards[0])  # (every run has it there: nothing new)
+    assert len(ed.prof_cards) == 2
+    ed._dup_prof(ed.prof_cards[0])  # (the copy right after it, in a new panel)
+    assert [x.collect()["panel"] for x in ed.prof_cards] == [0, 1, 0]
+    assert [x.collect()["runs"] for x in ed.prof_cards] == [[0], [0], [1]]
+    ed._remove_run(ed.run_rows[1])  # (the run's card goes)
+    assert [x.collect()["runs"] for x in ed.prof_cards] == [[0], [0]]
+
+
+def test_profile_ddz_and_hand_edits(ed):
+    from cm1view.figures import spec as fg
+    ed.kind.value = "profile"
+    c = ed.prof_cards[0]
+    c.w["region"].value, c.w["z1"].value = "domain", 4.0
+    v0 = render(ed)[1][0]["P0_v"]
+    c.w["op"].value = "ddz"
+    spec, data, fig = render(ed)
+    d = data[0]
+    z = np.asarray(d["P0_z"], dtype=float)
+    want = np.gradient(np.asarray(v0, float), z * 1000.0)
+    assert np.allclose(d["P0_v"], want, rtol=1e-3, atol=1e-4 * np.nanmax(np.abs(want)))
+    assert "d/dz" in fig.axes[0].get_xlabel() and "d/dz" in txt(c.title.object)
+    c.vals.section.collapsed = False
+    df = c.vals.w["table"].value
+    assert list(df.columns) == ["z", "computed", "yours"] and len(df) == z.size
+
+    class Ev:
+        def __init__(self, row, value):
+            self.column, self.row, self.value = "yours", row, value
+    c.vals._on_edit(Ev(0, "-5"))
+    c.vals._on_edit(Ev(1, "blank"))
+    e = ed.collect()["profiles"][0]
+    assert e["edits"]["0"] == {fg.edit_key(z[0]): -5.0, fg.edit_key(z[1]): None}
+    d = ed.panel_data(ed.collect())[0]
+    assert d["P0_v"][0] == -5.0 and np.isnan(d["P0_v"][1])
+    assert str(d["P0_label"]).endswith(fg.EDITED)
+    assert c.vals._csv().getvalue().startswith("z_km,computed,plotted")
+    c.w["reduce"].value = "min"
+    assert "hand edit" in c.info.object  # (what the values are of changed: said so)
+    ed.po["mark_edited"].value = False
+    assert not str(ed.panel_data(ed.collect())[0]["P0_label"]).endswith(fg.EDITED)
+    c.vals._reset_all()
+    assert "edits" not in ed.collect()["profiles"][0] and not c.info.object
+
+
+def test_profile_of_your_own_data(ed):
+    import json
+    from cm1view.figures import spec as fg
+    ed.kind.value = "profile"
+    ed._add_prof_data()
+    dc = ed.prof_cards[-1]
+    dc.w["text"].value = "z, obs w (m/s)\n0.5,1\n1.5,\n1.0,2\n2,3"
+    e = dc.collect()
+    assert fg.is_table(e) and e["table"]["t"] == [0.5, 1.5, 1.0, 2.0]
+    assert dc.w["label"].value == "obs w" and dc.w["units"].value == "m/s"
+    assert "height order" in dc.note.object
+    spec, data, fig = render(ed)
+    d = data[0]
+    j = next(j for j in range(d["nprof"]) if str(d[f"P{j}_label"]) == "obs w")
+    assert list(d[f"P{j}_z"]) == [0.5, 1.0, 1.5, 2.0] and np.isnan(d[f"P{j}_v"][2])
+    assert " min · " not in str(d["P0_label"])  # (your data has no time: none added)
+    assert fg.time_refs(spec) == fg.time_refs(dict(spec, profiles=spec["profiles"][:1]))
+    s = ed.collect()  # (reopened: the same cards)
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert [c.collect() for c in ed.prof_cards] == s["profiles"]
+    with pytest.raises(ValueError, match="height in km"):
+        fg.parse_table("only one column", "height")
+
+
 # ------------------------------------------------------------------ joint distributions
 @pytest.mark.parametrize("plot", ["hist", "scatter", "contour"])
 def test_joint_figure_draws_each_plot(ed, plot):
@@ -277,6 +369,37 @@ def test_sector_layer_on_plan_views(ed):
     assert ed.collect()["layers"][-1] == s["layers"][-1]
     ed.kind.value = "dist"
     assert not ed.add_btns["sector"].visible
+
+
+def test_derivative_of_a_layers_field(ed):
+    """A layer's Derivative (∂/∂z here) names the field 'ddz.winterp': its own colours
+    and units, drawn as Fields gives it, kept when the figure is reopened; a 2D field
+    offers no ∂/∂z."""
+    import json
+    c = next(c for c in ed.cards if c.type == "fill")
+    c.w["field"].value = "winterp"
+    c.w["deriv"].value = "ddz"
+    lay = c.collect()
+    assert lay["field"] == "ddz.winterp" and "deriv" not in lay
+    assert lay["units"] == "10⁻³ s⁻¹" and lay["vmin"] == -lay["vmax"] < 0
+    assert "∂/∂z" in c.title.object
+    from cm1view.figures import draw as figdraw
+    spec = ed.collect()  # (at a storm time: w, and so ∂w/∂z, is 0 at the start)
+    spec.setdefault("edits", {})["0"] = dict(time_s=float(ed.run.times[-1]))
+    data = ed.panel_data(spec)
+    figdraw.draw(spec, data)
+    j = next(j for j, x in enumerate(spec["layers"]) if x["field"] == "ddz.winterp")
+    d = next(d for d in data.values() if not d.get("missing"))
+    assert np.isfinite(d[f"L{j}"]).any() and np.nanmax(np.abs(d[f"L{j}"])) > 0
+    s = ed.collect()
+    ed.set_spec(json.loads(json.dumps(s)))
+    c = next(c for c in ed.cards if c.type == "fill")
+    assert (c.w["field"].value, c.w["deriv"].value) == ("winterp", "ddz")
+    two = next(n for n, x in ed.fields.defs.items() if x.ndim == 2)
+    c.w["field"].value = two
+    assert c.w["deriv"].value == "" and "ddz" not in c.w["deriv"].options.values()
+    c.w["deriv"].value = "gradh"
+    assert c.collect()["field"] == "gradh." + two
 
 
 def test_difference_layer(ed):

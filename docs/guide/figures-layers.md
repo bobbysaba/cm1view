@@ -25,6 +25,10 @@ panels](figures-panels.md)). *Layers* also has *Runs used* ([Runs](figures-panel
 A figure made from the map keeps the map's fill, more fills, contours and vectors as
 layers, with their colormaps and ranges.
 
+A fill, contour or shading layer's **Derivative** draws ∂/∂z, ∂/∂x, ∂/∂y or |∇h| of its
+Field (per km) instead of the field ([Derivatives of any field](fields.md#derivatives-of-any-field)):
+contours of ∂w/∂z over a fill of w, say.
+
 ## Differences
 
 A fill can be a **difference**. *Difference: minus another run or time* subtracts the same
@@ -118,6 +122,23 @@ anywhere without the file. It is drawn like any series: *Label*, *Units* (shared
 by units), *Axis label*, *Panel*, *Time zero*, colour, line, width, markers and y axis.
 It computes nothing and has no run. In a time–height figure the card is kept but not
 drawn.
+
+## Profiles: edits and your own data
+
+A profile card's **Values (edit points)** works as a time series' (above), a row per
+model level: *Height (km)*, *Computed*, *Yours*. It lists the values the preview drew
+(it computes nothing: **Refresh** once the preview has them), per run of the card. Edits
+are on the plotted values (after the time window's mean and *d/dz*) and kept in the
+figure at the level's height; changing the card's field, layer, region, reduction, time
+or *Plot* keeps them, with a warning in the card. An ensemble band is made from the
+edited lines. **Download CSV** saves `z_km,computed,plotted`. An edited line's legend
+label ends in "(edited)" unless *Plot → Mark edited lines* is off.
+
+**+ Your data** (profile figures) adds a card for a profile that is not from a run: an
+observed sounding, another model. Paste two columns, **height in km** and value (the
+same order as the CSV above, so a download reads back in), or load a file; a header such
+as `z, w (m/s)` gives the label and units. It is kept in the figure, drawn in its own
+colour, line and markers, and gives the value axis its label only if you set one.
 
 ## Soundings and distributions
 

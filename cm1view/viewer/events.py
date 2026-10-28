@@ -9,6 +9,7 @@ from functools import partial
 import panel as pn
 
 from ..core import vectors, volume3d
+from ..core.fields import deriv_options
 from .zoomview import ZoomImage
 from .ui import PANELS
 
@@ -164,9 +165,17 @@ class Events:
             self.v3_drawer.label("sv", f"Vectors · {len(on)}" if on else "Vectors")
 
     def _on_fill_var(self, ev):
-        d = self.F[ev.new]
+        if ev.obj is self.fill_op and self._hold:  # (following the Field, below)
+            return
         self._hold = True
         try:
+            if ev.obj is self.fill_var:  # (a 2D field has no ∂/∂z)
+                opts = deriv_options(self.F[ev.new])
+                if opts != self.fill_op.options:
+                    v = self.fill_op.value
+                    self.fill_op.options = opts
+                    self.fill_op.value = v if v in opts.values() else ""
+            d = self.F[self._fill_name()]
             self.fill_cmap.value = d.cmap
             self.fill_rev.value = False
             if d.vrange:

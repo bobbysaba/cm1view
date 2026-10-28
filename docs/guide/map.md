@@ -13,6 +13,7 @@ group: **More fills**, **Contours** and **Vectors**.
 | Control | What it does |
 |---|---|
 | Field | The fill field, from a list grouped by kind (Radar, Kinematics, Thermodynamics, Pressure decomposition, Microphysics, and so on). Each entry reads `label [name]`, with the CM1 variable name in brackets. |
+| Derivative | *None*, or ∂/∂z, ∂/∂x, ∂/∂y or \|∇h\| of the field, per km ([Derivatives of any field](fields.md#derivatives-of-any-field)). 2-D fields have no ∂/∂z. |
 | Level mode | *Height AGL (km)*, *Model level (k)*, *Column max* or *Column min*. |
 | Level | The height in km (steps of 0.25) or the model level `k` (steps of 1). Use the arrow keys or the mouse wheel over the box to step through. Disabled for column max / min. 2-D fields (swaths, surface fields) have no level. |
 | **Style ▾** | The fill's look (below). |

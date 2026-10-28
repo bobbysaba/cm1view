@@ -18,7 +18,7 @@ from bokeh.transform import transform
 from .. import pdecomp
 from ..core import render, track as trk, vectors
 from ..core.run import FileBusy, MissingAtTime
-from ..core.fields import palette
+from ..core.fields import deriv_name, palette
 from ..theme import ACCENT, BG, GRID, MUTED
 from .ui import EMPTY_LINES, EMPTY_VEC, KEEP_ASPECT_JS, _cbar_label, _html, style_fig
 
@@ -224,8 +224,12 @@ class MapView:
         return [spec["fill"]["var"]] + [o["var"] for o in spec.get("fills", []) + spec["ov"]
                                         if o["on"]]
 
+    def _fill_name(self):
+        """The map fill's field: the Field, or its derivative (fields.deriv_name)."""
+        return deriv_name(self.fill_op.value, self.fill_var.value)
+
     def _shown_names(self):
-        return [self.fill_var.value] + [o["var"].value for o in self.fills + self.ovs
+        return [self._fill_name()] + [o["var"].value for o in self.fills + self.ovs
                                         if o["on"].value]
 
     def _storm_fields_shown(self):
@@ -248,7 +252,7 @@ class MapView:
         return dict(
             t=self.t, view=self.view, maxpix=self.maxpix, storm=self._storm_motion(),
             fstorm=self._field_storm(self.t)[0],
-            fill=dict(var=self.fill_var.value, mode=fm, level=fl, style=self.fill_style.value,
+            fill=dict(var=self._fill_name(), mode=fm, level=fl, style=self.fill_style.value,
                       cmap=self.fill_cmap.value, rev=self.fill_rev.value,
                       auto=self.fill_auto.value, vmin=self.fill_min.value or 0.0,
                       vmax=self.fill_max.value or 0.0, nlev=self.fill_nlev.value,

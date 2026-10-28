@@ -325,6 +325,67 @@ GROUP_ORDER = ["Radar", "Kinematics", "Thermodynamics", "Pressure decomposition"
                "Microphysics", "Swaths & 2D", "Turbulence", "Budgets", "Base state"]
 
 
+# ---- derivatives of any field, per km: "ddz.winterp" (∂w/∂z), "ddx.", "ddy.", "gradh."
+# (|∇h|).  Built on demand by Fields / AllFields, not listed in the field lists: a
+# Derivative select beside a Field select names them (deriv_name).
+DERIVS = OrderedDict([("ddz", "∂/∂z"), ("ddx", "∂/∂x"), ("ddy", "∂/∂y"), ("gradh", "|∇h|")])
+
+
+def deriv_name(op, base):
+    """The field name of derivative op ('' : none) of field `base`."""
+    return f"{op}.{base}" if op else base
+
+
+def split_deriv(name):
+    """(op, base field) of a derivative's name; ('', name) for any other field."""
+    if not isinstance(name, str):
+        return "", name
+    op, dot, base = name.partition(".")
+    return (op, base) if dot and op in DERIVS else ("", name)
+
+
+def deriv_options(d):
+    """{label: op} for a Derivative select of field d (∂/∂z: 3D fields only)."""
+    return {"None": ""} | {v: k for k, v in DERIVS.items() if k != "ddz" or d.ndim == 3}
+
+
+def _per_km(units):
+    return {"m/s": "10⁻³ s⁻¹", "1/s": "s⁻¹ km⁻¹", "": "km⁻¹"}.get(units, f"{units} km⁻¹")
+
+
+def _no_func(f, c):
+    raise ValueError("a derivative is computed from whole levels (Fields.plane / volume)")
+
+
+def deriv_def(op, base):
+    """FieldDef of derivative op of field `base` (a FieldDef), in its units per km
+    (m/s: 10⁻³ s⁻¹); None when there is none (∂/∂z of a 2D field)."""
+    if op not in DERIVS or (op == "ddz" and base.ndim != 3):
+        return None
+    vr = None
+    if base.vrange is not None:  # (a starting range: half the field's per km)
+        m = 0.5 * max(abs(float(base.vrange[0])), abs(float(base.vrange[1])))
+        vr = (0.0, m) if op == "gradh" else (-m, m)
+    deps = base.deps if base.derived else (base.name,)
+    return FieldDef(deriv_name(op, base.name), f"{base.label} · {DERIVS[op]}",
+                    _per_km(base.units), "Derivatives", ndim=base.ndim,
+                    cmap="magma" if op == "gradh" else "RdBu_r", vrange=vr,
+                    diverging=op != "gradh", deps=deps, func=_no_func, pointwise=False,
+                    storm=base.storm)
+
+
+def hgrad(op, a, xkm, ykm):
+    """Horizontal derivative op ('ddx', 'ddy', 'gradh') of a (..., ny, nx) array on
+    the grid's x / y (km; stretched grids too), per km."""
+    def d(axis, c):
+        return np.gradient(a, c, axis=axis) if a.shape[axis] > 1 else np.zeros_like(a)
+    if op == "ddx":
+        return d(-1, xkm)
+    if op == "ddy":
+        return d(-2, ykm)
+    return np.hypot(d(-1, xkm), d(-2, ykm))
+
+
 class Fields:
     def __init__(self, run):
         from .. import pdecomp
@@ -348,13 +409,31 @@ class Fields:
             self.defs[d.name] = d
         self._planes = OrderedDict()
         self._lock = threading.Lock()
+        self._derivs = {}  # (derivative name -> its FieldDef, built when first asked)
 
     # ---- catalog helpers
     def __getitem__(self, name):
-        return self.defs[name]
+        d = self.defs.get(name) if isinstance(name, str) else None
+        if d is None:
+            d = self._deriv(name)
+            if d is None:
+                raise KeyError(name)
+        return d
 
     def __contains__(self, name):
-        return name in self.defs
+        return (isinstance(name, str) and name in self.defs) or self._deriv(name) is not None
+
+    def _deriv(self, name):
+        """FieldDef of a derivative's name (split_deriv), or None."""
+        op, base = split_deriv(name)
+        if not op or base not in self.defs:
+            return None
+        d = self._derivs.get(name)
+        if d is None:
+            d = deriv_def(op, self.defs[base])
+            if d is not None:
+                self._derivs[name] = d
+        return d
 
     def groups(self, ndim=None):
         """{group: {label: name}} for grouped Select widgets."""
@@ -366,7 +445,7 @@ class Fields:
         return OrderedDict((g, v) for g, v in out.items() if v)
 
     def native_deps(self, name):
-        d = self.defs[name]
+        d = self[name]
         return list(d.deps) if d.derived else [name]
 
     # ---- data access
@@ -381,7 +460,7 @@ class Fields:
         """2D (nj, ni) array of a field.
         mode: 'height' (km AGL), 'level' (model level index), 'colmax', 'colmin'.
         storm: ground-relative storm motion (m/s) for storm-relative fields."""
-        d = self.defs[name]
+        d = self[name]
         if d.ndim == 2:
             mode, value = "2d", 0
         ctx = self._ctx(d, storm)
@@ -392,9 +471,12 @@ class Fields:
             if a is not None:
                 self._planes.move_to_end(key)
                 return a
+        op, base = split_deriv(name)
         if mode in ("colmax", "colmin"):
             vol = self.volume(name, t, storm)
             a = vol.max(axis=0) if mode == "colmax" else vol.min(axis=0)
+        elif op:
+            a = self._deriv_plane(op, base, t, mode, value, storm)
         else:
             run = self.run
 
@@ -414,18 +496,64 @@ class Fields:
                 self._planes.popitem(last=False)
         return a
 
+    def _deriv_plane(self, op, base, t, mode, value, storm):
+        """2D derivative op of field base: horizontal ones of its plane; ∂/∂z on a
+        model level from the levels next to it (as np.gradient does on the volume, so
+        maps and cross-sections agree), at a height between the two levels' values."""
+        if op != "ddz":
+            if self.defs[base].ndim == 2:
+                mode, value = "2d", 0
+            return hgrad(op, self.plane(base, t, mode, value, storm), self.run.xh,
+                         self.run.yh)
+        if mode == "level":
+            return self._ddz_level(base, t, int(value), storm)
+        k0, k1, w = self.run.level_weights(float(value))
+        a = self._ddz_level(base, t, k0, storm)
+        if w == 0.0 or k1 == k0:
+            return a
+        return (1.0 - w) * a + w * self._ddz_level(base, t, k1, storm)
+
+    def _ddz_level(self, base, t, k, storm):
+        """∂/∂z (per km) of field base on model level k: centred on the stretched
+        levels inside, one-sided at the bottom and top."""
+        z, nk = self.run.z, self.run.nk
+        k = min(max(int(k), 0), nk - 1)
+        lo, hi = max(k - 1, 0), min(k + 1, nk - 1)
+
+        def f(kk):
+            return self.plane(base, t, "level", kk, storm)
+        if lo == hi:
+            return np.zeros_like(f(k))
+        if lo == k or hi == k:
+            return (f(hi) - f(lo)) / (z[hi] - z[lo])
+        hl, hr = z[k] - z[lo], z[hi] - z[k]
+        return (hl * hl * f(hi) - hr * hr * f(lo) + (hr * hr - hl * hl) * f(k)) / \
+            (hl * hr * (hl + hr))
+
     def forget(self, t, names):
         """Drop cached planes at time t of `names` and the fields derived from them
         (after those were recomputed)."""
         names = set(names)
         dep = {n for n, d in self.defs.items() if n in names or names & set(d.deps)}
+        dep |= {n for n in list(self._derivs) if split_deriv(n)[1] in dep}
         with self._lock:
             for k in [k for k in self._planes if k[1] == t and k[0] in dep]:
                 del self._planes[k]
         self.run.forget(dep, t)
 
     def volume(self, name, t, storm=None):
-        d = self.defs[name]
+        d = self[name]
+        op, base = split_deriv(name)
+        if op:  # (cached as '~ddz.w', '~ddz.name@u,v' if storm-relative)
+            ctx = self._ctx(d, storm)
+            key = f"~{name}" + ("@{:.3f},{:.3f}".format(*ctx["storm"]) if d.storm else "")
+            vol = self.run.cached(key, t)
+            if vol is None:
+                b = np.asarray(self.volume(base, t, storm), dtype=np.float32)
+                vol = np.asarray(np.gradient(b, self.run.z, axis=0) if op == "ddz" else
+                                 hgrad(op, b, self.run.xh, self.run.yh), dtype=np.float32)
+                self.run._insert(key, t, vol)
+            return vol
         if d.derived:
             # derived volumes are cached too (as '~name', '~name@u,v' if storm-relative)
             ctx = self._ctx(d, storm)
@@ -443,7 +571,7 @@ class Fields:
     def at_points(self, name, t, sample, storm=None):
         """Field values at arbitrary points: sample(vol) -> values.  Pointwise derived
         fields are computed from sampled inputs, so no derived volume is built."""
-        d = self.defs[name]
+        d = self[name]
         if d.derived and d.pointwise:
             self.run.load_volumes(d.deps, t)
             return np.asarray(d.func(lambda n: sample(self.run.volume(n, t)),
@@ -453,7 +581,7 @@ class Fields:
         return np.asarray(sample(self.run.volume(name, t))) * d.scale
 
     def auto_range(self, name, a):
-        d = self.defs[name]
+        d = self[name]
         if d.vrange is not None:
             return d.vrange
         finite = a[np.isfinite(a)]

@@ -202,9 +202,26 @@ profiles are averaged; those with the same panel number share a panel (e.g. two 
 or one run at two times), coloured by run (see [Runs](#runs)). *+ The Series tool's
 layer series* adds the Series tool's layer series at the shown time.
 
+A card's *Run* can also be **All runs** or **Several runs…**: a line per run (at the
+output nearest the card's time, which lists the first run's outputs), in the runs'
+colours, or in the card's colour with a line style per run when the panel has other
+profiles. *Ensemble of its runs* draws a band instead (min to max, 10–90th or 25–75th
+percentile, or mean ± 1 sd) with a mean or median line, the runs' own lines faint,
+hidden or drawn as usual. **Duplicate** copies the card into a new panel; **One per
+run** splits a card of several runs into a card per run, or copies a card of one run
+for each other run of the figure, in its panel.
+
+*Plot* **d/dz** draws the profile's vertical derivative, per metre (e.g. s⁻¹ for w).
+It is d/dz of the reduced profile, e.g. of the maximum w at each level, not the maximum
+of ∂w/∂z at each level (that is a [field derivative](fields.md#derivatives-of-any-field)
+on the map).
+
 A profile is a layer series computed only at the times it needs, and cached with the
 Series tool's: a time–height panel of the same series later reuses those times, and the
-other way round. *Plot* sets the value and height ranges, a zero line and the legend.
+other way round. *Plot* (the panel options) sets the value and height ranges, a zero
+line, the legend and whether edited lines are marked. A card's values can be edited by
+hand and downloaded, and **+ Your data** draws a profile of your own beside them
+([Profiles: edits and your own data](figures-layers.md#profiles-edits-and-your-own-data)).
 
 ### Joint distributions
 

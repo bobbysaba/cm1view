@@ -1,7 +1,7 @@
-"""The Values section of a time-series card: its computed values, one run at a time,
-with your hand edits (a value of your own, or the point blanked), kept on the card's
-entry (entry["edits"], see spec/panels.apply_edits) and drawn by the preview without
-computing anything again."""
+"""The Values section of a time-series card (and of a profile card: ProfileValues):
+its computed values, one run at a time, with your hand edits (a value of your own,
+or the point blanked), kept on the card's entry (entry["edits"], see
+spec/panels.apply_edits) and drawn by the preview without computing anything again."""
 
 import io
 import math
@@ -40,13 +40,55 @@ class SeriesValues:
     """A collapsed section of a SeriesCard; its widgets are made the first time it is
     opened (most cards are never edited)."""
 
+    TOL = fg.EDIT_TOL  # (an edit is at a row's key within this)
+    NAME = "series"  # (the CSV file's name when the card has no label)
+    HINT = ("Type a value in Yours to replace a point, <i>blank</i> to leave it out, or "
+            "clear the cell to undo.  Edits are on the plotted values (after d/dt) and "
+            "stay with the card when the time zero changes.")
+    GONE = "at times this run does not have"
+
     def __init__(self, card):
         self.card, self.ed = card, card.ed
         self.section = pn.Card(title="Values (edit points)", collapsed=True, **SECTION)
         self.section.param.watch(self._opened, "collapsed")
         self.w = None
-        self.times = np.array([])  # (model times, s, of the rows shown)
+        self.keys = np.array([])  # (where each row is: model time, s)
         self.k = None  # (the run shown)
+
+    # ---- what differs between a series and a profile
+    def _table(self):
+        return pn.widgets.Tabulator(
+            pd.DataFrame(dict(t=[], model_s=[], computed=[], yours=[])), show_index=False,
+            selectable="checkbox", theme="midnight", height=300, layout="fit_data_fill",
+            sizing_mode="stretch_width", editors={"t": None, "model_s": None,
+                                                  "computed": None, "yours": "input"},
+            titles={"t": "Time (min)", "model_s": "Model time (s)", "computed": "Computed",
+                    "yours": "Yours"})
+
+    def _fetch(self, k, ent):
+        """(row keys, the leading columns {name: values}, computed values, why there
+        are none) of run k."""
+        spec = {"runs": self.ed._runs_collect(), "series": [ent]}
+        got = self.ed._series_get(spec, k, 0)
+        if isinstance(got, str):
+            return [], dict(t=[], model_s=[]), [], got
+        run, ds = got
+        t0 = fg.series_t0({"time_label": {"t0_min": self._fig_t0()}}, ent)
+        t, v, _, _ = fg.series_arrays(run, ds, ent, t0)
+        why = ""
+        if v is None:
+            v, why = np.full(len(run.times), np.nan), "d/dz applies to time–height panels"
+        elif not np.isfinite(v).any():
+            why = "not computed yet (Refresh once it is)"
+        tm = np.asarray(run.times, dtype=np.float64)
+        return tm, dict(t=[round(float(x), 4) for x in t], model_s=[float(x) for x in tm]), \
+            v, why
+
+    def _csv_head(self):
+        return "time_min,model_time_s,computed,plotted\n"
+
+    def _csv_lead(self, df, j):
+        return f"{df['t'][j]:g},{df['model_s'][j]:g}"
 
     # ---- edits on the entry
     def edits(self, k=None):
@@ -91,21 +133,14 @@ class SeriesValues:
         w["reset_all"] = pn.widgets.Button(name="Reset all edits", height=32,
                                            button_type="warning", button_style="outline",
                                            description="Every edit of this card, every run")
-        w["dl"] = pn.widgets.FileDownload(callback=self._csv, filename="series.csv",
+        w["dl"] = pn.widgets.FileDownload(callback=self._csv, filename=f"{self.NAME}.csv",
                                           label="Download CSV", button_type="primary",
                                           button_style="outline", height=32)
-        w["table"] = pn.widgets.Tabulator(
-            pd.DataFrame(dict(t=[], model_s=[], computed=[], yours=[])), show_index=False,
-            selectable="checkbox", theme="midnight", height=300, layout="fit_data_fill",
-            sizing_mode="stretch_width", editors={"t": None, "model_s": None,
-                                                  "computed": None, "yours": "input"},
-            titles={"t": "Time (min)", "model_s": "Model time (s)", "computed": "Computed",
-                    "yours": "Yours"})
+        w["table"] = self._table()
         w["note"] = pn.pane.HTML(margin=(0, 4), sizing_mode="stretch_width")
         w["drop_gone"] = pn.widgets.Button(name="Drop those", height=28, button_type="light",
                                            button_style="outline", visible=False,
-                                           description="Forget the edits at times this run "
-                                                       "does not have")
+                                           description=f"Forget the edits {self.GONE}")
         w["run"].param.watch(lambda e: self.refresh(), "value")
         w["refresh"].on_click(lambda e: self.refresh())
         w["blank"].on_click(lambda e: self._picked(blank=True))
@@ -115,9 +150,7 @@ class SeriesValues:
         w["table"].on_edit(self._on_edit)
         self.section.objects = [
             _grid(w["run"], w["refresh"], w["dl"], w["blank"], w["reset"], w["reset_all"]),
-            _hint("Type a value in Yours to replace a point, <i>blank</i> to leave it out, "
-                  "or clear the cell to undo.  Edits are on the plotted values (after "
-                  "d/dt) and stay with the card when the time zero changes."),
+            _hint(self.HINT),
             w["table"], pn.Row(w["note"], w["drop_gone"], margin=0,
                                sizing_mode="stretch_width")]
         self.refresh()
@@ -145,23 +178,14 @@ class SeriesValues:
         w["run"].visible = len(opts) > 1
         self.k = k = w["run"].value
         ent = self.card.collect()
-        w["dl"].filename = f"{(ent.get('label') or 'series').strip() or 'series'}.csv" \
-            .replace("/", "_").replace(" ", "_")
+        name = (ent.get("label") or "").strip() or self.NAME
+        w["dl"].filename = f"{name}.csv".replace("/", "_").replace(" ", "_")
         if k is None:
-            return self._show([], [], [], "no run")
-        spec = {"runs": self.ed._runs_collect(), "series": [ent]}
-        got = self.ed._series_get(spec, k, 0)
-        if isinstance(got, str):
-            return self._show([], [], [], got)
-        run, ds = got
-        t0 = fg.series_t0({"time_label": {"t0_min": self._fig_t0()}}, ent)
-        t, v, _, _ = fg.series_arrays(run, ds, ent, t0)
-        why = ""
-        if v is None:
-            v, why = np.full(len(run.times), np.nan), "d/dz applies to time–height panels"
-        elif not np.isfinite(v).any():
-            why = "not computed yet (Refresh once it is)"
-        self._show(np.asarray(run.times, dtype=np.float64), t, v, why)
+            return self._show(*self._fetch_none(), "no run")
+        self._show(*self._fetch(k, ent))
+
+    def _fetch_none(self):
+        return [], {c: [] for c in self.w["table"].value.columns[:-2]}, []
 
     def _fig_t0(self):
         tl = getattr(self.ed, "tl_t0", None)  # (Style: built when first opened)
@@ -169,37 +193,35 @@ class SeriesValues:
             return float(tl.value or 0.0)
         return float(self.ed.spec.get("time_label", {}).get("t0_min", 0.0))
 
-    def _show(self, times_s, t, v, why):
+    def _show(self, keys, lead, v, why):
         w, k = self.w, self.k
-        self.times = np.asarray(times_s, dtype=np.float64)
-        yours = [""] * len(self.times)
+        self.keys = np.asarray(keys, dtype=np.float64)
+        yours = [""] * len(self.keys)
         eds = (self.card.ent.get("edits") or {}).get(str(k)) or {}
         gone = 0
         for key, val in eds.items():
-            j = np.flatnonzero(np.abs(self.times - float(key)) < 0.5)
+            j = np.flatnonzero(np.abs(self.keys - float(key)) < self.TOL)
             if not j.size:
                 gone += 1
                 continue
             yours[j[0]] = BLANK if val is None else _fmt(val)
         w["table"].value = pd.DataFrame(dict(
-            t=[round(float(x), 4) for x in t], model_s=[float(x) for x in self.times],
-            computed=[_fmt(float(x)) for x in v], yours=yours))
+            lead, computed=[_fmt(float(x)) for x in v], yours=yours))
         w["table"].selection = []
         msg = [why] if why else []
         n = len(eds) - gone
         if n:
             msg.append(f"{n} point{'s' if n != 1 else ''} edited")
         if gone:
-            msg.append(f"{gone} edit{'s' if gone != 1 else ''} at times this run does not "
-                       f"have (not drawn)")
+            msg.append(f"{gone} edit{'s' if gone != 1 else ''} {self.GONE} (not drawn)")
         w["note"].object = f'<div class="cv-hint">{" · ".join(msg)}</div>' if msg else ""
         w["drop_gone"].visible = bool(gone)
 
     # ---- editing
     def _on_edit(self, ev):
-        if ev.column != "yours" or self.k is None or not 0 <= ev.row < self.times.size:
+        if ev.column != "yours" or self.k is None or not 0 <= ev.row < self.keys.size:
             return
-        key = fg.edit_key(self.times[ev.row])
+        key = fg.edit_key(self.keys[ev.row])
         p = parse_yours(ev.value)
         old = self._old_key(key)
         if old is not None and old != key:  # (an edit stored for the same time)
@@ -217,16 +239,16 @@ class SeriesValues:
         """The stored key of the edit at the time of key, if any (keys may come from
         another rounding)."""
         for x in (self.card.ent.get("edits") or {}).get(str(self.k)) or {}:
-            if abs(float(x) - float(key)) < 0.5:
+            if abs(float(x) - float(key)) < self.TOL:
                 return x
         return None
 
     def _picked(self, blank):
-        rows = [j for j in self.w["table"].selection if 0 <= j < self.times.size]
+        rows = [j for j in self.w["table"].selection if 0 <= j < self.keys.size]
         if not rows or self.k is None:
             return
         for j in rows:
-            key = fg.edit_key(self.times[j])
+            key = fg.edit_key(self.keys[j])
             old = self._old_key(key)
             if old is not None:
                 self._store(self.k, old, drop=True)
@@ -240,7 +262,7 @@ class SeriesValues:
 
     def _drop_gone(self):
         eds = self.edits(self.k)
-        for key in [x for x in eds if not (np.abs(self.times - float(x)) < 0.5).any()]:
+        for key in [x for x in eds if not (np.abs(self.keys - float(x)) < self.TOL).any()]:
             eds.pop(key)
         self._tidy()
         self.done()
@@ -254,12 +276,49 @@ class SeriesValues:
 
     # ---- download
     def _csv(self):
-        """The run's line as drawn: time (min), model time (s), computed, plotted."""
+        """The run's line as drawn: where (series: time, min, and model time, s;
+        profile: height, km), computed, plotted."""
         df = self.w["table"].value
         out = io.StringIO()
-        out.write("time_min,model_time_s,computed,plotted\n")
-        for t, s, c, y in zip(df["t"], df["model_s"], df["computed"], df["yours"]):
+        out.write(self._csv_head())
+        for j, (c, y) in enumerate(zip(df["computed"], df["yours"])):
             p = c if y == "" else "" if y == BLANK else y
-            out.write(f"{t:g},{s:g},{c},{p}\n")
+            out.write(f"{self._csv_lead(df, j)},{c},{p}\n")
         out.seek(0)
         return out
+
+
+class ProfileValues(SeriesValues):
+    """The Values section of a ProfileCard: a row per level (height, km)."""
+
+    TOL = fg.EDIT_ZTOL
+    NAME = "profile"
+    HINT = ("Type a value in Yours to replace a level's, <i>blank</i> to leave it out, or "
+            "clear the cell to undo.  Edits are on the plotted values (after d/dz and the "
+            "time window's mean); the values are the preview's (nothing is computed here).")
+    GONE = "at heights this profile does not have"
+
+    def _table(self):
+        return pn.widgets.Tabulator(
+            pd.DataFrame(dict(z=[], computed=[], yours=[])), show_index=False,
+            selectable="checkbox", theme="midnight", height=300, layout="fit_data_fill",
+            sizing_mode="stretch_width", editors={"z": None, "computed": None,
+                                                  "yours": "input"},
+            titles={"z": "Height (km)", "computed": "Computed", "yours": "Yours"})
+
+    def _fetch(self, k, ent):
+        runs = self.ed._runs_collect()
+        if k >= len(runs):
+            return [], dict(z=[]), [], "no such run"
+        got = self.ed._profile_get(runs[k], ent, 0, 1, compute=False)
+        if isinstance(got, str):
+            return [], dict(z=[]), [], got
+        z, v = got
+        why = "" if np.isfinite(v).any() else "no values"
+        return z, dict(z=[round(float(x), 4) for x in z]), v, why
+
+    def _csv_head(self):
+        return "z_km,computed,plotted\n"
+
+    def _csv_lead(self, df, j):
+        return f"{df['z'][j]:g}"

@@ -311,7 +311,7 @@ class Layout:
             b.param.update(height=32, margin=(4, 2), button_type="light")
         d.panel.styles = dict(d.panel.styles, **DRAWER)
         # the fill's style sits in the fill's own pill; what goes over it in the next
-        bar = _bar(_group(self.fill_var, self.fill_mode, self.fill_lvl, style),
+        bar = _bar(_group(self.fill_var, self.fill_op, self.fill_mode, self.fill_lvl, style),
                    _group(more, cont, vec))
         # the tools, down the left edge: each sets what a map click does and opens its
         # panel; the eraser clears every marker on the map

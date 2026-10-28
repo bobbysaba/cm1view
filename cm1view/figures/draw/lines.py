@@ -410,24 +410,46 @@ def _dists(ax, d, spec, fs):
 
 
 def profile_colors(spec, d):
-    """Colour of each profile of panel data d: its own, else its run's when each of the
-    panel's profiles comes from another run (by_run), else the next of SND_COLORS."""
+    """(colour, line style) of each profile line of panel data d.  Colour: its
+    profile's own, else its run's when each of the panel's lines comes from another run
+    (by_run), else the next of SND_COLORS for each profile.  A profile of several runs
+    not coloured by run: a line style per run.  An ensemble's band and members: their
+    profile's colour; your own data: its own colour."""
     ents = spec.get("profiles", [])
     n = int(d.get("nprof", 0))
-    es = [ents[int(d[f"P{j}_e"])] if int(d[f"P{j}_e"]) < len(ents) else {} for j in range(n)]
+    es = [int(d[f"P{j}_e"]) for j in range(n)]
     runs = [int(d[f"P{j}_r"]) for j in range(n)]
-    rc = by_run(spec, runs)
-    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
-            for j, (e, k) in enumerate(zip(es, runs))]
+    ent = [ents[e] if e < len(ents) else {} for e in es]
+    plain = [j for j in range(n) if f"P{j}_ens" not in d and f"P{j}_mem" not in d
+             and ent[j].get("source") != "table"]
+    rc = by_run(spec, [runs[j] for j in plain])
+    order = list(dict.fromkeys(es))
+    several = {e for e in es if es.count(e) > 1}
+    out = []
+    for j in range(n):
+        e, x = es[j], ent[j]
+        mine = x.get("color") or SND_COLORS[order.index(e) % len(SND_COLORS)]
+        ls = x.get("ls") or "-"
+        if j not in plain:
+            out.append((mine, ls))
+        elif x.get("color"):
+            out.append((mine, run_style(spec, runs[j]) if e in several and not rc else ls))
+        elif rc:
+            out.append((run_color(spec, runs[j]), ls))
+        else:
+            out.append((mine, run_style(spec, runs[j]) if e in several else ls))
+    return out
 
 
 def _profiles(ax, d, spec, fs):
-    """Vertical profile panel: one line per profile, value (x) against height (y);
-    spec["prof"]: the axes' ranges, a zero line and the legend."""
+    """Vertical profile panel: one line per profile and run, value (x) against height
+    (y); an ensemble's band shaded and centre drawn in its profile's colour, its runs
+    thin and pale ("faint") or as other lines; spec["prof"]: the axes' ranges, a zero
+    line and the legend."""
     o = spec.get("prof", {})
     ents = spec.get("profiles", [])
     n = int(d.get("nprof", 0))
-    cols = profile_colors(spec, d)
+    looks = profile_colors(spec, d)
 
     def num(k):
         v = o.get(k)
@@ -437,9 +459,21 @@ def _profiles(ax, d, spec, fs):
     for j in range(n):
         e = ents[int(d[f"P{j}_e"])] if int(d[f"P{j}_e"]) < len(ents) else {}
         z, v = np.asarray(d[f"P{j}_z"]), np.asarray(d[f"P{j}_v"])
-        h, = ax.plot(v, z, color=cols[j], ls=e.get("ls") or "-",
-                     lw=float(e.get("lw") or 1.5), label=str(d.get(f"P{j}_label", "")))
-        handles.append(h)
+        color, ls = looks[j]
+        lw, label = float(e.get("lw") or 1.5), str(d.get(f"P{j}_label", ""))
+        if f"P{j}_mem" in d and e.get("ens_members", "faint") == "faint":
+            ax.plot(v, z, color=color, ls=ls, lw=0.6 * lw, alpha=0.4, zorder=1.5)
+        elif f"P{j}_ens" in d:
+            a = float(e.get("ens_alpha", 0.25))
+            ax.fill_betweenx(z, d[f"P{j}_lo"], d[f"P{j}_hi"], color=color, alpha=a, lw=0,
+                             zorder=1.2)
+            ax.plot(v, z, color=color, ls=ls, lw=lw)
+            handles.append(Patch(facecolor=color, alpha=a + 0.15, edgecolor=color, lw=lw,
+                                 label=label))
+        else:
+            h, = ax.plot(v, z, color=color, ls=ls, lw=lw, marker=e.get("marker") or None,
+                         ms=3, label=label)
+            handles.append(h)
         r = e.get("recipe") or {}  # (the layer asked for, not only the levels' centres)
         if z.size:
             top = float(z[-1]) + (0.5 * float(z[-1] - z[-2]) if z.size > 1 else 0.0)
@@ -455,7 +489,7 @@ def _profiles(ax, d, spec, fs):
         ax.axvline(0.0, color="0.6", lw=0.6, zorder=0)
     ax.set_xlabel("; ".join(dict.fromkeys(str(d[f"P{j}_xl"]) for j in range(n)
                                           if d.get(f"P{j}_xl"))))
-    if o.get("legend", True) and (n > 1 or spec.get("_legend_extra")):
+    if o.get("legend", True) and (len(handles) > 1 or spec.get("_legend_extra")):
         panel_legend(ax, handles, o, spec, "best", False)
 
 

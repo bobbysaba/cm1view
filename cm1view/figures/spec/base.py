@@ -142,7 +142,7 @@ def default_spec(run, F, t=0):
                             zero_line=False),
         profiles=[], prof=dict(xmin=None, xmax=None, zmin=None, zmax=None, zero_line=False,
                                legend=True, legend_loc="best", legend_ncol=1,
-                               legend_frame=False),
+                               legend_frame=False, mark_edited=True),
         joints=[], joint=dict(plot="hist", norm="count", bins=60, log=True, cmap="viridis",
                               reverse=False, colorbar=True, ms=2.0, alpha=0.5, lw=1.2,
                               contours=False, pcts="50, 90", contour_labels=True, fit=False,
@@ -506,7 +506,8 @@ def time_refs(spec):
         elif p["kind"] in ("sounding", "dist", "profile", "joint", "azim"):
             out += [(runs[int(e.get("run", 0))]["path"], float(e["time_s"]))
                     for e in p.get(figdraw.ENTRIES[p["kind"]]) or []
-                    if int(e.get("run", 0)) < len(runs)]
+                    if int(e.get("run", 0)) < len(runs)
+                    and e.get("source") != "table"]  # (your own data: no time)
     return out
 
 

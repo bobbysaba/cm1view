@@ -16,6 +16,7 @@ from . import draw as figdraw, spec as fg
 from ..core import render, series as ser, vectors
 from ..core.run import FileBusy, MissingAtTime
 from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
+                    ProfileDataCard,
                     DataCard, SeriesCard, SoundingCard, _dark)
 
 
@@ -540,9 +541,75 @@ class FigureSources:
 
     # ------------------------------------------------------------ profile cards
     def _prof_card(self, e):
-        c = ProfileCard(self, e)
+        c = ProfileDataCard(self, e) if fg.is_table(e) else ProfileCard(self, e)
         c.rm.on_click(lambda ev: self._remove_prof(c))
+        c.dup.on_click(lambda ev: self._dup_prof(c))
+        if not fg.is_table(e):
+            c.per_run.on_click(lambda ev: self._per_run_prof(c))
         return c
+
+    def _add_prof_data(self):
+        """A card of your own profile data, in the last card's panel (to compare with
+        it)."""
+        e = fg.profile_table_defaults(len(self.prof_cards))
+        e["panel"] = int(self.prof_cards[-1].w["panel"].value or 1) - 1 \
+            if self.prof_cards else 0
+        self.prof_cards.append(self._prof_card(e))
+        self._show_profiles()
+        self._fit_grid()
+        self.request()
+
+    def _new_profs(self, ents, at):
+        """Cards for profile entries ents after card `at`."""
+        i = self.prof_cards.index(at) + 1 if at in self.prof_cards else len(self.prof_cards)
+        self.prof_cards[i:i] = [self._prof_card(e) for e in ents]
+        self._show_profiles()
+        self._fit_grid()
+        self._build_titles()
+        self.request()
+
+    def _dup_prof(self, c):
+        """A copy of card c in a new panel (the first no profile card is in)."""
+        used = {int(x.w["panel"].value or 1) - 1 for x in self.prof_cards}
+        free = next(p for p in range(len(used) + 1) if p not in used)
+        self._new_profs([dict(c.collect(), panel=free)], at=c)
+
+    def _per_run_prof(self, c):
+        """Card c of several runs (or every run) becomes a card per run in its panel,
+        each in the run's colour; of one run, a copy for each other run of the figure
+        in its panel (a run with the same profile there already is skipped)."""
+        s, runs = c.collect(), sorted(self._run_names().values())
+        spec = dict(runs=self._runs_collect())  # (the runs' colours)
+        if s["runs"] is None or len(s["runs"]) > 1:
+            ks = s["runs"] or runs
+            if len(ks) < 2:
+                self._msg("The figure has one run: add others first (pick one in a "
+                          "card's <b>Run</b> list).", True)
+                return
+            i = self.prof_cards.index(c)
+            self.prof_cards.remove(c)
+            self.prof_cards[i:i] = [self._prof_card(dict(
+                s, run=k, runs=[k], ens="", color=figdraw.run_color(spec, k))) for k in ks]
+            self._show_profiles()
+            self._build_titles()
+            self.request()
+            return
+        others = [k for k in runs if k != s["runs"][0]]
+        if not others:
+            self._msg("The figure has one run: add others first (pick one in a card's "
+                      "<b>Run</b> list).", True)
+            return
+        key = json.dumps(s["recipe"], sort_keys=True, default=float)
+        have = {(x["run"], x["panel"], x["time_s"], x["time_s1"],
+                 json.dumps(x["recipe"], sort_keys=True, default=float))
+                for x in (y.collect() for y in self.prof_cards)
+                if x["runs"] is not None and len(x["runs"]) == 1}
+        new = [dict(s, run=k, runs=[k], label="", color="") for k in others
+               if (k, s["panel"], s["time_s"], s["time_s1"], key) not in have]
+        if not new:
+            self._msg("Each run has this profile in this panel already.", True)
+            return
+        self._new_profs(new, at=c)
 
     def _show_profiles(self):
         self.prof_box.objects = [c.panel for c in self.prof_cards] or [pn.pane.HTML(
@@ -870,10 +937,11 @@ class FigureSources:
                     self.dist_cache[key] = r
                     while len(self.dist_cache) > 60:
                         self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
+                        and not fg.is_table(x)]  # (your own data: no time)
                 times = len({round(float(x["time_s"]), 1) for x in mine}) > 1
                 labels[e] = fg.dist_label(ent, runs[k].get("label", ""), F, multi, times)
-                vlabs[e] = fg.dist_value_label(F, ent["recipe"]["field"])
+                vlabs[e] = fg.profile_value_label(F, ent)
             except (MissingAtTime, FileBusy) as ex:
                 r = str(ex)
             except Exception as ex:  # noqa: BLE001
@@ -926,7 +994,8 @@ class FigureSources:
                     self.dist_cache[key] = res[e]
                     while len(self.dist_cache) > 60:
                         self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
+                        and not fg.is_table(x)]  # (your own data: no time)
                 times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
                              for x in mine}) > 1
                 labels[e] = fg.joint_label(ent, runs[k].get("label", ""), F, multi, times)
@@ -982,7 +1051,8 @@ class FigureSources:
                     self.dist_cache[key] = res[e]
                     while len(self.dist_cache) > 60:
                         self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
+                        and not fg.is_table(x)]  # (your own data: no time)
                 times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
                              for x in mine}) > 1
                 labels[e] = fg.azim_label(ent, runs[k].get("label", ""), F, multi, times)
@@ -1013,38 +1083,42 @@ class FigureSources:
         res, labels, vlabs = {}, {}, {}
         multi = len(runs) > 1
 
-        def get(e):
-            if e in res:
-                return res[e]
+        def get(e, k):
+            if (e, k) in res:
+                return res[e, k]
             ent = ents[e]
-            k = int(ent.get("run", 0))
             if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
+                res[e, k] = "no such run"
+                return res[e, k]
             try:
-                res[e] = self._profile_get(runs[k], ent, e, len(ents), progress, cancelled)
+                n = sum(len(fg.profile_runs(x, len(runs))) for x in ents)
+                res[e, k] = self._profile_get(runs[k], ent, len(res), n, progress,
+                                              cancelled)
                 run, F = self.open_run(runs[k]["path"])
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))]
+                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
+                        and not fg.is_table(x)]  # (your own data: no time)
                 times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
                              for x in mine}) > 1
-                labels[e] = fg.profile_label(ent, runs[k].get("label", ""), F, multi, times)
-                vlabs[e] = fg.dist_value_label(F, ent["recipe"]["field"])
+                labels[e, k] = fg.profile_label(ent, runs[k].get("label", ""), F, multi, times)
+                labels.setdefault((e, -1), fg.profile_label(ent, "", F, False, times))
+                vlabs[e] = fg.profile_value_label(F, ent)
             except Exception as ex:  # noqa: BLE001
                 traceback.print_exc()
-                res[e] = f"{type(ex).__name__}: {ex}"
-            return res[e]
+                res[e, k] = f"{type(ex).__name__}: {ex}"
+            return res[e, k]
 
         data = {}
         for i in range(fg.npanels(spec)):
             if cancelled and cancelled():
                 return None
-            data[i] = fg.profile_panel(spec, i, get, lambda e: labels.get(e, ""),
+            data[i] = fg.profile_panel(spec, i, get, lambda e, k: labels.get((e, k), ""),
                                        lambda e: vlabs.get(e, ""))
         return data
 
-    def _profile_get(self, rentry, ent, e, n, progress=None, cancelled=None):
+    def _profile_get(self, rentry, ent, e, n, progress=None, cancelled=None, compute=True):
         """(z, values) of profile entry ent of run entry rentry, or why not (a
-        string): its outputs not computed yet are computed here."""
+        string): its outputs not computed yet are computed here (compute False: not,
+        say so)."""
         run, F = self.open_run(rentry["path"])
         r = ent["recipe"]
         if r["field"] not in F:
@@ -1069,6 +1143,8 @@ class FigureSources:
             self._ser_mem[key] = ds
         todo = [t for t in ts if not ds["computed"].values[t]]
         skipped = {}
+        if todo and not compute:
+            return "not computed yet (Refresh once the preview has drawn it)"
         if todo:
             if progress:
                 progress(e, n)
@@ -1080,7 +1156,7 @@ class FigureSources:
         if not used:
             why = next(iter(skipped.values()), "not computed")
             return f"no profile: {why}"
-        return z, v
+        return z, fg.profile_op(z, v, ent.get("op", ""))
 
     # ------------------------------------------------------------ start from series / soundings
     def from_series(self):

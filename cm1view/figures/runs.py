@@ -12,7 +12,7 @@ import panel as pn
 from .. import config, registry
 from . import draw as figdraw, spec as fg
 from ..core import track as trk
-from ..core.fields import GROUP_ORDER, Fields
+from ..core.fields import GROUP_ORDER, Fields, deriv_def, split_deriv
 from ..core.run import CM1Run
 from .cards import CARD, _hex, _row
 
@@ -32,10 +32,20 @@ class AllFields:
                 self._some.add(name)
 
     def __getitem__(self, name):
-        return self.defs[name]
+        d = self.defs.get(name) if isinstance(name, str) else None
+        if d is None:
+            op, base = split_deriv(name)
+            d = deriv_def(op, self.defs[base]) if op and base in self.defs else None
+            if d is None:
+                raise KeyError(name)
+        return d
 
     def __contains__(self, name):
-        return name in self.defs
+        try:
+            self[name]
+        except KeyError:
+            return False
+        return True
 
     def groups(self, ndim=None):
         out = OrderedDict((g, OrderedDict()) for g in GROUP_ORDER)
@@ -303,14 +313,14 @@ class FigureRuns:
         hold, self._hold = self._hold, True
         try:
             for w in [self.run_sel] + \
-                    [c.w["run"] for c in self.snd_cards + self.dist_cards + self.prof_cards
+                    [c.w["run"] for c in self.snd_cards + self.dist_cards
                      + self.joint_cards + self.azim_cards + self.sec_cards]:
                 self._set_runs_of(w, w.value)
             opts = self._series_run_opts(names)
             v = [k for k in self.gg_runs.value if k in names.values()] or [0]
             self.gg_runs.options = opts
             self.gg_runs.value = v
-            for c in self.ser_cards:
+            for c in self.ser_cards + self.prof_cards:
                 c.refresh_runs(names)
             for c in self.cards:  # (a layer's run)
                 if "run" in c.w:
@@ -405,10 +415,9 @@ class FigureRuns:
             if "ens_on" in c.w and c.w["ens_on"].value and c.w["on"].value:
                 ks = [int(k) for k in c.w["ens_runs"].value if not isinstance(k, str)]
                 used |= set(ks) if ks else set(range(n))
-        for c in self.snd_cards + self.dist_cards + self.prof_cards + self.joint_cards + \
-                self.azim_cards:
+        for c in self.snd_cards + self.dist_cards + self.joint_cards + self.azim_cards:
             used.add(c.w["run"].value or 0)
-        for c in self.ser_cards:
+        for c in self.ser_cards + self.prof_cards:
             ks = c.run_list()
             used |= set(range(n)) if ks is None else set(ks)
         used |= {int(e["run"]) for e in self._edit_runs()}
@@ -462,7 +471,6 @@ class FigureRuns:
                     else:
                         e["run"] = int(e["run"]) - 1
             for what, cards in (("sounding", self.snd_cards), ("distribution", self.dist_cards),
-                                ("profile", self.prof_cards),
                                 ("joint distribution", self.joint_cards),
                                 ("azimuthal mean", self.azim_cards)):
                 keep = []
@@ -485,17 +493,18 @@ class FigureRuns:
                     c.set_run(max(0, j - 1))
                 keep.append(c)
             self.sec_cards = keep
-            keep = []
-            for c in self.ser_cards:
-                old = c.run_list()
-                new = None if old is None else [j - (j > k) for j in old if j != k]
-                if old and not new:  # it was of that run only
-                    gone.append("series")
-                    continue
-                c.refresh_runs(names)
-                c.set_runs(new)
-                keep.append(c)
-            self.ser_cards = keep
+            for what, cards in (("series", self.ser_cards), ("profile", self.prof_cards)):
+                keep = []
+                for c in cards:
+                    old = c.run_list()
+                    new = None if old is None else [j - (j > k) for j in old if j != k]
+                    if old and not new:  # it was of that run only
+                        gone.append(what)
+                        continue
+                    c.refresh_runs(names)
+                    c.set_runs(new)
+                    keep.append(c)
+                cards[:] = keep
         finally:
             self._hold = False
         self._show_runs()

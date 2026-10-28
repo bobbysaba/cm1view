@@ -89,6 +89,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.t_speed.param.watch(self._on_speed, "value")
         self.mode.watch(self._on_mode)
         self.fill_var.param.watch(self._on_fill_var, "value")
+        self.fill_op.param.watch(self._on_fill_var, "value")
         for w in (self.fill_mode, self.fill_style, self.fill_cmap, self.fill_rev,
                   self.fill_nlev):
             w.param.watch(rm, "value")

@@ -7,6 +7,20 @@ has a matching git tag.
 
 ### Figures
 
+- **Derivatives of any field**: a **Derivative** select beside the Field (the map's
+  fill; a figure's fill, contour and shading layers on plan views and cross-sections)
+  plots ∂/∂z, ∂/∂x, ∂/∂y or |∇h| of it, per km (∂w/∂z in 10⁻³ s⁻¹), on the stretched
+  grid ([Derivatives of any field](guide/fields.md#derivatives-of-any-field)).
+- **Profiles of several runs**: a profile card's *Run* can be **All runs** or
+  **Several runs…** (a line per run), with an optional ensemble band (min–max,
+  percentiles or ± 1 sd) and mean or median line, and the cards have **Duplicate** and
+  **One per run**. *Plot* **d/dz** draws a profile's vertical derivative
+  ([Vertical profiles](guide/figures-panels.md#vertical-profiles)).
+- **Edit a profile's values and draw your own**: a profile card's *Values (edit
+  points)* edits or blanks levels by hand and downloads CSV; **+ Your data** draws a
+  profile pasted or loaded from a file (height in km, value)
+  ([Profiles: edits and your own data](guide/figures-layers.md#profiles-edits-and-your-own-data)).
+  Saved profile figures open as before.
 - **Edit a time series' values**: a series card's *Values (edit points)* replaces or
   blanks points by hand, per run, and downloads the line as CSV. Edits are kept in the
   figure and the edited line's legend label ends in "(edited)" (*Panels → Time and value

@@ -307,17 +307,23 @@ class FigureWidgets:
             legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
             legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
             legend=_chk("Legend", True), legend_frame=_chk("Legend frame", False),
-            zero_line=_chk("Zero line", False))
-        po_shows = ("legend", "legend_frame", "zero_line")
+            zero_line=_chk("Zero line", False), mark_edited=_chk("Mark edited lines", True))
+        po_shows = ("legend", "legend_frame", "zero_line", "mark_edited")
         self.prof_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.prof_tab = pn.widgets.Button(name="+ The Series tool's layer series", height=32,
                                           button_type="primary", button_style="outline")
         self.prof_new = pn.widgets.Button(name="+ Profile", button_type="light",
                                           button_style="outline", height=32)
+        self.prof_data = pn.widgets.Button(
+            name="+ Your data", button_type="light", button_style="outline", height=32,
+            description="A profile of your own (a sounding, observations, another model): "
+                        "paste height and value columns or load a CSV file")
         self.prof_col = pn.Column(
             _hint("Profiles with the same <b>Panel</b> number share a panel (colour = "
-                  "profile, or run): e.g. two runs, or one run at two times."),
-            _row(self.prof_tab, self.prof_new), self.prof_box,
+                  "profile, or run): e.g. two runs, or one run at two times. A card can "
+                  "draw <b>All runs</b> or <b>Several runs…</b> (with an ensemble band); "
+                  "<b>+ Your data</b> draws a profile of your own beside them."),
+            _row(self.prof_tab, self.prof_new, self.prof_data), self.prof_box,
             _section("Plot", _grid(*[w for k, w in po.items() if k not in po_shows]),
                      _checks(*[po[k] for k in po_shows]),
                      _hint("Values from / to and Bottom / Top: the axes' ranges (blank: the "
