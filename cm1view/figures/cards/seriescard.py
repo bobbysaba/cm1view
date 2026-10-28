@@ -11,6 +11,7 @@ from .base import (
     FIG_CMAPS, _hex, _f, _auto, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, SER_OPS,
     MARKERS, SND_WHERE, _BTN, _chk,
 )
+from .seriesvals import SeriesValues
 
 ENS_BANDS = {"Off": "", "Min to max": "minmax", "10–90th percentile": "p10p90",
              "25–75th percentile": "p25p75", "Mean ± 1 sd": "sd"}
@@ -132,13 +133,14 @@ class SeriesCard:
         w["run"].param.watch(self._on_run, "value")
         w["runs"].param.watch(self._on_runs, "value")
         w["field"].param.watch(self._on_field, "value")
-        w["op"].param.watch(lambda e: self._set_title(), "value")
+        w["op"].param.watch(lambda e: self._op_changed(), "value")
         w["ens"].param.watch(lambda e: self.show(ed.kind.value), "value")
         self.th_row = _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                             w["nlevels"], w["extend"], (w["cbar_label"], 2), w["cbar_ticks"])
         self.line_row = _grid(w["color"], w["ls"], w["lw"], w["marker"], w["axis"], w["ylabel"],
                               w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"])
         self.trk_box = pn.Column(margin=0, sizing_mode="stretch_width")  # (refresh_tracks)
+        self.vals = SeriesValues(self)  # (time series: its values, and your edits of them)
         self.where = _grid(w["run"], (w["runs"], 2), w["panel"], w["t0"], self.dup,
                            self.per_run)
         self.panel, self.body = _fold(
@@ -146,7 +148,8 @@ class SeriesCard:
             [self.where,
              _grid((w["field"], 2), w["vmode"], w["z"], w["z0"], w["z1"], w["region"],
                    w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"], w["op"],
-                   (w["label"], 3)), self.trk_box, self.th_row, self.line_row, self.info])
+                   (w["label"], 3)), self.trk_box, self.th_row, self.line_row, self.vals.section,
+             self.info])
         self._set_title()
         self.show(ed.kind.value)
 
@@ -164,7 +167,7 @@ class SeriesCard:
         w["radius"].visible = w["offx"].visible = w["offy"].visible = trkr
         w["pct"].visible = w["reduce"].value == "pct"
         self.th_row.visible = kind == "th"
-        self.line_row.visible = kind == "line"
+        self.line_row.visible = self.vals.section.visible = kind == "line"
         w["runs"].visible = kind == "line" and w["run"].value == SOME_RUNS
         several = kind == "line" and w["run"].value in (ALL_RUNS, SOME_RUNS)
         w["ens"].visible = several
@@ -282,6 +285,7 @@ class SeriesCard:
     def _where_changed(self):
         self.show(self.ed.kind.value)
         self.ed._series_changed()
+        self.vals.refresh()
 
     def _on_runs(self, ev):
         """A run not in the figure picked (its path): add it to the figure, and keep
@@ -320,7 +324,27 @@ class SeriesCard:
             self.box = [float(v) for v in self.ed.v.view]
         self.show(self.ed.kind.value)
         self._auto_label()
+        self._edits_stale()
         self.ed.request()
+
+    def _op_changed(self):
+        self._set_title()
+        self._edits_stale()
+
+    def _edits_stale(self):
+        """The recipe or derivative changed: hand edits (made on the values before)
+        are kept, with a word on the card."""
+        self._stale = bool(self.vals.count())
+        self.edits_changed()
+        self.vals.refresh()
+
+    def edits_changed(self):
+        n = self.vals.count()
+        self._stale = getattr(self, "_stale", False) and bool(n)
+        self.info.object = (
+            f'<div class="cv-hint">{n} hand edit{"s" if n != 1 else ""} made on this '
+            f'series before its recipe or Plot changed are still drawn: check them under '
+            f'Values (Reset all edits clears them).</div>' if self._stale else "")
 
     def _auto_label(self):
         """Keep an automatic label in step with the recipe (an edited one stays)."""
@@ -375,6 +399,10 @@ class SeriesCard:
                                else 0.25)
         e["panel"] = max(0, int(w["panel"].value or 1) - 1)
         e["runs"] = self.run_list()
+        if e.get("edits"):  # (a copy: the card goes on editing its own)
+            e["edits"] = {k: dict(v) for k, v in e["edits"].items() if v}
+        if not e.get("edits"):
+            e.pop("edits", None)
         e["base_units"] = self.ed.fields[e["recipe"]["field"]].units
         e["units"] = fg.op_units(e["base_units"], e["op"])
         return e

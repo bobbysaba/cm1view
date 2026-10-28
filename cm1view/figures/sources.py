@@ -16,7 +16,7 @@ from . import draw as figdraw, spec as fg
 from ..core import render, series as ser, vectors
 from ..core.run import FileBusy, MissingAtTime
 from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
-                    SeriesCard, SoundingCard, _dark)
+                    DataCard, SeriesCard, SoundingCard, _dark)
 
 
 class FigureSources:
@@ -157,17 +157,19 @@ class FigureSources:
 
     # ------------------------------------------------------------ series cards
     def _ser_card(self, e):
-        c = SeriesCard(self, e)
+        c = DataCard(self, e) if fg.is_table(e) else SeriesCard(self, e)
         c.up.on_click(lambda ev: self._move_ser(c, -1))
         c.down.on_click(lambda ev: self._move_ser(c, 1))
         c.rm.on_click(lambda ev: self._remove_ser(c))
         c.dup.on_click(lambda ev: self._dup_series(c))
-        c.per_run.on_click(lambda ev: self._per_run_series(c))
+        if not isinstance(c, DataCard):
+            c.per_run.on_click(lambda ev: self._per_run_series(c))
         return c
 
     def _show_series(self):
         for c in self.ser_cards:
             c.show(self.kind.value)
+        self.ser_data.visible = self.kind.value == "line"
         self.ser_box.objects = [c.panel for c in self.ser_cards] or [pn.pane.HTML(
             '<div class="cv-empty">No series yet, so nothing is computed: add one of the '
             'Series tool’s (above) or a new one.</div>')]
@@ -236,7 +238,7 @@ class FigureSources:
         have = {(x["runs"][0] if x["runs"] else -1,
                  x["panel"] if line else -1, json.dumps(x["recipe"], sort_keys=True,
                                                          default=float))
-                for x in (y.collect() for y in self.ser_cards)}
+                for x in (y.collect() for y in self.ser_cards) if not fg.is_table(x)}
         C = int(self.cols.value or 1)
         row, col = divmod(s["panel"], C)
         taken = {int(x.w["panel"].value or 1) - 1 for x in self.ser_cards}
@@ -263,7 +265,8 @@ class FigureSources:
         per run when the series split all have the same runs, else its panel when no
         card before it is there (else the next free one)."""
         names = sorted(self._run_names().values())
-        ents = [c.collect() for c in self.ser_cards]
+        mine = [c for c in self.ser_cards if isinstance(c, DataCard)]  # (stay as they are)
+        ents = [c.collect() for c in self.ser_cards if c not in mine]
         own = [e["runs"] or names for e in ents]
         split = any(len(ks) > 1 for ks in own)
         alike = split and all(r == own[0] for r in own)
@@ -276,7 +279,7 @@ class FigureSources:
                 taken.add(p)
                 out.append(dict(e, runs=[k], panel=p))  # (its band: back as time series)
         if out != ents:
-            self.ser_cards = [self._ser_card(e) for e in out]
+            self.ser_cards = [self._ser_card(e) for e in out] + mine
 
     def _line_cards_from_th(self):
         """Time-height panels become time series: the cards of one series (alike but
@@ -285,8 +288,9 @@ class FigureSources:
         if not any(c._kind == "th" for c in self.ser_cards):
             return
         names = sorted(self._run_names().values())
+        mine = [c for c in self.ser_cards if isinstance(c, DataCard)]  # (stay as they are)
         groups = {}
-        for e in (c.collect() for c in self.ser_cards):
+        for e in (c.collect() for c in self.ser_cards if c not in mine):
             key = json.dumps({k: v for k, v in e.items() if k not in ("runs", "panel")},
                              sort_keys=True, default=float)
             groups.setdefault(key, (e, []))[1].extend(e["runs"] or names)
@@ -294,7 +298,7 @@ class FigureSources:
         for n, (e, ks) in enumerate(groups.values()):
             ks = sorted(set(ks))
             out.append(dict(e, runs=None if ks == names and len(ks) > 1 else ks, panel=n))
-        self.ser_cards = [self._ser_card(e) for e in out]
+        self.ser_cards = [self._ser_card(e) for e in out] + mine
 
     def _move_ser(self, c, d):
         i = self.ser_cards.index(c)
@@ -342,6 +346,13 @@ class FigureSources:
         self.ser_cards.append(self._ser_card(e))
         self._series_changed()
 
+    def _add_data(self):
+        """A card of your own data, in the last card's panel (to compare with it)."""
+        e = fg.table_defaults(len(self.ser_cards))
+        e["panel"] = int(self.ser_cards[-1].w["panel"].value or 1) - 1 if self.ser_cards else 0
+        self.ser_cards.append(self._ser_card(e))
+        self._series_changed()
+
     def _fit_grid(self, reset=False, wide=False):
         """Time-series / sounding / distribution / section figures: enough grid cells
         for the highest panel number of the cards (reset: a column of up to 3, else 2
@@ -356,6 +367,8 @@ class FigureSources:
                  "dist": self.dist_cards, "profile": self.prof_cards,
                  "joint": self.joint_cards, "azim": self.azim_cards,
                  "xsec": self.sec_cards}[kind]
+        if kind == "th":  # (your own data: time series only)
+            cards = [c for c in cards if not isinstance(c, DataCard)]
         n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
         runs = len({c.w["run"].value for c in cards}) if kind in ("xsec", "th") else 1
@@ -664,7 +677,7 @@ class FigureSources:
         r = min(abs(dx), abs(dy)) if coords == "data" else 0.15
         a = dict(kind=kind, panel=-1, coords=coords, x=round(x, 2), y=round(y, 2),
                  x2=round(x + dx, 2), y2=round(y + dy, 2), r=round(r, 2),
-                 text="A" if kind == "text" else "",
+                 text={"text": "A", "legend": "Entry"}.get(kind, ""),
                  color="#000000", size=10.0 if kind != "marker" else 8.0, lw=1.5,
                  ls="--" if kind in ("vline", "hline") else "-")
         self.ann_rows.append(self._ann_row(a))

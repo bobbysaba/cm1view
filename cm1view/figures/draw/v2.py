@@ -150,7 +150,7 @@ def th_grid(spec):
         cells, seen = [None] * (r * c), set()
         for e, ent in enumerate(ents):
             p, k = int(ent.get("panel", 0)), int((ent.get("runs") or [0])[0])
-            if p in seen or not 0 <= p < r * c:
+            if p in seen or not 0 <= p < r * c or ent.get("source") == "table":
                 continue
             seen.add(p)
             cells[p] = (k, e) if 0 <= k < nr else None

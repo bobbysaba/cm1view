@@ -43,7 +43,7 @@ def _lines(ax, d, spec, fs):
         ens, faint = f"S{j}_ens" in d, f"S{j}_mem" in d and \
             e.get("ens_members", "faint") == "faint"
         color, ls = e.get("color", "k"), e.get("ls") or "-"
-        rs = e.get("runs")
+        rs = [] if e.get("source") == "table" else e.get("runs")  # (your own data: no run)
         if not ens and (rs is None and nr > 1 or rs is not None and len(rs) > 1):
             if len(es) == 1:  # (several runs, alone: a colour per run)
                 color = run_color(spec, k)
@@ -88,7 +88,8 @@ def _lines(ax, d, spec, fs):
         ax.set_ylim(None if lo in (None, "") else float(lo), None if hi in (None, "") else float(hi))
     if ts.get("zero_line"):
         ax.axhline(0.0, color="0.6", lw=0.6, zorder=0)
-    if ts.get("legend", True) and (len(handles) > 1 or (ts.get("mark_legend") and mark)):
+    if ts.get("legend", True) and (len(handles) > 1 or (ts.get("mark_legend") and mark)
+                                   or spec.get("_legend_extra")):
         panel_legend(ax, handles, ts, spec, "best", False)
 
 
@@ -356,7 +357,8 @@ def _dists(ax, d, spec, fs):
             ax.axvline(0.0, color="0.6", lw=0.6, zorder=0)
         ax.set_xlabel(vlab)
         ax.set_ylabel(ylab)
-        if o.get("legend", True) and (n > 1 or (keys and not in_box)):
+        if o.get("legend", True) and (n > 1 or (keys and not in_box)
+                                      or spec.get("_legend_extra")):
             panel_legend(ax, handles, o, spec, "best", False)
         return
     horiz = bool(o.get("horizontal"))
@@ -453,7 +455,7 @@ def _profiles(ax, d, spec, fs):
         ax.axvline(0.0, color="0.6", lw=0.6, zorder=0)
     ax.set_xlabel("; ".join(dict.fromkeys(str(d[f"P{j}_xl"]) for j in range(n)
                                           if d.get(f"P{j}_xl"))))
-    if o.get("legend", True) and n > 1:
+    if o.get("legend", True) and (n > 1 or spec.get("_legend_extra")):
         panel_legend(ax, handles, o, spec, "best", False)
 
 
@@ -657,7 +659,7 @@ def _joints(ax, d, spec, fs):
                                           if d.get(f"J{j}_xl"))))
     ax.set_ylabel("; ".join(dict.fromkeys(str(d[f"J{j}_yl"]) for j in range(n)
                                           if d.get(f"J{j}_yl"))))
-    if o.get("legend", True) and n > 1:
+    if o.get("legend", True) and (n > 1 or spec.get("_legend_extra")):
         panel_legend(ax, handles, o, spec, "best", False)
 
 
@@ -747,5 +749,5 @@ def _azims(ax, d, spec, fs):
                     zhi if num("zmax") is None else num("zmax"))
     ax.set_xlabel("Radius (km)")
     ax.set_ylabel("Height (km)")
-    if o.get("legend", True) and n > 1:
+    if o.get("legend", True) and (n > 1 or spec.get("_legend_extra")):
         panel_legend(ax, handles, o, spec, "best", False)

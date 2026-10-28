@@ -83,6 +83,42 @@ Series tool** copies one of the viewer's computed series (the shown one is picke
 the figure and cached, so restyling is instant; the figure waits for any that are still
 computing before it saves ([Series and distributions](series.md)).
 
+### Editing a series' values
+
+A time-series card's **Values (edit points)** section (folded; built when you open it)
+lists the line of the *Run* picked: *Time (min)*, *Model time (s)*, *Computed* and
+*Yours*. Type a number in *Yours* to replace a point, `blank` to leave it out of the line
+(a gap), or clear the cell to undo. **Blank points** and **Reset points** act on the rows
+ticked, **Reset all edits** on every run of the card; **Download CSV** saves the line as
+drawn, **Refresh** reads the values again (e.g. after more output was written).
+
+Edits are kept in the figure, per run, at the model time of the point, so they stay put
+when the card's or the figure's time zero changes. They are on the plotted values (after
+*d/dt*); changing the card's field or reduction keeps them, with a warning in the card.
+Everything drawn from the line uses them: ensemble bands, maxima and minima, axis
+ranges. An edit at a time the run no longer has is not drawn; the section lists those,
+and **Drop those** forgets them. An edited line's legend label ends in "(edited)" unless
+*Panels → Time and value axes → Mark edited lines* is off.
+
+Edits belong to a run by its place in the card's *Run* list: reordering or removing the
+card's runs moves them to another run, so reset them first.
+
+### Your own data
+
+**+ Your data** (time-series figures) adds a card for a series that is not from a run:
+observations, another model. Paste two columns, time in minutes and value, split by
+commas, tabs, semicolons or spaces (the text is read when you click away), or load a
+file (up to 2 MB). A header line is optional; `time, rain (mm)` gives the card's label
+and units when they are blank. Lines starting with `#` are skipped, and a blank, `nan` or
+`-` value leaves a gap. The note under it gives the points read and their time range;
+text it cannot read is reported there and the data read before is still drawn.
+
+The data, up to 10,000 points, is kept in the figure itself, so a saved figure opens
+anywhere without the file. It is drawn like any series: *Label*, *Units* (shared y axes
+by units), *Axis label*, *Panel*, *Time zero*, colour, line, width, markers and y axis.
+It computes nothing and has no run. In a time–height figure the card is kept but not
+drawn.
+
 ## Soundings and distributions
 
 The soundings (Skew-T, hodograph, parameter table) and distributions (plot type, bins,

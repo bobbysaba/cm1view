@@ -141,7 +141,8 @@ class DistCard:
 
 
 class AnnotationRow:
-    """One annotation: text, marker, arrow, line, box or circle in one panel or all."""
+    """One annotation: text, marker, arrow, line, box or circle in one panel or all, or
+    an entry of its own in their legends ("legend")."""
 
     def __init__(self, ed, a):
         self.ed = ed
@@ -167,6 +168,10 @@ class AnnotationRow:
         w["marker"] = pn.widgets.Select(name="Marker", options={
             "×": "x", "+": "+", "●": ".", "○": "o", "□": "s", "★": "*", "▲": "^"},
             value=a.get("marker", "x"), width=80)
+        w["look"] = pn.widgets.Select(name="Looks like", options={
+            "Line": "line", "Marker": "marker", "Line and marker": "both",
+            "Filled box": "patch"}, value=a.get("look", "line"), width=130)
+        w["alpha"] = _f("Opacity", float(a.get("alpha", 1.0)), 80, step=0.1)
         w["bold"] = _chk("Bold", a.get("bold", False))
         w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(a.get("color", "k")),
                                             width=70)
@@ -183,6 +188,11 @@ class AnnotationRow:
         for k, x in w.items():
             if k not in ("kind", "panel", "color"):
                 x.visible = k in use
+        if w["kind"].value == "legend":  # (what its look draws)
+            look = w["look"].value
+            w["marker"].visible = look in ("marker", "both")
+            w["ls"].visible = look != "marker"
+            w["alpha"].visible = look == "patch"
         kind = next(k for k, v in ANN_KINDS.items() if v == w["kind"].value)
         p = parse_panels(w["panel"].value)
         ps = [p] if isinstance(p, int) else p

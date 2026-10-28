@@ -5,8 +5,8 @@ import matplotlib
 from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 
-from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, panel_letter, time_text, _new_fig,
-                   _fs, _cell, rc, anchor_kw, font_size, run_code, run_color, layer_color)
+from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_letter,
+                   time_text, _new_fig, _fs, _cell, rc, anchor_kw, font_size, run_code, run_color, layer_color)
 from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text,
                  LEGEND_OPTS)
 from .layers import (_fill, _contour, _shade, _vectors, sector_outline, extend_of,
@@ -154,8 +154,13 @@ def _block(fig, spec, k, bv, data, fs, ext):
         if half and p["kind"] == "sounding":
             V = dict(V, skewt=dict(V.get("skewt", {}), _hodo_half=half))
         used.append(ax)
+        extra = legend_handles(V.get("annotations", []), p["id"])
+        if p["kind"] in LEGEND_OPTS:  # (into the panel's own legend)
+            V = dict(V, _legend_extra=extra)
         ax, m = _panel(fig, ax, d, V, _panel_layers(p), fs, entries.setdefault(p["id"], {}),
                        ext.get(p["id"]))
+        if p["kind"] not in LEGEND_OPTS:  # (after its layers' entries, in the block's legend)
+            entries[p["id"]].update(extra)
         used[-1] = ax
         if grid is not None:
             grid[r * cols + c] = ax
@@ -520,7 +525,7 @@ def _annotate(ax, i, anns, fs):
     skew-T, data coordinates are temperature (deg C) and pressure (hPa)."""
     skew = getattr(ax, "_cv_skew", None)
     for a in anns:
-        if not ann_on(a, i):
+        if not ann_on(a, i) or a.get("kind") == "legend":  # (legend_handles)
             continue
         data = a.get("coords") != "axes"
         tr = ax.transData if data else ax.transAxes

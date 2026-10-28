@@ -119,7 +119,7 @@ def default_spec(run, F, t=0):
                     ncol=1, frame=True, title="", own=True),
         series=[], ts=dict(tmin=None, tmax=None, zmin=0.0, zmax=10.0, legend=True,
                            legend_loc="best", legend_ncol=1, legend_frame=False,
-                           zero_line=False, mark="", mark_legend=False),
+                           zero_line=False, mark="", mark_legend=False, mark_edited=True),
         extremes=dict(on=False, layer=-1, what="both", marker=True, loc="upper center",
                       box=True),
         soundings=[], skewt=dict(pmax=1000.0, pmin=100.0, tmin=-40.0, tmax=50.0, skew=35.0,
@@ -387,6 +387,8 @@ def series_looks(spec):
     nr = len(runs)
 
     def runs_of(e):
+        if e.get("source") == "table":  # (your own data: no run)
+            return []
         rs = e.get("runs")
         return list(range(nr)) if rs is None else [int(k) for k in rs if int(k) < nr]
 

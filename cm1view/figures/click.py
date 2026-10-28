@@ -365,6 +365,8 @@ def _grips(a, b, start):
         return (float(x), float(y)) if axes else to_frac(b, float(x), float(y))
 
     kind = a.get("kind")
+    if kind == "legend":  # (in the legend, not on the panel)
+        return {}
     if kind == "vline":  # (grabbed anywhere along it)
         return {"all": (to_frac(b, float(a["x"]), to_data(b, *start)[1])[0], start[1])}
     if kind == "hline":

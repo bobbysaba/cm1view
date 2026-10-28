@@ -197,8 +197,8 @@ def test_legend_anchor_puts_its_corner_at_the_point():
 def test_panel_legend_anchor():
     from cm1view.figures.draw.base import panel_legend
     fig, axs, _ = _axes(1)
-    leg = panel_legend(axs[0], [Line2D([], [])], dict(legend_loc="upper left",
-                                                      legend_anchor=[1.02, 1.0]), {}, "best",
+    leg = panel_legend(axs[0], [Line2D([], [], label="w")],
+                       dict(legend_loc="upper left", legend_anchor=[1.02, 1.0]), {}, "best",
                        False)
     box = leg.get_bbox_to_anchor().transformed(axs[0].transAxes.inverted())
     assert (round(box.x0, 6), round(box.y0, 6)) == (1.02, 1.0)
@@ -214,3 +214,41 @@ def test_style_legend_anchor_and_own_round_trip(ed):
     ed.lg_anchor.value, ed.lg_own.value = "1.02, 1", False
     lg = ed.collect()["legend"]
     assert lg["anchor"] == [1.02, 1.0] and lg["own"] is False
+
+
+def test_blank_label_has_no_legend_entry():
+    from cm1view.figures.draw.base import panel_legend
+    fig, axs, _ = _axes(2)
+    named, = axs[0].plot([0, 1], [0, 1], label="a")
+    blank, = axs[0].plot([0, 1], [1, 0], label="")  # (matplotlib calls it "_child1")
+    leg = panel_legend(axs[0], [named, blank], {}, {}, "best", False)
+    assert [t.get_text() for t in leg.get_texts()] == ["a"]
+    alone, = axs[1].plot([0, 1], [1, 0], label="")
+    assert panel_legend(axs[1], [alone], {}, {}, "best", False) is None
+    assert axs[1].get_legend() is None and axs[1]._cv_entries == []
+
+
+def test_legend_entry_annotations_join_the_panels_legend():
+    from cm1view.figures.draw.base import legend_handles, panel_legend
+    anns = [dict(kind="legend", text="Obs", look="line", ls="--", panel=-1),
+            dict(kind="legend", text="Window", look="patch", alpha=0.3, color="red", panel=0),
+            dict(kind="legend", text="Pt", look="marker", marker="o", panel=1),
+            dict(kind="legend", text="", panel=-1), dict(kind="text", text="A")]
+    extra = legend_handles(anns, 0)
+    assert [t for t, _ in extra] == ["Obs", "Window"]
+    assert extra[0][1].get_linestyle() == "--" and extra[1][1].get_alpha() == 0.3
+    fig, axs, _ = _axes(1)
+    line, = axs[0].plot([0, 1], [0, 1], label="run")
+    leg = panel_legend(axs[0], [line], {}, dict(_legend_extra=extra), "best", False)
+    assert [t.get_text() for t in leg.get_texts()] == ["run", "Obs", "Window"]
+    assert [t for _, t in axs[0]._cv_entries] == ["run", "Obs", "Window"]
+
+
+def test_legend_entry_in_the_editor(ed):
+    """Added in Annotate, it reaches the legend; it draws nothing on the panel."""
+    ed.ann_kind.value = "legend"
+    ed._add_annotation()
+    a = ed.ann_rows[-1].collect()
+    assert a["kind"] == "legend" and a["text"] == "Entry" and "x" not in a
+    from cm1view.figures.draw.base import legend_handles
+    assert [t for t, _ in legend_handles([a], 0)] == ["Entry"]

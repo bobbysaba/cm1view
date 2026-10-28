@@ -227,7 +227,7 @@ def _skewt(ax, d, spec, fs, cols, inset=True):
         # (equal aspect shrinks the box: keep it in its corner, custom: at x, y)
         hx.set_anchor({"upper right": "NE", "upper left": "NW", "lower right": "SE",
                        "lower left": "SW", "custom": "SW"}.get(where, "C"))
-    if _shows_legend(o, many):
+    if _shows_legend(o, many) or spec.get("_legend_extra"):
         panel_legend(ax, handles, o, spec, "upper left", True)
 
 

@@ -2,6 +2,7 @@
 azimuthal mean panels."""
 
 import os
+import re
 
 import numpy as np
 
@@ -11,6 +12,7 @@ from .base import npanels, tindex, storm_motion
 
 LINE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "k"]
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
+EDITED = " (edited)"  # (after a hand-edited line's label, Style: "Mark edited lines")
 
 
 def series_defaults(F, recipe, n=0, label=""):
@@ -71,6 +73,8 @@ def series_pairs(spec):
 
 
 def _entry_runs(ent, nr):
+    if is_table(ent):  # (your own data: no run)
+        return []
     runs = ent.get("runs")
     return list(range(nr)) if runs is None else [int(k) for k in runs if int(k) < nr]
 
@@ -96,6 +100,124 @@ def series_arrays(run, ds, entry, t0_min=0.0):
         v = np.gradient(v, tm)
         P = None if P is None else np.gradient(P, tm, axis=0)
     return tm / 60.0 - t0_min, v, z, P
+
+
+def is_table(entry):
+    """Whether a series entry is data of your own (entry["table"]: "t" minutes, "v"
+    values), drawn as it is, with no run and nothing computed."""
+    return entry.get("source") == "table"
+
+
+def table_arrays(entry, t0_min=0.0):
+    """(t in min from t0_min, values) of a series of your own, in time order; missing
+    values (None) NaN."""
+    tab = entry.get("table") or {}
+    t = np.asarray([np.nan if x is None else float(x) for x in tab.get("t", [])], np.float64)
+    v = np.asarray([np.nan if x is None else float(x) for x in tab.get("v", [])], np.float64)
+    n = min(t.size, v.size)
+    t, v = t[:n], v[:n]
+    ok = np.isfinite(t)
+    t, v = t[ok], v[ok]
+    o = np.argsort(t, kind="stable")
+    return t[o] - t0_min, v[o]
+
+
+TABLE_MAX = 10000  # (points in a series of your own: it is kept in the spec)
+_NA = ("", "nan", "na", "none", "null", "-", "–", "blank")
+
+
+def _cell(s):
+    """A number of a table cell: None for a missing value; ValueError if not one."""
+    if s.strip().lower() in _NA:
+        return None
+    v = float(s)
+    return v if np.isfinite(v) else None
+
+
+def parse_table(text):
+    """Your own data as text: two columns, time (min) and value, split by commas, tabs,
+    semicolons or spaces; an optional header line first; lines starting with # and
+    empty ones skipped; a missing value (blank, nan, -) leaves a gap.  Returns
+    (table {"t", "v", and "names" of a header}, notes); ValueError says what is wrong
+    (with its line number)."""
+    t, v, names, notes, extra = [], [], None, [], False
+    for n, line in enumerate(str(text or "").splitlines(), 1):
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        raw = line.strip(" \r\n")  # (a tab at the end: a missing value)
+        cells = [c.strip() for c in re.split(r"[,;\t]", raw)] if re.search(r"[,;\t]", raw) \
+            else s.split()  # (spaces split only a line without commas, tabs or ;)
+        if len(cells) < 2:
+            raise ValueError(f"line {n}: two columns wanted (time in min, value): {s[:40]!r}")
+        try:
+            a = _cell(cells[0])
+            b = _cell(cells[1])
+        except ValueError:
+            if t or names is not None:
+                raise ValueError(f"line {n}: not a number: {s[:40]!r}") from None
+            names = cells[:2]  # (a header)
+            continue
+        if a is None:
+            raise ValueError(f"line {n}: no time: {s[:40]!r}")
+        extra = extra or len(cells) > 2
+        t.append(a)
+        v.append(b)
+        if len(t) > TABLE_MAX:
+            raise ValueError(f"more than {TABLE_MAX} points: thin the data first")
+    if not t:
+        raise ValueError("no data lines (time in min, value)")
+    if extra:
+        notes.append("columns after the second left out")
+    if any(b < a for a, b in zip(t, t[1:])):
+        notes.append("times not in order: drawn in time order")
+    if not any(x is not None for x in v):
+        notes.append("every value is missing")
+    out = dict(t=t, v=v)
+    if names:
+        out["names"] = names
+    return out, notes
+
+
+def table_text(table):
+    """A table of your own as CSV text (parse_table reads it back)."""
+    tab = table or {}
+    names = tab.get("names") or ["time_min", "value"]
+    rows = [f"{float(a):g},{'' if b is None else format(float(b), '.8g')}"
+            for a, b in zip(tab.get("t", []), tab.get("v", [])) if a is not None]
+    return "\n".join([",".join(names)] + rows)
+
+
+def table_defaults(n=0, label="My data", units=""):
+    """A spec["series"] entry of your own data (empty: the card fills its table)."""
+    return dict(source="table", table=dict(t=[], v=[]), recipe={}, runs=[], label=label,
+                op="", units=units, base_units=units,
+                color=LINE_COLORS[n % len(LINE_COLORS)], lw=1.5, ls="-", t0_min=0.0,
+                marker="o", panel=0, axis="auto", ylabel="", ens="")
+
+
+def edit_key(t_s):
+    """The key of a hand edit at model time t_s (s): entry["edits"][str(run)][key]."""
+    return f"{float(t_s):.6g}"
+
+
+def apply_edits(v, times_s, entry, k):
+    """Values v (at the run's model times times_s, s) of series entry for run k with
+    its hand edits (entry["edits"] {str(run): {edit_key(time s): value, or None to
+    blank it}}): (values, how many applied, how many at a time the run lacks)."""
+    eds = (entry.get("edits") or {}).get(str(k)) or {}
+    if not eds:
+        return v, 0, 0
+    v, tm = np.array(v, dtype=np.float64), np.asarray(times_s, dtype=np.float64)
+    used = gone = 0
+    for key, val in eds.items():
+        j = np.flatnonzero(np.abs(tm - float(key)) < 0.5)
+        if not j.size:
+            gone += 1
+            continue
+        v[j[0]] = np.nan if val is None else float(val)
+        used += 1
+    return v, used, gone
 
 
 def series_t0(spec, entry):
@@ -191,17 +313,38 @@ def line_panel(spec, i, get):
     S<n>_r -1, S<n>_v the centre, S<n>_lo / S<n>_hi the band)."""
     ents, runs = spec.get("series", []), spec.get("runs") or []
     ts = spec.get("ts", {})
+    flag = ts.get("mark_edited", True)  # (" (edited)" after the label of a hand-edited line)
     lines = [(e, k) for e, ent in enumerate(ents) if int(ent.get("panel", 0)) == i
              for k in _entry_runs(ent, len(runs))]
     out, n, lo, hi, why = {}, 0, np.inf, -np.inf, ""
+    lines += [(e, -1) for e, ent in enumerate(ents)
+              if is_table(ent) and int(ent.get("panel", 0)) == i]
     members = {}  # (entry index: [(t, v)] of its runs, with an ensemble band)
+    edited = set()  # ((entry, run) drawn with hand edits)
     for e, k in lines:
+        if k < 0:  # (your own data)
+            t, v = table_arrays(ents[e], series_t0(spec, ents[e]))
+            if not np.isfinite(v).any():
+                why = why or "no values in your data"
+                continue
+            fin = np.flatnonzero(np.isfinite(v))
+            sl = slice(fin[0], fin[-1] + 1)
+            lo, hi = min(lo, t[fin[0]]), max(hi, t[fin[-1]])
+            out[f"S{n}_t"], out[f"S{n}_v"] = t[sl], v[sl]
+            out[f"S{n}_e"], out[f"S{n}_r"] = e, -1
+            out[f"S{n}_label"] = ents[e].get("label", "")
+            n += 1
+            continue
         got = get(k, e)
         if got is None:
             why = "not computed yet"
             continue
         run, ds = got
         t, v, _, _ = series_arrays(run, ds, ents[e], series_t0(spec, ents[e]))
+        if v is not None:
+            v, used, _ = apply_edits(v, run.times, ents[e], k)  # (edits at times the
+            if used:  # run lacks wait, not moved to other times: the card says so)
+                edited.add((e, k))
         if v is None or not np.isfinite(v).any():
             why = why or ("d/dz applies to time–height panels" if ents[e].get("op") == "ddz"
                           else "not computed yet")
@@ -218,7 +361,9 @@ def line_panel(spec, i, get):
         out[f"S{n}_t"], out[f"S{n}_v"] = t[sl], v[sl]
         out[f"S{n}_e"], out[f"S{n}_r"] = e, k
         out[f"S{n}_label"] = el if len(_entry_runs(ents[e], len(runs))) == 1 else \
-            f"{el} · {run_folder(spec, k)}"  # (a series of several runs: a line each)
+            " · ".join(x for x in (el, run_folder(spec, k)) if x)  # (several runs: a line each)
+        if (e, k) in edited and flag:
+            out[f"S{n}_label"] += EDITED
         if ens:
             out[f"S{n}_mem"] = 1
         n += 1
@@ -229,6 +374,8 @@ def line_panel(spec, i, get):
         out[f"S{n}_t"], out[f"S{n}_v"], out[f"S{n}_lo"], out[f"S{n}_hi"] = b
         out[f"S{n}_e"], out[f"S{n}_r"], out[f"S{n}_ens"] = e, -1, len(ms)
         out[f"S{n}_label"] = ensemble_label(ents[e], len(ms))
+        if flag and any(x == e for x, _ in edited):
+            out[f"S{n}_label"] += EDITED
         n += 1
     if not n:
         return dict(missing=why or "no series in this panel")

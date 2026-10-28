@@ -162,6 +162,34 @@ def ann_on(a, i):
     return -1 in ps or i in ps
 
 
+def legend_handles(anns, i):
+    """[(text, handle)] of the "legend" annotations of panel i: an entry of its own in
+    the panel's legend, drawn nowhere else; its "look" is a line, a marker, both, or a
+    filled box ("patch", at its "alpha")."""
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    out = []
+    for a in anns:
+        txt = str(a.get("text", "")).strip()
+        if a.get("kind") != "legend" or not txt or not ann_on(a, i):
+            continue
+        col, lw, look = a.get("color", "k"), float(a.get("lw", 1.5)), a.get("look", "line")
+        if look == "patch":
+            h = Patch(facecolor=col, alpha=min(max(float(a.get("alpha", 1.0)), 0.0), 1.0),
+                      edgecolor=col, lw=0.5 * lw, ls=a.get("ls", "-"))
+        elif look == "line":
+            h = Line2D([], [], color=col, lw=lw, ls=a.get("ls", "-"))
+        else:  # (a marker, as a Marker annotation draws it; "both": on a line)
+            mk = a.get("marker", "o")
+            h = Line2D([], [], color=col, lw=lw, ls="none" if look == "marker"
+                       else a.get("ls", "-"), marker=mk, ms=6,
+                       mew=lw if mk in ("x", "+") else 1.0,
+                       mfc="none" if mk in ("o", "s") else col)
+        h.set_label(txt)
+        out.append((txt, h))
+    return out
+
+
 def panel_letter(i, fmt):
     return (fmt.replace("{a}", string.ascii_lowercase[i % 26])
             .replace("{A}", string.ascii_uppercase[i % 26]))
@@ -289,7 +317,15 @@ def panel_legend(ax, handles, o, spec, loc, frame):
     o["legend_anchor"]), how many columns (o["legend_ncol"]) and whether framed
     (o["legend_frame"], else frame) are the panel's own settings.  The entries are kept
     on the axes (ax._cv_entries) for a figure legend that gathers them (figure.py:
-    _legends)."""
+    _legends).  A handle without a label (blank, or matplotlib's own "_child1") has no
+    entry: a blank Label keeps a line out of the legend.  The panel's "Legend entry"
+    annotations (spec["_legend_extra"]: figure._block) come after its own entries."""
+    handles = list(handles) + [h for _, h in spec.get("_legend_extra", ())]
+    handles = [h for h in handles if str(h.get_label() or "").strip()
+               and not str(h.get_label()).startswith("_")]
+    if not handles:
+        ax._cv_entries = []
+        return None
     leg = ax.legend(handles=handles, **anchor_kw(o.get("legend_loc") or loc,
                                                  o.get("legend_anchor")),
                     fontsize=font_size(spec, "legend"), ncol=int(o.get("legend_ncol") or 1),

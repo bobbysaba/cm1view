@@ -444,3 +444,191 @@ def test_each_series_has_its_own_time_zero():
     spec["series"] = [dict(a, runs=None)]
     d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
     assert [d["S0_label"], d["S1_label"]] == ["w · run_a", "w · run_b"]
+
+
+# ------------------------------------------------------------------ series data by hand
+def _line_setup():
+    from types import SimpleNamespace
+    import xarray as xr
+    times = np.arange(0.0, 3001.0, 600.0)  # 0-50 min
+    nt = times.size
+    run = SimpleNamespace(times=times)
+    ds = xr.Dataset(dict(value=("time", np.arange(nt, dtype=float)),
+                         computed=("time", np.ones(nt, np.int8))))
+    a = dict(recipe=dict(), op="", panel=0, runs=[0], label="w")
+    spec = dict(kind="line", series=[a], ts={}, runs=[dict(label="A"), dict(label="B")])
+    return run, ds, a, spec
+
+
+def test_hand_edits_change_and_blank_a_series():
+    """A series' hand edits (by model time, s) replace or blank its values for that run
+    only; an edit at a time the run lacks is left out; the legend says "(edited)"
+    unless Style turns it off."""
+    from cm1view.figures import spec as fg
+    run, ds, a, spec = _line_setup()
+    a["edits"] = {"0": {fg.edit_key(1200.0): 9.5, fg.edit_key(1800.0): None,
+                        fg.edit_key(99999.0): 1.0}}
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    assert d["S0_v"][2] == 9.5 and np.isnan(d["S0_v"][3]) and d["S0_v"][4] == 4.0
+    assert d["S0_label"] == "w (edited)"
+    spec["ts"]["mark_edited"] = False
+    assert fg.line_panel(spec, 0, lambda k, e: (run, ds))["S0_label"] == "w"
+    a["runs"] = [1]  # (the edits are run 0's: run 1 drawn as computed)
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    assert list(d["S0_v"]) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    v, used, gone = fg.apply_edits(np.zeros(6), run.times, dict(a, edits={"1": {
+        fg.edit_key(600.0): 2.0, fg.edit_key(7.0): 3.0}}), 1)
+    assert (used, gone) == (1, 1) and v[1] == 2.0
+
+
+def test_hand_edits_feed_the_ensemble_band():
+    """An ensemble band is made from the members as edited, and says "(edited)"."""
+    from cm1view.figures import spec as fg
+    run, ds, a, spec = _line_setup()
+    a.update(runs=None, ens="minmax", ens_members="hidden",
+             edits={"1": {fg.edit_key(0.0): 10.0}})
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    assert d["nlines"] == 1 and "S0_ens" in d
+    assert d["S0_hi"][0] == 10.0 and d["S0_lo"][0] == 0.0
+    assert d["S0_label"].endswith(" (edited)")
+
+
+def test_a_series_of_your_own_data_draws_without_a_run():
+    """A series of your own (source "table"): its points in time order, shifted by the
+    time zero, beside a computed series; nothing asked of any run."""
+    from cm1view.figures import spec as fg
+    run, ds, a, spec = _line_setup()
+    obs = dict(recipe=dict(), op="", panel=0, source="table", label="obs", ls="--",
+               color="k", table=dict(t=[20.0, 0.0, 10.0, None], v=[3.0, 1.0, None, 7.0]))
+    spec["series"].append(obs)
+    asked = []
+    d = fg.line_panel(spec, 0, lambda k, e: asked.append((k, e)) or (run, ds))
+    assert asked == [(0, 0)] and d["nlines"] == 2
+    assert d["S1_label"] == "obs" and d["S1_r"] == -1
+    assert list(d["S1_t"]) == [0.0, 10.0, 20.0] and np.isnan(d["S1_v"][1])
+    assert fg.series_pairs(spec) == [(0, 0)]
+    spec["time_label"] = dict(t0_min=5.0)
+    assert fg.line_panel(spec, 0, lambda k, e: (run, ds))["S1_t"][0] == -5.0
+    spec["series"] = [obs]  # (alone, with no data at all: why)
+    obs["table"] = dict(t=[0.0], v=[None])
+    assert fg.line_panel(spec, 0, lambda k, e: None)["missing"] == "no values in your data"
+
+
+def test_a_figure_draws_your_own_data_and_hand_edits(ed):
+    """A time-series figure with a hand-edited series and a series of your own data
+    draws both lines; the edited one's legend entry says "(edited)"."""
+    from conftest import wait
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.from_series()
+    ed.kind.value = "line"
+    spec = ed.collect()
+    ed.panel_data(spec)  # (starts computing the series)
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    n = ed.panel_data(spec)[0]["nlines"]
+    e0 = spec["series"][0]
+    spec["series"][0] = dict(e0, edits={"0": {fg.edit_key(ed.v.run.times[0]): -123.0}})
+    spec["series"].append(dict(e0, source="table", label="obs", runs=[], panel=0,
+                               table=dict(t=[0.0, 5.0], v=[1.0, 2.0])))
+    data = ed.panel_data(spec)
+    assert data[0]["nlines"] == n + 1
+    assert any(-123.0 in data[0][f"S{j}_v"] for j in range(n))
+    fig = figdraw.draw(spec, data)
+    texts = [x.get_text() for x in fig.axes[0].get_legend().texts]
+    assert any(x.endswith(" (edited)") for x in texts) and "obs" in texts
+
+
+def test_series_card_values_section_edits(ed):
+    """A time-series card's Values section (built when opened) lists the run's values;
+    typing in Yours edits a point, 'blank' blanks one, the edits go into the spec and
+    the preview, a recipe change keeps them with a word on the card, Reset all clears."""
+    from conftest import wait
+    from cm1view.figures import spec as fg
+    from cm1view.figures.cards.seriesvals import BLANK, parse_yours
+
+    class Ev:
+        def __init__(self, row, value):
+            self.column, self.row, self.value = "yours", row, value
+
+    assert parse_yours("") == (False, None) and parse_yours("blank") == (True, None)
+    assert parse_yours(" 2.5 ") == (True, 2.5) and parse_yours("two") is None
+    ed.from_series()
+    ed.kind.value = "line"
+    c = ed.ser_cards[0]
+    assert c.vals.w is None  # (nothing built until opened)
+    ed.panel_data(ed.collect())
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    c.vals.section.collapsed = False
+    df = c.vals.w["table"].value
+    assert len(df) == len(ed.v.run.times) and (df["yours"] == "").all()
+    c.vals._on_edit(Ev(0, "-123"))
+    c.vals._on_edit(Ev(1, "blank"))
+    df = c.vals.w["table"].value
+    assert df["yours"][0] == "-123" and df["yours"][1] == BLANK
+    e = ed.collect()["series"][0]
+    t = ed.v.run.times
+    assert e["edits"]["0"] == {fg.edit_key(t[0]): -123.0, fg.edit_key(t[1]): None}
+    d = ed.panel_data(ed.collect())[0]
+    assert -123.0 in d["S0_v"] and d["S0_label"].endswith(fg.EDITED)
+    c.vals._on_edit(Ev(0, ""))  # (cleared: back to computed)
+    assert list(ed.collect()["series"][0]["edits"]["0"]) == [fg.edit_key(t[1])]
+    assert c.vals._csv().getvalue().startswith("time_min,model_time_s,computed,plotted")
+    c.w["reduce"].value = "min" if c.w["reduce"].value != "min" else "max"
+    assert "hand edit" in c.info.object  # (recipe changed: edits kept, said so)
+    c.vals._reset_all()
+    assert "edits" not in ed.collect()["series"][0] and not c.info.object
+
+
+def test_parse_your_own_data():
+    """Pasted text: commas, tabs, semicolons or spaces; a header (its second column
+    with units in brackets); # comments; blank / nan values gaps; errors with their line;
+    table_text reads back the same."""
+    from cm1view.figures import spec as fg
+    tab, notes = fg.parse_table("# obs\ntime, rain (mm)\n0,1\n5,2\n10, nan\n7,3,9\n")
+    assert tab == dict(t=[0.0, 5.0, 10.0, 7.0], v=[1.0, 2.0, None, 3.0],
+                       names=["time", "rain (mm)"])
+    assert len(notes) == 2  # (a third column; times out of order)
+    assert fg.parse_table(fg.table_text(tab))[0] == tab
+    assert fg.parse_table("0\t1\n5\t\n")[0] == dict(t=[0.0, 5.0], v=[1.0, None])
+    assert fg.parse_table("t  v\n 0 1\n5   2\n")[0]["v"] == [1.0, 2.0]
+    for bad, why in [("", "no data"), ("0,1\nx,2", "line 2"), ("5", "line 1"),
+                     ("a,b\nc,d", "line 2"), ("\n".join(f"{j},1" for j in range(10001)),
+                                              "more than")]:
+        with pytest.raises(ValueError, match=why):
+            fg.parse_table(bad)
+
+
+def test_your_data_card(ed):
+    """+ Your data (time series): a card in the last card's panel; pasted text becomes
+    the entry's table (the header's label and units), a bad paste keeps the data before
+    and says why, a file loads the same way; the line is drawn without a run; the card
+    stays (not drawn) through time-height and back, and comes back from a saved spec."""
+    from cm1view.figures import spec as fg
+    from cm1view.figures.cards import DataCard
+    ed.from_series()
+    ed.kind.value = "line"
+    n = len(ed.ser_cards)
+    assert ed.ser_data.visible
+    ed._add_data()
+    c = ed.ser_cards[-1]
+    assert isinstance(c, DataCard) and len(ed.ser_cards) == n + 1
+    assert c.w["panel"].value == ed.ser_cards[-2].w["panel"].value
+    c.w["text"].value = "time, w max (m/s)\n0,1\n5,\n10,30"
+    e = ed.collect()["series"][-1]
+    assert fg.is_table(e) and e["label"] == "w max" and e["units"] == "m/s"
+    assert e["table"]["t"] == [0.0, 5.0, 10.0] and e["table"]["v"] == [1.0, None, 30.0]
+    c.w["text"].value = "0,1\nzz,2"
+    assert "line 2" in c.note.object and ed.collect()["series"][-1]["table"]["t"][-1] == 10.0
+    c.w["file"].value = b"\xef\xbb\xbft,v\n1,2\n3,4\n"
+    assert ed.collect()["series"][-1]["table"] == dict(t=[1.0, 3.0], v=[2.0, 4.0],
+                                                       names=["t", "v"])
+    d = fg.line_panel(dict(ed.collect(), series=[ed.collect()["series"][-1]]), 0,
+                      lambda k, e: None)
+    assert d["nlines"] == 1 and list(d["S0_t"]) == [1.0, 3.0]
+    ed.kind.value = "th"
+    assert not ed.ser_data.visible and c in ed.ser_cards and not c.body_col.visible
+    ed.kind.value = "line"
+    assert c in ed.ser_cards and c.body_col.visible
+    s = ed.collect()
+    ed.set_spec(s)
+    assert isinstance(ed.ser_cards[-1], DataCard)
+    assert ed.ser_cards[-1].collect()["table"]["t"] == [1.0, 3.0]

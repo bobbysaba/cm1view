@@ -345,7 +345,7 @@ class FigureRuns:
         try:
             for w in ([c.w["field"] for c in self.cards if "field" in c.w]
                       + [r["field"] for r in self.pf_rows]
-                      + [c.w["field"] for c in self.ser_cards]):
+                      + [c.w["field"] for c in self.ser_cards if "field" in c.w]):
                 v = w.value
                 w.groups = g
                 w.value = v

@@ -144,6 +144,10 @@ class FigureWidgets:
                                          button_style="outline", height=32)
         self.ser_new = pn.widgets.Button(name="+ New series", button_type="light",
                                          button_style="outline", height=32)
+        self.ser_data = pn.widgets.Button(
+            name="+ Your data", button_type="light", button_style="outline", height=32,
+            description="A series of your own (observations, another model): paste "
+                        "time and value columns or load a CSV file")
         self.series_col = pn.Column(
             _hint('Each card picks its <b>Run</b> and <b>Panel</b>, like the sounding and '
                   'section cards; regions around the storm use each run’s track, and every '
@@ -151,8 +155,9 @@ class FigureWidgets:
                   'panel number share a panel (other units get their own axis), and a card '
                   'can draw <b>All runs</b> or <b>Several runs…</b> (with an ensemble band). '
                   'Time–height: one card per panel; <b>One per run</b> copies a card down '
-                  'its column for the other runs.'),
-            _grid((self.ser_from, 2), self.ser_add, self.ser_new), self.ser_box,
+                  'its column for the other runs.  Time series: <b>+ Your data</b> draws points of '
+                  'your own beside them.'),
+            _grid((self.ser_from, 2), self.ser_add, self.ser_new, self.ser_data), self.ser_box,
             sizing_mode="stretch_width", margin=0)
         # soundings
         sk = self.sk = dict(
@@ -413,6 +418,7 @@ class FigureWidgets:
         self.ts_zero = _chk("Zero line", False)
         self.ts_mark = pn.widgets.Select(name="Mark each line's", options=MARK_EXTREMES)
         self.ts_mark_legend = _chk("Extremes in the legend", False)
+        self.ts_mark_edited = _chk("Mark edited lines", True)
         # the maximum / minimum of a layer (plan, section and time-height panels)
         self.ex_on = _chk("Maximum / minimum", False)
         self.ex_layer = pn.widgets.Select(name="Of layer", options={"First fill": -1})
@@ -525,9 +531,11 @@ class FigureWidgets:
         self.ts_sec = _section("Time and value axes", _grid(
             self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax, self.ts_ymin,
             self.ts_ymax, self.ts_legloc, self.ts_legncol, self.ts_mark),
-            _checks(self.ts_legend, self.ts_legframe, self.ts_zero, self.ts_mark_legend),
+            _checks(self.ts_legend, self.ts_legframe, self.ts_zero, self.ts_mark_legend,
+                    self.ts_mark_edited),
             _hint("Blank: the range of the data. Minutes are counted from <b>Style → Panel "
-                  "labels → Minutes counted from</b>."))
+                  "labels → Minutes counted from</b>. <b>Mark edited lines</b>: "
+                  "“(edited)” after the legend label of a line with values changed by hand."))
         self.runs_sec = _section(
             "Runs used", _hint(
                 "Each layer, section, sounding, distribution and series picks its run in its "

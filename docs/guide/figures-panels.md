@@ -117,6 +117,11 @@ both puts a dot and its value on the line (over the plotted times); **Extremes i
 legend** adds "max 32.1 at 95 min" to each line's entry. Like time–height, it starts with
 no series.
 
+A card's points can be changed or blanked by hand, and **+ Your data** adds a series of
+your own (observations, another model) from pasted text or a CSV file; see
+[Editing a series' values](figures-layers.md#editing-a-series-values) and
+[Your own data](figures-layers.md#your-own-data).
+
 **Ensemble of its runs** (a card of *All runs* or *Several runs…*) draws a series from
 several runs as one band: its *Centre line*
 (the runs' mean or median, or none) and a shaded range: *Min to max*, the *10–90th* or

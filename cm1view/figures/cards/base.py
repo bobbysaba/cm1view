@@ -323,7 +323,7 @@ STORM_MOTIONS = {"Bunkers right mover": "rm", "Bunkers left mover": "lm",
                  "0–6 km mean wind": "mean", "Custom (u, v)": "custom"}
 ANN_KINDS = {"Text": "text", "Marker": "marker", "Arrow": "arrow", "Line": "line",
              "Vertical line": "vline", "Horizontal line": "hline", "Box": "box",
-             "Circle": "circle"}
+             "Circle": "circle", "Legend entry": "legend"}
 ANN_FIELDS = {  # widgets each kind uses (besides kind, panel, colour, remove)
     "text": ("coords", "x", "y", "text", "size", "bold"),
     "marker": ("coords", "x", "y", "marker", "size", "lw", "text", "bold"),
@@ -333,6 +333,7 @@ ANN_FIELDS = {  # widgets each kind uses (besides kind, panel, colour, remove)
     "hline": ("y", "lw", "ls", "text", "bold"),
     "box": ("coords", "x", "y", "x2", "y2", "lw", "ls"),
     "circle": ("coords", "x", "y", "r", "lw", "ls"),
+    "legend": ("text", "look", "lw", "ls", "marker", "alpha"),  # (no place: in the legend)
 }
 _BTN = dict(width=32, height=28, margin=(2, 1), button_type="default", button_style="outline")
 

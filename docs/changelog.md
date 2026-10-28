@@ -7,6 +7,16 @@ has a matching git tag.
 
 ### Figures
 
+- **Edit a time series' values**: a series card's *Values (edit points)* replaces or
+  blanks points by hand, per run, and downloads the line as CSV. Edits are kept in the
+  figure and the edited line's legend label ends in "(edited)" (*Panels → Time and value
+  axes → Mark edited lines*) ([Editing a series' values](guide/figures-layers.md#editing-a-series-values)).
+- **Your own data in a time series**: *Layers → + Your data* draws a series pasted or
+  loaded from a CSV file (time in minutes, value), kept in the figure
+  ([Your own data](guide/figures-layers.md#your-own-data)).
+- **Legend entries of your own**: *Annotate → Add: Legend entry* puts a line, marker,
+  line and marker or filled box with your text in the panels' legends.
+- **A blank label leaves a line out of the legend**: it showed as `_child1` before.
 - **A quicker figure editor**: the browser gets far fewer widgets. Hidden settings are
   not sent until shown, nor a folded card's or section's settings until it is opened; the Layers and
   Panels tabs hold only what the figure kind uses; a tab is sent the first time it is

@@ -148,6 +148,7 @@ class FigureSpecIO:
             self.ts_legframe.value = bool(ts.get("legend_frame", False))
             self.ts_mark.value = ts.get("mark") or ""
             self.ts_mark_legend.value = bool(ts.get("mark_legend", False))
+            self.ts_mark_edited.value = bool(ts.get("mark_edited", True))
             self.ts_ymin.value, self.ts_ymax.value = _num(ts.get("ymin")), _num(ts.get("ymax"))
             sk = s.get("skewt", {})
             sk = dict(sk, layout=figdraw.sounding_layout(sk),
@@ -365,7 +366,8 @@ class FigureSpecIO:
                        legend_loc=self.ts_legloc.value, legend_ncol=int(self.ts_legncol.value or 1),
                        legend_frame=self.ts_legframe.value, zero_line=self.ts_zero.value,
                        ymin=_num(self.ts_ymin.value), ymax=_num(self.ts_ymax.value),
-                       mark=self.ts_mark.value, mark_legend=self.ts_mark_legend.value)
+                       mark=self.ts_mark.value, mark_legend=self.ts_mark_legend.value,
+                       mark_edited=self.ts_mark_edited.value)
         s["extremes"] = dict(s.get("extremes", {}), on=self.ex_on.value,
                              layer=_spec_index(self.ex_layer.value, len(pf)),
                              what=self.ex_what.value,

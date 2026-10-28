@@ -362,7 +362,8 @@ class FigurePanelOpts:
         self.ts_sec.title = "Time and height axes" if kind == "th" else "Time and value axes"
         self.ts_zmin.visible = self.ts_zmax.visible = kind == "th"
         for w in (self.ts_ymin, self.ts_ymax, self.ts_zero, self.ts_legend, self.ts_legloc,
-                  self.ts_legncol, self.ts_legframe, self.ts_mark, self.ts_mark_legend):
+                  self.ts_legncol, self.ts_legframe, self.ts_mark, self.ts_mark_legend,
+                  self.ts_mark_edited):
             w.visible = kind == "line"
         self.ext_sec.visible = kind in ("plan", "xsec", "th")
         if hasattr(self, "cb_sec"):  # (Style tab: no colorbar on lines and soundings)

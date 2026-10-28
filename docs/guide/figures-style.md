@@ -103,6 +103,20 @@ colours and lines. The fonts and sizes stay the editor's. For a dark figure also
 The **Annotate** tab adds text, markers, arrows, lines, boxes and circles. Each goes in
 every panel (leave *Panels* blank) or in the panels listed (e.g. `1, 3-4`).
 
+### Legend entries
+
+A **Legend entry** adds a line of your own to the legend of the panels listed: its
+*Text*, and what it *Looks like* (a line, a marker, a line and marker, or a filled box
+with an *Opacity*) in its colour, width and style. It is drawn nowhere else. In a
+time-series, distribution, profile, joint, azimuthal-mean or sounding panel it comes
+after the panel's own entries, and shows even beside one line alone (unless the panel's
+*Legend* is off); in a plan view or section it goes in the layer legend. A figure legend
+gathers it with the rest, listing the same entry of several panels once.
+
+To leave a line out of the legend, clear its card's *Label*: a line without a label has
+no legend entry. (A series of several runs keeps its run names, which tell its lines
+apart.)
+
 ### Placing by clicking
 
 Instead of typing positions, pick an item from the *Click …* list above the preview and

@@ -233,6 +233,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.jo["plot"].param.watch(lambda e: self._show_joint_opts(), "value")
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
+        self.ser_data.on_click(lambda e: self._add_data())
         self.snd_tab.on_click(lambda e: self._add_tab_soundings())
         for k in ("layout", "table"):
             self.sk[k].param.watch(lambda e: self._fit_size(), "value")
@@ -242,8 +243,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                   *self.ao.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
                   self.ts_ymin, self.ts_ymax,
                   self.ts_legend, self.ts_legloc, self.ts_legncol, self.ts_legframe, self.ts_zero,
-                  self.ts_mark,
-                  self.ts_mark_legend, self.ex_on, self.ex_layer, self.ex_what, self.ex_loc,
+                  self.ts_mark, self.ts_mark_legend, self.ts_mark_edited,
+                  self.ex_on, self.ex_layer, self.ex_what, self.ex_loc,
                   self.ex_marker, self.ex_box, self.ck_on, self.ck_layer,
                   self.ck_label, self.ck_x, self.ck_y, self.ck_size, self.ck_fs,
                   self.ck_frame, self.code_on, self.code):
