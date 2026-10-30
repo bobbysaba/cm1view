@@ -50,6 +50,8 @@ there when you come back.
 ### Top bar
 
 - **Run name** (folder icon): click it to open another run. See [Switching runs](#switching-runs).
+- **Bookmark** and **Export data**: save or load a [session](#sessions); write fields
+  to a netCDF file ([Exporting data](#exporting-data)).
 - **⚙ Settings**: where your runs live, where figures and saved data go, and the other
   [settings](../settings.md). Most apply to the next save; a few (port, cache, workers)
   need a restart.
@@ -97,10 +99,90 @@ the items, so a sounding's point and its curves match.
 
 ### URL options
 
-The address carries two options you can bookmark or share (on the same tunnel):
+The address carries options you can bookmark or share (on the same tunnel):
 
 - `?run=/path/to/run` opens that run (the run picker sets it).
 - `?t=<index>` opens at that output time (0 is the first).
+- `?session=/path/to/session.json` opens a saved [session](#sessions) and its run.
+
+### Sessions
+
+The **bookmark** button in the top bar (right of the run name) saves
+what the viewer shows to a JSON file and puts it back later:
+
+- the run and the output time,
+- the map's view (the area in view; re-fitted to the window's shape, centred the same),
+- the fill: field, derivative, level, style, colormap, range and its difference,
+- the more fills, contours and vectors (as many rows as you had, each as set),
+- the storm motion of the sounding options (storm-relative vectors use it),
+- the storm track (its fixes are kept in the session, so an unsaved track comes back
+  too, and the track file box),
+- the soundings (points, boxes, ones following the storm, pinned times, the domain
+  mean), their options, plot style and zoom,
+- the cross-section: A and B, its fills, contours, vectors, difference, limits and look,
+- the 3D setup: the region, the seed box, floor, isosurfaces, vectors, streamlines,
+  camera (a scene is rendered again when the session opens on the 3D workspace),
+- the series: each one shown, which is chosen, the plot settings and the Series form,
+- the distributions (computed again at their times), how they are drawn and the form,
+- the active tool, whether its panel is open, and the workspace (Map, 3D, Figure).
+
+Series come back from the series cache (or the file you loaded them from) without a
+recompute; a time missing from the cache stays blank until you **Compute** that recipe
+again. The items tray under the map shows what came back.
+
+**Save** writes the file in the box (asking before replacing one), **Load** reads it,
+and **Download** gives you the file in the browser. A session of another run reopens
+the page on that run. Values the open run cannot take (a field it lacks, a time it does
+not have) are left as they are, and the dialog lists them. The default file is
+`session.json` under `<exports_dir>/<parent>_<run>/sessions`.
+
+Figures are not in sessions: save a figure's spec from the Figure workspace.
+
+### Exporting data
+
+The **Export data** button in the top bar (right of the bookmark) writes fields to a
+netCDF file, to analyse them with your own tools:
+
+- **Fields**: any of the field lists, derived fields, [column fields and sounding
+  parameters](fields.md#column-fields) included; it starts with the map's fill. Add a
+  [derivative](fields.md#derivatives-of-any-field) with *Derivative … of … Add*.
+- **Times**: *From*, *To* and *every n-th output*; *This time* and *All* set them.
+- **Region**: the whole domain, the map's view, or a box (x0, x1, y0, y1 km,
+  grid-relative; it starts as the map's view). The columns whose centres are inside.
+- **Vertical**: the **model levels** (up to a height, 0 for all), or **heights** (km
+  AGL): each the same values as the map shows at that height. 2D fields have no
+  vertical dimension.
+
+The dialog shows the size before compression. **Export** writes the file one time after
+another, so a long one can be opened while it grows; **Stop** ends it after the field
+it is on and keeps the times done (the file's `cm1view_incomplete` attribute says how
+far it got). The default file is under `<exports_dir>/<parent>_<run>/data`, named after
+the fields and times.
+
+The file has `time` (s), `xh`, `yh` (km) and, with 3D fields, `z` (km; on model levels
+also `level`, the index) coordinates, one variable per field (a derivative's
+`ddz.winterp` is `ddz_winterp`) in the units the viewer shows (UDUNITS spelling, e.g.
+`1e-3 s-1`, with the shown units in `units_shown`), and CF-style attributes: the run,
+the box, umove / vmove, a column field's layer. Storm-relative fields use the tracked
+storm motion where the track has a fix, else the domain motion, as the map does; that
+motion is in `storm_u`, `storm_v`. A time a field is missing from the output is NaN
+(`cm1view_missing` lists them). Winds and positions are grid-relative, as CM1 writes
+them.
+
+Without the viewer (e.g. in a batch job), `cm1view export` does the same:
+
+```bash
+cm1view export /path/to/run --list                      # the run's field names
+cm1view export /path/to/run --fields winterp,zvort,uh25,ddz.winterp \
+    --from 60 --to 120 --every 2 --box -20,20,-10,30 --ztop 10
+cm1view export /path/to/run --fields thpert,srh03 --time 90 --heights 0.5,1,3 \
+    --out '~/data/{run}_{name}'
+```
+
+`--track FILE` (default: the run's storm track file, if one is found) sets the storm
+motion of storm-relative fields, `--storm U,V` a fixed one; `--no-compress` writes
+faster, larger files; an existing file is replaced only with `--overwrite`. See
+`cm1view export -h`.
 
 ## Switching runs
 

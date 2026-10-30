@@ -13,32 +13,32 @@ and rendering the preview); the rest are mixins, one module each: the widgets
 the Panels tab's reactions (panelopts), runs (runs), sources and lists (sources),
 export (export), animations (anim), figures of several parts (combo), placing by
 clicking the preview (click), the panel tree (tree), style (style), the quick start
-(quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package."""
+(quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package.
+The data behind a figure (reading the runs, the caches) is FigureData's (render), which
+works without the editor."""
 
 import base64
 import html
 import io
-import json
 import struct
 import time as _time
 import traceback
-from collections import OrderedDict
 from functools import partial
 
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from ..core import series as ser
 from ..theme import GRID
 from .cards import LayerCard
 from .anim import FigureAnimation
 from .click import ClickImage, FigureClick, place_map, watch_tight
-from .combo import FigureCombo, panel_name
+from .combo import FigureCombo
 from .export import FigureExport
 from .runs import AllFields, FigureRuns
 from .sources import FigureSources
 from .style import FigureStyle
 from .panelopts import FigurePanelOpts
+from .render import FigureData, panel_name
 from .quick import FigureQuick
 from .scene import FigureScene
 from .specio import FigureSpecIO
@@ -54,10 +54,6 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
         self.fields = AllFields([self.F])  # the field lists: the fields of every run
-        self.cache = OrderedDict()  # data key -> panel arrays
-        self._opened = {}  # run path -> (CM1Run, Fields) when the viewer has no registry
-        self._tracks = {}  # track file -> (mtime, run path, fixes)
-        self._track_err = {}  # track file -> error text
         self._hold = False  # widgets being set from a spec: no re-render per widget
         self._req = 0
         self.cards = []
@@ -73,19 +69,17 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._hist, self._future, self._last, self._restoring = [], [], None, False
         self._png = None  # (width, height) px and dpi of the shown preview
         self._lims = {}  # panel -> (xlim, ylim) of the last preview, to place annotations
-        # series of time-height / time-series figures: (run path, recipe, track) ->
-        # dataset (filled in place while it is computed); state "running" / "done"
-        self._ser_mem, self._ser_state, self._ser_prog = {}, {}, {}
-        # the series keys the shown figure needs (its last whole preview's, and any
-        # started since): a series job of one no longer needed stops
-        self._ser_live, self._ser_touch = set(), set()
-        self.snd_cache = OrderedDict()  # sounding (run, time, where, track) -> analysis
-        self.dist_cache = OrderedDict()  # distribution (run, time, recipe, track) -> summary
-        self.scene_cache = OrderedDict()  # 3D scene (run, time, scene, track) -> arrays
-        self._st_cache = {}  # (build_scene's: the last scene's streamlines)
         from concurrent.futures import ThreadPoolExecutor
         viewer.pools["figser"] = ThreadPoolExecutor(1, thread_name_prefix="cm1view-figser")
         viewer.gen["figser"] = 0
+        # the figure's data and its caches (figures/render.py), the series filled in
+        # the background, each update re-rendering the preview
+        self.data = FigureData(
+            self.run, self.F, getattr(viewer, "reg", None), lambda: viewer.fixes,
+            lambda text: viewer._schedule(partial(
+                self._status, f'<span class="busy">● {html.escape(text)}</span>')),
+            viewer.pools["figser"], lambda: viewer._schedule(partial(self.request, False, False)),
+            lambda: viewer.gen["figser"])
         self._build()
         self.set_spec(self._default())
         self._started = False  # (the example: the quick start opens over it)
@@ -371,109 +365,19 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
 
     def panel_data(self, spec, progress=None, cancelled=None):
         """{panel: arrays} of the spec, from the cache where possible."""
-        if spec["kind"] == "combo":
-            return self._combo_data(spec, progress, cancelled)
-        if spec["kind"] in ("th", "line"):
-            return self._series_data(spec)
-        if spec["kind"] == "sounding":
-            return self._sounding_data(spec, progress, cancelled)
-        if spec["kind"] == "dist":
-            return self._dist_data(spec, progress, cancelled)
-        if spec["kind"] == "profile":
-            return self._profile_data(spec, progress, cancelled)
-        if spec["kind"] == "joint":
-            return self._joint_data(spec, progress, cancelled)
-        if spec["kind"] == "azim":
-            return self._azim_data(spec, progress, cancelled)
-        if spec["kind"] == "scene":
-            return self._scene_data(spec, cancelled)
-        ctx = {}  # run index -> (run, Fields, fixes, centres, track signature)
+        return self.data.panel_data(spec, progress, cancelled)
 
-        def context(k):
-            if k not in ctx:
-                e = spec["runs"][k]
-                run, F = self.open_run(e["path"])
-                fx = self.run_fixes(e, run)
-                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                        for t, f in fx.items()))
-                ctx[k] = (run, F, fx, ser.track_centers(fx, len(run.times)), sig)
-            return ctx[k]
+    def open_run(self, path):
+        """(CM1Run, Fields) of the run in `path` (the viewer's own run, or one opened
+        through the viewer's registry so its cache is shared)."""
+        return self.data.open_run(path)
 
-        def read(s, i, k, ts, n, at):
-            """Arrays of panel i of spec s, read from run k at time ts (for panel `at`)."""
-            entry = spec["runs"][k]
-            try:
-                run, F, fx, centers, sig = context(k)
-            except Exception as e:  # noqa: BLE001
-                return dict(time_s=ts, missing=f"could not open {entry['path']}: {e}")
-            t = fg.tindex(run, ts)
-            c = centers.get(t) if t is not None else None
-            key = fg.data_key(s, i, c, run.path)
-            lays = figdraw.spec_layers(s, i)
-            if any(lay["type"] in ("track", "sector") or (lay.get("reduce") or {}).get(
-                    "op") == "composite" for lay in lays) or \
-                    (s["kind"] == "xsec" and fg.uses_motion(fg.panel_section(s, i)[1])) or \
-                    (any(lay["type"] == "line" for lay in lays)
-                     and any(fg.uses_motion(x) for x in fg.sections(s))):
-                key += sig  # (a composite follows the whole track; a sector, section its motion)
-            d = self.cache.get(key)
-            if d is None:
-                if progress:
-                    progress(at, n)
-                storm = fg.storm_motion(run, fx, t) if t is not None else None
-                rp = None
-                if progress and any(lay.get("reduce") for lay in figdraw.spec_layers(s, i)):
-                    def rp(done, total):  # (a time window: one output at a time)
-                        self.v._schedule(partial(self._status, (
-                            f'<span class="busy">● Time window of panel '
-                            f'{panel_name(spec, at)}: output {done + 1}/{total}…</span>')))
-                d = fg.extract(run, F, s, i, c, fx, storm, rp)
-                self.cache[key] = d
-                while len(self.cache) > 60:
-                    self.cache.popitem(last=False)
-            else:
-                self.cache.move_to_end(key)
-            return d
+    def run_fixes(self, entry, run):
+        """Track fixes {t: fix} of a spec["runs"] entry ({} without a track)."""
+        return self.data.run_fixes(entry, run)
 
-        multi = len(spec["runs"]) > 1
-        data = {}
-        n = fg.npanels(spec)
-        for i in range(n):
-            if cancelled and cancelled():
-                return None
-            ref = fg.panel_ref(spec, i)
-            if ref is None:
-                continue  # an empty cell of a run x time grid
-            k, ts = ref
-            groups = fg.layer_groups(spec, i)  # (layers of another run or time)
-            lays = figdraw.spec_layers(spec, i)
-            if not groups:
-                d = read(spec, i, k, ts, n, i)
-            else:
-                others = {j for js in groups.values() for j in js}
-                d = read(fg.group_spec(spec, i, ref, set(range(len(lays))) - others), 0,
-                         k, ts, n, i)
-                for g, js in groups.items():
-                    dd = read(fg.group_spec(spec, i, g, set(js)), 0, g[0], g[1], n, i)
-                    d = fg.merge_group(d, dd, js, lays)
-            for j, lay in enumerate(lays):  # ensembles: a statistic over several runs
-                if lay["type"] == "fill" and lay.get("ens") and lay.get("on", True):
-                    dds = [read(fg.group_spec(spec, i, g, {j}), 0, g[0], g[1], n, i)
-                           for g in fg.ens_refs(spec, i, lay)]
-                    d = fg.ensemble(d, dds, j, lay["ens"])
-            for j, lay in enumerate(lays):  # differences: minus another run or time
-                if lay["type"] == "fill" and lay.get("minus") and lay.get("on", True) \
-                        and not lay.get("ens"):
-                    g = fg.minus_ref(spec, i, lay)
-                    if g[0] >= len(spec["runs"]):
-                        d = dict(d, missing="difference: that run is no longer in the figure")
-                        continue
-                    dd = read(fg.group_spec(spec, i, g, {j}), 0, g[0], g[1], n, i)
-                    d = fg.subtract(d, dd, j, lay["minus"].get("grid", "ask"))
-            entry = spec["runs"][k]
-            data[i] = dict(d, run=k, **({"run_label": entry.get("label", "")} if multi
-                                         else {}))
-        return data
+    def series_pending(self):
+        return self.data.series_pending()
 
     def _job(self, g, spec):
         t0 = _time.time()
@@ -490,11 +394,11 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                                                    f'{i + 1}/{n}…</span>'))
 
         try:
-            self._ser_touch = set()
+            self.data.ser_touch = set()
             data = self.panel_data(spec, progress, cancelled)
             if data is None:
                 return
-            self._ser_live = self._ser_touch  # (a series no longer shown: its job stops)
+            self.data.ser_live = self.data.ser_touch  # (a series no longer shown: stops)
             self._lims = {i: (d["xlim"], d["ylim"]) for i, d in data.items()
                           if "xlim" in d and "ylim" in d and not d.get("missing")}
             # sharp at the page's size, and on screen at 96 px per inch when actual size

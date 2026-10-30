@@ -12,6 +12,7 @@ import json
 import panel as pn
 
 from . import draw as figdraw, spec as fg
+from .render import panel_name  # noqa: F401  (combo.panel_name, as before)
 from .cards import _auto, _chk, _grid, _hint, _num, _section
 
 KIND_NAMES = {"plan": "plan views", "xsec": "cross-sections", "th": "time–height",
@@ -160,16 +161,6 @@ class FigureCombo:
                        size=[_num(self.part_w.value), _num(self.part_h.value)],
                        one_colorbar=bool(self.part_cb.value))
 
-    def _combo_data(self, spec, progress=None, cancelled=None):
-        data = {}
-        for k, part in enumerate(spec["parts"]):
-            d = self.panel_data(part, progress, cancelled)
-            if d is None:
-                return None
-            for i, v in d.items():
-                data[k * 1000 + int(i)] = v
-        return data
-
 
 def share_sections(parts, src):
     """The plan-view and section parts of a figure of parts take part src's list of
@@ -221,11 +212,3 @@ def combine(parts, arrange="row", title="", like=None, size=None, one_colorbar=F
                 runs=runs, suptitle=title, export=like.get("export", {}),
                 background=like.get("background", "white"), font=like.get("font", {}),
                 mplstyle=like.get("mplstyle", ""), spacing=like.get("spacing", {}))
-
-
-def panel_name(spec, i):
-    """Panel i's letter (a figure of parts: data key k * 1000 + j, letters running on)."""
-    if spec.get("kind") != "combo":
-        return figdraw.panel_letter(i, "{a}")
-    k, j = divmod(int(i), 1000)
-    return figdraw.panel_letter(sum(fg.npanels(p) for p in spec["parts"][:k]) + j, "{a}")

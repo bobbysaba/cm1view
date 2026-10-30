@@ -3,8 +3,11 @@
 import panel as pn
 
 from ...core import series as ser
+from ...core.fields import deriv_name
 from .. import spec as fg
-from .base import _hex, _f, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, _BTN, _chk
+from .base import (
+    _hex, _f, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, _BTN, _chk, _deriv_pair,
+)
 from .seriescard import ALL_RUNS, ENS_BANDS, SOME_RUNS, several_run_choices
 from .seriesvals import ProfileValues
 
@@ -46,8 +49,7 @@ class ProfileCard:
             name="Mean to (a time window)", options=self._to_opts(opts), width=210,
             value=ONE_TIME if t1 is None else ed._nearest(opts, t1),
             description="Average the profiles of every output from Time to this one")
-        field = r["field"] if r["field"] in F else next(iter(F.defs))
-        w["field"] = pn.widgets.Select(name="Field", groups=F.groups(), value=field, width=210)
+        w["field"], w["deriv"] = _deriv_pair(F, r["field"])
         w["z0"] = _f("Bottom (km)", float(r.get("z0", 0.0)), 90, step=0.5)
         w["z1"] = _f("Top (km)", float(r.get("z1", 10.0)), 80, step=0.5)
         w["region"] = pn.widgets.Select(name="Region", options=SER_REGIONS, value=r["region"],
@@ -86,8 +88,8 @@ class ProfileCard:
                             start=0.0, end=1.0)
         w["run"].param.watch(self._on_run, "value")
         w["runs"].param.watch(self._on_runs, "value")
-        what = ("time", "time1", "field", "z0", "z1", "region", "radius", "offx", "offy",
-                "reduce", "pct", "op")  # (what the values are of: edits go stale)
+        what = ("time", "time1", "field", "deriv", "z0", "z1", "region", "radius", "offx",
+                "offy", "reduce", "pct", "op")  # (what the values are of: edits go stale)
         for k, x in w.items():
             if k not in ("run", "runs", "panel"):
                 x.param.watch(lambda e, k=k: self._changed(k in what), "value")
@@ -98,9 +100,10 @@ class ProfileCard:
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.rm],
             [_grid(w["run"], (w["runs"], 2), w["panel"], self.dup, self.per_run),
-             _grid((w["time"], 2), (w["time1"], 2), (w["field"], 2), w["z0"],
-                   w["z1"], w["region"], w["radius"], w["offx"], w["offy"], w["reduce"],
-                   w["pct"], w["op"], w["auto_color"], w["color"], w["ls"], w["lw"],
+             _grid((w["time"], 2), (w["time1"], 2), (w["field"], 2), w["deriv"],
+                   w["z0"], w["z1"], w["region"], w["radius"], w["offx"], w["offy"],
+                   w["reduce"], w["pct"], w["op"], w["auto_color"], w["color"], w["ls"],
+                   w["lw"],
                    (w["label"], 3)),
              _grid(w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"]),
              self.vals.section, self.info,
@@ -128,7 +131,7 @@ class ProfileCard:
         w["ens"].visible = several
         for k in ("ens_mid", "ens_members", "ens_alpha"):
             w[k].visible = several and bool(w["ens"].value)
-        d = self.ed.fields[w["field"].value]
+        d = self.ed.fields[self.field_name()]
         when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
         when = when.split("(")[-1].rstrip(")")
         if self._t1() is not None:
@@ -273,8 +276,12 @@ class ProfileCard:
         self.vals.refresh()
         self.ed.request()
 
+    def field_name(self):
+        """The profile's field: the Field, or its Derivative (fields.deriv_name)."""
+        return deriv_name(self.w["deriv"].value, self.w["field"].value)
+
     def recipe(self):
-        w, d = self.w, self.ed.fields[self.w["field"].value]
+        w, d = self.w, self.ed.fields[self.field_name()]
         return ser.normalize(dict(
             field=d.name, vmode="layer", z0=w["z0"].value or 0.0, z1=w["z1"].value or 0.0,
             region=w["region"].value, radius=w["radius"].value or 5.0,

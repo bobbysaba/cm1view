@@ -43,7 +43,7 @@ class RunPicker:
             const p = (cb_obj.value || '').trim();
             if (!p) return;
             const q = new URLSearchParams(window.location.search);
-            q.set('run', p); q.delete('t');
+            q.set('run', p); q.delete('t'); q.delete('session');
             window.location.search = q.toString();
         """)
         self.body = pn.Column(pn.Row(self.query, self.open, margin=0, **size), self.list,

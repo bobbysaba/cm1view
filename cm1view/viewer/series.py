@@ -21,7 +21,7 @@ from bokeh.transform import transform
 
 from .. import config
 from ..core import series as ser
-from ..core.fields import CMAPS, palette
+from ..core.fields import CMAPS, deriv_name, deriv_options, palette
 from ..theme import BG, GRID, MUTED, POINT_COLORS, TEXT
 from .numinput import FloatInput
 from .ui import _bokeh, _html, _settings_toggle, style_fig
@@ -37,6 +37,11 @@ class SeriesPanel:
         first = "thpert" if "thpert" in F else next(iter(F.defs))
         self.ser_field = pn.widgets.Select(name="Field", groups=F.groups(), value=first,
                                            width=230)
+        self.ser_op = pn.widgets.Select(
+            name="Derivative", options=deriv_options(F[first]), value="", width=90,
+            description="A derivative of the field (per km), taken before the reduction: "
+                        "∂/∂z on the model levels, ∂/∂x, ∂/∂y or the horizontal "
+                        "gradient's size")
         self.ser_vmode = pn.widgets.Select(
             name="Vertical", options={"At a height": "height", "Layer (every level)": "layer"},
             value="height", width=150,
@@ -187,6 +192,14 @@ class SeriesPanel:
             self.ser_radius.visible = self.ser_offx.visible = self.ser_offy.visible = trkr
             self.ser_pct.visible = self.ser_reduce.value == "pct"
 
+        def ops(e):  # (a 2D field has no ∂/∂z)
+            opts = deriv_options(F[e.new])
+            if opts != self.ser_op.options:
+                v = self.ser_op.value
+                self.ser_op.options = opts
+                self.ser_op.value = v if v in opts.values() else ""
+
+        self.ser_field.param.watch(ops, "value")
         for w in (self.ser_field, self.ser_vmode, self.ser_region, self.ser_reduce):
             w.param.watch(vis, "value")
         self.ser_go.on_click(self._on_ser_compute)
@@ -219,7 +232,7 @@ class SeriesPanel:
     # ================================================================ time series
     def _ser_recipe(self):
         """The recipe of the Series form, normalized (None + message if incomplete)."""
-        d = self.F[self.ser_field.value]
+        d = self.F[deriv_name(self.ser_op.value, self.ser_field.value)]
         r = dict(field=d.name, vmode="2d" if d.ndim == 2 else self.ser_vmode.value,
                  z=self.ser_z.value or 0.0, z0=self.ser_z0.value or 0.0,
                  z1=self.ser_z1.value or 0.0, reduce=self.ser_reduce.value,
@@ -252,7 +265,7 @@ class SeriesPanel:
         if loaded:
             label += f" — {os.path.basename(loaded)}"
         if key not in self.series:
-            self.series[key] = dict(ds=ds, recipe=recipe, label=label,
+            self.series[key] = dict(ds=ds, recipe=recipe, label=label, file=loaded or None,
                                     color=POINT_COLORS[self._ser_n % len(POINT_COLORS)]
                                     if self._ser_n < 4 else
                                     palette("Spectral_r", 12)[(3 * self._ser_n) % 12])

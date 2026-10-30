@@ -1,4 +1,9 @@
-"""cm1view command-line entry point:  python -m cm1view RUN_DIR [options]"""
+"""cm1view command-line entry point:  python -m cm1view RUN_DIR [options]
+
+    cm1view render FIGURE [--run PATH ...] [options]   draws a saved figure or template
+                                                      without the viewer (cm1view render -h)
+    cm1view export RUN --fields A,B [options]         writes fields to netCDF without the
+                                                      viewer (cm1view export -h)"""
 
 import argparse
 import os
@@ -8,7 +13,15 @@ import time
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="cm1view", description=__doc__)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["render"]:  # (a run folder named "render": ./render)
+        from .figures.batch import main as render
+        return render(argv[1:])
+    if argv[:1] == ["export"]:  # (likewise: ./export)
+        from .core.export import main as export
+        return export(argv[1:])
+    ap = argparse.ArgumentParser(prog="cm1view", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run", nargs="?", default=None,
                     help="directory containing CM1 output files (default: the "
                          "default_run setting, else pick one in the browser)")

@@ -69,7 +69,7 @@ class SeriesValues:
         """(row keys, the leading columns {name: values}, computed values, why there
         are none) of run k."""
         spec = {"runs": self.ed._runs_collect(), "series": [ent]}
-        got = self.ed._series_get(spec, k, 0)
+        got = self.ed.data.series_get(spec, k, 0)
         if isinstance(got, str):
             return [], dict(t=[], model_s=[]), [], got
         run, ds = got
@@ -310,7 +310,7 @@ class ProfileValues(SeriesValues):
         runs = self.ed._runs_collect()
         if k >= len(runs):
             return [], dict(z=[]), [], "no such run"
-        got = self.ed._profile_get(runs[k], ent, 0, 1, compute=False)
+        got = self.ed.data.profile_get(runs[k], ent, 0, 1, compute=False)
         if isinstance(got, str):
             return [], dict(z=[]), [], got
         z, v = got

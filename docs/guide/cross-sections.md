@@ -34,6 +34,8 @@ losing its settings.
   pixels or filled contours, colormap, *Reverse*, *Auto range* (or *Min* and *Max*),
   *Opacity*, and for more fills *Clear outside range*. Each fill has a colorbar of its
   own. A diverging colormap stays white at zero ([The map](map.md#style-the-fill)).
+  The first fill's *Style* also has **Difference: minus another time or run**, as on
+  the map: the section through the other run (the same A and B, in km) is subtracted.
 - **Contours** (up to six): field, *Levels* (`auto`, `5, 15, 25` or `-4:4:1`), colour,
   line width, and *Dash negative*. The first row starts as w with levels
   `-10, -5, 5, 10, 20, 30` and the second as θ′ with levels `-6, -4, -2, -1` (if the run

@@ -7,7 +7,7 @@ correction; LCL from Bolton (1980).
 """
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 RD, RV, CP, LV, G = 287.04, 461.5, 1005.7, 2.501e6, 9.81
 EPS = RD / RV
@@ -122,6 +122,160 @@ def parcel(z, p, Tv_env, k0, p0, T0, r0):
     cape, cin, lfc, el, cape3 = _integrate_buoyancy(z[s], B, zl)
     return dict(cape=cape, cin=cin, lcl_z=zl, lcl_p=pl, lfc_z=lfc, el_z=el,
                 cape3=cape3, T=T, k0=k0, p0=p0)
+
+
+# ------------------------------------------------- many columns (maps of parameters)
+PARCELS = ("sb", "ml", "mu")
+
+
+@njit(cache=True)
+def _theta_e1(p, T, r):
+    """theta_e of one point (as theta_e)."""
+    e = max(p * r / (EPS + r), 1e-3)
+    lne = np.log(e / 611.2)
+    Td = min(243.5 * lne / (17.67 - lne) + 273.15, T)
+    TL = 1.0 / (1.0 / (Td - 56.0) + np.log(T / Td) / 800.0) + 56.0
+    th = T * (1.0e5 / p) ** (0.2854 * (1.0 - 0.28 * r))
+    return th * np.exp((3.376 / TL - 0.00254) * 1000.0 * r * (1.0 + 0.81 * r))
+
+
+@njit(cache=True)
+def _interp1(x, xp, fp):
+    """np.interp of one value (xp increasing)."""
+    n = xp.size
+    if x <= xp[0]:
+        return fp[0]
+    if x >= xp[n - 1]:
+        return fp[n - 1]
+    k = np.searchsorted(xp, x, side="right") - 1
+    return fp[k] + (x - xp[k]) * (fp[k + 1] - fp[k]) / (xp[k + 1] - xp[k])
+
+
+@njit(cache=True)
+def _column_parcel(z, p, th, qv, kind):
+    """(CAPE, CIN, LCL height) of parcel kind (0 SB, 1 ML, 2 MU) of one column, as
+    analyze gives them: same parcel, lift and _integrate_buoyancy."""
+    nk = p.size
+    T = np.empty(nk)
+    Tv = np.empty(nk)
+    for k in range(nk):
+        T[k] = th[k] * (p[k] / 1.0e5) ** KAPPA
+        Tv[k] = T[k] * (1.0 + qv[k] / EPS) / (1.0 + qv[k])
+    k0 = 0
+    if kind == 0:
+        T0, r0 = T[0], qv[0]
+    elif kind == 1:  # 100 hPa mixed layer, weights np.gradient(-p)
+        sw = st = sq = 0.0
+        for k in range(nk):
+            if p[k] < p[0] - 10000.0:
+                continue
+            if k == 0:
+                w = p[0] - p[1]
+            elif k == nk - 1:
+                w = p[k - 1] - p[k]
+            else:
+                w = 0.5 * (p[k - 1] - p[k + 1])
+            sw += w
+            st += th[k] * w
+            sq += qv[k] * w
+        T0, r0 = (st / sw) * (p[0] / 1.0e5) ** KAPPA, sq / sw
+    else:  # most unstable in the lowest 300 hPa
+        best = -1.0
+        for k in range(nk):
+            if p[k] >= p[0] - 30000.0:
+                te = _theta_e1(p[k], T[k], qv[k])
+                if te > best:
+                    best, k0 = te, k
+        T0, r0 = T[k0], qv[k0]
+    Tp, Tvp, pl, Tl = lift(p, k0, p[k0], T0, r0)
+    # LCL height: np.interp(-log(pl), -log(p), z)
+    lnp = np.empty(nk)
+    for k in range(nk):
+        lnp[k] = -np.log(p[k])
+    zl = _interp1(-np.log(pl), lnp, z)
+    # buoyancy on a 10 m grid from the parcel's level (_integrate_buoyancy)
+    m = nk - k0
+    zs = z[k0:]
+    B = np.empty(m)
+    for k in range(m):
+        e = Tv[k0 + k]
+        B[k] = G * (Tvp[k0 + k] - e) / e
+    dz = 10.0
+    nf = int(np.ceil((zs[m - 1] - zs[0]) / dz))
+    if nf <= 0:
+        return 0.0, 0.0, zl
+    bf = np.empty(nf)
+    for i in range(nf):
+        bf[i] = _interp1(zs[0] + i * dz, zs, B)
+    # positive runs [a, b) that reach above the LCL: the first one's start, last one's end
+    first, last = -1, -1
+    i = 0
+    while i < nf:
+        if bf[i] > 0.0:
+            a = i
+            while i < nf and bf[i] > 0.0:
+                i += 1
+            if zs[0] + (i - 1) * dz > zl:
+                if first < 0:
+                    first = a
+                last = i - 1
+        else:
+            i += 1
+    if first < 0:
+        return 0.0, 0.0, zl
+    kl = np.searchsorted(zs[0] + np.arange(nf) * dz, zl)
+    lfc = max(first, kl)
+    cape = cin = 0.0
+    for i in range(lfc, last + 1):
+        if bf[i] > 0.0:
+            cape += bf[i]
+    for i in range(lfc):
+        if bf[i] < 0.0:
+            cin += bf[i]
+    return cape * dz, cin * dz, zl
+
+
+@njit(parallel=True, cache=True)
+def _columns_par(z, p, th, qv, kind):
+    n = p.shape[1]
+    out = np.empty((3, n))
+    for c in prange(n):
+        out[0, c], out[1, c], out[2, c] = _column_parcel(
+            z, np.ascontiguousarray(p[:, c]), np.ascontiguousarray(th[:, c]),
+            np.ascontiguousarray(qv[:, c]), kind)
+    return out
+
+
+@njit(cache=True)
+def _columns_one(z, p, th, qv, kind):  # (no thread pool: series reader processes)
+    n = p.shape[1]
+    out = np.empty((3, n))
+    for c in range(n):
+        out[0, c], out[1, c], out[2, c] = _column_parcel(
+            z, np.ascontiguousarray(p[:, c]), np.ascontiguousarray(th[:, c]),
+            np.ascontiguousarray(qv[:, c]), kind)
+    return out
+
+
+def parcel_columns(z, p, th, qv, kind="sb", threads=1):
+    """CAPE (J/kg), CIN (J/kg) and LCL height (m AGL) of parcel kind ('sb', 'ml', 'mu')
+    in every column, as analyze gives them for one: z (nk,) m AGL; p (Pa), th (K),
+    qv (kg/kg) of shape (nk, ...).  Returns three arrays of shape (...); `threads`
+    columns at a time."""
+    import numba
+    p = np.asarray(p, np.float64)
+    shape = p.shape[1:]
+    def flat(a):
+        return np.ascontiguousarray(np.asarray(a, np.float64).reshape(p.shape[0], -1))
+    th, qv, p = flat(th), np.maximum(flat(qv), 1e-10), flat(p)
+    z, kind = np.asarray(z, np.float64), PARCELS.index(kind)
+    threads = max(1, min(int(threads), numba.config.NUMBA_NUM_THREADS))
+    if threads == 1:
+        out = _columns_one(z, p, th, qv, kind)
+    else:
+        numba.set_num_threads(threads)
+        out = _columns_par(z, p, th, qv, kind)
+    return tuple(o.reshape(shape) for o in out)
 
 
 # --------------------------------------------------------------- kinematics

@@ -81,6 +81,7 @@ class SectionPanel:
         self.xs_max = FloatInput(name="Max", value=1.0, width=90, disabled=True)
         self.xs_nlev = pn.widgets.IntSlider(name="Contour intervals", start=4, end=30,
                                             value=15, width=160)
+        self.xs_diff = self._diff_widgets()  # (minus another time or run)
         # more fills, contours and vectors: a row each in their drawers, as on the map
         self.xs_fills, self.xs_ovs, self.xs_vecs = [], [], []
         self.xs_fill_list, self.xs_ov_list, self.xs_vec_list = (
@@ -282,6 +283,9 @@ class SectionPanel:
                                        if o["on"].value]
 
     def request_xsec(self):
+        if self._applying:  # (a session going back: once, at its end)
+            self._due.add("xs")
+            return
         if len(self.xs_pts) != 2 or self._hold_xs:
             return
         self.gen["xs"] += 1
@@ -315,7 +319,8 @@ class SectionPanel:
                                density=int(o["density"].value),
                                ref=o["ref"].value or vectors.VECTORS[o["q"].value].ref,
                                color=o["color"].value) for o in self.xs_vecs],
-                    fstorm=self._field_storm(self.t)[0])
+                    fstorm=self._field_storm(self.t)[0],
+                    minus=self._minus_spec(self.xs_diff))
         spec["fnote"] = self._storm_note(self._xs_names(spec), self.t)
         return spec
 
@@ -341,6 +346,13 @@ class SectionPanel:
             if not run.load_volumes(names, t, progress=prog,
                                     cancelled=lambda: g != self.gen["xs"]):
                 return
+            m = spec["minus"] and self._minus_ref(spec["minus"], t)
+            if m:  # (a difference: the fill of the other run / time it subtracts)
+                spec = dict(spec, minus=m)
+                if spec["fill"] in m["F"] and not m["F"].run.load_volumes(
+                        m["F"].native_deps(spec["fill"]), m["t"], progress=prog,
+                        cancelled=lambda: g != self.gen["xs"]):
+                    return
             s, fi, fj, (ex, ey) = render.section_coords(run, spec["A"], spec["B"])
             zq = np.linspace(0.0, spec["ztop"], max(120, int(spec["ztop"] / 0.04)))
 
@@ -348,12 +360,16 @@ class SectionPanel:
                 return render.sample_section(run, F.volume(name, t, spec["fstorm"]),
                                              fi, fj, zq)
 
-            def fill(name, f):
+            def fill(name, f, m=None):
                 a = sample(name)
-                lo, hi = F.auto_range(name, a) if f["auto"] else (f["vmin"], f["vmax"])
+                if m:
+                    a = a - render.minus_section(F, m["F"], name, m["t"], spec["A"],
+                                                 spec["B"], s, zq, spec["fstorm"])
+                lo, hi = ((render.diff_range(a) if m else F.auto_range(name, a))
+                          if f["auto"] else (f["vmin"], f["vmax"]))
                 return render.fill_bands(s, zq, a, lo, max(hi, lo + 1e-6), f)
 
-            out = dict(s=s, zq=zq, fill=fill(spec["fill"], spec))
+            out = dict(s=s, zq=zq, fill=fill(spec["fill"], spec, m))
             # more fills drawn over the first; clip: clear outside their range
             out["fills"] = [fill(f["var"], f) if f["on"] else None for f in spec["fills"]]
             out["ov"] = []
@@ -444,10 +460,11 @@ class SectionPanel:
         self.xs_lab[1].x = float(s[-1])
         self._xs_look()
         self.xs_cbar_label.axis_label = d.title + (
-            f' · {spec["fnote"][1]}' if spec["fnote"] and d.storm else "")
+            f' · {spec["fnote"][1]}' if spec["fnote"] and d.storm else "") + (
+            " · difference" if spec["minus"] else "")
         self._xs_labels(spec)
         (xa, ya), (xb, yb) = spec["A"], spec["B"]
-        parts = [f'<b>{d.label}</b>']
+        parts = [f'<b>{d.label}</b>{self._minus_note(spec["minus"])}']
         parts += [f'+ <b>{F[f["var"]].label}</b>' for f in spec["fills"] if f["on"]]
         parts += [f'<span style="color:{o["color"]}">— {F[o["var"]].label}</span>'
                   for o in spec["ov"] if o["on"]]

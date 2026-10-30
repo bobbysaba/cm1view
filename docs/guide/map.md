@@ -49,6 +49,15 @@ level (*Contours · w 3 km*); with several on it gives the count (*Vectors · 2*
   symmetric about zero (±the 99.5th percentile of the absolute value). Untick it to type
   your own **Min** and **Max**; the boxes start from the range last drawn.
 - **Opacity** from 0.1 to 1, to see the layers below through the fill.
+- **Difference: minus another time or run** draws the fill minus the same field (and
+  level) at another time and/or in another run: *Minus time* is the shown time, **the
+  output before** it (a change over one output interval) or a fixed time; *Minus run* is
+  this run or one next to it or opened recently. Another run is taken at the same model
+  time, and interpolated onto this run's grid if its grid differs (blank outside its
+  domain). The colormap turns to `RdBu_r` on an automatic range symmetric about zero; the
+  title says what is subtracted and the colorbar says *difference*. A run without output
+  at that time says so instead of drawing. *Figure from this map* keeps the difference
+  ([Differences](figures-layers.md#differences)).
 
 !!! note "Diverging colormaps stay white at zero"
     A diverging colormap (`RdBu_r`, `BrBG`, `PuOr_r`, `coolwarm`, …) keeps white at 0 when

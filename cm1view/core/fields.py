@@ -80,18 +80,47 @@ def mpl_cmap(name, reverse=False):
 class FieldDef:
     def __init__(self, name, label, units, group, ndim=3, scale=1.0, cmap="viridis",
                  vrange=None, diverging=False, deps=(), func=None, pointwise=True,
-                 storm=False):
+                 storm=False, layer=None, edges=False, costly=False):
         self.name, self.label, self.units, self.group = name, label, units, group
+        # layer: a column field (2D from 3D natives) over (z0, z1) km AGL, z1 None: the
+        # model top.  func(f, c) gets f(n) -> (levels, ny, nx) of native n on the model
+        # levels whose cells reach into the layer, c["dz"] (m, each one's thickness in
+        # it), c["zk"] (km) and c["top"] (the layer top, km); see column_levels.
+        # edges: also the level just below and above the layer (thickness 0), so func
+        # can interpolate to its bounds
+        self.layer = None if layer is None else tuple(layer)
+        self.edges = edges
+        # costly: a column field slow per column (parcels): computed on every
+        # column_stride(run)-th column, and func gets c["memo"] (a dict shared by the
+        # fields of one time, to keep results such as a parcel's) and c["threads"]
+        self.costly = costly
+        if self.layer is not None:
+            ndim, pointwise = 2, False
         self.ndim, self.scale, self.cmap, self.vrange = ndim, scale, cmap, vrange
         self.diverging, self.deps, self.func = diverging, tuple(deps), func
+        # deps may name derivatives of native fields ("ddz.winterp": per km, in the
+        # field's display units), which Fields and the series worker compute for func
         # pointwise: func works on any samples of its inputs (no spatial derivatives)
-        self.pointwise = pointwise
+        self.pointwise = pointwise and not any(split_deriv(n)[0] for n in self.deps)
         # storm: depends on the storm motion, c["storm"] = ground-relative (u, v) m/s
         self.storm = storm
 
     @property
     def derived(self):
         return self.func is not None
+
+    @property
+    def column(self):
+        return self.layer is not None
+
+    def levels(self, z, zf):
+        """(ks, dz) of a column field's layer on model levels z, cell faces zf (km)."""
+        return column_levels(z, zf, *self.layer, edges=self.edges)
+
+    @property
+    def natives(self):
+        """The native fields read: deps, with a derivative's base field in its place."""
+        return tuple(dict.fromkeys(split_deriv(n)[1] for n in self.deps))
 
     @property
     def title(self):
@@ -318,11 +347,247 @@ def _make_fields(avail):
             D.append(FieldDef("qprecip", "Precipitation (qr+qs+qg+qhl)", "g/kg",
                               "Microphysics", cmap="cmo.rain", vrange=(0, 8), deps=pr,
                               func=lambda f, c: 1000.0 * sum(f(n) for n in pr)))
-    return [d for d in D if all(x in avail for x in d.deps)]
+    D += _vort_tendencies()
+    D += _columns()
+    D += _sounding_kinematics()
+    D += _sounding_thermo()
+    return [d for d in D if all(x in avail for x in d.natives)]
 
 
-GROUP_ORDER = ["Radar", "Kinematics", "Thermodynamics", "Pressure decomposition",
-               "Microphysics", "Swaths & 2D", "Turbulence", "Budgets", "Base state"]
+def _vort_tendencies():
+    """Vertical-vorticity tendencies and the Okubo–Weiss parameter, in 10⁻⁴ s⁻².  Their
+    deps' derivatives are per km (m/s per km = 10⁻³ s⁻¹)."""
+    def stretch(f, c):  # ζ ∂w/∂z
+        return 10.0 * f("zvort") * f("ddz.winterp")
+
+    def tilt(f, c):  # ξ ∂w/∂x + η ∂w/∂y
+        return 10.0 * (f("xvort") * f("ddx.winterp") + f("yvort") * f("ddy.winterp"))
+
+    def okubo(f, c):  # W = s_n² + s_s² − ω² (strain dominates > 0, rotation < 0)
+        ux, uy, vx, vy = (f("ddx.uinterp"), f("ddy.uinterp"), f("ddx.vinterp"),
+                          f("ddy.vinterp"))
+        return 0.01 * ((ux - vy) ** 2 + (vx + uy) ** 2 - (vx - uy) ** 2)
+
+    g, kw = "Vorticity tendencies", dict(cmap="RdBu_r", vrange=(-5, 5), diverging=True)
+    sdeps = ("zvort", "ddz.winterp")
+    tdeps = ("xvort", "yvort", "ddx.winterp", "ddy.winterp")
+    return [
+        FieldDef("zstretch", "ζ stretching (ζ ∂w/∂z)", "10⁻⁴ s⁻²", g, deps=sdeps,
+                 func=stretch, **kw),
+        FieldDef("ztilt", "ζ tilting (ξ ∂w/∂x + η ∂w/∂y)", "10⁻⁴ s⁻²", g, deps=tdeps,
+                 func=tilt, **kw),
+        FieldDef("ztend", "ζ stretching + tilting", "10⁻⁴ s⁻²", g, deps=sdeps + tdeps,
+                 func=lambda f, c: stretch(f, c) + tilt(f, c), **kw),
+        FieldDef("okubo", "Okubo–Weiss (s_n² + s_s² − ω²)", "10⁻⁴ s⁻²", g,
+                 deps=("ddx.uinterp", "ddy.uinterp", "ddx.vinterp", "ddy.vinterp"),
+                 func=okubo, **kw),
+    ]
+
+
+def _columns():
+    """Column fields (2D from 3D): updraft helicity and layer maxima."""
+    def uh(f, c):  # ∫ w ζ dz
+        return np.tensordot(c["dz"], f("winterp") * f("zvort"), axes=1)
+
+    def top(n):
+        return lambda f, c: f(n).max(axis=0)
+
+    g = "Column fields"
+    return [
+        FieldDef("uh25", "Updraft helicity 2–5 km (∫ w ζ dz)", "m²/s²", g, cmap="magma",
+                 vrange=(0, 300), deps=("winterp", "zvort"), func=uh, layer=(2.0, 5.0)),
+        FieldDef("uh01", "Updraft helicity 0–1 km (∫ w ζ dz)", "m²/s²", g, cmap="magma",
+                 vrange=(0, 50), deps=("winterp", "zvort"), func=uh, layer=(0.0, 1.0)),
+        FieldDef("zvmax01", "Max vertical vorticity 0–1 km", "1/s", g, cmap="magma",
+                 vrange=(0, 0.05), deps=("zvort",), func=top("zvort"), layer=(0.0, 1.0)),
+        FieldDef("wmax", "Column max vertical velocity", "m/s", g, cmap="turbo",
+                 vrange=(0, 50), deps=("winterp",), func=top("winterp"),
+                 layer=(0.0, None)),
+    ]
+
+
+def _wind(f, c):  # ground-relative
+    return f("uinterp") + c["umove"], f("vinterp") + c["vmove"]
+
+
+def bulk_shear(u, v, zk, top):
+    """|V(top) − V(lowest level)| of (L, ...) winds on levels zk (km)."""
+    return np.hypot(at_height(u, zk, top) - u[0], at_height(v, zk, top) - v[0])
+
+
+def helicity(u, v, zk, top, storm):
+    """Storm-relative helicity from the lowest level to top km:
+    Σ (u_k+1 − cx)(v_k − cy) − (u_k − cx)(v_k+1 − cy)."""
+    u = layer_points(u - storm[0], zk, top)
+    v = layer_points(v - storm[1], zk, top)
+    return (u[1:] * v[:-1] - u[:-1] * v[1:]).sum(axis=0)
+
+
+def _sounding_kinematics():
+    """Bulk shear and storm-relative helicity of every column, as the soundings give
+    them (thermo.analyze): from the lowest model level up to the layer top, the winds
+    linearly interpolated between the levels."""
+    def shear(f, c):
+        return bulk_shear(*_wind(f, c), c["zk"], c["top"])
+
+    def srh(f, c):
+        return helicity(*_wind(f, c), c["zk"], c["top"], c["storm"])
+
+    g, deps = "Sounding parameters", ("uinterp", "vinterp")
+    kw = dict(deps=deps, edges=True)
+    return [
+        FieldDef("shear01", "Bulk shear 0–1 km", "m/s", g, cmap="viridis", vrange=(0, 25),
+                 func=shear, layer=(0.0, 1.0), **kw),
+        FieldDef("shear06", "Bulk shear 0–6 km", "m/s", g, cmap="viridis", vrange=(0, 40),
+                 func=shear, layer=(0.0, 6.0), **kw),
+        FieldDef("srh01", "Storm-relative helicity 0–1 km", "m²/s²", g, cmap="RdBu_r",
+                 vrange=(-300, 300), diverging=True, func=srh, layer=(0.0, 1.0),
+                 storm=True, **kw),
+        FieldDef("srh03", "Storm-relative helicity 0–3 km", "m²/s²", g, cmap="RdBu_r",
+                 vrange=(-500, 500), diverging=True, func=srh, layer=(0.0, 3.0),
+                 storm=True, **kw),
+    ]
+
+
+def _parcel(f, c, kind):
+    """(CAPE, CIN, LCL m) of parcel kind ('sb', 'ml', 'mu') in the columns, kept in
+    c["memo"] for the other fields of this time."""
+    memo = c.get("memo")
+    if memo is not None and kind in memo:
+        return memo[kind]
+    from . import thermo
+    out = thermo.parcel_columns(1000.0 * np.asarray(c["zk"], np.float64), f("prs"),
+                                f("th"), f("qv"), kind, c.get("threads", 1))
+    if memo is not None:
+        memo[kind] = out
+    return out
+
+
+def _sounding_thermo():
+    """CAPE, CIN and LCL of surface-based, 100 hPa mixed-layer and most-unstable
+    parcels in every column, and fixed-layer STP and SCP: as the soundings compute
+    them (thermo.analyze), on every column_stride-th column."""
+    g, deps = "Sounding parameters", ("prs", "th", "qv")
+    kw = dict(layer=(0.0, None), costly=True)
+    names = dict(sb="Surface-based", ml="Mixed-layer (100 hPa)", mu="Most-unstable")
+    D = []
+    for kind, lab in names.items():
+        def pick(i, kind=kind):
+            return lambda f, c: _parcel(f, c, kind)[i]
+        D += [
+            FieldDef(f"{kind}cape", f"{lab} CAPE", "J/kg", g, cmap="magma",
+                     vrange=(0, 4000), deps=deps, func=pick(0), **kw),
+            FieldDef(f"{kind}cin", f"{lab} CIN", "J/kg", g, cmap="cmo.ice",
+                     vrange=(-300, 0), deps=deps, func=pick(1), **kw),
+            FieldDef(f"{kind}lcl", f"{lab} LCL height", "m AGL", g, cmap="cividis",
+                     vrange=(0, 3000), deps=deps, func=pick(2), **kw),
+        ]
+
+    def stp(f, c):  # (SBCAPE/1500)(SBLCL term)(0–1 km SRH/150)(0–6 km shear term)
+        cape, _, lcl = _parcel(f, c, "sb")
+        u, v = _wind(f, c)
+        zk = c["zk"]
+        bwd = bulk_shear(u, v, zk, 6.0)
+        return ((cape / 1500.0) * np.clip((2000.0 - lcl) / 1000.0, 0.0, 1.0)
+                * (helicity(u, v, zk, 1.0, c["storm"]) / 150.0)
+                * np.where(bwd < 12.5, 0.0, np.minimum(bwd, 30.0) / 20.0))
+
+    def scp(f, c):  # (MUCAPE/1000)(0–3 km SRH/50)(0–6 km shear term)(MUCIN term)
+        cape, cin, _ = _parcel(f, c, "mu")
+        u, v = _wind(f, c)
+        zk = c["zk"]
+        bwd = bulk_shear(u, v, zk, 6.0)
+        return ((cape / 1000.0) * (helicity(u, v, zk, 3.0, c["storm"]) / 50.0)
+                * np.where(bwd < 10.0, 0.0, np.minimum(bwd, 20.0) / 20.0)
+                * np.where(cin > -40.0, 1.0, -40.0 / np.minimum(cin, -40.0)))
+
+    wdeps = deps + ("uinterp", "vinterp")
+    ckw = dict(cmap="RdBu_r", diverging=True, deps=wdeps, storm=True, **kw)
+    D += [
+        FieldDef("stp", "Significant tornado parameter (fixed layer)", "", g,
+                 vrange=(-6, 6), func=stp, **ckw),
+        FieldDef("scp", "Supercell composite parameter (fixed layer)", "", g,
+                 vrange=(-20, 20), func=scp, **ckw),
+    ]
+    return D
+
+
+COSTLY = frozenset(d.name for d in _sounding_thermo())  # (names of the costly fields)
+
+
+def column_stride(run):
+    """Columns apart of the costly column fields' computed columns: the column_stride
+    setting; auto: the smallest that keeps them to about 250 000 (1 up to 500 x 500)."""
+    from .. import config
+    s = config.get("column_stride")
+    if s == "auto":
+        s = int(np.ceil(np.sqrt(run.ni * run.nj / 250000.0)))
+    return max(1, int(s))
+
+
+def stride_cols(lo, hi, n, s):
+    """Points lo..hi-1 (of n along an axis) on a stride s: each s-wide block (from 0)
+    takes the value at its middle point.  Returns (r0, r1, take, back): read r0..r1,
+    keep `take` of those (relative to r0); back[i - lo] is point i's among the kept."""
+    idx = np.minimum((np.arange(lo, hi) // s) * s + s // 2, n - 1)
+    u, back = np.unique(idx, return_inverse=True)
+    return int(u[0]), int(u[-1]) + 1, u - u[0], back
+
+
+def at_height(a, zk, h):
+    """(L, ...) values a on levels zk (km) linearly interpolated to height h km,
+    held at the end levels beyond them."""
+    zk = np.asarray(zk, dtype=np.float64)
+    if zk.size == 1 or h <= zk[0]:
+        return a[0]
+    if h >= zk[-1]:
+        return a[-1]
+    k = int(np.searchsorted(zk, h)) - 1
+    w = (h - zk[k]) / (zk[k + 1] - zk[k])
+    return (1.0 - w) * a[k] + w * a[k + 1]
+
+
+def layer_points(a, zk, top):
+    """(P, ...) a from the lowest level up to height top km: the levels below it, then
+    its value at top (interpolated)."""
+    zk = np.asarray(zk, dtype=np.float64)
+    below = np.flatnonzero(zk < top)
+    if below.size == 0:
+        return a[:1]
+    return np.concatenate([a[below], at_height(a, zk, top)[None]])
+
+
+def layer_top(d, run):
+    """Top (km) of column field d's layer (None: the model top)."""
+    return float(run.zf[-1]) if d.layer[1] is None else float(d.layer[1])
+
+
+def column_levels(z, zf, z0, z1, edges=False):
+    """(ks, dz) of a column layer z0..z1 km AGL (z1 None: the model top): the model
+    levels (heights z, km) whose cells (between the zf levels) reach into it, and each
+    one's thickness inside it (m), so sum(dz * f[ks]) integrates f over the layer.
+    edges: also the level below and above those (where there is one), thickness 0."""
+    zf = np.asarray(zf, dtype=np.float64)
+    top = zf[-1] if z1 is None else float(z1)
+    lo, hi = np.clip(zf[:-1], z0, top), np.clip(zf[1:], z0, top)
+    ks = np.flatnonzero(hi > lo)
+    if ks.size == 0:  # (a layer thinner than nothing: the nearest level)
+        ks = np.array([int(np.argmin(np.abs(np.asarray(z) - z0)))])
+        return [int(ks[0])], np.zeros(1)
+    dz = 1000.0 * (hi - lo)[ks]
+    if edges:
+        lo_k, hi_k = int(ks[0]) - 1, int(ks[-1]) + 1
+        if lo_k >= 0:
+            ks, dz = np.concatenate([[lo_k], ks]), np.concatenate([[0.0], dz])
+        if hi_k < len(zf) - 1:
+            ks, dz = np.concatenate([ks, [hi_k]]), np.concatenate([dz, [0.0]])
+    return [int(k) for k in ks], dz
+
+
+GROUP_ORDER = ["Radar", "Kinematics", "Vorticity tendencies", "Column fields",
+               "Sounding parameters", "Thermodynamics",
+               "Pressure decomposition", "Microphysics", "Swaths & 2D", "Turbulence",
+               "Budgets", "Base state"]
 
 
 # ---- derivatives of any field, per km: "ddz.winterp" (∂w/∂z), "ddx.", "ddy.", "gradh."
@@ -410,6 +675,7 @@ class Fields:
         self._planes = OrderedDict()
         self._lock = threading.Lock()
         self._derivs = {}  # (derivative name -> its FieldDef, built when first asked)
+        self._memo = OrderedDict()  # (t, stride) -> costly column fields' shared results
 
     # ---- catalog helpers
     def __getitem__(self, name):
@@ -446,7 +712,7 @@ class Fields:
 
     def native_deps(self, name):
         d = self[name]
-        return list(d.deps) if d.derived else [name]
+        return list(d.natives) if d.derived else [name]
 
     # ---- data access
     def _ctx(self, d, storm):
@@ -465,7 +731,8 @@ class Fields:
             mode, value = "2d", 0
         ctx = self._ctx(d, storm)
         key = (name, t, mode, round(float(value), 4),
-               tuple(round(float(x), 3) for x in ctx["storm"]) if d.storm else None)
+               tuple(round(float(x), 3) for x in ctx["storm"]) if d.storm else None,
+               column_stride(self.run) if d.costly else None)
         with self._lock:
             a = self._planes.get(key)
             if a is not None:
@@ -477,10 +744,14 @@ class Fields:
             a = vol.max(axis=0) if mode == "colmax" else vol.min(axis=0)
         elif op:
             a = self._deriv_plane(op, base, t, mode, value, storm)
+        elif d.column:
+            a = self._column(d, t, ctx)
         else:
             run = self.run
 
             def fetch(n):
+                if split_deriv(n)[0]:  # (a derivative input, e.g. ∂w/∂z)
+                    return self.plane(n, t, mode, value, storm)
                 if mode == "level":
                     return run.read_level(n, t, int(value))
                 if mode == "2d":
@@ -495,6 +766,29 @@ class Fields:
             while len(self._planes) > 40:
                 self._planes.popitem(last=False)
         return a
+
+    def _column(self, d, t, ctx):
+        """A column field: its inputs on the levels of its layer only (a costly one on
+        every column_stride-th column, each block of columns showing its middle one)."""
+        run = self.run
+        ks, dz = d.levels(run.z, run.zf)
+        c = dict(ctx, dz=dz, zk=run.z[ks], top=layer_top(d, run))
+        if not d.costly:
+            return d.func(lambda n: np.stack([run.read_level(n, t, k) for k in ks]), c)
+        s = column_stride(run)
+        with self._lock:
+            memo = self._memo.setdefault((t, s), {})
+            self._memo.move_to_end((t, s))
+            while len(self._memo) > 4:
+                self._memo.popitem(last=False)
+        c.update(memo=memo, threads=run.workers)
+        if s == 1:
+            return d.func(lambda n: np.stack([run.read_level(n, t, k) for k in ks]), c)
+        r0, r1, tj, bj = stride_cols(0, run.nj, run.nj, s)
+        c0, c1, ti, bi = stride_cols(0, run.ni, run.ni, s)
+        a = d.func(lambda n: np.stack([run.read_level(n, t, k)[r0:r1, c0:c1][
+            np.ix_(tj, ti)] for k in ks]), c)
+        return np.asarray(a)[np.ix_(bj, bi)]
 
     def _deriv_plane(self, op, base, t, mode, value, storm):
         """2D derivative op of field base: horizontal ones of its plane; ∂/∂z on a
@@ -534,15 +828,20 @@ class Fields:
         """Drop cached planes at time t of `names` and the fields derived from them
         (after those were recomputed)."""
         names = set(names)
-        dep = {n for n, d in self.defs.items() if n in names or names & set(d.deps)}
+        dep = {n for n, d in self.defs.items() if n in names or names & set(d.natives)}
         dep |= {n for n in list(self._derivs) if split_deriv(n)[1] in dep}
         with self._lock:
             for k in [k for k in self._planes if k[1] == t and k[0] in dep]:
                 del self._planes[k]
+            if any(self.defs[n].costly for n in dep if n in self.defs):
+                for k in [k for k in self._memo if k[0] == t]:
+                    del self._memo[k]
         self.run.forget(dep, t)
 
     def volume(self, name, t, storm=None):
         d = self[name]
+        if d.column:  # (2D: its plane)
+            return self.plane(name, t, storm=storm)
         op, base = split_deriv(name)
         if op:  # (cached as '~ddz.w', '~ddz.name@u,v' if storm-relative)
             ctx = self._ctx(d, storm)
@@ -560,20 +859,24 @@ class Fields:
             key = f"~{name}" + ("@{:.3f},{:.3f}".format(*ctx["storm"]) if d.storm else "")
             vol = self.run.cached(key, t)
             if vol is None:
-                self.run.load_volumes(d.deps, t)
-                vol = np.asarray(d.func(lambda n: self.run.volume(n, t), ctx),
+                self.run.load_volumes(d.natives, t)
+                vol = np.asarray(d.func(lambda n: self._input(n, t, storm), ctx),
                                  dtype=np.float32)
                 self.run._insert(key, t, vol)
             return vol
         vol = self.run.volume(name, t)
         return vol if d.scale == 1.0 else vol * np.float32(d.scale)
 
+    def _input(self, n, t, storm):
+        """Volume of a derived field's input n: raw native, or a derivative."""
+        return self.volume(n, t, storm) if split_deriv(n)[0] else self.run.volume(n, t)
+
     def at_points(self, name, t, sample, storm=None):
         """Field values at arbitrary points: sample(vol) -> values.  Pointwise derived
         fields are computed from sampled inputs, so no derived volume is built."""
         d = self[name]
         if d.derived and d.pointwise:
-            self.run.load_volumes(d.deps, t)
+            self.run.load_volumes(d.natives, t)
             return np.asarray(d.func(lambda n: sample(self.run.volume(n, t)),
                                      self._ctx(d, storm)))
         if d.derived:

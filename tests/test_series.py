@@ -14,8 +14,9 @@ from conftest import wait
 
 
 def compute(v, field, reduce="max", region="domain", vmode="height", z=1.0,
-            layer=(0.0, 10.0), radius=5.0):
+            layer=(0.0, 10.0), radius=5.0, op=""):
     v.ser_field.value, v.ser_vmode.value, v.ser_reduce.value = field, vmode, reduce
+    v.ser_op.value = op
     if vmode == "layer":
         v.ser_z0.value, v.ser_z1.value = layer
     else:
@@ -42,6 +43,96 @@ def test_domain_min_matches_the_map(viewer, reg):
     t = 4
     ref = float(np.nanmin(F.plane("thpert", t, "height", 1.0)))
     assert abs(ds.value.values[t] - ref) < 1e-3
+
+
+def test_derivative_series_match_the_map(viewer, reg):
+    """A field derivative is taken before the reduction, with the points just outside
+    the region, so a box or a layer gives the map's values (horizontal divergence too)."""
+    run, F = reg.get()
+    t = 4
+    s = compute(viewer, "winterp", "max", z=2.0, op="ddz")
+    assert s["recipe"]["field"] == "ddz.winterp"
+    ref = float(np.nanmax(F.plane("ddz.winterp", t, "height", 2.0)))
+    assert abs(s["ds"].value.values[t] - ref) < 1e-4 * abs(ref)
+    viewer.ser_field.value = next(n for n, d in F.defs.items() if d.ndim == 2)
+    assert "ddz" not in viewer.ser_op.options.values() and viewer.ser_op.value == ""
+    w = F.plane("winterp", t, "height", 3.0)
+    j, i = np.unravel_index(np.nanargmax(w), w.shape)
+    x, y = float(run.xh[i]), float(run.yh[j])
+    box = (x - 7.3, x + 6.1, y - 5.2, y + 8.4)
+    for field, vmode, how in (("gradh.thpert", "height", "max"),
+                              ("ddx.thpert", "height", "mean"),
+                              ("ddy.winterp", "layer", "max"), ("ddz.winterp", "layer", "min"),
+                              ("hdiv", "height", "min"), ("bgen_x", "layer", "max")):
+        r = S.normalize(dict(field=field, vmode=vmode, z=1.0, z0=0.0, z1=3.0, region="box",
+                             box=box, reduce=how))
+        ds, skipped = S.compute(run, F, r, S.empty(run, r), times=[t], workers=1)
+        assert not skipped
+        i0, i1, j0, j1 = S.region_at(run, r, None)[:4]
+        if vmode == "height":
+            a = F.plane(field, t, "height", 1.0)[j0:j1, i0:i1]
+        else:
+            a = np.stack([F.plane(field, t, "level", k)[j0:j1, i0:i1]
+                          for k in S.levels(run, r)])
+            prof = np.array([{"max": np.nanmax, "min": np.nanmin}[how](b) for b in a])
+            assert np.allclose(ds.profile.values[t], prof, rtol=1e-5, atol=1e-7)
+        ref = {"max": np.nanmax, "min": np.nanmin, "mean": np.nanmean}[how](a)
+        assert abs(ds.value.values[t] - ref) <= 1e-5 * max(abs(ref), 1e-3), field
+
+
+def test_column_field_series_match_the_map(reg):
+    """Column fields (and a horizontal derivative of one) reduced over the domain and a
+    box give the map's values."""
+    run, F = reg.get()
+    t = 4
+    a = F.plane("uh25", t)
+    j, i = np.unravel_index(np.nanargmax(a), a.shape)
+    x, y = float(run.xh[i]), float(run.yh[j])
+    box = (x - 7.3, x + 6.1, y - 5.2, y + 8.4)
+    for field, region, how in (("uh25", "domain", "max"), ("uh25", "box", "mean"),
+                               ("uh01", "box", "min"), ("zvmax01", "box", "max"),
+                               ("wmax", "domain", "pct"), ("gradh.uh25", "box", "max"),
+                               ("srh03", "box", "max"), ("shear06", "domain", "mean"),
+                               ("sbcin", "box", "min"), ("stp", "box", "max"),
+                               ("ddx.mucape", "box", "max")):
+        r = S.normalize(dict(field=field, vmode="2d", region=region, box=box,
+                             reduce=how, pct=90.0))
+        ds, skipped = S.compute(run, F, r, S.empty(run, r), times=[t], workers=1)
+        assert not skipped, field
+        i0, i1, j0, j1 = S.region_at(run, r, None)[:4]
+        b = F.plane(field, t)[j0:j1, i0:i1]
+        ref = {"max": np.nanmax, "min": np.nanmin, "mean": np.nanmean,
+               "pct": lambda v: np.nanpercentile(v, 90.0)}[how](b)
+        assert abs(ds.value.values[t] - ref) <= 1e-4 * max(abs(ref), 1e-3), field
+        if how == "max":
+            assert ds.x_km.values[t] == run.xh[i0 + np.nanargmax(b) % (i1 - i0)], field
+
+
+def test_vorticity_tendency_series_match_the_map(reg):
+    """Fields whose inputs are derivatives (ζ ∂w/∂z, tilting, Okubo–Weiss), and a
+    derivative of one, give the map's values over a box, at a height and in a layer."""
+    run, F = reg.get()
+    t = 4
+    w = F.plane("winterp", t, "height", 3.0)
+    j, i = np.unravel_index(np.nanargmax(w), w.shape)
+    x, y = float(run.xh[i]), float(run.yh[j])
+    box = (x - 7.3, x + 6.1, y - 5.2, y + 8.4)
+    for field, vmode, how in (("zstretch", "height", "max"), ("ztilt", "layer", "min"),
+                              ("okubo", "height", "mean"), ("ddz.ztend", "layer", "max")):
+        r = S.normalize(dict(field=field, vmode=vmode, z=1.0, z0=0.0, z1=3.0, region="box",
+                             box=box, reduce=how))
+        ds, skipped = S.compute(run, F, r, S.empty(run, r), times=[t], workers=1)
+        assert not skipped, field
+        i0, i1, j0, j1 = S.region_at(run, r, None)[:4]
+        if vmode == "height":
+            a = F.plane(field, t, "height", 1.0)[j0:j1, i0:i1]
+        else:
+            a = np.stack([F.plane(field, t, "level", k)[j0:j1, i0:i1]
+                          for k in S.levels(run, r)])
+            prof = np.array([{"max": np.nanmax, "min": np.nanmin}[how](b) for b in a])
+            assert np.allclose(ds.profile.values[t], prof, rtol=1e-5, atol=1e-7), field
+        ref = {"max": np.nanmax, "min": np.nanmin, "mean": np.nanmean}[how](a)
+        assert abs(ds.value.values[t] - ref) <= 1e-5 * max(abs(ref), 1e-3), field
 
 
 def test_second_session_reads_the_cache(viewer, reg):

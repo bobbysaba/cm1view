@@ -43,10 +43,12 @@ processes and renders figures.
 | File | Covers |
 |---|---|
 | `test_fields.py` | Derived fields, shared reads, the cache, the base state |
-| `test_map.py` | Map, cross-section and 3D: layers, streamlines, the region and floor |
+| `test_map.py` | Map, cross-section and 3D: layers, differences, streamlines, the region and floor |
 | `test_streamlines.py` | The 3D streamline tracer on analytic winds, and the 3D pane's restyle echo |
 | `test_sounding.py` | Soundings, comparison styles, zoom and the hover data |
 | `test_tracking.py` | Automatic and hand-placed tracking, save and load, storm-following soundings |
+| `test_session.py` | Session files: save, load, rows and values a run cannot take, another run's session; soundings, section, 3D, series and distributions back |
+| `test_export.py` | netCDF export: values == the volumes / map planes, heights, box, stop, missing times, the dialog, `cm1view export` |
 | `test_series.py`, `test_dist.py` | Series (cache, time–height, files) and distributions |
 | `test_pdecomp.py` | The pressure decomposition, on copies of demo files |
 | `test_figure.py`, `test_figure_layers.py`, `test_figure_runs.py`, `test_figure_export.py`, `test_figure_spec.py` | The figure editor: widgets ↔ spec, layers, several runs, export and animation, spec upgrades |
@@ -62,14 +64,16 @@ processes and renders figures.
 cm1view/                  config.py (settings: file, precedence, save folders, run search),
                           registry.py (open runs shared by sessions, run discovery),
                           theme.py (colours and CSS), demo.py (synthetic CM1 runs for
-                          cm1view --demo and the tests), __main__.py (command line)
+                          cm1view --demo and the tests), __main__.py (command line; `render` goes
+                          to figures/batch.py, `export` to core/export.py)
 
 core/                     model output, no UI
   run.py                  file discovery, staggered->scalar reads, 3D cache, parallel reads
   fields.py               field catalog, derived fields, colormaps
   thermo.py               parcel theory (numba), kinematics, composite parameters
   sounding_plot.py        skew-T / hodograph / profiles / parameter table
-  render.py               map + cross-section computations (contours, vectors, sampling)
+  render.py               map + cross-section computations (contours, vectors, sampling,
+                          differences with another run or time, regridding)
   vectors.py              the vector quantities (wind, horizontal vorticity, baroclinic
                           generation) that map, section, 3D and figures draw
   track.py                meso tracking + CSV/text export
@@ -77,6 +81,8 @@ core/                     model output, no UI
   series.py               time series of reduced fields: compute, cache, files
   dist.py                 distributions: a field's values over a region, their summary
   swath.py                time-window reductions (swaths, storm-following composites)
+  export.py               netCDF export of fields (box, times, model levels or heights,
+                          streamed per time) and `cm1view export`
 
 pdecomp/                  pressure decomposition
   __init__.py             file fields, computing one time on request
@@ -94,6 +100,11 @@ viewer/                   the interactive page (Panel / Bokeh)
   series.py               Viewer mixin: the Series panel and plots
   dist.py                 Viewer mixin: the Distribution panel, plots and statistics
   xsec.py                 Viewer mixin: cross-sections
+  diff.py                 Viewer mixin: map / section fill differences (minus a time or run)
+  session.py              Viewer mixin: session files (collect / put back what the viewer
+                          shows; the Session dialog; ?session=)
+  export.py               Viewer mixin: the Export data dialog (core/export.py in the
+                          "exp" pool, progress, Stop)
   view3d.py               Viewer mixin: 3D scene, pressure-decomposition button, streamlines
                           (picking, the card, pins; the pointer is followed in the browser)
   items.py                Viewer mixin: the items tray
@@ -119,6 +130,11 @@ figures/                  the Figure workspace
     lines.py              time-series and distribution panels
     sounding.py           skew-T, hodograph, parameter table
     figure.py             draw(): blocks, panels, labels, annotations
+  render.py               FigureData: a spec's panel data (runs, tracks, series,
+                          caches) without the editor or Panel; the editor's .data
+  batch.py                `cm1view render`: saved figures and templates drawn
+                          without the viewer (images, bundles, GIFs); the GIF frame
+                          helpers anim.py uses
   editor.py               the Figure workspace editor (FigureEditor): putting the
                           widgets together, wiring, layer cards, rendering the preview
   cards/                  its constants, widget helpers and cards (cards.<name> for any
@@ -133,9 +149,9 @@ figures/                  the Figure workspace
   times.py                editor mixin: the panels' times and titles
   panelopts.py            editor mixin: the Panels tab's reactions (fields, heights,
                           layout, size, kind, area, automatic titles)
-  runs.py                 editor mixin: runs
+  runs.py                 editor mixin: the Runs tab
   sources.py              editor mixin: new figures from the viewer, series / sounding /
-                          distribution lists
+                          distribution lists (their data: render.py)
   export.py               editor mixin: saving and reopening figures
   quick.py                editor mixin: the quick start (new figure dialog)
   anim.py, click.py,      editor mixins: animation, click-to-place, combining panels,
@@ -155,7 +171,19 @@ the class's bases.
 Derived fields are defined in `cm1view/core/fields.py` (`_make_fields`) as `FieldDef`s: a
 name, label, units and menu group, a default colormap and range, the fields it needs
 (`deps`) and a function of them (`func`). They then appear in every
-field menu (map, section, 3D, series, figures). Add a test in `tests/test_fields.py`
+field menu (map, section, 3D, series, figures). A dep can be a derivative of a native
+field (`"ddz.winterp"`, `"ddx.uinterp"`: per km, as the Derivative select gives it), as
+for the vorticity tendencies; the field is then computed from whole levels, and series
+read the points just outside their region. A *column field* (`layer=(z0, z1)` km AGL) is
+2D from 3D natives: its `func` gets each input on the levels of the layer only
+(`(levels, ny, nx)`) and their thickness in it, `c["dz"]` (m), as for updraft helicity,
+with their heights `c["zk"]` and the layer top `c["top"]` (km); `edges=True` adds the
+level just outside each end (thickness 0) for interpolating to the bounds, as the bulk
+shear and helicity do (`at_height`, `layer_points`). The series worker then reads just
+those levels. `costly=True` marks a column field that is slow per column (the parcels
+of `thermo.parcel_columns`): it is computed on every `column_stride(run)`-th column,
+and its `func` gets `c["memo"]`, a dict shared by the fields of one time (so SB CAPE,
+SB CIN and STP lift the SB parcel once), and `c["threads"]`. Add a test in `tests/test_fields.py`
 against the definition, as for θρ.
 
 ## Adding a vector

@@ -45,6 +45,8 @@ components. Vectors can be shown ground-, grid- or storm-relative
 | `hvort` | Horizontal vorticity magnitude (1/s) | √(ξ² + η²) |
 | `wstream`, `wcross` | Streamwise and crosswise vorticity (1/s) | the horizontal vorticity along and across the storm-relative horizontal wind (below) |
 | `bgen_x`, `bgen_y` | Baroclinic generation of horizontal vorticity (10⁻⁴ s⁻²) | (∂B/∂y, −∂B/∂x): the buoyancy torque, also drawn as the *Baroclinic generation* vector |
+| `zstretch`, `ztilt`, `ztend` | Vertical-vorticity stretching, tilting and their sum (10⁻⁴ s⁻²) | ζ ∂w/∂z, ξ ∂w/∂x + η ∂w/∂y (below) |
+| `okubo` | Okubo–Weiss parameter (10⁻⁴ s⁻²) | s<sub>n</sub>² + s<sub>s</sub>² − ω² (below) |
 | `qcloud`, `qprecip` | Cloud and precipitation condensate (g/kg) | qc + qi, and qr + qs + qg + qhl, where those are in the output |
 | `p_dyn`, `acc_dyn`, `acc_tot` | Pressure decomposition sums | see below |
 
@@ -53,9 +55,9 @@ Other derived fields are defined in `cm1view/core/fields.py` (`_make_fields`); s
 
 ### Derivatives of any field
 
-The **Derivative** select beside a Field (the map's fill, and a figure's fill, contour and
-shading layers on plan views and cross-sections) plots a derivative of that field instead,
-per km:
+The **Derivative** select beside a Field (the map's fill, a figure's fill, contour and
+shading layers on plan views and cross-sections, the Series tab, and a figure's series and
+profile cards) plots a derivative of that field instead, per km:
 
 | Derivative | Name | What |
 |---|---|---|
@@ -68,6 +70,97 @@ Units are the field's per km; a wind's (m/s per km) read 10⁻³ s⁻¹, so ∂w
 a cross-section's derivative is taken on the 3-D grid, so it agrees with the map at the
 same level. Derivatives of derived fields work the same way (∂θ′/∂x, ∂B/∂z, ...). The
 starting colour range is half the field's own per km; use Auto range on the map.
+
+In a series or profile the derivative is taken first and then reduced over the region:
+the maximum ∂w/∂z at 2 km, not ∂/∂z of the maximum w. Horizontal derivatives are taken
+with the grid points just outside the region, so the values at its edge are the map's.
+
+### Vorticity tendencies
+
+The *Vorticity tendencies* group has the terms of the vertical-vorticity equation that
+make or concentrate ζ, in 10⁻⁴ s⁻² (a ζ of 0.02 s⁻¹ in ∂w/∂z of 0.01 s⁻¹ stretches at 2):
+
+| Name | Term |
+|---|---|
+| `zstretch` | stretching, ζ ∂w/∂z |
+| `ztilt` | tilting of horizontal vorticity into the vertical, ξ ∂w/∂x + η ∂w/∂y |
+| `ztend` | stretching + tilting |
+| `okubo` | Okubo–Weiss, W = s<sub>n</sub>² + s<sub>s</sub>² − ω², with s<sub>n</sub> = ∂u/∂x − ∂v/∂y, s<sub>s</sub> = ∂v/∂x + ∂u/∂y and ω = ∂v/∂x − ∂u/∂y: negative where rotation dominates the strain (a vortex), positive where strain dominates |
+
+ζ, ξ and η are CM1's `zvort`, `xvort` and `yvort`; the derivatives are those of the
+**Derivative** select (below), so ∂w/∂z is centred on the stretched levels and the
+horizontal ones on the grid, and Okubo–Weiss uses the winds on the scalar points. Like
+the other fields they work on the map, cross-sections, column max / min, 3D, series and
+figures; in a series the horizontal derivatives use the points just outside the region.
+Baroclinic generation of horizontal vorticity is `bgen_x`, `bgen_y` (above).
+
+### Column fields
+
+The *Column fields* group has 2D fields made from the 3D fields over a fixed layer of
+each column, so they work wherever a 2D field does (the map, series, distributions,
+figures), and a series of one reads only the levels of its layer in the region:
+
+| Name | What | Layer |
+|---|---|---|
+| `uh25` | Updraft helicity, ∫ w ζ dz (m²/s²) | 2–5 km AGL |
+| `uh01` | Updraft helicity, ∫ w ζ dz (m²/s²) | 0–1 km AGL |
+| `zvmax01` | Maximum ζ (1/s) | 0–1 km AGL |
+| `wmax` | Maximum w (m/s) | the whole column |
+
+The integral is over the layer exactly: each model level counts with the part of its grid
+cell (between the `zf` levels) inside the layer. A maximum is over the model levels whose
+cells reach into the layer. w and ζ are `winterp` and `zvort`; updraft helicity is that of
+Kain et al. (2008), so it is negative in an anticyclonic updraft or a cyclonic downdraft
+(CM1's own `shs` swath is its running maximum). The layers are fixed for now.
+
+### Sounding parameters
+
+The *Sounding parameters* group has the bulk shear, storm-relative helicity, parcel
+CAPE, CIN and LCL and the composite parameters of every column, as 2D column fields (so
+on the map, series, distributions and figures):
+
+| Name | What | Layer |
+|---|---|---|
+| `shear01` | Bulk shear, \|V(1 km) − V(lowest level)\| (m/s) | 0–1 km AGL |
+| `shear06` | Bulk shear (m/s) | 0–6 km AGL |
+| `srh01` | Storm-relative helicity (m²/s²) | 0–1 km AGL |
+| `srh03` | Storm-relative helicity (m²/s²) | 0–3 km AGL |
+
+They are computed as the [Soundings](soundings.md#what-is-computed) tab computes them:
+from the lowest model level up to the layer top, with the wind linearly interpolated
+between the levels (to the layer top exactly, where the sounding's 10 m grid can stop a
+few metres short, so SRH may differ from the sounding's by about 1%). Helicity is
+relative to the **tracked storm motion** at that time when the track has a fix there,
+and otherwise to the domain motion, as for streamwise vorticity (below); the map title
+and colorbar say which. Shear does not depend on it.
+
+Parcel parameters, from the whole column:
+
+| Name | What |
+|---|---|
+| `sbcape`, `mlcape`, `mucape` | CAPE (J/kg) of the surface-based, 100 hPa mixed-layer and most-unstable parcels |
+| `sbcin`, `mlcin`, `mucin` | CIN (J/kg, negative) of those parcels |
+| `sblcl`, `mllcl`, `mulcl` | LCL height (m AGL) of those parcels |
+| `stp` | Significant tornado parameter, fixed layer: SBCAPE, SB LCL, 0–1 km SRH, 0–6 km shear |
+| `scp` | Supercell composite parameter, fixed layer: MUCAPE, 0–3 km SRH, 0–6 km shear, MUCIN |
+
+The parcels are those of the [Soundings](soundings.md#what-is-computed) tab, lifted the
+same way, so a column's values are the sounding's there. STP is the sounding's *STP
+(fixed)*. The sounding's *SCP* uses the effective inflow layer, which needs a parcel
+lifted from every level of a column. That is too slow for a map, so the map's `scp`
+takes its formula with 0–3 km SRH for effective SRH and 0–6 km shear for effective
+shear. Both use helicity relative to the tracked storm motion, as `srh01` and `srh03`
+do. The soundings' default storm motion is the Bunkers right mover; set the sounding's
+*Storm motion* to *Tracked meso motion* to compare them.
+
+Lifting a parcel through every column is slow: about 0.1 ms a column per parcel on one
+CPU (more with more levels), spread over the reader CPUs (`workers`). A 1000 × 1000 domain
+takes tens of seconds per parcel and time. So these fields are computed on every n-th
+column in x and y (the `column_stride` [setting](../settings.md); each n × n block of
+the map shows its middle column). With `auto`, that is every column up to 500 × 500
+points and enough columns apart beyond that to keep to about 250 000. The fields of
+one parcel and time share one lift (SB CAPE, SB CIN, SB LCL and STP lift once). A
+series uses the same columns as the map.
 
 ### Streamwise and crosswise vorticity
 

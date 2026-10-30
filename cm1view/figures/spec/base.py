@@ -9,6 +9,7 @@ import numpy as np
 
 from ... import config
 from ...core import track as trk
+from ...core.render import regrid, same_grid as _same
 from .. import draw as figdraw
 from .sections import panel_section, section_defaults, to_cards, upgrade_sections
 
@@ -322,19 +323,6 @@ def ensemble(d, dds, j, ens):
             out = np.nanmean(V, axis=0)
     out = np.where(have, out, np.nan)
     return dict(d, **{f"L{j}": np.asarray(out, dtype=np.float32), f"L{j}_ens": len(stack)})
-
-
-def _same(u, v):
-    u, v = np.asarray(u, dtype=float), np.asarray(v, dtype=float)
-    return u.shape == v.shape and np.allclose(u, v, atol=1e-6)
-
-
-def regrid(a, x, y, xn, yn):
-    """2-D array a on the rectilinear grid (y, x) interpolated bilinearly onto (yn, xn)
-    (NaN outside a's grid)."""
-    a, x, y = np.asarray(a, dtype=float), np.asarray(x, dtype=float), np.asarray(y, dtype=float)
-    rows = np.array([np.interp(xn, x, r, left=np.nan, right=np.nan) for r in a])
-    return np.array([np.interp(yn, y, c, left=np.nan, right=np.nan) for c in rows.T]).T
 
 
 def tindex(run, time_s):

@@ -6,10 +6,11 @@ import os
 import panel as pn
 
 from ...core import series as ser
+from ...core.fields import deriv_name
 from .. import spec as fg
 from .base import (
     FIG_CMAPS, _hex, _f, _auto, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, SER_OPS,
-    MARKERS, SND_WHERE, _BTN, _chk,
+    MARKERS, SND_WHERE, _BTN, _chk, _deriv_pair,
 )
 from .seriesvals import SeriesValues
 
@@ -60,8 +61,7 @@ class SeriesCard:
             int(runs[0]) if len(runs) == 1 else SOME_RUNS
         w["run"] = pn.widgets.Select(name="Run", width=170, **self._run_choices())
         w["run"].value = k if k in self._run_values() else 0
-        field = r["field"] if r["field"] in F else next(iter(F.defs))
-        w["field"] = pn.widgets.Select(name="Field", groups=F.groups(), value=field, width=210)
+        w["field"], w["deriv"] = _deriv_pair(F, r["field"])
         w["vmode"] = pn.widgets.Select(name="Vertical", options={
             "Layer (every level)": "layer", "At a height": "height"},
             value="height" if r["vmode"] == "height" else "layer", width=150)
@@ -140,12 +140,13 @@ class SeriesCard:
         for k in recipe_keys:
             w[k].param.watch(lambda e: self._changed(), "value")
         for k, x in w.items():
-            if k not in recipe_keys and k not in ("field", "panel", "run", "runs"):
+            if k not in recipe_keys and k not in ("field", "deriv", "panel", "run", "runs"):
                 x.param.watch(lambda e: ed.request(), "value")
         w["panel"].param.watch(lambda e: self._where_changed(), "value")
         w["run"].param.watch(self._on_run, "value")
         w["runs"].param.watch(self._on_runs, "value")
         w["field"].param.watch(self._on_field, "value")
+        w["deriv"].param.watch(self._on_field, "value")
         w["op"].param.watch(lambda e: self._op_changed(), "value")
         w["ens"].param.watch(lambda e: self.show(ed.kind.value), "value")
         self.th_row = _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
@@ -159,10 +160,10 @@ class SeriesCard:
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.up, self.down, self.rm],
             [self.where,
-             _grid((w["field"], 2), w["vmode"], w["z"], w["z0"], w["z1"], w["region"],
-                   w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"], w["op"],
-                   (w["label"], 3)), self.trk_box, self.th_row, self.line_row, self.vals.section,
-             self.info])
+             _grid((w["field"], 2), w["deriv"], w["vmode"], w["z"], w["z0"], w["z1"],
+                   w["region"], w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"],
+                   w["op"], (w["label"], 3)), self.trk_box, self.th_row, self.line_row,
+             self.vals.section, self.info])
         self._set_title()
         self.show(ed.kind.value)
 
@@ -170,7 +171,7 @@ class SeriesCard:
         if kind != self._kind:  # (every run / the runs picked: time series only)
             self._kind = kind
             self.refresh_runs()
-        w, two = self.w, self.ed.fields[self.w["field"].value].ndim == 2
+        w, two = self.w, self.ed.fields[self.field_name()].ndim == 2
         th = kind == "th"  # (time-height: always every level of the layer)
         lay = th or w["vmode"].value == "layer"
         w["vmode"].visible = not two and not th
@@ -316,7 +317,7 @@ class SeriesCard:
 
     def _set_title(self):
         w = self.w
-        d = self.ed.fields[w["field"].value]
+        d = self.ed.fields[self.field_name()]
         op = {"ddz": " · d/dz", "ddt": " · d/dt"}.get(w["op"].value, "")
         runs = self.run_list()
         names = {k: n.split(". ", 1)[-1] for n, k in self.ed._run_names().items()}
@@ -355,7 +356,7 @@ class SeriesCard:
     def _auto_label(self):
         """Keep an automatic label in step with the recipe (an edited one stays)."""
         old = self.ent.get("_auto", self.ent.get("label", ""))
-        d = self.ed.fields[self.w["field"].value]
+        d = self.ed.fields[self.field_name()]
         new = ser.describe(self.recipe(), d.label)
         if self.w["label"].value in ("", old):
             hold, self.ed._hold = self.ed._hold, True
@@ -378,8 +379,12 @@ class SeriesCard:
         self._set_title()
         self._changed()
 
+    def field_name(self):
+        """The series' field: the Field, or its Derivative (fields.deriv_name)."""
+        return deriv_name(self.w["deriv"].value, self.w["field"].value)
+
     def recipe(self):
-        w, d = self.w, self.ed.fields[self.w["field"].value]
+        w, d = self.w, self.ed.fields[self.field_name()]
         vm = "layer" if self._kind == "th" else w["vmode"].value  # (see show)
         r = dict(field=d.name, vmode="2d" if d.ndim == 2 else vm,
                  z=w["z"].value or 0.0, z0=w["z0"].value or 0.0, z1=w["z1"].value or 0.0,

@@ -31,11 +31,11 @@ def test_distribution_figure_draws_each_plot(ed, plot):
         ticks = [t.get_text() for t in ax.get_xticklabels()]
         assert len(ticks) == 2 and ticks[1].startswith(str(d["D1_label"]))
         assert "mean" in ticks[0] and "(" in ax.get_ylabel()
-    assert ed.dist_cache  # (restyling reads nothing again)
-    n = len(ed.dist_cache)
+    assert ed.data.dist_cache  # (restyling reads nothing again)
+    n = len(ed.data.dist_cache)
     ed.ds["bins"].value, ed.ds["logy"].value = 20, True
     render(ed)
-    assert len(ed.dist_cache) == n
+    assert len(ed.data.dist_cache) == n
 
 
 def test_distribution_bar_labels_and_statistics_box(ed):
@@ -126,8 +126,8 @@ def test_profile_figure_computes_only_its_times(ed):
     assert ax.get_lines()[1].get_linestyle() == "--"
     # the window's last profile is the one-time profile: the mean is not it
     assert not np.allclose(d["P0_v"], d["P1_v"])
-    key = next(k for k in ed._ser_mem if json.loads(k[1]).get("pct") == 97.5)
-    ds = ed._ser_mem[key]
+    key = next(k for k in ed.data.ser_mem if json.loads(k[1]).get("pct") == 97.5)
+    ds = ed.data.ser_mem[key]
     assert int(ds["computed"].sum()) == 3  # (outputs 1-3 only, not every time)
     s = ed.collect()  # (reopened: the same cards)
     ed.set_spec(json.loads(json.dumps(s)))
@@ -218,6 +218,49 @@ def test_profile_ddz_and_hand_edits(ed):
     assert not str(ed.panel_data(ed.collect())[0]["P0_label"]).endswith(fg.EDITED)
     c.vals._reset_all()
     assert "edits" not in ed.collect()["profiles"][0] and not c.info.object
+
+
+def test_series_and_profile_cards_take_a_derivative(ed):
+    """A Derivative beside the Field of series and profile cards: the field's
+    derivative reduced (not d/dz of the reduced values), reopened as Field +
+    Derivative."""
+    from cm1view.figures.cards.seriescard import SeriesCard
+    F, run = ed.v.F, ed.v.run  # (the run's own fields; ed.fields is every run's catalog)
+    ed.from_series()
+    ed.kind.value = "line"
+    c = ed.ser_cards[0]
+    c.w["field"].value, c.w["deriv"].value = "winterp", "ddz"
+    c.w["vmode"].value, c.w["z"].value = "height", 2.0
+    c.w["region"].value, c.w["reduce"].value = "domain", "max"
+    e = ed.collect()["series"][0]
+    assert e["recipe"]["field"] == "ddz.winterp" and e["units"] == "10⁻³ s⁻¹"
+    assert "∂/∂z" in txt(c.title.object)
+    ed.panel_data(ed.collect())
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    d = ed.panel_data(ed.collect())[0]
+    want = [np.nanmax(F.plane("ddz.winterp", t, "height", 2.0)) for t in range(len(run.times))]
+    assert np.allclose(np.asarray(d["S0_v"], float), want, rtol=1e-5, equal_nan=True)
+    c2 = SeriesCard(ed, e)
+    assert (c2.w["field"].value, c2.w["deriv"].value) == ("winterp", "ddz")
+    c.w["field"].value = next(n for n, f in F.defs.items() if f.ndim == 2)
+    assert c.w["deriv"].value == "" and "ddz" not in c.w["deriv"].options.values()
+    ed.kind.value = "profile"
+    p = ed.prof_cards[0]
+    p.w["field"].value, p.w["deriv"].value = "thpert", "gradh"
+    p.w["region"].value, p.w["z1"].value, p.w["reduce"].value = "domain", 3.0, "max"
+    spec, data, fig = render(ed)
+    assert spec["profiles"][0]["recipe"]["field"] == "gradh.thpert"
+    t = fg_tindex(run, spec["profiles"][0]["time_s"])
+    z = np.asarray(data[0]["P0_z"], float)
+    k = int(np.argmin(np.abs(run.z - z[2])))
+    assert np.isclose(data[0]["P0_v"][2], np.nanmax(F.plane("gradh.thpert", t, "level", k)),
+                      rtol=1e-5)
+    assert "|∇h|" in fig.axes[0].get_xlabel()
+
+
+def fg_tindex(run, ts):
+    from cm1view.figures import spec as fg
+    return fg.tindex(run, ts)
 
 
 def test_profile_of_your_own_data(ed):

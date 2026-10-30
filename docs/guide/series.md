@@ -15,6 +15,7 @@ leave nothing to recompute when you change how the result is drawn.
 | Setting | Meaning |
 |---|---|
 | **Field** | Any native or derived field, 3D or 2D. |
+| **Derivative** | Reduce a derivative of the field instead (∂/∂z, ∂/∂x, ∂/∂y or \|∇h\|, per km; see [Derivatives of any field](fields.md#derivatives-of-any-field)), e.g. the maximum ∂w/∂z at 2 km. A 2D field has no ∂/∂z. |
 | **Vertical** | *At a height* (km AGL), or *Layer (every level)*, with *Bottom* and *Top*. For a layer the reduction also keeps every model level in it. Distributions also offer *Every level (whole depth)*. 2D fields (swaths, surface fields) have no vertical setting. |
 | **Region** | *Whole domain*, *Current map view* (the area in view when you compute), *3D region box* (offered once you have drawn one, see [3D](3d.md)), or *Around tracked storm* (needs a [track](tracking.md)). |
 | **Radius (km)**, **Offset x / y (km)** | For *Around tracked storm*: a disc of this radius, centred on the storm or shifted by the offset on the model grid, e.g. into the inflow or onto the cold pool. |

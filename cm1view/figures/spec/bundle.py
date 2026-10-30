@@ -10,7 +10,7 @@ import numpy as np
 
 from ... import config
 from .. import draw as figdraw
-from .base import _abs
+from .base import _abs, default_spec, run_entry
 
 def flatten(data):
     """{panel: {name: array}} -> {'p<panel>__<name>': array} for .npz files."""
@@ -263,6 +263,32 @@ def script(spec, npz_name, out_name, run=None, note="", draw_name="../_src/draw.
 def _plain(o):
     """JSON round trip: numpy scalars and tuples become plain Python."""
     return json.loads(json.dumps(o, default=float))
+
+
+# options of older figures that new figures have on: a figure saved before them opens
+# as it was drawn (run names in black, the inset at the upper right, no storm ring)
+OLDER = {"run_label": dict(run_color=False),
+         "skewt": dict(inset_loc="upper right", hodo_storm=False)}
+
+
+def with_defaults(spec, run, F, t, track=None):
+    """A saved figure (or part) with what it lacks from this version's defaults (of
+    `run` at output t); without runs of its own (a template), `run` with `track`
+    (run_entry's)."""
+    base = default_spec(run, F, t)
+    for k, val in spec.items():  # keys added in later versions keep their defaults
+        base[k] = dict(base[k], **val) if isinstance(base.get(k), dict) else val
+    for k, was in OLDER.items():  # ... but what would change how it looked
+        if isinstance(spec.get(k), dict):
+            base[k].update({kk: v for kk, v in was.items() if kk not in spec[k]})
+    if "runs" not in spec:  # a figure of one run: this run
+        base["runs"] = [run_entry(run, track)]
+    nt = len(run.times)
+    if "times_s" not in spec:
+        base["times"] = [t for t in base["times"] if t is None or t < nt]
+        base["time"] = min(int(base["time"]), nt - 1)
+        base.pop("times_s"), base.pop("time_s")
+    return base
 
 
 def load_spec(path):

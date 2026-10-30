@@ -276,3 +276,102 @@ def test_use_map_view_as_region(viewer):
     x0, x1, y0, y1 = v.box
     X0, X1, Y0, Y1 = v.extent
     assert X0 <= x0 < x1 <= X1 and Y0 <= y0 < y1 <= Y1
+
+
+def test_map_difference_minus_another_time_or_run(viewer, reg, demo_root):
+    """The map fill minus the output before, a fixed time or another run's at the same
+    time: drawn as the hand difference, diverging about 0, said in the title; a time
+    the other run lacks says so; a figure from the map keeps the difference."""
+    import os
+    v = viewer
+    run, F = reg.get()
+    v.tslider.value = 2
+    v.fill_var.value = "winterp"
+    d = v.fill_diff
+    assert not d["run"].visible
+    d["on"].value = True
+    assert d["run"].visible and d["time"].visible and v.fill_cmap.value == "RdBu_r"
+    weak = os.path.abspath(os.path.join(demo_root, "demo", "supercell_weak"))
+    assert weak in d["run"].options.values()
+    d["time"].value = "prev"
+    wait(lambda: "minus 1:00:00" in (v.map_title.object or ""), msg="difference")
+    lvl = float(v.fill_lvl.value)
+    want = F.plane("winterp", 2, "height", lvl) - F.plane("winterp", 1, "height", lvl)
+    win = render.view_window(run, v.view, v.maxpix)
+    _, _, want = render._crop(run, want, win)
+    np.testing.assert_allclose(v.img_src.data["image"][0], want, atol=1e-5)
+    lo, hi = v._last_range
+    assert lo == -hi and (lo, hi) == render.diff_range(
+        F.plane("winterp", 2, "height", lvl) - F.plane("winterp", 1, "height", lvl))
+    assert "difference" in v.cbar_label.axis_label
+    # another run at the shown time
+    r2, F2 = reg.get(weak)
+    d["time"].value, d["run"].value = "", weak
+    wait(lambda: "of " in (v.map_title.object or ""), msg="other run")
+    want = F.plane("winterp", 2, "height", lvl) - F2.plane("winterp", 2, "height", lvl)
+    _, _, want = render._crop(run, want, win)
+    np.testing.assert_allclose(v.img_src.data["image"][0], want, atol=1e-5)
+    # into a figure: the other run added, the layer a difference with the map's colours
+    v.figed.from_map()
+    s = v.figed.collect()
+    lay = s["layers"][0]
+    assert lay["minus"]["run"] is not None and lay["minus"]["time_s"] is None
+    assert s["runs"][lay["minus"]["run"]]["path"] == weak
+    assert (lay["vmin"], lay["vmax"]) == tuple(round(x, 6) for x in v._last_range)
+    # a time before the first output: an error, not a map
+    v.tslider.value, d["run"].value, d["time"].value = 0, "", "prev"
+    wait(lambda: "no output before" in (v.status.object or ""), msg="error")
+    # off: the field's own colours
+    d["on"].value = False
+    assert v.fill_cmap.value == F["winterp"].cmap and not d["run"].visible
+
+
+def test_cross_section_difference(viewer, reg):
+    """The section fill minus the output before: the hand difference along A–B."""
+    v = viewer
+    run, F = reg.get()
+    v.tslider.value = 2
+    v.mode.set("Cross-section")
+    v.xs_fill.value = "winterp"
+    tap(v, -15.0, -6.0)
+    tap(v, 15.0, -1.0)
+    wait(lambda: "long" in (v.xs_status.object or ""), msg="section")
+    v.xs_diff["on"].value = True
+    assert v.xs_cmap.value == "RdBu_r"
+    v.xs_diff["time"].value = "prev"
+    wait(lambda: "minus 1:00:00" in (v.xs_status.object or ""), msg="difference")
+    spec = v.xs_spec()
+    s, fi, fj, _ = render.section_coords(run, spec["A"], spec["B"])
+    zq = np.linspace(0.0, spec["ztop"], max(120, int(spec["ztop"] / 0.04)))
+    run.load_volumes(F.native_deps("winterp"), 1)
+    want = render.sample_section(run, F.volume("winterp", 2), fi, fj, zq) \
+        - render.sample_section(run, F.volume("winterp", 1), fi, fj, zq)
+    np.testing.assert_allclose(v.xs_img.data["image"][0], want, atol=1e-5)
+    assert v._xs_range == render.diff_range(want)
+
+
+def test_difference_on_another_grid_is_interpolated():
+    """minus_plane: another run on a different grid is interpolated onto this one
+    (blank outside its domain)."""
+    from types import SimpleNamespace as NS
+
+    class Flds:
+        def __init__(self, x, y):
+            self.run = NS(xh=x, yh=y, name="r")
+            X, Y = np.meshgrid(x, y)
+            self.a = (2 * X + Y).astype(np.float32)
+
+        def __contains__(self, n):
+            return True
+
+        def plane(self, *a, **k):
+            return self.a
+
+    A = Flds(np.arange(0.0, 10.0, 1.0), np.arange(0.0, 8.0, 1.0))
+    B = Flds(np.arange(0.0, 6.0, 0.5), np.arange(0.0, 6.0, 0.5))  # (finer, smaller)
+    b = render.minus_plane(A, B, "f", 0, "height", 1.0)
+    assert b.shape == A.a.shape
+    inside = np.isfinite(b)
+    assert inside[:6, :6].all() and not inside[:, 6:].any() and not inside[6:, :].any()
+    np.testing.assert_allclose(b[inside], A.a[inside], atol=1e-5)  # (a linear field)
+    assert render.minus_plane(A, A, "f", 0, "height", 1.0) is A.a

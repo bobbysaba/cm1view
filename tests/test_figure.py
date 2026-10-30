@@ -476,25 +476,25 @@ def test_a_series_no_longer_shown_stops(ed, monkeypatch):
     """A series job whose recipe the figure no longer needs (e.g. its region changed
     from around the storm to the whole domain) stops, and one queued behind another
     does not start; both start again (from the times kept) when needed again."""
-    from cm1view.figures import sources
+    from cm1view.figures import render
     calls = []
 
     def compute(run, F, recipe, ds, centers, storm, on_result=None, cancelled=None):
         calls.append(recipe["region"])
-        ed._ser_live = set()  # (the figure changed meanwhile)
+        ed.data.ser_live = set()  # (the figure changed meanwhile)
         assert cancelled()
         return ds, {}
 
-    monkeypatch.setattr(sources.ser, "compute", compute)
+    monkeypatch.setattr(render.ser, "compute", compute)
     old, new = ("p", "storm", ""), ("p", "domain", "")
-    ed._ser_state[old] = "running"
-    ed._ser_live = {new}  # queued, not needed by the time it is reached: not started
-    ed._ser_compute(old, ed.run, ed.F, dict(region="track"), None, None, None, "w")
-    assert calls == [] and old not in ed._ser_state
-    ed._ser_state[new] = "running"
-    ed._ser_live = {new}  # started, then no longer needed: stopped, to start again
-    ed._ser_compute(new, ed.run, ed.F, dict(region="domain"), None, None, None, "w")
-    assert calls == ["domain"] and new not in ed._ser_state
+    ed.data.ser_state[old] = "running"
+    ed.data.ser_live = {new}  # queued, not needed by the time it is reached: not started
+    ed.data.ser_compute(old, ed.run, ed.F, dict(region="track"), None, None, None, "w")
+    assert calls == [] and old not in ed.data.ser_state
+    ed.data.ser_state[new] = "running"
+    ed.data.ser_live = {new}  # started, then no longer needed: stopped, to start again
+    ed.data.ser_compute(new, ed.run, ed.F, dict(region="domain"), None, None, None, "w")
+    assert calls == ["domain"] and new not in ed.data.ser_state
     assert not ed.series_pending()
 
 

@@ -184,7 +184,8 @@ class Layout:
         d = self.xs_drawer = Drawer()
         # as on the map: the fill's style in the fill's pill, what goes over it in the next
         xs_style = d.add("style", "Style", self.xs_fill_style, self.xs_cmap, self.xs_rev,
-                         self.xs_auto, self.xs_min, self.xs_max, self.xs_nlev)
+                         self.xs_auto, self.xs_min, self.xs_max, self.xs_nlev,
+                         *self.xs_diff.values())
         xs_more = d.add("fills", "More fills", pn.Column(
             self.xs_fill_list, self.xs_fill_add, margin=0, sizing_mode="stretch_width"))
         xs_cont = d.add("ov", "Contours", pn.Column(
@@ -239,9 +240,9 @@ class Layout:
                            align_items="flex-end", gap="0 4px", sizing_mode="stretch_width"),
                 self.trk_table, scroll="y-auto", sizing_mode="stretch_both")),
             ("Series", pn.Column(
-                pn.FlexBox(self.ser_field, self.ser_vmode, self.ser_z, self.ser_z0,
-                           self.ser_z1, self.ser_region, self.ser_radius, self.ser_offx,
-                           self.ser_offy, self.ser_reduce, self.ser_pct, self.ser_go,
+                pn.FlexBox(self.ser_field, self.ser_op, self.ser_vmode, self.ser_z,
+                           self.ser_z0, self.ser_z1, self.ser_region, self.ser_radius,
+                           self.ser_offx, self.ser_offy, self.ser_reduce, self.ser_pct, self.ser_go,
                            self.ser_stop, flex_wrap="wrap", align_items="flex-end",
                            gap="0 4px", sizing_mode="stretch_width"),
                 self.ser_status,
@@ -289,7 +290,8 @@ class Layout:
                        self.time_html)
         times.styles = dict(times.styles, flex="1 1 420px", **{"min-width": "0"})
         return pn.Column(
-            _bar(self.ws_group, _group(self.run_btn, self.gear_btn),
+            _bar(self.ws_group,
+                 _group(self.run_btn, self.ses_btn, self.exp_btn, self.gear_btn),
                  _group(self.storm_btn), times),
             styles=dict(BAR, **{"z-index": "40"}), margin=0, sizing_mode="stretch_width")
 
@@ -297,7 +299,7 @@ class Layout:
         d = self.map_drawer = Drawer()
         style = d.add("style", "Style", self.fill_style, self.fill_cmap, self.fill_rev,
                       self.fill_auto, self.fill_min, self.fill_max, self.fill_nlev,
-                      self.fill_alpha)
+                      self.fill_alpha, *self.fill_diff.values())
         more = d.add("fills", "More fills", pn.Column(self.fill_list, self.fill_add, margin=0,
                                                       sizing_mode="stretch_width"))
         cont = d.add("ov", "Contours", pn.Column(self.ov_list, self.ov_add, margin=0,
@@ -398,7 +400,8 @@ class Layout:
         self.fig_ws = pn.Column(self.figed.panel, sizing_mode="stretch_width", visible=False,
                                 margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,
-                         self.rp_modal, self.settings.modal, self.confirm.modal,
+                         self.rp_modal, self.ses_modal, self.exp_modal,
+                         self.settings.modal, self.confirm.modal,
                          margin=0, styles={"position": "fixed", "top": "0", "left": "0",
                                            "width": "100vw", "height": "100vh",
                                            "display": "flex", "flex-direction": "column"})

@@ -154,7 +154,12 @@ def fill_palette(spec):
 
 def _map_fill(F, f, t, win, fstorm):
     a = F.plane(f["var"], t, f["mode"], f["level"], storm=fstorm)
-    lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
+    m = f.get("minus")  # (a difference: {F, t} of the other run / time)
+    if m:
+        a = a - minus_plane(F, m["F"], f["var"], m["t"], f["mode"], f["level"], fstorm)
+        lo, hi = diff_range(a) if f["auto"] else (f["vmin"], f["vmax"])
+    else:
+        lo, hi = F.auto_range(f["var"], a) if f["auto"] else (f["vmin"], f["vmax"])
     if hi <= lo:
         hi = lo + 1e-6
     x, y, ac = _crop(F.run, a, win)
@@ -214,6 +219,61 @@ def compute_map(F, spec):
     out["vecs"] = [_map_vectors(F, o, t, win, spec["storm"]) if o["on"] else None
                    for o in spec["vecs"]]
     return out
+
+
+# ------------------------------------------------------------ differences
+def same_grid(u, v):
+    u, v = np.asarray(u, dtype=float), np.asarray(v, dtype=float)
+    return u.shape == v.shape and np.allclose(u, v, atol=1e-6)
+
+
+def regrid(a, x, y, xn, yn):
+    """2-D array a on the rectilinear grid (y, x) interpolated bilinearly onto (yn, xn)
+    (NaN outside a's grid)."""
+    a, x, y = np.asarray(a, dtype=float), np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    rows = np.array([np.interp(xn, x, r, left=np.nan, right=np.nan) for r in a])
+    return np.array([np.interp(yn, y, c, left=np.nan, right=np.nan) for c in rows.T]).T
+
+
+def diff_range(a):
+    """Auto range of a difference: symmetric about 0 (99.5th percentile of |a|)."""
+    finite = np.abs(a[np.isfinite(a)])
+    if finite.size == 0:
+        return (-1.0, 1.0)
+    m = float(np.percentile(finite[:: max(1, finite.size // 200000)], 99.5)) or 1.0
+    return (-m, m)
+
+
+def _other_has(F, F2, name):
+    if name not in F2:
+        raise ValueError(f"difference: {F[name].label} is not in {F2.run.name}")
+
+
+def minus_plane(F, F2, name, t2, mode, level, fstorm=None):
+    """Field `name` of the run of F2 at time index t2, on the grid of F's run (what a
+    map difference subtracts): as is on the same grid, else interpolated (NaN outside
+    the other run's domain)."""
+    _other_has(F, F2, name)
+    b = F2.plane(name, t2, mode, level, storm=fstorm)
+    r, r2 = F.run, F2.run
+    if r2 is r or (same_grid(r.xh, r2.xh) and same_grid(r.yh, r2.yh)):
+        return b
+    return regrid(b, r2.xh, r2.yh, r.xh, r.yh).astype(np.float32)
+
+
+def minus_section(F, F2, name, t2, A, B, s, zq, fstorm=None):
+    """Field `name` of the run of F2 at time index t2 along the section A–B, on the
+    distances s and heights zq of F's section (NaN outside the other run's domain).
+    Its 3D field must be loaded (CM1Run.load_volumes)."""
+    _other_has(F, F2, name)
+    r2 = F2.run
+    s2, fi, fj, _ = section_coords(r2, A, B)
+    b = sample_section(r2, F2.volume(name, t2, fstorm), fi, fj, zq)
+    out = (fi < -0.5) | (fi > r2.ni - 0.5) | (fj < -0.5) | (fj > r2.nj - 0.5)
+    b[:, out] = np.nan
+    if s2.size != np.size(s):
+        b = regrid(b, s2, zq, s, zq).astype(np.float32)
+    return b
 
 
 # ------------------------------------------------------------ cross-section

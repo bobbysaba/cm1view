@@ -47,6 +47,7 @@ class MapView:
         keep = CustomJS(args=dict(fig=fig, ext=list(self.extent)), code=KEEP_ASPECT_JS)
         fig.js_on_change("inner_width", keep)
         fig.js_on_change("inner_height", keep)
+        fig.js_on_change("tags", keep)  # (a session's view, put back: Sessions._put_view)
         fig.x_range.on_change("reset_end", self._on_resized)
         fig.y_range.on_change("reset_end", self._on_resized)
 
@@ -256,7 +257,7 @@ class MapView:
                       cmap=self.fill_cmap.value, rev=self.fill_rev.value,
                       auto=self.fill_auto.value, vmin=self.fill_min.value or 0.0,
                       vmax=self.fill_max.value or 0.0, nlev=self.fill_nlev.value,
-                      alpha=self.fill_alpha.value),
+                      alpha=self.fill_alpha.value, minus=self._minus_spec(self.fill_diff)),
             fills=[dict(on=o["on"].value, var=o["var"].value, mode=o["mode"].value,
                         level=float(o["level"].value), style=o["style"].value,
                         cmap=o["cmap"].value, rev=o["rev"].value, auto=o["auto"].value,
@@ -274,7 +275,7 @@ class MapView:
         )
 
     def request_map(self):
-        if self._hold:
+        if self._hold or self._applying:
             return
         self.gen["map"] += 1
         g, spec = self.gen["map"], self._map_spec()
@@ -287,6 +288,9 @@ class MapView:
             if any(pdecomp.is_pdecomp(self.F, n) for n in
                    self._spec_names(spec)):
                 pdecomp.source(self.run, spec["t"])  # file version tag, off the page thread
+            m = spec["fill"].get("minus")
+            if m:  # (a difference: the other run / time it subtracts, opened here)
+                spec = dict(spec, fill=dict(spec["fill"], minus=self._minus_ref(m, spec["t"])))
             res = render.compute_map(self.F, spec)
         except (MissingAtTime, FileBusy) as e:  # fields at other times only / being written
             res = e
@@ -327,7 +331,8 @@ class MapView:
                 self.img_r.visible, self.poly_r.visible = False, True
                 self.poly_r.glyph.fill_alpha = fs["alpha"]
             note = self._storm_note([fs["var"]], spec["t"])
-            self.cbar_label.axis_label = F[fs["var"]].title + (f" · {note[1]}" if note else "")
+            self.cbar_label.axis_label = F[fs["var"]].title + (f" · {note[1]}" if note else "") \
+                + (" · difference" if fs.get("minus") else "")
         for f, fres, g in zip(spec["fills"], res["fills"], self.fill_r):
             g["cbar"].visible = fres is not None
             if fres is None:
@@ -372,7 +377,8 @@ class MapView:
                 return f" @ k={int(level)} ({run.z[int(level)] * 1000:.0f} m)"
             return " column max" if mode == "colmax" else " column min"
 
-        parts = [f'<b>{F[fs["var"]].label}</b>{lvl_txt(fs["mode"], fs["level"], fs["var"])}']
+        parts = [f'<b>{F[fs["var"]].label}</b>{lvl_txt(fs["mode"], fs["level"], fs["var"])}'
+                 + self._minus_note(fs.get("minus") if fill else None)]
         for f in spec["fills"]:
             if f["on"]:
                 parts.append(f'+ <b>{F[f["var"]].label}</b>'

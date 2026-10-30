@@ -21,6 +21,8 @@ has a matching git tag.
   fill; a figure's fill, contour and shading layers on plan views and cross-sections)
   plots ∂/∂z, ∂/∂x, ∂/∂y or |∇h| of it, per km (∂w/∂z in 10⁻³ s⁻¹), on the stretched
   grid ([Derivatives of any field](guide/fields.md#derivatives-of-any-field)).
+  Series (the Series tab, and a figure's series and profile cards) have it too: the
+  derivative is taken before the reduction, e.g. the maximum ∂w/∂z at 2 km.
 - **Profiles of several runs**: a profile card's *Run* can be **All runs** or
   **Several runs…** (a line per run), with an optional ensemble band (min–max,
   percentiles or ± 1 sd) and mean or median line, and the cards have **Duplicate** and
@@ -139,10 +141,62 @@ has a matching git tag.
   panels, a card each; a *Section line* layer draws each section once
   ([Panels](guide/figures-panels.md#vertical-cross-sections)).
 
+- **`cm1view render`**: draws a saved figure or a template from the command line, with
+  no viewer: as saved, or for each of several runs (`--run`, as a template of it), at
+  another time (`--time`), as an image, a bundle (`--bundle`) or an animated GIF
+  (`--gif`), with `{run}` / `{name}` in `--out`. For batch jobs after the runs finish;
+  Slurm and PBS examples in [Running on a cluster](hpc.md#figures-in-a-batch-job)
+  ([Drawing figures without the viewer](guide/figures-export.md#drawing-figures-without-the-viewer)).
+
 ### The viewer
 
+- **Live differences**: the map's fill and the cross-section's fill can be a difference
+  (*Style → Difference: minus another time or run*): minus the output before, a fixed
+  time, or another run at the same time (interpolated if its grid differs), drawn in
+  `RdBu_r` symmetric about zero. A figure made from the map or section keeps it
+  ([The map](guide/map.md#style-the-fill)).
+- **Sessions**: the bookmark button in the top bar saves what the viewer shows (time,
+  map view, fill with its level, style and difference, more fills, contours, vectors,
+  storm motion, storm track, soundings, cross-section, 3D setup, series, distributions,
+  tool and workspace) to a JSON file, and loads it back (series from their cache,
+  distributions computed again);
+  `?session=/path/to/file.json` opens a session (and its run) from the address.
+  Saved under `<exports_dir>/<parent>_<run>/sessions` by default
+  ([Sessions](guide/index.md#sessions)).
+- **netCDF export**: the new *Export data* button in the top bar writes fields (native,
+  derived, derivatives, column fields and sounding parameters) of the whole domain, the
+  map's view or a box, at chosen times, on the model levels or at heights (the map's
+  values there), to a CF-style netCDF file, one time after another, with progress and
+  Stop (the file keeps the times done). `cm1view export RUN --fields ...` does the same
+  from the command line or a batch job ([Exporting data](guide/index.md#exporting-data)).
+- **Vorticity tendencies**: a new field group with ζ stretching (ζ ∂w/∂z), tilting
+  (ξ ∂w/∂x + η ∂w/∂y), their sum, and the Okubo–Weiss parameter, in 10⁻⁴ s⁻², on the
+  map, sections, 3D, series and figures
+  ([Vorticity tendencies](guide/fields.md#vorticity-tendencies)).
+- **Column fields**: a new 2D field group made from a layer of each column: updraft
+  helicity 2–5 km and 0–1 km (∫ w ζ dz), maximum ζ 0–1 km and column maximum w, on the
+  map, series, distributions and figures
+  ([Column fields](guide/fields.md#column-fields)).
+- **Sounding parameters**: bulk shear 0–1 and 0–6 km and storm-relative helicity 0–1
+  and 0–3 km of every column (helicity relative to the tracked storm motion, else the
+  domain motion), as 2D fields on the map, series, distributions and figures; and the
+  CAPE, CIN and LCL height of surface-based, mixed-layer and most-unstable parcels, and
+  fixed-layer STP and SCP, as the soundings compute them. Parcels are lifted in parallel
+  on every n-th column (the new `column_stride` setting; auto keeps to about 250 000
+  columns) ([Sounding parameters](guide/fields.md#sounding-parameters)).
+- Series of horizontal divergence and baroclinic generation over a box or a disc now
+  match the map at the region's edge (they were taken with one-sided differences there).
 - **Linked clicks**: clicking the track's time series shows that time; clicking the
   time–height plot also moves the map to the clicked height.
+
+### Under the hood
+
+- A figure's data (opening its runs, reading their tracks, the panel arrays and the
+  series, soundings, distributions, profiles and 3D scenes behind them, and their
+  caches) is now `FigureData` in `cm1view/figures/render.py`, which needs no viewer or
+  Panel: `figdraw.draw(spec, FigureData().panel_data(spec))` draws a saved spec from a
+  script. The figure editor uses it. `cm1view/figures/batch.py` (`cm1view render`)
+  builds on it; filling a saved figure's missing settings is `spec.with_defaults`.
 
 ## 0.4.0 (2026-10-26)
 

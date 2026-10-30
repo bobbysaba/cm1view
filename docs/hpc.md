@@ -68,6 +68,7 @@ the same with `#PBS` lines):
 #SBATCH --output=cm1view-%j.out
 
 source ~/miniforge3/etc/profile.d/conda.sh   # or: module load conda
+eval "$(conda shell.bash hook)"
 conda activate cm1view
 cm1view /path/to/cm1/run
 ```
@@ -97,6 +98,7 @@ default). Without these, cm1view sizes itself from the whole machine.
 ## 2. Start cm1view
 
 ```bash
+eval "$(conda shell.bash hook)"
 conda activate cm1view
 cm1view /path/to/cm1/run          # or ./cm1view.sh, same options
 ```
@@ -118,7 +120,9 @@ Open the viewer:
 Options: `--cache-gb` (memory for cached 3D fields), `--workers` (parallel reader
 processes), `--maxpix` (map pixels sent per axis; zooming in gives full resolution),
 `--port`, `--config` (another settings file), `--demo`. `cm1view --help` lists them all.
-Add `?t=30` to the URL to open at time index 30, or `?run=/path` to open another run.
+`cm1view render` draws saved figures without the viewer ([below](#figures-in-a-batch-job)).
+Add `?t=30` to the URL to open at time index 30, or `?run=/path` to open another run (`?session=/path/to/session.json`: a saved
+[session](guide/index.md#sessions)).
 
 ## 3. Open it in your browser
 
@@ -141,6 +145,56 @@ no tunnel needed. Request the hub session with the CPUs and memory above.
 
 Only you can reach the server: it listens on `127.0.0.1` (`--address` changes that, but
 there is no login page, so don't expose it on a shared network).
+
+## Figures in a batch job
+
+`cm1view render` draws saved figures and templates without the viewer
+([Drawing figures without the viewer](guide/figures-export.md#drawing-figures-without-the-viewer)),
+so figures can be made in a batch job, e.g. once the runs finish. It needs no port or
+tunnel; give the job the memory and CPUs that reading the runs takes.
+
+**Slurm**
+
+```bash
+#!/bin/bash
+#SBATCH --account=<ACCOUNT>
+#SBATCH --partition=<PARTITION>
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#SBATCH --time=01:00:00
+#SBATCH --output=cm1view-render-%j.out
+
+eval "$(conda shell.bash hook)"   # (conda in a batch job)
+conda activate cm1view
+cm1view render refl --run /path/to/runs/* --time 90 --out '~/figures/{run}/refl.pdf'
+cm1view render refl --run /path/to/runs/* --gif --step 2 --out '~/figures/{run}/refl'
+cm1view export /path/to/runs/run1 --fields winterp,zvort,uh25 --ztop 10 --every 2
+```
+
+**PBS Pro**
+
+```bash
+#!/bin/bash
+#PBS -A <ACCOUNT>
+#PBS -q <QUEUE>
+#PBS -l select=1:ncpus=4:mem=32GB
+#PBS -l walltime=01:00:00
+#PBS -j oe
+
+eval "$(conda shell.bash hook)"
+conda activate cm1view
+cm1view render refl --run /path/to/runs/* --time 90 --out '~/figures/{run}/refl.pdf'
+```
+
+Submit with `sbatch render.sh` or `qsub render.sh`. To run after the model, make the
+job depend on it (`sbatch --dependency=afterok:<jobid>`, `qsub -W depend=afterok:<jobid>`).
+The job's output file lists each figure as it is saved.
+
+`cm1view export` writes fields to netCDF the same way, without the viewer
+([Exporting data](guide/index.md#exporting-data)); its progress goes to the job's
+output. Large exports (many 3D fields at every time) read every file once per time, so
+give the job time, and write to a file system with room for them (`--out`, or the
+`exports_dir` setting).
 
 ## Tips
 

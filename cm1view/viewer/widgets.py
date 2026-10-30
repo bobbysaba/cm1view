@@ -340,6 +340,7 @@ class Widgets:
                                               value=15, width=160)
         self.fill_alpha = pn.widgets.FloatSlider(name="Opacity", start=0.1, end=1.0,
                                                  step=0.05, value=1.0, width=150)
+        self.fill_diff = self._diff_widgets()  # (minus another time or run)
 
         # ---- more fills, over the first: a row each in the More fills drawer
         self.fills = []

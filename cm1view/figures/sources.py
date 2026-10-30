@@ -1,20 +1,16 @@
 """Figure editor: new figures from the map, the cross-section, the series, the
-soundings and the distributions, the series / sounding / distribution / profile / joint
-distribution / azimuthal mean / annotation lists, and the series, sounding,
-distribution, profile, joint distribution and azimuthal mean data of a figure.
+soundings and the distributions, and the series / sounding / distribution / profile /
+joint distribution / azimuthal mean / annotation lists.  (The data of a figure is
+FigureData's, figures/render.py.)
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
 import json
-import time as _time
-import traceback
-from functools import partial
 
 import panel as pn
 
 from . import draw as figdraw, spec as fg
 from ..core import render, series as ser, vectors
-from ..core.run import FileBusy, MissingAtTime
 from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
                     ProfileDataCard,
                     DataCard, SeriesCard, SoundingCard, _dark)
@@ -52,6 +48,28 @@ class FigureSources:
                  times_s=[float(self.run.times[k]) for k in times],
                  time_s=float(self.run.times[t]))
         return s
+
+    def _minus(self, s, lay, m, rng):
+        """Fill layer `lay` of figure spec s as the viewer's difference m (_minus_spec;
+        another run is added to the figure's runs), in the colours it is shown in:
+        range rng (lo, hi)."""
+        if not m:
+            return
+        run = None
+        if m["path"]:
+            other, _ = self.open_run(m["path"])
+            paths = [r["path"] for r in s["runs"]]
+            if other.path not in paths:
+                s["runs"].append(fg.run_entry(other, ""))
+                paths.append(other.path)
+            run = paths.index(other.path)
+        t = self.v.t
+        ts = None if m["time"] == "" else float(self.run.times[max(t - 1, 0)]) \
+            if m["time"] == "prev" else float(m["time"])
+        lay.update(minus=dict(run=run, time_s=ts, grid="interp"), cmap="RdBu", reverse=True,
+                   white_first=False, mask_below=None, scale="linear")
+        if rng:
+            lay.update(vmin=round(float(rng[0]), 6), vmax=round(float(rng[1]), 6))
 
     def from_map(self):
         """A one-panel figure of what the map shows (field, levels, contours, vectors,
@@ -104,6 +122,7 @@ class FigureSources:
             layers.append(lay)
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
+        self._minus(s, layers[0], sp["fill"].get("minus"), v._last_range)
         s.update(rows=1, cols=1, size=[5.0, 4.5], layers=layers, vary="time", kind="plan")
         s["domain"] = dict(s["domain"], mode="box", box=[float(x) for x in v.view])
         s["colorbar"] = dict(s["colorbar"], mode="each", orientation="vertical", shrink=0.9)
@@ -147,6 +166,7 @@ class FigureSources:
                 layers.append(lay)
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
+        self._minus(s, layers[0], sp["minus"], v._xs_range)
         s.update(kind="xsec", rows=1, cols=1, size=[7.0, 3.5], layers=layers, vary="time")
         s["xsec"] = dict(s["xsec"], ztop=float(v.xs_ztop.value))
         s["sections"] = [fg.section_defaults(orient="ab", pos="fixed", a=list(v.xs_pts[0]),
@@ -757,448 +777,6 @@ class FigureSources:
         self.ann_rows.remove(r)
         self._show_anns()
         self.request()
-
-    # ------------------------------------------------------------ series data
-    def _series_get(self, spec, k, e):
-        """(run, dataset) of series e of spec for run k, or why not (a string).  Starts
-        computing the missing times in the background (the preview updates as they come
-        in)."""
-        runs, ent = spec["runs"], spec["series"][e]
-        try:
-            run, F = self.open_run(runs[k]["path"])
-        except Exception as ex:  # noqa: BLE001
-            return f"could not open {runs[k]['path']}: {ex}"
-        r = ent["recipe"]
-        if r["field"] not in F:
-            return f"this run has no {r['field']}"
-        fx = self.run_fixes(runs[k], run)
-        track = r["region"] == "track"
-        if track and not fx:
-            return "no storm track for this run (Runs tab)"
-        centers = ser.track_centers(fx, len(run.times)) if track else None
-        sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                for t, f in fx.items())) if track else ""
-        key = (run.path, json.dumps(r, sort_keys=True), sig)
-        self._ser_touch.add(key)
-        ds = self._ser_mem.get(key)
-        if ds is None:
-            d = F[r["field"]]
-            ds = ser.cached(run, r, d.label, d.units, centers)
-            self._ser_mem[key] = ds
-        if key not in self._ser_state and int(ds["computed"].sum()) < len(run.times):
-            self._ser_state[key] = "running"
-            self._ser_live = self._ser_live | {key}
-            storm = ({t: fg.storm_motion(run, fx, t) for t in range(len(run.times))}
-                     if F[r["field"]].storm else None)
-            self.v.pools["figser"].submit(self._ser_compute, key, run, F, r, ds, centers, storm,
-                                          f"{runs[k].get('label') or ''}: {ent.get('label', '')}")
-        elif key not in self._ser_state:
-            self._ser_state[key] = "done"
-        return run, ds
-
-    def _ser_compute(self, key, run, F, recipe, ds, centers, storm, what):
-        """Compute series `key` in the background; it stops (its times so far kept, to
-        go on from when it is needed again) once the shown figure no longer needs it,
-        e.g. its region changed from around the storm to the whole domain."""
-        g0, last = self.v.gen["figser"], [_time.time()]
-
-        def stale():
-            return self.v.gen["figser"] != g0 or key not in self._ser_live
-
-        if stale():  # (queued behind another, and changed meanwhile: not started)
-            self._ser_state.pop(key, None)
-            self._ser_prog.pop(key, None)
-            return
-
-        def on_result(ds_, done, total):
-            self._ser_prog[key] = f"{what[:60]} {done}/{total}"
-            if _time.time() - last[0] > 10 and done < total:  # partial preview
-                last[0] = _time.time()
-                self.v._schedule(partial(self.request, False, False))
-
-        try:
-            ser.compute(run, F, recipe, ds, centers, storm, on_result=on_result,
-                        cancelled=stale)
-            if stale():  # (computed again from where it stopped when it is wanted)
-                self._ser_state.pop(key, None)
-            else:
-                self._ser_state[key] = "done"
-        except Exception as e:  # noqa: BLE001
-            traceback.print_exc()
-            self._ser_state[key] = f"error: {e}"
-        self._ser_prog.pop(key, None)
-        self.v._schedule(partial(self.request, False, False))
-
-    def series_pending(self):
-        return [v for k, v in self._ser_prog.items() if self._ser_state.get(k) == "running"] \
-            or [""] * sum(v == "running" for v in self._ser_state.values())
-
-    def _series_data(self, spec):
-        got = {}
-
-        def get(k, e):
-            if (k, e) not in got:
-                got[(k, e)] = self._series_get(spec, k, e)
-            return None if isinstance(got[(k, e)], str) else got[(k, e)]
-
-        data, multi = {}, len(spec["runs"]) > 1
-        busy = bool(self.series_pending())
-        for i in range(fg.npanels(spec)):
-            if spec["kind"] == "th":
-                ref = figdraw.series_ref(spec, i)
-                if ref is None:
-                    continue
-                r = get(*ref)
-                d = (dict(missing=got[ref]) if r is None else
-                     fg.th_panel(r[0], r[1], spec["series"][ref[1]], spec))
-                d["run"] = ref[0]
-                if multi:
-                    d["run_label"] = fg.run_folder(spec, ref[0])
-            else:
-                d = fg.line_panel(spec, i, get)
-            if busy and d.get("missing") == "not computed yet":
-                d["missing"] = "computing…"
-            data[i] = d
-        return fg.share_time_range(spec, data)
-
-    def _sounding_data(self, spec, progress=None, cancelled=None):
-        runs, ents = spec["runs"], spec.get("soundings", [])
-        res, labels = {}, {}
-        multi = len(runs) > 1
-        storm = fg.storm_choice(spec.get("skewt", {}))  # (of the SRH and the ring)
-
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, _ = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                        for t, f in fx.items())) \
-                    if ent["where"].get("kind") == "trk" else ""
-                key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig, storm],
-                                 sort_keys=True)
-                r = self.snd_cache.get(key)
-                if r is None:
-                    if progress:
-                        progress(e, len(ents))
-                    r = fg.sounding_column(run, ent, fx, storm=storm)
-                    self.snd_cache[key] = r
-                    while len(self.snd_cache) > 40:
-                        self.snd_cache.popitem(last=False)
-                labels[e] = fg.sounding_label(ent, runs[k].get("label", ""), run, multi)
-            except (MissingAtTime, FileBusy) as ex:
-                r = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                r = f"{type(ex).__name__}: {ex}"
-            res[e] = r
-            return r
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.sounding_panel(spec, i, get, lambda e: labels.get(e, ""))
-        return data
-
-    def _dist_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of a distribution figure; the summaries are kept
-        (dist_cache), so restyling reads nothing."""
-        runs, ents = spec["runs"], spec.get("dists", [])
-        res, labels, vlabs = {}, {}, {}
-        multi = len(runs) > 1
-
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, F = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                track = ent["recipe"]["region"] == "track" or \
-                    (ent["recipe"]["field"] in F and F[ent["recipe"]["field"]].storm)
-                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                        for t, f in fx.items())) if track else ""
-                key = json.dumps([run.path, float(ent["time_s"]), ent["recipe"], sig],
-                                 sort_keys=True)
-                r = self.dist_cache.get(key)
-                if r is None:
-                    if progress:
-                        progress(e, len(ents))
-                    r = fg.dist_compute(run, F, ent, fx)
-                    self.dist_cache[key] = r
-                    while len(self.dist_cache) > 60:
-                        self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({round(float(x["time_s"]), 1) for x in mine}) > 1
-                labels[e] = fg.dist_label(ent, runs[k].get("label", ""), F, multi, times)
-                vlabs[e] = fg.profile_value_label(F, ent)
-            except (MissingAtTime, FileBusy) as ex:
-                r = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                r = f"{type(ex).__name__}: {ex}"
-            res[e] = r
-            return r
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.dist_panel(spec, i, get, lambda e: labels.get(e, ""),
-                                    lambda e: vlabs.get(e, ""))
-        return data
-
-    def _joint_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of a joint distribution figure; the summaries are kept
-        (dist_cache, with the distributions'), so restyling reads nothing."""
-        runs, ents = spec["runs"], spec.get("joints", [])
-        res, labels, axlabs = {}, {}, {}
-        multi = len(runs) > 1
-
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, F = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                r = ent["recipe"]
-                track = r["region"] == "track" or any(
-                    f in F and F[f].storm for f in (r["field"], r["yfield"]))
-                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                        for t, f in fx.items())) if track else ""
-                key = json.dumps(["joint", run.path, float(ent["time_s"]),
-                                  ent.get("time_s1"), r, sig], sort_keys=True)
-                res[e] = self.dist_cache.get(key)
-                if res[e] is None:
-                    if progress:
-                        progress(e, len(ents))
-                    res[e] = fg.joint_compute(run, F, ent, fx, cancelled)
-                    if res[e] is None:  # (stopped for a newer preview: not kept)
-                        res[e] = "cancelled"
-                        return res[e]
-                    self.dist_cache[key] = res[e]
-                    while len(self.dist_cache) > 60:
-                        self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
-                             for x in mine}) > 1
-                labels[e] = fg.joint_label(ent, runs[k].get("label", ""), F, multi, times)
-                axlabs[e] = (fg.dist_value_label(F, r["field"]),
-                             fg.dist_value_label(F, r["yfield"]))
-            except (MissingAtTime, FileBusy) as ex:
-                res[e] = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                res[e] = f"{type(ex).__name__}: {ex}"
-            return res[e]
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.joint_panel(spec, i, get, lambda e: labels.get(e, ""),
-                                     lambda e: axlabs.get(e, ("", "")))
-        return data
-
-    def _scene_data(self, spec, cancelled=None):
-        """{0: arrays} of a 3D scene figure; kept (scene_cache) by what they depend on
-        (scene_key), so camera and look changes only render again, and an isosurface
-        edit keeps the traced streamlines (_st_cache)."""
-        runs, k = spec["runs"], int(spec.get("run", 0))
-        ts = float(spec["time_s"])
-        if k >= len(runs):
-            return {0: dict(time_s=ts, missing="no such run")}
-        try:
-            run, F = self.open_run(runs[k]["path"])
-            fx = self.run_fixes(runs[k], run)
-            sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                    for t, f in fx.items()))
-            key = fg.scene_key(spec, run.path, sig)
-            d = self.scene_cache.get(key)
-            if d is None:
-                def prog(done, total, name):
-                    if total:
-                        self.v._schedule(partial(self._status, (
-                            f'<span class="busy">● Loading 3D fields ({done}/{total}) '
-                            f'{name}…</span>')))
-
-                d = fg.scene_extract(run, F, spec, fx, prog, cancelled, self._st_cache)
-                if d is None:  # (stopped for a newer preview)
-                    return None
-                self.scene_cache[key] = d
-                while len(self.scene_cache) > 6:  # (meshes are large)
-                    self.scene_cache.popitem(last=False)
-            else:
-                self.scene_cache.move_to_end(key)
-        except (MissingAtTime, FileBusy) as ex:
-            d = dict(time_s=ts, missing=str(ex))
-        except Exception as ex:  # noqa: BLE001
-            traceback.print_exc()
-            d = dict(time_s=ts, missing=f"{type(ex).__name__}: {ex}")
-        out = dict(d, run=k)
-        if len(runs) > 1:
-            out["run_label"] = runs[k].get("label", "")
-        return {0: out}
-
-    def _azim_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of an azimuthal mean figure; the results are kept
-        (dist_cache, with the distributions'), so restyling reads nothing."""
-        runs, ents = spec["runs"], spec.get("azims", [])
-        res, labels, cbl, look = {}, {}, {}, {}
-        multi = len(runs) > 1
-
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, F = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                r = ent["recipe"]
-                # (the track: centres, and azimuth 0 / storm-relative fields: motion)
-                sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                        for t, f in fx.items()))
-                key = json.dumps(["azim", run.path, float(ent["time_s"]),
-                                  ent.get("time_s1"), r, sig], sort_keys=True)
-                res[e] = self.dist_cache.get(key)
-                if res[e] is None:
-                    if progress:
-                        progress(e, len(ents))
-                    res[e] = fg.azim_compute(run, F, ent, fx, cancelled)
-                    if res[e] is None:  # (stopped for a newer preview: not kept)
-                        res[e] = "cancelled"
-                        return res[e]
-                    self.dist_cache[key] = res[e]
-                    while len(self.dist_cache) > 60:
-                        self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
-                             for x in mine}) > 1
-                labels[e] = fg.azim_label(ent, runs[k].get("label", ""), F, multi, times)
-                cbl[e] = fg.dist_value_label(F, r["field"])
-                d = F[r["field"]] if r["field"] in F else None
-                look[e] = (d.cmap, d.diverging) if d is not None else ("viridis", False)
-            except (MissingAtTime, FileBusy) as ex:
-                res[e] = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                res[e] = f"{type(ex).__name__}: {ex}"
-            return res[e]
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.azim_panel(spec, i, get, lambda e: labels.get(e, ""),
-                                    lambda e: cbl.get(e, ""),
-                                    lambda e: look.get(e, ("viridis", False)))
-        return data
-
-    def _profile_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of a profile figure.  Each profile is a layer series
-        computed (ser.compute) only at the outputs it needs and cached with the series
-        (on disk and in _ser_mem), so restyling reads nothing."""
-        runs, ents = spec["runs"], spec.get("profiles", [])
-        res, labels, vlabs = {}, {}, {}
-        multi = len(runs) > 1
-
-        def get(e, k):
-            if (e, k) in res:
-                return res[e, k]
-            ent = ents[e]
-            if k >= len(runs):
-                res[e, k] = "no such run"
-                return res[e, k]
-            try:
-                n = sum(len(fg.profile_runs(x, len(runs))) for x in ents)
-                res[e, k] = self._profile_get(runs[k], ent, len(res), n, progress,
-                                              cancelled)
-                run, F = self.open_run(runs[k]["path"])
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
-                             for x in mine}) > 1
-                labels[e, k] = fg.profile_label(ent, runs[k].get("label", ""), F, multi, times)
-                labels.setdefault((e, -1), fg.profile_label(ent, "", F, False, times))
-                vlabs[e] = fg.profile_value_label(F, ent)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                res[e, k] = f"{type(ex).__name__}: {ex}"
-            return res[e, k]
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.profile_panel(spec, i, get, lambda e, k: labels.get((e, k), ""),
-                                       lambda e: vlabs.get(e, ""))
-        return data
-
-    def _profile_get(self, rentry, ent, e, n, progress=None, cancelled=None, compute=True):
-        """(z, values) of profile entry ent of run entry rentry, or why not (a
-        string): its outputs not computed yet are computed here (compute False: not,
-        say so)."""
-        run, F = self.open_run(rentry["path"])
-        r = ent["recipe"]
-        if r["field"] not in F:
-            return f"this run has no {r['field']}"
-        if F[r["field"]].ndim != 3:
-            return "profiles need a 3D field"
-        ts = fg.profile_times(run, ent)
-        if not ts:
-            return f"no output at {float(ent['time_s']) / 60:g} min in this run"
-        fx = self.run_fixes(rentry, run)
-        track = r["region"] == "track"
-        if track and not fx:
-            return "no storm track for this run (Runs tab)"
-        centers = ser.track_centers(fx, len(run.times)) if track else None
-        sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
-                                for t, f in fx.items())) if track else ""
-        key = (run.path, json.dumps(r, sort_keys=True), sig)  # (as _series_get's)
-        ds = self._ser_mem.get(key)
-        if ds is None:
-            d = F[r["field"]]
-            ds = ser.cached(run, r, d.label, d.units, centers)
-            self._ser_mem[key] = ds
-        todo = [t for t in ts if not ds["computed"].values[t]]
-        skipped = {}
-        if todo and not compute:
-            return "not computed yet (Refresh once the preview has drawn it)"
-        if todo:
-            if progress:
-                progress(e, n)
-            storm = ({t: fg.storm_motion(run, fx, t) for t in todo}
-                     if F[r["field"]].storm else None)
-            _, skipped = ser.compute(run, F, r, ds, centers, storm, cancelled=cancelled,
-                                     times=todo)
-        z, v, used = fg.profile_values(ds, ts)
-        if not used:
-            why = next(iter(skipped.values()), "not computed")
-            return f"no profile: {why}"
-        return z, fg.profile_op(z, v, ent.get("op", ""))
 
     # ------------------------------------------------------------ start from series / soundings
     def from_series(self):

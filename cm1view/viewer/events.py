@@ -10,6 +10,7 @@ import panel as pn
 
 from ..core import vectors, volume3d
 from ..core.fields import deriv_options
+from .diff import DIFF_CMAP
 from .zoomview import ZoomImage
 from .ui import PANELS
 
@@ -176,7 +177,7 @@ class Events:
                     self.fill_op.options = opts
                     self.fill_op.value = v if v in opts.values() else ""
             d = self.F[self._fill_name()]
-            self.fill_cmap.value = d.cmap
+            self.fill_cmap.value = DIFF_CMAP if self.fill_diff["on"].value else d.cmap
             self.fill_rev.value = False
             if d.vrange:
                 self.fill_min.value, self.fill_max.value = d.vrange
@@ -201,7 +202,7 @@ class Events:
     def _on_xs_fill(self, ev):
         self._hold_xs = True
         self.xs_cmap.value, self.xs_rev.value, self.xs_auto.value = \
-            self.F[ev.new].cmap, False, True
+            DIFF_CMAP if self.xs_diff["on"].value else self.F[ev.new].cmap, False, True
         self._hold_xs = False
         self.request_xsec()
 

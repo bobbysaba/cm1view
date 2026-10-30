@@ -117,6 +117,9 @@ class SoundingPanel:
         return "custom", m
 
     def request_soundings(self):
+        if self._applying:  # (a session going back: once, at its end)
+            self._due.add("snd")
+            return
         self.gen["snd"] += 1
         g = self.gen["snd"]
         if not self.points:

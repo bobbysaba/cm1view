@@ -157,6 +157,9 @@ class View3DPanel:
 
     # ================================================================ 3D
     def request_3d(self):
+        if self._applying:  # (a session going back: once, at its end)
+            self._due.add("3d")
+            return
         if self.box is None:
             self._set_box(self.view)
         self.gen["3d"] += 1

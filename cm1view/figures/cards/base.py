@@ -8,7 +8,7 @@ from matplotlib import font_manager
 from matplotlib.colors import to_hex
 
 from .. import draw as figdraw
-from ...core.fields import CMAPS
+from ...core.fields import CMAPS, DERIVS, deriv_options, split_deriv
 from ...viewer.numinput import FloatInput
 from ...theme import GRID, PANEL, RAISED, TEXT
 
@@ -340,3 +340,35 @@ _BTN = dict(width=32, height=28, margin=(2, 1), button_type="default", button_st
 
 def _chk(name, value):
     return pn.widgets.Checkbox(name=name, value=bool(value), margin=(5, 6, 12, 6))
+
+
+def _deriv_opts(F, base):
+    """{label: op} of a Derivative select beside Field `base` (a 2D field: no ∂/∂z)."""
+    return deriv_options(F[base]) if base in F else {"None": ""} | \
+        {v: k for k, v in DERIVS.items()}
+
+
+def _deriv_pair(F, name, width=210, first=None):
+    """(Field, Derivative) selects of field name `name` (fields.deriv_name), the
+    Derivative following the Field's options; fields.deriv_name(deriv, field) is the
+    name picked."""
+    op, base = split_deriv(name)
+    if base not in F:
+        op, base = "", first or next(iter(F.defs))
+    field = pn.widgets.Select(name="Field", groups=F.groups(), value=base, width=width)
+    opts = _deriv_opts(F, base)
+    deriv = pn.widgets.Select(
+        name="Derivative", options=opts, value=op if op in opts.values() else "", width=100,
+        description="A derivative of the field (per km), taken before the reduction: ∂/∂z "
+                    "on the model levels, ∂/∂x, ∂/∂y or the horizontal gradient's size")
+
+    def follow(ev):  # (registered first: other watchers of the Field see valid options)
+        o = _deriv_opts(F, ev.new)
+        if o != deriv.options:
+            v = deriv.value
+            deriv.options = o
+            deriv.value = v if v in o.values() else ""
+
+    field.param.watch(follow, "value")
+    return field, deriv
+

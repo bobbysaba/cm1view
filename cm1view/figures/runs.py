@@ -11,9 +11,7 @@ import panel as pn
 
 from .. import config, registry
 from . import draw as figdraw, spec as fg
-from ..core import track as trk
-from ..core.fields import GROUP_ORDER, Fields, deriv_def, split_deriv
-from ..core.run import CM1Run
+from ..core.fields import GROUP_ORDER, deriv_def, split_deriv
 from .cards import CARD, _hex, _row
 
 
@@ -59,39 +57,6 @@ class AllFields:
 
 class FigureRuns:
     # ------------------------------------------------------------ runs
-    def open_run(self, path):
-        """(CM1Run, Fields) of the run in `path` (the viewer's own run, or one opened
-        through the viewer's registry so its cache is shared)."""
-        path = os.path.abspath(path)
-        if path == self.run.path:
-            return self.run, self.F
-        reg = getattr(self.v, "reg", None)
-        if reg is not None:
-            return reg.get(path)
-        if path not in self._opened:
-            r = CM1Run(path, workers=self.run.workers, cache=self.run._vc)
-            self._opened[path] = (r, Fields(r))
-        return self._opened[path]
-
-    def run_fixes(self, entry, run):
-        """Track fixes {t: fix} of a spec["runs"] entry ({} without a track)."""
-        tr = entry.get("track") or ""
-        if tr == "viewer":
-            return dict(self.v.fixes) if run is self.run else {}
-        if not tr:
-            return {}
-        path = os.path.abspath(os.path.expanduser(os.path.expandvars(tr)))
-        try:
-            mt = os.path.getmtime(path)
-            hit = self._tracks.get(path)
-            if hit is None or hit[0] != mt or hit[1] != run.path:
-                self._tracks[path] = (mt, run.path, trk.load(run, path))
-            self._track_err.pop(path, None)
-            return self._tracks[path][2]
-        except Exception as e:  # noqa: BLE001
-            self._track_err[path] = str(e)
-            return {}
-
     def _build_runs(self, runs):
         self.run_rows = [self._run_row(e, k) for k, e in enumerate(runs)]
         self._ref_paths = set()  # (the runs something used; see _prune_runs)
@@ -181,8 +146,8 @@ class FigureRuns:
         tr = e["track"]
         path = os.path.abspath(os.path.expanduser(os.path.expandvars(tr))) \
             if tr and tr != "viewer" else ""
-        if path in self._track_err:
-            return f'<span style="color:#f87171">track: {self._track_err[path]}</span>'
+        if path in self.data.track_err:
+            return f'<span style="color:#f87171">track: {self.data.track_err[path]}</span>'
         if not tr:
             return "no track (storm-centred panels stay empty)"
         note = f"track: {len(fx)} fix{'es' if len(fx) != 1 else ''}"

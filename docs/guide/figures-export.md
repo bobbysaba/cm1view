@@ -33,7 +33,8 @@ shown:
   nearest output; panels past the run's end stay empty);
 - what only another run had (its soundings, a difference from it) is left out.
 
-Use a template to make the same figure for each of several runs.
+Use a template to make the same figure for each of several runs (or `cm1view render`,
+[below](#drawing-figures-without-the-viewer), for all of them at once).
 
 ## Animations
 
@@ -68,6 +69,49 @@ an arrow drawn for one frame is drawn for all of them.
 
 A single panel (1 × 1) is the usual choice, but any grid works: a 1 × 2 figure of two
 runs makes a side-by-side loop.
+
+## Drawing figures without the viewer
+
+`cm1view render` draws a saved figure or a template from the runs' files, with no
+browser or server: for example at the end of a batch job, or to make the same figure
+for every run of an experiment.
+
+```bash
+# a saved figure again, as it was saved (its image is replaced: --overwrite)
+cm1view render ~/cm1view/figures/demo_supercell/_src/refl_spec.json --overwrite
+# a template on two runs, the first panel at 90 min
+cm1view render refl --run /path/to/run1 /path/to/run2 --time 90
+# a saved figure for each run, as PDFs in a folder per run
+cm1view render refl_spec.json --run /path/to/runs/* --out '~/figs/{run}/{name}.pdf'
+# an animation, every other output from 60 min on
+cm1view render refl_spec.json --gif --time 60 --step 2 --fps 6
+```
+
+The figure is a saved figure's `_src/<name>_spec.json` (or the image or script saved
+with it), a template's file, or a template's name (as in *Templates*).
+
+- **Without `--run`** the figure is drawn on its own runs, as saved. `--time` moves every
+  panel by the same amount, the first to the output nearest that time.
+- **With `--run`** (one or more, or `--run` several times) it is drawn for each run in
+  turn, as *Apply to this run* would with a template of it: its layout and look on that
+  run, its times kept as far apart as they were and moved to `--time` (default: the
+  saved times). A template needs `--run`.
+
+| Option | Meaning |
+|---|---|
+| `--out PATH` | Where to save. Its extension, if an image format's, sets the format. It may hold `{run}` (the run's folder name), `{parent}` (the folder above it) and `{name}` (the figure's or template's name); several runs need `{run}` or `{parent}`. Default: where the figure was saved; with `--run`, `<Figures folder>/<parent>_<run>/<name>`. |
+| `--format`, `--dpi` | The image's format and resolution (default: the figure's export settings). |
+| `--bundle` | Also the script, data and spec, as **+ script & data**. |
+| `--gif` | An animation, as **Export → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
+| `--overwrite` | Replace files that are already there. Without it, nothing is drawn if any is. |
+| `--code` | Run the figure's own code (*Annotate → Your own code*). The editor asks before running code from a file; `render` leaves it off unless told. |
+| `--config`, `--cache-gb`, `--workers` | As for the viewer. |
+
+A storm track from the viewer's *Track* tab is not saved with a figure: `render` uses the
+run's `storm_tracks` file instead (and says so), or no track. Series, soundings and the
+rest are computed as in the editor, using the same series cache. Each run is reported as
+it is saved; if one fails, the others are still drawn and the command exits with
+status 1. For batch-job scripts, see [Running on a cluster](../hpc.md#figures-in-a-batch-job).
 
 ## The script and data
 

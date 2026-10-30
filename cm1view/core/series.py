@@ -1,7 +1,9 @@
 """Time series of one field reduced over a region, at every output time of a run.
 
 A recipe says what to compute at each time:
-  field   any 3D or 2D field of the catalog (native or derived, e.g. thpert, thrhopert)
+  field   any 3D or 2D field of the catalog (native or derived, e.g. thpert, thrhopert,
+          or a column field such as uh25), or a derivative of one (fields.deriv_name,
+          e.g. ddz.winterp)
   vmode   'height' (one height, km AGL), 'layer' (every model level in z0..z1) or '2d'
   region  'domain', 'box' (x0, x1, y0, y1 km) or 'track' (disc of `radius` km around
           the tracked storm, shifted by `offset` km)
@@ -204,52 +206,137 @@ def _reduce(a, how, pct):
     return float(np.percentile(a[ok], pct)), -1
 
 
+def _ddz(f, z, k, nk):
+    """∂/∂z (per km) on model level k of f(level) -> plane: centred on the stretched
+    levels inside, one-sided at the bottom and top (as Fields._ddz_level)."""
+    k = min(max(int(k), 0), nk - 1)
+    lo, hi = max(k - 1, 0), min(k + 1, nk - 1)
+    if lo == hi:
+        return np.zeros_like(f(k))
+    if lo == k or hi == k:
+        return (f(hi) - f(lo)) / (z[hi] - z[lo])
+    hl, hr = z[k] - z[lo], z[hi] - z[k]
+    return (hl * hl * f(hi) - hr * hr * f(lo) + (hr * hr - hl * hl) * f(k)) / \
+        (hl * hr * (hl + hr))
+
+
 def _worker(task):
     """Reader process: the recipe at one time.  Returns dict(t, value, x, y, z, prof,
-    npts) or dict(t, error)."""
+    npts) or dict(t, error).  A derivative (task "op", of field task "field") and
+    derived fields that are not pointwise are computed on the region plus a one-point
+    border (task "halo"), so their values at its edge are those of the map."""
     import netCDF4
+
+    from .fields import hgrad, split_deriv, stride_cols
 
     t = task["t"]
     try:
         with netCDF4.Dataset(task["path"]) as d:
             d.set_auto_mask(False)
             name, info = task["field"], task["natives"]
+            op = task.get("op", "")
             fdef = None if name in info else _field_def(name, task["avail"])
-            deps = [name] if fdef is None else list(fdef.deps)
+            if fdef is None and name not in info:
+                return dict(t=t, error=f"unknown field {name}")
+            deps = [name] if fdef is None else list(fdef.natives)
             missing = [n for n in deps if n not in d.variables]
             if missing:
                 return dict(t=t, error="not in this file: " + ", ".join(missing))
             i0, i1, j0, j1 = task["box"]
+            # the box read: the region and its border (cut off at the domain's edge)
+            e0, e1, f0, f1 = task.get("halo") or (i0, i1, j0, j1)
+            crop = (slice(j0 - f0, j1 - f0), slice(i0 - e0, i1 - e0))
             mask = task["mask"]
             ctx = task["ctx"]
 
-            def plane(fetch):
-                a = (np.asarray(fdef.func(fetch, ctx), dtype=np.float32) if fdef is not None
-                     else fetch(name) * np.float32(info[name][1]))
+            def base(fetch):
+                """The field (not yet differentiated) on the box read."""
+                if fdef is not None and fdef.column:  # (its layer's levels only)
+                    ks, dz, zk, top = task["column"]
+                    c = dict(ctx, dz=dz, zk=zk, top=top, memo={})
+                    s = task.get("stride", 1)
+                    if s == 1:
+                        return np.asarray(fdef.func(lambda n: np.stack(
+                            [_read(d[n], info[n][0], k, f0, f1, e0, e1, info[n][2])
+                             for k in ks]), c), dtype=np.float32)
+                    # (costly: the middle columns of the stride's blocks, as the map)
+                    r0, r1, tj, bj = stride_cols(f0, f1, task["nj"], s)
+                    c0, c1, ti, bi = stride_cols(e0, e1, task["ni"], s)
+                    a = fdef.func(lambda n: np.stack(
+                        [_read(d[n], info[n][0], k, r0, r1, c0, c1, info[n][2])[
+                            np.ix_(tj, ti)] for k in ks]), c)
+                    return np.asarray(a, dtype=np.float32)[np.ix_(bj, bi)]
+                return (np.asarray(fdef.func(fetch, ctx), dtype=np.float32)
+                        if fdef is not None else fetch(name) * np.float32(info[name][1]))
+
+            def finish(a):
+                """Horizontal derivative (on the box read), cut to the region, masked."""
+                if op in ("ddx", "ddy", "gradh"):
+                    a = hgrad(op, a, task["xe"], task["ye"])
+                a = np.asarray(a, dtype=np.float32)[crop]
                 if mask is not None:
                     a = np.where(mask, a, np.nan)
                 return a
+
+            zfull, nk = task.get("zfull"), task.get("nk", 0)
+            raw = {}  # (native, level) -> plane on the box read; ∂/∂z inputs reuse them
+
+            def read(n, k):
+                if (n, k) not in raw:
+                    if len(raw) > 24:
+                        raw.pop(next(iter(raw)))
+                    raw[n, k] = _read(d[n], info[n][0], k, f0, f1, e0, e1, info[n][2])
+                return raw[n, k]
 
             def fetcher(k):
                 memo = {}
 
                 def fetch(n):
+                    """Input n on level k: native (raw units), or a derivative of one
+                    (per km, in its display units, as Fields gives it)."""
                     if n not in memo:
-                        memo[n] = _read(d[n], info[n][0], k, j0, j1, i0, i1, info[n][2])
+                        dop, dn = split_deriv(n)
+                        sc = np.float32(task.get("dscale", {}).get(dn, 1.0))
+                        if dop == "ddz":
+                            memo[n] = sc * _ddz(lambda kk: read(dn, kk), zfull, k, nk)
+                        elif dop:
+                            memo[n] = sc * hgrad(dop, read(dn, k), task["xe"], task["ye"])
+                        else:
+                            memo[n] = read(n, k)
                     return memo[n]
                 return fetch
+
+            memo_k = {}  # (∂/∂z: each level's field is used by up to three levels)
+
+            def level_base(k):
+                if k not in memo_k:
+                    if len(memo_k) > 4:
+                        memo_k.pop(min(memo_k))
+                    memo_k[k] = base(fetcher(k))
+                return memo_k[k]
+
+            def level(k):
+                """The final field on model level k, cut to the region and masked."""
+                if op == "ddz":
+                    return finish(_ddz(level_base, zfull, k, nk))
+                return finish(base(fetcher(k)))
 
             how, pct = task["reduce"], task.get("pct", 99.0)
             ny, nx = j1 - j0, i1 - i0
             out = dict(t=t, npts=int(mask.sum()) if mask is not None else nx * ny)
             if task["vmode"] in ("height", "2d"):
                 if task["vmode"] == "2d":
-                    a = plane(fetcher(0))
+                    a = finish(base(fetcher(0)))
                 else:
                     k0, k1, w = task["weights"]
-                    f0, f1 = fetcher(k0), fetcher(k1)
-                    a = plane(f0 if (w == 0.0 or k0 == k1) else
-                              (lambda n: (1.0 - w) * f0(n) + w * f1(n)))
+                    if op == "ddz":  # (∂/∂z of the two levels, then between them)
+                        a = level(k0)
+                        if w != 0.0 and k0 != k1:
+                            a = (1.0 - w) * a + w * level(k1)
+                    else:
+                        g0, g1 = fetcher(k0), fetcher(k1)
+                        a = finish(base(g0 if (w == 0.0 or k0 == k1) else
+                                        (lambda n: (1.0 - w) * g0(n) + w * g1(n))))
                 val, i = _reduce(a, how, pct)
                 out.update(value=val, prof=None, z=task.get("zkm", np.nan))
                 if i >= 0:
@@ -261,7 +348,7 @@ def _worker(task):
             best = (np.nan, -1, -1)  # value, level position, flat index
             pool = []  # values for an overall mean / percentile
             for n, k in enumerate(ks):
-                a = plane(fetcher(k))
+                a = level(k)
                 prof[n], i = _reduce(a, how, pct)
                 if how in ("min", "max") and np.isfinite(prof[n]):
                     if (not np.isfinite(best[0]) or (prof[n] < best[0] if how == "min"
@@ -341,7 +428,11 @@ def empty(run, recipe, label="", units=""):
 
 
 def _cache_path(run, recipe):
-    key = hashlib.sha1(json.dumps([run.path, recipe], sort_keys=True).encode())
+    from .fields import COSTLY, column_stride, split_deriv
+    key = [run.path, recipe]
+    if split_deriv(recipe["field"])[1] in COSTLY:  # (its values depend on the stride)
+        key.append(column_stride(run))
+    key = hashlib.sha1(json.dumps(key, sort_keys=True).encode())
     return os.path.join(cache_dir(), key.hexdigest()[:20] + ".nc")
 
 
@@ -411,13 +502,26 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
     import multiprocessing as mp
 
     centers, storm = centers or {}, storm or {}
-    name = recipe["field"]
-    d = F[name]
+    from .fields import column_stride, layer_top, split_deriv
+
+    d = F[recipe["field"]]
+    op, name = split_deriv(recipe["field"])  # (a derivative: op of field `name`)
+    b = F[name]
     # (stag, scale, ndim) of the native fields read: derived fields work in raw units
     natives = {n: (run.vars[n].stag, 1.0, run.vars[n].ndim)
-               for n in (d.deps if d.derived else (name,)) if n in run.vars}
-    if not d.derived:
-        natives[name] = (run.vars[name].stag, d.scale, run.vars[name].ndim)
+               for n in (b.natives if b.derived else (name,)) if n in run.vars}
+    # derivative inputs of a derived field (∂w/∂z ...) are of the display-unit field
+    dscale = {split_deriv(n)[1]: F[split_deriv(n)[1]].scale
+              for n in b.deps if split_deriv(n)[0]} if b.derived else {}
+    if not b.derived:
+        natives[name] = (run.vars[name].stag, b.scale, run.vars[name].ndim)
+    # a one-point border around the region for horizontal derivatives
+    halo = op in ("ddx", "ddy", "gradh") or (b.derived and not b.pointwise
+                                              and not b.column)
+    column = None
+    if b.column:  # (levels of its layer, their thickness in it, heights)
+        ks_c, dz_c = b.levels(run.z, run.zf)
+        column = (ks_c, dz_c, run.z[ks_c], layer_top(b, run))
     ctx = dict(F.ctx)
     skipped, tasks = {}, []
     vmode = recipe["vmode"] if d.ndim == 3 else "2d"
@@ -438,13 +542,18 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
         c = dict(ctx)
         if d.storm:
             c["storm"] = tuple(storm.get(t, (run.umove, run.vmove)))
+        e0, e1, f0, f1 = ((max(i0 - 1, 0), min(i1 + 1, run.ni), max(j0 - 1, 0),
+                           min(j1 + 1, run.nj)) if halo else (i0, i1, j0, j1))
         tasks.append(dict(
-            t=t, path=run.files[t], field=name, natives=natives, avail=sorted(run.vars),
-            box=(i0, i1, j0, j1), mask=mask, ctx=c, reduce=recipe["reduce"],
+            t=t, path=run.files[t], field=name, op=op, natives=natives, dscale=dscale,
+            avail=sorted(run.vars), box=(i0, i1, j0, j1), halo=(e0, e1, f0, f1),
+            mask=mask, ctx=c, reduce=recipe["reduce"],
             pct=recipe.get("pct", 99.0), vmode=vmode, weights=weights,
             zkm=recipe.get("z", np.nan), levels=ks,
             zlev=None if ks is None else run.z[ks], xh=run.xh[i0:i1], yh=run.yh[j0:j1],
-            center=cen))
+            xe=run.xh[e0:e1], ye=run.yh[f0:f1], zfull=np.asarray(run.z), nk=run.nk,
+            column=column, stride=column_stride(run) if b.costly else 1, ni=run.ni,
+            nj=run.nj, center=cen))
     total, done = len(tasks), 0
     if not tasks:
         return ds, skipped

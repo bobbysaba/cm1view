@@ -5,19 +5,17 @@ optionally with each frame as a PNG.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
-import io
 import os
 import traceback
 from functools import partial
 
 import panel as pn
-from PIL import Image
 
 from .. import config
 from . import draw as figdraw, spec as fg
+from .batch import MAX_FRAMES, anim_frame, auto_ends, frame_image
 from .cards import _chk, _f, _grid, _hint, _section
 
-MAX_FRAMES = 300  # (every frame is held in memory until the GIF is written)
 END = "End of run"
 IMAGE_EXTS = (".gif", ".png", ".pdf", ".svg", ".eps", ".jpg", ".jpeg", ".tif", ".tiff")
 
@@ -157,12 +155,7 @@ class FigureAnimation:
 
     @staticmethod
     def _anim_frame(spec, offsets, j, opts):
-        """The spec of frame j: its times moved on; a 3D scene's camera turned by its
-        share of the orbit and its picture rendered at the animation's DPI."""
-        s = fg.scene_frame(fg.shift_times(spec, offsets[j]), j, len(offsets))
-        if s.get("kind") == "scene":
-            s["scene3d"] = dict(s["scene3d"], dpi=opts["dpi"])
-        return s
+        return anim_frame(spec, offsets, j, opts["dpi"])
 
     def _stop_anim(self):
         self._anim_gen += 1
@@ -184,8 +177,7 @@ class FigureAnimation:
 
         images = [] if images is None else images
         ends = {} if ends is None else ends
-        auto = any(lay.get("type") == "fill" and lay.get("extend") == "auto"
-                   for p in figdraw.upgrade(spec)[0]["panels"] for lay in p.get("layers") or [])
+        auto = auto_ends(spec)
         try:
             for j in range(scanned, len(offsets) if auto else 0):
                 if g != self._anim_gen:
@@ -215,16 +207,10 @@ class FigureAnimation:
                 s = self._anim_frame(spec, offsets, j, opts)
                 data = self.panel_data(s)
                 missing += any(d.get("missing") for d in data.values())
-                fig = figdraw.draw(s, data, ends)
-                buf = io.BytesIO()
-                figdraw.save(s, fig, buf, format="png", **fg.save_kw(s, opts["dpi"]))
-                buf.seek(0)
-                im = Image.open(buf)
-                im.load()
+                im = frame_image(s, data, ends, opts["dpi"])
                 if opts["frames"]:
                     im.save(os.path.join(fdir, f"{name}_{j:03d}.png"))
-                images.append(im.convert("RGBA") if im.mode in ("RGBA", "LA", "P")
-                              else im.convert("RGB"))
+                images.append(im)
                 if self._preview_waiting and len(images) < len(offsets):
                     self.v.pools["fig"].submit(self._anim_job, g, spec, offsets, base,
                                                opts, images, missing, ends, len(offsets))

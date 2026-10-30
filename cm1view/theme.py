@@ -1,8 +1,5 @@
-"""Shared dark theme."""
-
-from panel.theme import Inherit
-from panel.theme import fast
-from panel.widgets import Widget
+"""Shared dark theme.  (Panel only for the Fast design, made when first asked for:
+the colours alone, e.g. for figures rendered without the viewer, need no Panel.)"""
 
 BG = "#0b0f17"
 PANEL = "#111723"
@@ -143,8 +140,18 @@ body, #main, .main {{ background: var(--cv-bg) !important; }}
 """
 
 
-class Fast(fast.Fast):
-    """The template's Fast design plus the shared widget styles.  (Named Fast: Panel
-    finds a design's bundled files under the lower-cased class name.)"""
+def __getattr__(name):
+    if name != "Fast":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from panel.theme import Inherit, fast
+    from panel.widgets import Widget
 
-    modifiers = {Widget: {"stylesheets": [Inherit, WIDGETS]}}
+    class Fast(fast.Fast):
+        """The template's Fast design plus the shared widget styles.  (Named Fast: Panel
+        finds a design's bundled files under the lower-cased class name.)"""
+
+        modifiers = {Widget: {"stylesheets": [Inherit, WIDGETS]}}
+
+    Fast.__qualname__ = "Fast"
+    globals()["Fast"] = Fast
+    return Fast

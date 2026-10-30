@@ -35,8 +35,8 @@ KEYS = [
         "Exported figures go to <this>/<parent>_<run>/ (image; script in scripts/, data "
         "and spec in _src/).", kind="outdir"),
     Key("exports_dir", "paths", "~/cm1view/exports", "Saved data",
-        "Saved series go to <this>/<parent>_<run>/series; tracks go to .../tracks "
-        "when no track folder exists.",
+        "Saved series go to <this>/<parent>_<run>/series, data exports to .../data, "
+        "sessions to .../sessions; tracks go to .../tracks when no track folder exists.",
         kind="outdir"),
     Key("cache_dir", "paths", "~/.cache/cm1view", "Cache",
         "Throwaway files cm1view can rebuild (computed series). Scratch is a good "
@@ -62,6 +62,11 @@ KEYS = [
     Key("allow_writes_to_output", "data", False, "Allow writing into output files",
         "Lets the pressure decomposition write its fields into the CM1 output files. "
         "Off: results stay in memory.", kind="bool"),
+    Key("column_stride", "data", "auto", "Sounding-parameter stride",
+        "CAPE, CIN, LCL, STP and SCP maps are computed on every n-th column in x and "
+        "y (each n x n block shows its middle column). auto = as few as keep them to "
+        "about 250 000 columns (every column up to 500 x 500 points).",
+        kind="auto_int", advanced=True),
     Key("cache_gb", "server", "auto", "3D cache (GB)",
         "Memory for cached 3D fields. auto = a share of this job's memory, leaving "
         "room for the pressure decomposition.", kind="auto_float", restart=True,

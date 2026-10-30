@@ -3,7 +3,8 @@
 The Viewer is assembled from mixins, one module each: widgets (the drawers' controls),
 mapview (the map and its job), layout (the page), events (time, tools, map clicks),
 sounding, tracking, series, dist, xsec, view3d (3D, pressure decomposition,
-streamline pick) and items (the items tray).  This module builds it, wires the
+streamline pick), items (the items tray), diff (differences) and session (session
+files).  This module builds it, wires the
 events and makes the page; shared UI pieces are in ui.py, the Figure workspace in
 figures/editor.py."""
 
@@ -21,20 +22,25 @@ from ..theme import ACCENT, BG, CSS, GRID, PANEL, Fast
 from .ui import PANELS, _html
 # the Viewer's feature groups, one module each
 from .events import Events
+from .export import DataExport
 from .layout import Layout
 from .mapview import MapView
 from .widgets import Widgets
+from .diff import Differences
 from .dist import DistPanel
 from .items import ItemsTray
 from .sounding import SoundingPanel
 from .series import SeriesPanel
+from .session import Sessions
+from .session import read as read_session
 from .tracking import TrackPanel
 from .view3d import View3DPanel
 from .xsec import SectionPanel
 
 
 class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, SeriesPanel,
-             DistPanel, SectionPanel, View3DPanel, ItemsTray):
+             DistPanel, SectionPanel, View3DPanel, ItemsTray, Differences, Sessions,
+             DataExport):
     def __init__(self, run, fields, maxpix=900, error="", reg=None):
         self.run, self.F = run, fields
         self.reg = reg  # the shared runs (figures with panels from other runs)
@@ -43,7 +49,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.doc = pn.state.curdoc
         self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
                       for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser", "dist",
-                            "fig")}
+                            "fig", "exp")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
@@ -68,6 +74,8 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
         self.figed = figui.FigureEditor(self)
         self._build_items()
+        self._build_session()
+        self._build_export()
         self._wire()
         # save folders from the settings (followed while the boxes still point there)
         self._auto_dirs = {"series": config.exports_dir(run.path, "series")}
@@ -96,6 +104,8 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         for w in (self.fill_lvl, self.fill_alpha):
             w.param.watch(rm, "value_throttled")
         self.fill_auto.param.watch(self._on_fill_auto, "value")
+        self._wire_diff(self.fill_diff, self.fill_cmap, self.fill_rev, self.fill_auto,
+                        self._fill_name, self.request_map, "_hold")
         for w in (self.fill_min, self.fill_max):
             w.param.watch(lambda e: None if self.fill_auto.value else self.request_map(),
                           "value")
@@ -147,6 +157,8 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
                           "value")
         self.xs_fill.param.watch(self._on_xs_fill, "value")
         self.xs_auto.param.watch(self._on_xs_auto, "value")
+        self._wire_diff(self.xs_diff, self.xs_cmap, self.xs_rev, self.xs_auto,
+                        lambda: self.xs_fill.value, self.request_xsec, "_hold_xs")
         self.xs_ztop.param.watch(rx, "value_throttled")
         self.v3_view.on_click(self._on_use_view)
         self.v3_render.on_click(lambda e: self.request_3d())
@@ -362,26 +374,38 @@ def create_app(reg, maxpix=None):
     pn.extension("plotly", "modal", "tabulator", "codeeditor", notifications=False,
                  raw_css=[CSS])
     maxpix = maxpix or config.get("maxpix")
-    want, error = None, ""
+    want, error, session = None, "", None
     try:  # ?run=/path/to/run picks the run directory
         want = pn.state.session_args.get("run", [b""])[0].decode().strip() or None
+        ses = pn.state.session_args.get("session", [b""])[0].decode().strip()
     except (AttributeError, TypeError, ValueError):
-        pass
+        ses = ""
+    if ses:  # ?session=/path/to/session.json: its run (unless ?run= says otherwise)
+        try:
+            session = read_session(ses)
+            want = want or session.get("run") or None
+        except (OSError, ValueError) as e:
+            print(f"cm1view: could not read session {ses}: {e}", flush=True)
+            error = f"Could not read the session {ses}: {e}."
     run = fields = None
     try:
         if want or reg.default:
             run, fields = reg.get(config.expand(want) if want else None)
     except Exception as e:  # noqa: BLE001
         print(f"cm1view: could not open {want}: {e}", flush=True)
-        error = f"Could not open {want}: {e}."
+        error += f" Could not open {want}: {e}."
         if want and reg.default:
             error += " Showing the default run instead."
             run, fields = reg.get()
+            session = None  # (it was for the run that did not open)
     if run is None:
-        body, settings = _landing(error)
+        body, settings = _landing(error.strip())
     else:
-        v = Viewer(run, fields, maxpix=maxpix, error=error, reg=reg)
+        v = Viewer(run, fields, maxpix=maxpix, error=error.strip(), reg=reg)
         pn.state.on_session_destroyed(lambda ctx: v.close())
+        if session is not None:
+            v.ses_path.value = config.expand(ses)
+            v.apply_session(session)
         body, settings = v.main(), v.settings
     # first run (or settings that no longer work): open the settings window
     if config.needs_setup():
