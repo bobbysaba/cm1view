@@ -2,7 +2,8 @@
 cross-sections, time-height plots, time series, soundings, distributions, vertical
 profiles, joint distributions or azimuthal means on a grid of panels.
 
-Needs only numpy and matplotlib (cmweather or pyart, if installed, for their colormaps).  cm1view
+Needs only numpy and matplotlib (cmweather or pyart, if installed, for their colormaps;
+pyvista for 3D scenes).  cm1view
 saves this package's code (source(): its modules in MODULES order) with every exported
 figure script (_src/<name>_draw.py), so the script redraws exactly what the viewer showed;
 edit SPEC or my_changes() in the script (or this code) to change the figure.  The modules
@@ -70,6 +71,9 @@ azimuthal mean panels (kind "azim"): nazim, and per azimuthal mean n (a field re
   A<n>_x, A<n>_z, A<n>_v   radius bin centres, heights (km) and values (heights x radii)
   A<n>_e, A<n>_r, A<n>_label   azimuthal mean entry and run index, legend text
   A<n>_cl, A<n>_cm, A<n>_div   colorbar label, the field's colormap, diverging (0 / 1)
+3D scene panels (kind "scene"): the isosurfaces, floor, vectors and streamlines of
+  core.volume3d.build_scene (scene3d.scene_data: nmesh, M<n>_x, ..., box, ztop), drawn as a
+  picture rendered with pyvista (spec["scene3d"]: camera, look, exag; scene3d.render)
 figures of parts (kind "combo"): part k's panel i under k * 1000 + i
 
 Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts):
@@ -96,9 +100,9 @@ Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts
   them.
 """
 
-from . import base, v2, layers, lines, sounding, figure
+from . import base, v2, layers, lines, sounding, scene3d, figure
 
-MODULES = (base, v2, layers, lines, sounding, figure)  # (each uses only those before it)
+MODULES = (base, v2, layers, lines, sounding, scene3d, figure)  # (each uses only those before it)
 for _m in MODULES:  # one namespace, as in an exported script
     globals().update({k: v for k, v in vars(_m).items() if not k.startswith("__")})
 

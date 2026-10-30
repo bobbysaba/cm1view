@@ -92,6 +92,11 @@ limited to 300 frames.
 smaller (about 50 km across or less is full resolution), lower the *Top*, or choose a
 coarser *Resolution*.
 
+**A 3D scene figure says it needs pyvista, or the preview fails with an OpenGL
+error.** 3D scene figures render with PyVista (VTK) off-screen, which needs an OpenGL
+library on the machine running cm1view (not the browser). Most cluster nodes have one;
+see [Installing](../install.md#3d-scene-figures-and-opengl).
+
 **Clicking a streamline does nothing.** An isosurface in front of it can catch the click.
 Lower its opacity or switch it off.
 

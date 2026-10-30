@@ -89,7 +89,8 @@ class FigureQuick:
         maps = kind in MAPS
         self.qs_field.visible = maps
         self.qs_vary.visible = kind == "plan"  # (sections: a card per panel)
-        self.qs_rows.visible = self.qs_cols.visible = kind != "th"  # (th: its cards')
+        self.qs_rows.visible = self.qs_cols.visible = kind not in ("th", "scene")  # (th: its
+        #                                                   cards'; a 3D scene: one picture)
         note = {
             "th": "Time–height panels: a series card per panel (Layers → Series: its "
                   "run and panel), like the section cards; click a card's <b>One per "
@@ -112,6 +113,9 @@ class FigureQuick:
             "azim": "Every panel starts with w around the tracked storm (else the middle "
                     "of the map's view) at the shown time, the whole ring out to 20 km, to "
                     "change in Layers → Azimuthal means.",
+            "scene": "One 3D picture of what the 3D workspace shows (its box, surfaces "
+                     "and camera; the whole domain without a box), at the shown time: "
+                     "change it in Layers.",
             "xsec": "A section card per panel (Layers → Sections), alternately x–z and "
                     "y–z (through the storm when it is tracked) at the shown time: set "
                     "each card's run, time "
@@ -156,7 +160,7 @@ class FigureQuick:
                 self._quick_xsec = False
             if kind == "plan":
                 self.g_rows.value, self.g_cols.value = "none", vary
-            if kind != "th":
+            if kind not in ("th", "scene"):
                 self.rows.value = int(self.qs_rows.value)
                 self.cols.value = int(self.qs_cols.value)
             if kind in ("sounding", "dist", "profile", "joint", "azim", "xsec"):

@@ -13,6 +13,7 @@ from .layers import (_fill, _contour, _shade, _vectors, sector_outline, extend_o
                      union_extend, _extends, _ticks, _colorbars, _cbar_style, _contour_key)
 from .lines import _lines, _dists, _profiles, _joints, _azims
 from .sounding import _sounding, shared_hodo_half
+from .scene3d import scene_panel, finish_scenes, scene_dpi
 
 
 def draw(spec, data, ends=None):
@@ -196,6 +197,7 @@ def _block(fig, spec, k, bv, data, fs, ext):
     ck = bv.get("contour_key", {})
     keyp = next((p for p in pans if p["id"] == ck.get("panel")), pans[0] if pans else None)
     _contour_key(fig, bv, fs, keyp.get("layers", []) if keyp else [])
+    finish_scenes(fig, scene_dpi(spec))
     fig._cv_axes = {p["id"]: ax for p, ax, _ in placed}  # (panel -> axes)
     fig._cv_grid = grid if grid is not None else [ax for _, ax, _ in placed]
     opts = b.get("opts") or {}
@@ -329,6 +331,8 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
         _joints(ax, d, spec, fs)
     elif kind == "azim":
         _azims(ax, d, spec, fs)
+    elif kind == "scene":  # (its picture: finish_scenes, once the figure is laid out)
+        scene_panel(fig, ax, d, spec, fs, legend)
     else:
         xsec = kind == "xsec"
         x, y = d["x"], d["y"]
@@ -493,7 +497,7 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
             ax.set_ylim(*d["ylim"])
     if kind == "plan" and ax_opts.get("equal", True):
         ax.set_aspect("equal")
-    if not getattr(ax, "_cv_hodo", False):  # (a hodograph panel labels its rings)
+    if not getattr(ax, "_cv_hodo", False) and kind != "scene":  # (a hodograph labels its rings)
         xl = ax_opts.get("xlabel", "")
         if kind == "xsec" and xl in AUTO_XSEC_X and d.get("xname"):
             xl = d["xname"]  # (x, y or the distance, as the panel's section runs)

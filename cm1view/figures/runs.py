@@ -339,7 +339,7 @@ class FigureRuns:
         finally:
             self._hold = hold
         self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \
-            not self._uses("runs") and self.kind.value == "plan"  # (sections: cards')
+            not self._uses("runs") and self.kind.value in ("plan", "scene")  # (sections: cards')
 
     def _refresh_fields(self):
         """The field lists offer the fields of every run of the figure."""
@@ -405,7 +405,7 @@ class FigureRuns:
             used |= set(self._grid_runs())
         elif self.kind.value == "xsec":  # (a card per panel)
             used |= {c.w["run"].value or 0 for c in self.sec_cards}
-        elif maps:
+        elif maps or self.kind.value == "scene":
             used.add(self.run_sel.value or 0)
         for c in self.cards:
             for key in ("run", "minus_run"):

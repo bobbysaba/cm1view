@@ -44,6 +44,15 @@ something misbehaves, try the conda environment first. netCDF4 and numba ship bi
 wheels for common platforms. If pip has to build them from source, conda is the easier
 route.
 
+## 3D scene figures and OpenGL
+
+3D scene figures ([3D scenes](guide/figures-panels.md#3d-scenes)) are rendered off-screen
+by PyVista (VTK), installed with the rest. VTK draws with the machine's OpenGL library
+(`libGL`/`libEGL`), which cluster login and compute nodes usually have even without a
+display. On a machine with none, everything else works and a 3D scene shows an error in
+the preview; install the system's Mesa OpenGL libraries (e.g. `libgl1-mesa-dri`,
+`mesa-libGL`) or ask your site's help desk.
+
 ## Check the install
 
 ```bash

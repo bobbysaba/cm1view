@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 
-from ...core import azim, render, series as ser, swath, vectors
+from ...core import azim, render, series as ser, swath, track as trk, vectors, volume3d
 from .. import draw as figdraw
 from ...core.run import FileBusy, MissingAtTime
 from .base import panel_ref, tindex, storm_motion
@@ -63,6 +63,112 @@ def extract(run, F, spec, i, center, fixes=None, storm=None, progress=None):
             _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress)
     except (MissingAtTime, FileBusy) as e:
         out = dict(time_s=float(run.times[t]), missing=str(e))
+    return out
+
+
+# a 3D scene figure's spec["scene3d"]: build_scene's request (the viewer's 3D tab; box
+# None: the whole domain; isosurfaces and vectors with on False kept but not drawn), the
+# picture's camera and look (figdraw.CAMERA, LOOK keys) and, in animations, whether the
+# box follows the track ("track") or stays ("fixed") and the camera's turn over all the
+# frames (orbit, degrees; t0_s: the first frame's time, set by shift_times)
+SCENE3D = dict(box=None, ztop=15.0, exag=2.0, smooth=0.75, res=0, isos=[], vecs=[],
+               stream=dict(on=False, z=0.5, n=12, length=40.0, dir="forward",
+                           frame="storm", color_by="z", seed_box=None),
+               ground=dict(on=False, var="dbz", z=0.0, cmap="Field default", rev=False,
+                           range="data", lo=0.0, hi=0.0),
+               camera={}, look={}, follow="fixed", orbit=0.0)
+SCENE_DATA = ("box", "ztop", "smooth", "res", "isos", "vecs", "stream", "ground")  # -> data
+
+
+def _on(items):
+    return [dict(i) for i in items or [] if i.get("on", True)]
+
+
+def scene3d_of(spec):
+    """A 3D scene figure's scene block with the defaults (SCENE3D) where it has none."""
+    sc = dict(SCENE3D, **(spec.get("scene3d") or {}))
+    for k in ("stream", "ground"):
+        sc[k] = dict(SCENE3D[k], **(sc.get(k) or {}))
+    return sc
+
+
+def scene_key(spec, path, sig=""):
+    """Everything a 3D scene's arrays depend on (camera, look and exaggeration
+    changes leave it unchanged); sig: the run's track."""
+    sc = scene3d_of(spec)
+    t0 = sc.get("t0_s") if sc["follow"] == "track" else None
+    return json.dumps(["scene", path, float(spec["time_s"]),
+                       {k: sc[k] for k in SCENE_DATA}, t0, sig], sort_keys=True,
+                      default=float)
+
+
+def scene_request(run, spec, fixes, t):
+    """build_scene's request of a 3D scene figure at output t: its settings, the whole
+    domain for no box, and the track's storm motion (else the domain's) for the
+    storm-relative fields, vectors and streamlines.  A box following the track (an
+    animation's frame) moves, with the streamlines' seed box, as far as the track has
+    since the first frame (t0_s): shift (dx, dy km), None when it stays."""
+    sc = scene3d_of(spec)
+    storm = tuple(float(v) for v in storm_motion(run, fixes, t))
+    own = bool(fixes) and storm != (float(run.umove), float(run.vmove))
+    box = tuple(float(v) for v in sc["box"]) if sc.get("box") else domain_box(run)
+    stream = dict(sc["stream"])
+    shift = scene_shift(run, sc, fixes, t) if sc.get("box") else None
+    if shift:
+        dx, dy = shift
+        box = (box[0] + dx, box[1] + dx, box[2] + dy, box[3] + dy)
+        sb = stream.get("seed_box")
+        if sb:
+            stream["seed_box"] = [sb[0] + dx, sb[1] + dx, sb[2] + dy, sb[3] + dy]
+    ztop = min(float(sc["ztop"]), float(run.z[-1]))
+    return dict(t=t, box=box, ztop=ztop, exag=float(sc["exag"]),
+                smooth=float(sc["smooth"]), res=int(sc["res"]), isos=_on(sc["isos"]),
+                vecs=_on(sc["vecs"]), stream=stream, ground=dict(sc["ground"]),
+                storm=storm, fstorm=(storm, "rel. to tracked motion" if own
+                                     else "rel. to umove/vmove"), shift=shift)
+
+
+def scene_shift(run, sc, fixes, t):
+    """(dx, dy) km the track moved from the animation's first frame (sc["t0_s"]) to
+    output t when scene block sc follows the track; None when it does not, or the
+    track has no fix at either time (the box then stays)."""
+    if sc.get("follow") != "track" or sc.get("t0_s") is None or not fixes:
+        return None
+    t0 = tindex(run, float(sc["t0_s"]))
+    p0 = trk.position(fixes, t0) if t0 is not None else None
+    p1 = trk.position(fixes, t)
+    if p0 is None or p1 is None:
+        return None
+    return float(p1[0] - p0[0]), float(p1[1] - p0[1])
+
+
+def scene_extract(run, F, spec, fixes=None, progress=None, cancelled=None, cache=None):
+    """Arrays of a 3D scene figure's panel (figdraw.scene_data), or None when
+    cancelled.  progress(done, total, name) reports the loading; cache: build_scene's
+    (the streamlines kept across calls)."""
+    ts = float(spec["time_s"])
+    t = tindex(run, ts)
+    if t is None:
+        return dict(time_s=ts, missing=f"no output at {ts / 60:g} min in this run")
+    bad = [n for n in [i["var"] for i in _on(scene3d_of(spec)["isos"])] if n not in F]
+    if bad:
+        return dict(time_s=ts, missing="this run has no " + ", ".join(bad))
+    req = scene_request(run, spec, fixes, t)
+    try:
+        arrays = volume3d.build_scene(run, F, req, progress, cancelled, cache)
+    except (MissingAtTime, FileBusy) as e:
+        return dict(time_s=float(run.times[t]), missing=str(e))
+    if arrays is None:
+        return None
+    out = dict(figdraw.scene_data(arrays, req["box"], req["ztop"]), time_s=float(run.times[t]))
+    notes = list(arrays["notes"])
+    if req["shift"]:
+        out["shift"] = np.asarray(req["shift"], np.float64)
+    elif (scene3d_of(spec)["follow"] == "track" and scene3d_of(spec).get("t0_s") is not None
+          and scene3d_of(spec).get("box")):
+        notes.append("no track fix at this time or the first frame's: the box stays")
+    if notes:
+        out["notes"] = "; ".join(notes)
     return out
 
 

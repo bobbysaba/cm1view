@@ -268,6 +268,54 @@ w).
 A **Sector** layer on a plan view outlines a sector at each panel's time (see
 [Layers](figures-layers.md)); give it the azimuthal mean's settings.
 
+### 3D scenes
+
+One large 3D picture of a box of the run, for print: the isosurfaces, floor, vectors and
+streamlines of the [3D workspace](3d.md), rendered off-screen with
+[PyVista](https://pyvista.org) (VTK) instead of the browser. Translucent surfaces nest
+correctly, the surfaces are smooth-shaded and lit, and the picture is rendered at the
+export's DPI. The title, labels, legend (a swatch per surface, vectors and streamlines),
+colorbars (floor, streamlines) and axis ticks are drawn by matplotlib around it, as in
+any figure, so they stay sharp and editable.
+
+The quickest start is the **photo icon** on the 3D box in the items tray (or **Copy the
+3D view** in *Layers*): a figure of everything the 3D workspace shows, its box, settings
+and camera included, at the shown time. Rotate the 3D view first to choose the camera.
+*3D scene (one picture)* in the quick start or in *Panels* also makes one, from what the
+3D workspace shows (the whole domain when it has no box). The run and time are in
+*Panels → Time*.
+
+*Layers* holds the scene's settings:
+
+| Section | Settings |
+|---|---|
+| **Isosurfaces** | Up to 6: field, value, colour, opacity. Untick one to leave it out (it is kept). |
+| **Floor** | As in the 3D workspace: a field (a 3D one at a height), colormap, *Reverse*, *Range*. |
+| **Vectors** | Up to 6 planes of arrows: vector, height, frame, *Arrows across*, *Ref. length*, colour. |
+| **Streamlines** | Seed height, seeds (*n × n*), maximum length, direction, frame, *Colour by* height or w. **The map's seed box** seeds inside the box picked on the map; **Whole region** clears it. |
+| **Region and resolution** | *Whole domain* or a *Fixed box* (typed, or **The map's 3D box**), *Top*, *Vertical exaggeration*, *Smoothing σ*, *Resolution*. |
+| **Camera** | *View* (from the southwest, above, south, north, west, east), *Azimuth* and *Elevation* (blank: the view's), *Zoom* (1: the whole region fits), *Projection* (perspective or orthographic), *View angle*. **Camera of the 3D view** takes the 3D workspace's, as you left it. |
+| **Look** | *Lighting* (a soft light kit, three lights, or a headlight), *Background* (the figure's, white, black or transparent), vectors as 3D arrows or lines, *Shine*, *Ambient light*, *Line thickness*, where the colorbars go, box colour, axis labels; box outline, axis ticks, legend, seed box outline. |
+| **Animation** | *Box in animations* and *Camera orbit*: see below. |
+
+Only the region, top, smoothing, resolution, surfaces, floor, vectors and streamlines
+read and compute again; the camera, look and exaggeration only render the picture
+again. While editing, the picture is rendered at the preview's resolution; saving
+renders it at the export's DPI (up to 6000 pixels on its longer side).
+
+**Animations.** *Export → Animation (GIF)* steps the scene's time like any other figure
+([Animations](figures-export.md#animations)); each frame computes the scene again, so
+expect a few seconds per frame or more for a large region. *Box in animations*:
+**Stays where it is**, or **Follows the track**: a *Fixed box* moves each frame by as
+far as the run's storm track has moved since the first frame (the streamlines' seed box
+moves with it and the camera keeps aiming at it; a frame without a track fix keeps the
+box where it was, and the status says so). The whole domain never moves. *Camera orbit (°)*: how far the camera turns round the
+region over the whole animation (360: once round; negative: the other way). The turn is
+shared out evenly and stops a step short, so a looping full turn has no repeated frame.
+
+The saved script redraws the scene with PyVista from the data file (the surfaces as
+triangle meshes), so it needs PyVista where it runs.
+
 ## Runs
 
 Every layer, sounding, distribution, profile, joint distribution, azimuthal mean and

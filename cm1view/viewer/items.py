@@ -109,7 +109,10 @@ class ItemsTray:
                 groups.append(group(
                     *label(lab, self._open_3d, tip="Show it in the 3D view"),
                     icon("x", "Remove the 3D box", self._remove_box),
-                    icon("cube", "Show it in the 3D view", self._open_3d)))
+                    icon("cube", "Show it in the 3D view", self._open_3d),
+                    icon("photo", "Make a figure of the 3D view (a publication 3D scene: "
+                                  "its box, surfaces and camera)",
+                         to_fig(self.figed.from_3d))))
         ser = [e for e in entries if e[0] == "ser"]
         if ser:
             objs = [_html('<span class="cv-hint">Series</span>', margin=(0, 4, 0, 6),

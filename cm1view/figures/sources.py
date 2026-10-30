@@ -416,6 +416,8 @@ class FigureSources:
             w, h = (5.2 if c == 1 else 4.4 * c) + 0.3, 4.0 * r + 0.3
         elif kind == "azim":  # (with its colorbar)
             w, h = (5.6 if c == 1 else 4.6 * c) + 0.3, 3.8 * r + 0.3
+        elif kind == "scene":  # (one picture, its colorbars beside it)
+            w, h = 6.5, 5.2
         else:
             w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
         hold, self._hold = self._hold, True
@@ -1015,6 +1017,46 @@ class FigureSources:
             data[i] = fg.joint_panel(spec, i, get, lambda e: labels.get(e, ""),
                                      lambda e: axlabs.get(e, ("", "")))
         return data
+
+    def _scene_data(self, spec, cancelled=None):
+        """{0: arrays} of a 3D scene figure; kept (scene_cache) by what they depend on
+        (scene_key), so camera and look changes only render again, and an isosurface
+        edit keeps the traced streamlines (_st_cache)."""
+        runs, k = spec["runs"], int(spec.get("run", 0))
+        ts = float(spec["time_s"])
+        if k >= len(runs):
+            return {0: dict(time_s=ts, missing="no such run")}
+        try:
+            run, F = self.open_run(runs[k]["path"])
+            fx = self.run_fixes(runs[k], run)
+            sig = json.dumps(sorted((t, round(f["x"], 4), round(f["y"], 4))
+                                    for t, f in fx.items()))
+            key = fg.scene_key(spec, run.path, sig)
+            d = self.scene_cache.get(key)
+            if d is None:
+                def prog(done, total, name):
+                    if total:
+                        self.v._schedule(partial(self._status, (
+                            f'<span class="busy">● Loading 3D fields ({done}/{total}) '
+                            f'{name}…</span>')))
+
+                d = fg.scene_extract(run, F, spec, fx, prog, cancelled, self._st_cache)
+                if d is None:  # (stopped for a newer preview)
+                    return None
+                self.scene_cache[key] = d
+                while len(self.scene_cache) > 6:  # (meshes are large)
+                    self.scene_cache.popitem(last=False)
+            else:
+                self.scene_cache.move_to_end(key)
+        except (MissingAtTime, FileBusy) as ex:
+            d = dict(time_s=ts, missing=str(ex))
+        except Exception as ex:  # noqa: BLE001
+            traceback.print_exc()
+            d = dict(time_s=ts, missing=f"{type(ex).__name__}: {ex}")
+        out = dict(d, run=k)
+        if len(runs) > 1:
+            out["run_label"] = runs[k].get("label", "")
+        return {0: out}
 
     def _azim_data(self, spec, progress=None, cancelled=None):
         """{panel: arrays} of an azimuthal mean figure; the results are kept

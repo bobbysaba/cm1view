@@ -112,7 +112,7 @@ def test_animation_saves_at_gif_path_or_save_as(ed, tmp_path, monkeypatch):
 def test_animation_needs_plan_or_section(ed):
     ed.from_soundings()
     ed._on_anim()
-    assert "plan views or cross-sections" in txt(ed.an_msg.object)
+    assert "plan views, cross-sections or 3D scenes" in txt(ed.an_msg.object)
 
 
 def test_stopped_animation_saves_nothing(ed, tmp_path):

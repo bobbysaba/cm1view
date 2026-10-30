@@ -153,7 +153,7 @@ class View3DPanel:
         self._hl_line = None  # line now in the "selected" trace
         self._pl_key = ()  # (line, colour) of each pin now in the "pinned" trace
         self._fig3d = None    # the scene shown: the streamline traces are updated in it
-        self._st_cache = (None, None)  # (inputs, streamlines) of the last tracing
+        self._st_cache = {}  # build_scene's: the last tracing's inputs and streamlines
 
     # ================================================================ 3D
     def request_3d(self):
@@ -190,14 +190,8 @@ class View3DPanel:
     def _3d_job(self, spec, g):
         if g != self.gen["3d"]:
             return
-        run, F, t = self.run, self.F, spec["t"]
+        run, t = self.run, spec["t"]
         try:
-            names = []
-            for iso in spec["isos"]:
-                names += F.native_deps(iso["var"])
-            if spec["stream"]["on"]:
-                names += ["uinterp", "vinterp", "winterp"]
-
             def prog(done, total, name):
                 if total:
                     self._schedule(partial(
@@ -205,71 +199,21 @@ class View3DPanel:
                         f'<div class="cv-status"><span class="busy">● Loading 3D fields '
                         f'({done}/{total}) {name}…</span></div>'))
 
-            if not run.load_volumes(names, t, progress=prog,
-                                    cancelled=lambda: g != self.gen["3d"]):
+            sc = volume3d.build_scene(run, self.F, spec, progress=prog,
+                                      cancelled=lambda: g != self.gen["3d"],
+                                      cache=self._st_cache)
+            if sc is None:
                 return
-            stride = spec["res"] or volume3d.auto_stride(run, spec["box"], spec["ztop"], 12e6)
-            meshes, notes = [], []
-            for iso in spec["isos"]:
-                d = F[iso["var"]]
-                m = volume3d.isosurface(run, F.volume(iso["var"], t, spec["fstorm"][0]),
-                                        spec["box"], iso["val"], stride, spec["smooth"],
-                                        spec["ztop"])
-                name = f'{d.label} = {iso["val"]:g} {d.units}'
-                if d.storm:
-                    name += f' ({spec["fstorm"][1]})'
-                if m is None:
-                    notes.append(f"{name}: no surface in region")
-                    continue
-                if m["step"] > 1:
-                    notes.append(f"{name}: coarsened ×{m['step']} (mesh too large)")
-                m.update(color=iso["color"], opacity=iso["op"], name=name)
-                meshes.append(m)
-            ground = self._floor(spec["ground"], spec["box"], t, spec["fstorm"])
-            vecs, stream, ss = [], None, spec["stream"]
-            for vs in spec["vecs"]:
-                u, v = vectors.plane(F, vs["q"], t, "height", vs["level"], vs["frame"],
-                                     spec["storm"])
-                X, Y, _ = volume3d.surface_vectors(run, u, v, spec["box"], vs["density"],
-                                                   vs["ref"])
-                zlev = max(vs["level"], float(run.z[0]))
-                # drawn at least 2% of the scene height up: right at z = 0 the opaque
-                # reflectivity floor hides them (depth-buffer ties); label keeps zlev
-                vecs.append(dict(x=X, y=Y, z=max(zlev, 0.02 * spec["ztop"]), color=vs["color"],
-                                 name=f'{vectors.label(vs["q"], vs["frame"])} @ '
-                                      f'{zlev * 1000:.0f} m'))
-            if ss["on"]:
-                # traced again only when what they depend on changed: an isosurface or
-                # floor edit keeps the same lines (and the selection and pins on them)
-                off = self._frame_offset(ss["frame"], spec["storm"])
-                key = (id(run), t, spec["box"], spec["ztop"], ss["z"], ss["n"],
-                       ss["length"], ss["dir"], off, ss["seed_box"])
-                if self._st_cache[0] == key:
-                    stream = self._st_cache[1]
-                else:
-                    stream = volume3d.streamlines(
-                        run, run.volume("uinterp", t), run.volume("vinterp", t),
-                        run.volume("winterp", t), spec["box"], spec["ztop"], ss["z"],
-                        ss["n"], ss["length"], ss["dir"], off, seed_box=ss["seed_box"])
-                    self._st_cache = (key, stream)
-                stream = dict(stream) if stream is not None else None
-                if stream is None:
-                    notes.append("streamlines: none (calm or outside region)")
-                else:
-                    stream.update(color_by=ss["color_by"], seed_box=ss["seed_box"],
-                                  seed_z=max(ss["z"], float(run.z[0])),
-                                  name=f'Streamlines ({FRAME_SHORT[ss["frame"]]}, '
-                                       f'{stream["n"]})')
+            meshes, stream, stride = sc["meshes"], sc["stream"], sc["stride"]
             title = (f"t = {run.time_label(t)} · "
                      f"{'full res' if stride == 1 else f'1/{stride} res'}")
-            fig = volume3d.scene_figure(meshes, ground, spec["box"], spec["ztop"],
-                                        spec["exag"], title, vectors=vecs, stream=stream,
+            fig = volume3d.scene_figure(meshes, sc["ground"], spec["box"], spec["ztop"],
+                                        spec["exag"], title, vectors=sc["vecs"], stream=stream,
                                         camera=self.v3_cam.value, dragmode=self.v3_drag.value,
                                         revision=f"cam{self._cam_rev}")
             nf = sum(len(m["faces"]) for m in meshes)
-            s3 = dict(t=t, stream=stream, off=self._frame_offset(ss["frame"], spec["storm"]),
-                      frame=ss["frame"])
-            res = (fig, notes, nf, stride, s3)
+            s3 = dict(t=t, stream=stream, off=sc["off"], frame=spec["stream"]["frame"])
+            res = (fig, sc["notes"], nf, stride, s3)
         except (MissingAtTime, FileBusy) as e:  # expected: no traceback
             res = e
         except Exception as e:  # noqa: BLE001
@@ -277,32 +221,6 @@ class View3DPanel:
             res = e
         if g == self.gen["3d"]:
             self._schedule(partial(self._apply_3d, res, g))
-
-    def _floor(self, fs, box, t, fstorm):
-        """The floor surface for scene_figure (None when off): the field over the region,
-        thinned to about 300 points across, with its colours and range."""
-        F, run, name = self.F, self.run, fs["var"]
-        if not fs["on"] or name not in F:
-            return None
-        d = F[name]
-        i0, i1, j0, j1 = volume3d.box_indices(run, box)
-        gs = max(1, int(np.ceil(max(i1 - i0, j1 - j0) / 300)))
-        a = F.plane(name, t, "height", fs["z"], storm=fstorm[0])[j0:j1:gs, i0:i1:gs]
-        a = np.asarray(a, np.float64)
-        cmap = d.cmap if fs["cmap"] == "Field default" else fs["cmap"]
-        title = d.title
-        if d.ndim == 3:
-            title += f' @ {max(fs["z"], float(run.z[0])) * 1000:.0f} m'
-        if d.storm:
-            title += f" ({fstorm[1]})"
-        if fs["range"] == "custom" and fs["hi"] > fs["lo"]:
-            lo, hi = fs["lo"], fs["hi"]
-        elif cmap == "reflectivity" and not fs["rev"]:
-            lo, hi = 0.0, 75.0  # the stepped NWS scale is laid out for 0-75 dBZ
-        else:
-            lo, hi = volume3d.floor_range(a, d.vrange, d.diverging, fs["range"])
-        return dict(x=run.xh[i0:i1:gs], y=run.yh[j0:j1:gs], a=a, lo=lo, hi=hi, title=title,
-                    colorscale=volume3d.floor_colorscale(cmap, fs["rev"]))
 
     def _floor_widgets(self, *e):
         """Height only for 3D floor fields; Min/Max only for a custom range (filled from
@@ -333,15 +251,6 @@ class View3DPanel:
                           scene_camera=volume3d.CAMERAS[ev.new])
         self.plot3d.object = fig
         self.plot3d.param.trigger("object")
-
-    def _frame_offset(self, frame, storm):
-        """What to subtract from grid-relative (u, v) to get the wanted frame."""
-        run = self.run
-        if frame == "ground":
-            return (-run.umove, -run.vmove)
-        if frame == "storm":
-            return (storm[0] - run.umove, storm[1] - run.vmove)
-        return (0.0, 0.0)
 
     def _apply_3d(self, res, g):
         if g != self.gen["3d"]:

@@ -203,6 +203,7 @@ class FigureSpecIO:
             self.joint_cards = [self._joint_card(e) for e in s.get("joints", [])]
             self.azim_cards = [self._azim_card(e) for e in s.get("azims", [])]
             self.ann_rows = [self._ann_row(a) for a in s.get("annotations", [])]
+            self._scene_set(fg.scene3d_of(s))
             self._show_series()
             self._show_soundings()
             self._show_dists()
@@ -360,6 +361,10 @@ class FigureSpecIO:
             k: _num(w.value) if isinstance(w, pn.widgets.FloatInput) else w.value
             for k, w in self.ao.items()})
         s["annotations"] = [r.collect() for r in self.ann_rows]
+        if self.kind.value == "scene":  # (other figures: no 3D block in their spec)
+            s["scene3d"] = self._scene_collect()
+        else:
+            s.pop("scene3d", None)
         s["ts"] = dict(s.get("ts", {}), tmin=minutes(self.ts_tmin), tmax=minutes(self.ts_tmax),
                        zmin=float(self.ts_zmin.value or 0.0),
                        zmax=float(self.ts_zmax.value or 10.0), legend=self.ts_legend.value,

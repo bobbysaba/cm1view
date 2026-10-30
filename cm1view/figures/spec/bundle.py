@@ -185,6 +185,8 @@ def script(spec, npz_name, out_name, run=None, note="", draw_name="../_src/draw.
     nml = {r["path"]: r.get("namelist_sha256", "")
            for r in (spec.get("made_with") or {}).get("runs", [])}
 
+    scene = any(p.get("kind") == "scene" for p in spec.get("panels") or [spec])
+
     def tag(path):
         return f"  (namelist sha256 {nml[path]})" if nml.get(path) else ""
 
@@ -198,7 +200,8 @@ def script(spec, npz_name, out_name, run=None, note="", draw_name="../_src/draw.
           [f"run: {run.path}{tag(run.path)}" if run is not None else ""]),
         note,
         "Redraw:  python this_script.py   (needs numpy and matplotlib; cmweather or pyart",
-        "for their colormaps).  To change the figure:",
+        "for their colormaps).  To change the figure:" if not scene else
+        "for their colormaps; pyvista for the 3D scene).  To change the figure:",
         "  - SPEC below: its settings (colours, ranges, labels, size, ...), as in the editor;",
         "  - my_changes() below: anything else, in plain matplotlib, after it is drawn.",
         f"The plotted arrays are in {npz_name}, the drawing code in {draw_name}.",

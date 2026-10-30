@@ -1,6 +1,7 @@
 """Figure editor: animations.  The figure as it is set up, redrawn at a run of output
-times (every panel steps forward together; storm-centred panels follow the storm) and
-saved as an animated GIF, optionally with each frame as a PNG.
+times (every panel steps forward together; storm-centred panels follow the storm; a 3D
+scene's box can follow the track and its camera orbit) and saved as an animated GIF,
+optionally with each frame as a PNG.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
@@ -56,9 +57,10 @@ class FigureAnimation:
         self.an_end.param.watch(lambda e: self._anim_count(), "value")
         self.anim_sec = _section(
             "Animation (GIF)",
-            _hint("Plan views and cross-sections, redrawn at successive output times from "
-                  "the panels' own times: every panel steps forward together, and "
-                  "storm-centred panels follow the storm. In a figure of parts, every "
+            _hint("Plan views, cross-sections and 3D scenes, redrawn at successive output "
+                  "times from the panels' own times: every panel steps forward together, "
+                  "and storm-centred panels follow the storm (a 3D scene: its box and "
+                  "camera orbit, Layers → Animation). In a figure of parts, every "
                   "part steps (soundings too; time–height and time series stay). Saved at "
                   "<i>GIF path</i>, or <code>&lt;Save as&gt;.gif</code> if it is blank "
                   "(frames in <code>&lt;name&gt;_frames/</code>)."),
@@ -118,9 +120,9 @@ class FigureAnimation:
     def _on_anim(self):
         spec = self.collect_all()
         if not fg.animated(spec):
-            self._anim_msg("Animations are made of plan views or cross-sections (the "
-                           "panels' kind in <b>Panels</b>; in a figure of parts, at least "
-                           "one part of them).", True)
+            self._anim_msg("Animations are made of plan views, cross-sections or 3D "
+                           "scenes (the panels' kind in <b>Panels</b>; in a figure of "
+                           "parts, at least one part of them).", True)
             return
         base = config.expand(self.an_path.value.strip() or self.path.value.strip())
         if not base:
@@ -152,6 +154,15 @@ class FigureAnimation:
             self.v.pools["fig"].submit(self._anim_job, self._anim_gen, spec, offsets, base,
                                        opts)
         self.v.confirm.ask(paths, go)
+
+    @staticmethod
+    def _anim_frame(spec, offsets, j, opts):
+        """The spec of frame j: its times moved on; a 3D scene's camera turned by its
+        share of the orbit and its picture rendered at the animation's DPI."""
+        s = fg.scene_frame(fg.shift_times(spec, offsets[j]), j, len(offsets))
+        if s.get("kind") == "scene":
+            s["scene3d"] = dict(s["scene3d"], dpi=opts["dpi"])
+        return s
 
     def _stop_anim(self):
         self._anim_gen += 1
@@ -201,7 +212,7 @@ class FigureAnimation:
                 self.v._schedule(partial(
                     self._anim_msg, f'<span class="busy">● Drawing frame {j + 1}/'
                                     f'{len(offsets)}…</span>'))
-                s = fg.shift_times(spec, offsets[j])
+                s = self._anim_frame(spec, offsets, j, opts)
                 data = self.panel_data(s)
                 missing += any(d.get("missing") for d in data.values())
                 fig = figdraw.draw(s, data, ends)

@@ -36,7 +36,7 @@ class FigureWidgets:
             "Time–height (series)": "th", "Time series": "line", "Soundings": "sounding",
             "Distributions": "dist", "Vertical profiles": "profile",
             "Joint distributions (x vs y)": "joint",
-            "Azimuthal means (radius–height)": "azim"})
+            "Azimuthal means (radius–height)": "azim", "3D scene (one picture)": "scene"})
         # what the rows and the columns step through (plan views and sections)
         self.g_rows = pn.widgets.Select(name="Rows are", options=GRID_DIMS, value="none")
         self.g_cols = pn.widgets.Select(name="Columns are", options=GRID_DIMS, value="times")

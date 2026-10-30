@@ -12,8 +12,8 @@ and rendering the preview); the rest are mixins, one module each: the widgets
 (widgets), spec <-> widgets and undo (specio), the panels' times and titles (times),
 the Panels tab's reactions (panelopts), runs (runs), sources and lists (sources),
 export (export), animations (anim), figures of several parts (combo), placing by
-clicking the preview (click), the panel tree (tree), style (style) and the quick start
-(quick).  Constants, helpers and cards are in the cards package."""
+clicking the preview (click), the panel tree (tree), style (style), the quick start
+(quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package."""
 
 import base64
 import html
@@ -40,6 +40,7 @@ from .sources import FigureSources
 from .style import FigureStyle
 from .panelopts import FigurePanelOpts
 from .quick import FigureQuick
+from .scene import FigureScene
 from .specio import FigureSpecIO
 from .times import FigureTimes
 from .tree import FigureTree
@@ -48,7 +49,7 @@ from .widgets import FigureWidgets
 
 class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, FigureRuns,
                    FigureSources, FigureExport, FigureAnimation, FigureCombo, FigureClick,
-                   FigureTree, FigureStyle, FigureQuick):
+                   FigureTree, FigureStyle, FigureQuick, FigureScene):
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
@@ -80,6 +81,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._ser_live, self._ser_touch = set(), set()
         self.snd_cache = OrderedDict()  # sounding (run, time, where, track) -> analysis
         self.dist_cache = OrderedDict()  # distribution (run, time, recipe, track) -> summary
+        self.scene_cache = OrderedDict()  # 3D scene (run, time, scene, track) -> arrays
+        self._st_cache = {}  # (build_scene's: the last scene's streamlines)
         from concurrent.futures import ThreadPoolExecutor
         viewer.pools["figser"] = ThreadPoolExecutor(1, thread_name_prefix="cm1view-figser")
         viewer.gen["figser"] = 0
@@ -99,6 +102,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.redo_btn = pn.widgets.Button(icon="arrow-forward-up", description="Redo", **ib)
         self._build_panel_widgets()
         self._build_layer_widgets()
+        self._build_scene()
         self._build_text()
         self._build_more()
         self._build_anim()
@@ -122,7 +126,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         # (the Layers tab holds the figure kind's columns only: _keep_tabs)
         self.layers_all = [self.xsec_col, self.plan_layers, self.series_col, self.snd_col,
                            self.dist_col, self.prof_col, self.joint_col, self.azim_col,
-                           self.ext_sec, self.runs_sec]
+                           self.scene_col, self.ext_sec, self.runs_sec]
         self.layers_tab = layers_tab = pn.Column(*self.layers_all,
                                                  sizing_mode="stretch_width")
         style_tab = self._style_tab()
@@ -381,6 +385,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             return self._joint_data(spec, progress, cancelled)
         if spec["kind"] == "azim":
             return self._azim_data(spec, progress, cancelled)
+        if spec["kind"] == "scene":
+            return self._scene_data(spec, cancelled)
         ctx = {}  # run index -> (run, Fields, fixes, centres, track signature)
 
         def context(k):
@@ -491,12 +497,14 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             self._ser_live = self._ser_touch  # (a series no longer shown: its job stops)
             self._lims = {i: (d["xlim"], d["ylim"]) for i, d in data.items()
                           if "xlim" in d and "ylim" in d and not d.get("missing")}
-            fig = figdraw.draw(spec, data)
-            code_err = getattr(fig, "_cv_code_error", None)
-            watch_tight(fig)  # (where the panels are in the image, for clicks)
             # sharp at the page's size, and on screen at 96 px per inch when actual size
             dpi = min(float(spec["export"]["dpi"]), max(1100.0 / max(spec["size"][0], 0.5),
                                                          192.0))
+            # (a 3D scene's picture rendered at the preview's resolution, not the export's)
+            fig = figdraw.draw(dict(spec, scene3d=dict(spec["scene3d"], dpi=dpi))
+                               if spec["kind"] == "scene" else spec, data)
+            code_err = getattr(fig, "_cv_code_error", None)
+            watch_tight(fig)  # (where the panels are in the image, for clicks)
             buf = io.BytesIO()
             figdraw.save(spec, fig, buf, format="png", **fg.save_kw(spec, dpi))
             raw = buf.getvalue()
@@ -515,6 +523,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                     f"{spec['export']['dpi']} dpi) · {_time.time() - t0:.1f} s")
             kinds = {p["kind"] for p in spec.get("parts", [spec])}
             pend = self.series_pending() if kinds & {"th", "line"} else []
+            scene_notes = [str(d["notes"]) for d in data.values() if d.get("notes")]
+            if scene_notes:  # (a 3D scene: surfaces not found, meshes coarsened, ...)
+                note += " · " + html.escape("; ".join(scene_notes))
             if pend:
                 note += (' · <span class="busy">● computing series '
                          + "; ".join(p for p in pend if p) + "</span>")

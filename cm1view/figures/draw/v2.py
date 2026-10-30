@@ -112,7 +112,9 @@ def npanels(spec):
         return sum(npanels(p) for p in spec["parts"])
     cells = int(spec["rows"]) * int(spec["cols"])
     kind = spec.get("kind", "plan")
-    if kind == "th" and th_cards(spec):
+    if kind == "scene":  # (one 3D scene)
+        n = 1
+    elif kind == "th" and th_cards(spec):
         n = 1 + max([int(e.get("panel", 0)) for e in spec.get("series") or []] or [0])
     elif kind == "th":
         n = cells
@@ -349,6 +351,8 @@ def _v1_panel(spec, i):
         p["layers"] = [dict({k: copy.deepcopy(v) for k, v in e.items() if k != "panel"},
                             type="series" if kind == "line" else kind)
                        for e in spec.get(ENTRIES[kind], []) if int(e.get("panel", 0)) == i]
+    elif kind == "scene":  # (its settings: spec["scene3d"], in the panel's view)
+        p["run"], p["time_s"] = int(spec.get("run", 0)), float(spec["time_s"])
     else:
         ref = panel_ref(spec, i)
         if ref is None:

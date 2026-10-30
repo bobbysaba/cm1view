@@ -459,6 +459,9 @@ def shift_times(spec, dt_s):
         s["parts"] = [shift_times(p, dt_s) for p in s["parts"]]
         return s
     s["times_s"] = [None if t is None else float(t) + dt_s for t in s.get("times_s", [])]
+    if s.get("kind") == "scene" and s.get("time_s") is not None:  # (a box following the
+        s["scene3d"] = dict(s.get("scene3d") or {})                # track: from here)
+        s["scene3d"].setdefault("t0_s", float(s["time_s"]))
     if s.get("time_s") is not None:
         s["time_s"] = float(s["time_s"]) + dt_s
     for p in s.get("panels") or []:
@@ -481,10 +484,23 @@ def shift_times(spec, dt_s):
 
 
 def animated(spec):
-    """Whether the spec has panels that step in time (plan views, sections, soundings;
-    time-height and time-series panels stay as they are)."""
+    """Whether the spec has panels that step in time (plan views, sections, 3D scenes,
+    soundings; time-height and time-series panels stay as they are)."""
     parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
-    return any(p["kind"] in ("plan", "xsec") for p in parts)
+    return any(p["kind"] in ("plan", "xsec", "scene") for p in parts)
+
+
+def scene_frame(spec, j, n):
+    """Frame j of n of an animation of 3D scene figure `spec` (already shift_times'd):
+    its camera turned by the orbit's share, j / n of it (the last frame stops short, so
+    a looping full turn has no repeated frame)."""
+    sc = spec.get("scene3d") or {}
+    deg = float(sc.get("orbit") or 0.0) * j / max(int(n), 1)
+    if spec.get("kind") != "scene" or not deg:
+        return spec
+    s = dict(spec, scene3d=dict(sc))
+    s["scene3d"]["camera"] = figdraw.orbit_camera(sc.get("camera"), deg)
+    return s
 
 
 def time_refs(spec):
@@ -503,6 +519,10 @@ def time_refs(spec):
                 lays = figdraw.spec_layers(p, i)
                 out += [(runs[k]["path"], ts) for (k, ts), js in layer_groups(p, i).items()
                         if not all(lays[j].get("time_lock") for j in js)]
+        elif p["kind"] == "scene" and p.get("time_s") is not None:
+            k = int(p.get("run", 0))
+            if k < len(runs):
+                out.append((runs[k]["path"], float(p["time_s"])))
         elif p["kind"] in ("sounding", "dist", "profile", "joint", "azim"):
             out += [(runs[int(e.get("run", 0))]["path"], float(e["time_s"]))
                     for e in p.get(figdraw.ENTRIES[p["kind"]]) or []

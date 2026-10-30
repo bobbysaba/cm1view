@@ -333,8 +333,12 @@ class FigurePanelOpts:
         rd, cd = self._axes()
         both = rd != "none" and cd != "none"
         self.g_rows.visible = self.g_cols.visible = self.grid_hint.visible = kind == "plan"
-        self.times_sec.visible = kind == "plan"  # (sections: each card's run and time)
+        # (sections: each card's run and time; a 3D scene: the Time section's)
+        self.times_sec.visible = kind in ("plan", "scene")
         self.xsec_col.visible = kind == "xsec"
+        self.scene_col.visible = kind == "scene"
+        for w in (self.rows, self.cols, self.fit_btn):  # (one 3D picture)
+            w.visible = kind != "scene"
         times, runs = self._uses("times"), self._uses("runs")
         words = (["runs"] if runs else []) + ["times" if times else "time"] + \
             [d for d in ("fields", "heights") if self._uses(d)]
@@ -356,7 +360,7 @@ class FigurePanelOpts:
         self.pf_box.visible = self._uses("fields")
         self._pf_show()
         self.run_sel.visible = (len(self.run_rows) > 1 or bool(self._other_runs())) and \
-            not runs and kind == "plan"
+            not runs and kind in ("plan", "scene")
         self.plan_layers.visible = self.area_sec.visible = maps
         self.series_col.visible = self.ts_sec.visible = kind in ("th", "line")
         self.ts_sec.title = "Time and height axes" if kind == "th" else "Time and value axes"
@@ -367,7 +371,7 @@ class FigurePanelOpts:
             w.visible = kind == "line"
         self.ext_sec.visible = kind in ("plan", "xsec", "th")
         if hasattr(self, "cb_sec"):  # (Style tab: no colorbar on lines and soundings)
-            self.cb_sec.visible = kind not in ("line", "sounding", "dist", "profile")
+            self.cb_sec.visible = kind not in ("line", "sounding", "dist", "profile", "scene")
         self.snd_col.visible = kind == "sounding"
         self.dist_col.visible = kind == "dist"
         self.prof_col.visible = kind == "profile"
@@ -479,7 +483,7 @@ class FigurePanelOpts:
             return abs(y1 - y0) / max(abs(x1 - x0), 1e-6)
         return {"xsec": 0.5, "th": 0.55, "line": 0.45, "sounding": 1.0,
                 "dist": 0.7, "profile": 1.3, "joint": 0.85,
-                "azim": 0.8}.get(s["kind"], 0.75)
+                "azim": 0.8, "scene": 0.8}.get(s["kind"], 0.75)
 
     def fit_height(self, s=None):
         """A figure height (in) that fits the panels at the figure's width: their shape
@@ -538,9 +542,9 @@ class FigurePanelOpts:
                 elif kind == "profile":
                     self.xlabel.value, self.ylabel.value = "", "height (km)"  # (x: the field's)
                     self.cb_mode.value = "none"
-                elif kind in ("joint", "azim"):  # (the fields' / radius, height; the
-                    self.xlabel.value = self.ylabel.value = ""  # panel's own colorbar)
-                    self.cb_mode.value = "none"
+                elif kind in ("joint", "azim", "scene"):  # (the fields' / radius,
+                    self.xlabel.value = self.ylabel.value = ""  # height; the panel's or
+                    self.cb_mode.value = "none"  # the scene's own colorbars and axes)
                 else:
                     self.xlabel.value, self.ylabel.value = "temperature (°C)", "pressure (hPa)"
                     self.cb_mode.value = "none"
@@ -562,6 +566,8 @@ class FigurePanelOpts:
                 self._add_joint()
             if kind == "azim" and not self.azim_cards:
                 self._add_azim()
+            if kind == "scene" and not self.iso_rows:  # (a start: the 3D view's)
+                self._scene_set(self.viewer_scene())
             grid = kind == "xsec" and (self._quick_xsec  # (the quick start: its own)
                                        or self._cards_from_grid())
             if kind == "th":  # (a card per panel: one run each)

@@ -10,6 +10,7 @@ import panel as pn
 import param
 from bokeh.models import FixedTicker, LinearAxis
 
+from ..core.vectors import FRAME_SHORT  # noqa: F401  (re-exported)
 from ..theme import BG, CSS, FIGURE, GRID, MUTED, PANEL, TEXT, TOOLBAR
 
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
@@ -17,7 +18,6 @@ BASE_VARS = ("th0", "prs0", "qv0", "u0", "v0")
 LEVEL_MODES = {"Height AGL (km)": "height", "Model level (k)": "level",
                "Column max": "colmax", "Column min": "colmin"}
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
-FRAME_SHORT = {"ground": "ground-rel", "grid": "grid-rel", "storm": "storm-rel"}
 EMPTY_LINES = dict(xs=[], ys=[])
 EMPTY_VEC = dict(x0=[], y0=[], x1=[], y1=[], angle=[])
 

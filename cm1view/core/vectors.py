@@ -22,6 +22,8 @@ VECTORS = {d.key: d for d in (
     VectorDef("bgen", "Baroclinic generation", "10⁻⁴ s⁻²", ("bgen_x", "bgen_y", None), 1.0),
 )}
 
+FRAME_SHORT = {"ground": "ground-rel", "grid": "grid-rel", "storm": "storm-rel"}
+
 # matplotlib quiver scale (data units per axes width) for a figure layer
 FIG_SCALE = 12.5  # × ref: 250 for the wind
 
@@ -64,5 +66,4 @@ def deps(F, key):
 def label(key, frame=None):
     """'Wind (storm-rel)' / 'Horizontal vorticity'."""
     d = VECTORS[key]
-    short = {"ground": "ground-rel", "grid": "grid-rel", "storm": "storm-rel"}
-    return f"{d.label} ({short[frame]})" if d.framed and frame else d.label
+    return f"{d.label} ({FRAME_SHORT[frame]})" if d.framed and frame else d.label

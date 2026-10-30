@@ -1,8 +1,8 @@
 # Figures
 
 The **Figure** workspace makes publication figures from anything in the viewer: plan
-views, cross-sections, time–height plots, time series, soundings and distributions,
-across times and runs. The figure is previewed at its final size, every change can be
+views, cross-sections, time–height plots, time series, soundings, distributions and 3D
+scenes, across times and runs. The figure is previewed at its final size, every change can be
 undone, and each saved figure comes with a stand-alone script and data that redraw the
 same image without cm1view.
 
@@ -21,7 +21,7 @@ tabs have a page each:
 A figure can start from
 
 - the **picture buttons** in the items tray under the map: the map view, soundings, the
-  section, a series. The figure then keeps the layers, fields and ranges you set up in
+  section, a series, the 3D box. The figure then keeps the layers, fields and ranges you set up in
   the viewer;
 - **Figure of these** in the Distribution tool; or
 - the **quick start**, which the Figure workspace shows the first time you open it (when
@@ -32,7 +32,7 @@ A figure can start from
 
 | Setting | Meaning |
 |---|---|
-| **Panels show** | *Plan views*, *Vertical cross-sections*, *Time–height (series)*, *Time series*, *Soundings* or *Distributions*. |
+| **Panels show** | *Plan views*, *Vertical cross-sections*, *Time–height (series)*, *Time series*, *Soundings*, *Distributions*, *Vertical profiles*, *Joint distributions*, *Azimuthal means* or *3D scene (one picture)*. |
 | **Panels differ in** | (Plan views.) *Time*, *Field*, *Height*, *Run*, or *Nothing*; the panels fill the grid row by row. For a grid of two (e.g. runs × times) set *Panels → Grid and size → Rows are / Columns are*. Cross-sections start with a section card per panel, x–z and y–z in turn (*Layers → Sections*). |
 | **Colour fill** | The field every panel starts with. |
 | **Rows**, **Columns** | The grid, up to 8 × 8. |

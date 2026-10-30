@@ -37,8 +37,10 @@ Use a template to make the same figure for each of several runs.
 
 ## Animations
 
-**Export → Animation (GIF)** saves plan-view and cross-section figures as animated GIFs.
-Figures made of parts work if at least one part is a plan view or cross-section: every
+**Export → Animation (GIF)** saves plan-view, cross-section and 3D scene figures as
+animated GIFs (a 3D scene's box can follow the storm and its camera orbit: see
+[3D scenes](figures-panels.md#3d-scenes)). Figures made of parts work if at least one part
+is a plan view or cross-section: every
 part steps together (soundings too), while time–height and time-series parts stay as they
 are.
 

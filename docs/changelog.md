@@ -7,6 +7,16 @@ has a matching git tag.
 
 ### Figures
 
+- **Publication 3D scenes**: a new figure kind, *3D scene (one picture)*, renders the 3D
+  workspace's isosurfaces, floor, vectors and streamlines off-screen with PyVista at the
+  export's DPI (smooth shading, lighting, translucent surfaces in the right order,
+  transparent background possible), with matplotlib's title, legend, colorbars and axis
+  ticks around it. Start one from the 3D box's photo icon in the items tray (the camera
+  as you left the 3D view) or *Copy the 3D view*; camera, look and region are in
+  *Layers*. Scenes animate (*Export → Animation*), the box optionally following the
+  storm track and the camera orbiting. The saved script redraws it with PyVista
+  ([3D scenes](guide/figures-panels.md#3d-scenes)). **New dependency: pyvista** (with
+  vtk-base); run `conda env update -f environment.yml --prune` after pulling.
 - **Derivatives of any field**: a **Derivative** select beside the Field (the map's
   fill; a figure's fill, contour and shading layers on plan views and cross-sections)
   plots ∂/∂z, ∂/∂x, ∂/∂y or |∇h| of it, per km (∂w/∂z in 10⁻³ s⁻¹), on the stretched

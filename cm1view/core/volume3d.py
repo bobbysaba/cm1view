@@ -1,9 +1,11 @@
-"""Isosurface extraction (server side) + Plotly WebGL scene."""
+"""The 3D scene: isosurfaces, floor, vectors and streamlines computed server side
+(build_scene), and the viewer's Plotly WebGL figure of them (scene_figure)."""
 
 import numpy as np
 from scipy.ndimage import gaussian_filter, map_coordinates
 from skimage.measure import marching_cubes
 
+from . import vectors
 from .fields import _NWS_REF, mpl_cmap
 from ..theme import BG, GRID, MUTED, TEXT
 
@@ -201,6 +203,115 @@ def sample_points(run, vol, x, y, z):
     fk = np.interp(z, run.z, np.arange(run.nk, dtype=np.float64))
     return map_coordinates(vol, np.stack([fk, fj, fi]), order=1, mode="nearest")
 
+
+def frame_offset(run, frame, storm):
+    """What to subtract from grid-relative (u, v) to get the wanted frame."""
+    if frame == "ground":
+        return (-run.umove, -run.vmove)
+    if frame == "storm":
+        return (storm[0] - run.umove, storm[1] - run.vmove)
+    return (0.0, 0.0)
+
+
+def floor_surface(run, F, fs, box, t, fstorm):
+    """The floor surface (None when off): the field over the region, thinned to about
+    300 points across, with its colormap (name, reversed), plotly colorscale and range."""
+    name = fs["var"]
+    if not fs["on"] or name not in F:
+        return None
+    d = F[name]
+    i0, i1, j0, j1 = box_indices(run, box)
+    gs = max(1, int(np.ceil(max(i1 - i0, j1 - j0) / 300)))
+    a = F.plane(name, t, "height", fs["z"], storm=fstorm[0])[j0:j1:gs, i0:i1:gs]
+    a = np.asarray(a, np.float64)
+    cmap = d.cmap if fs["cmap"] == "Field default" else fs["cmap"]
+    title = d.title
+    if d.ndim == 3:
+        title += f' @ {max(fs["z"], float(run.z[0])) * 1000:.0f} m'
+    if d.storm:
+        title += f" ({fstorm[1]})"
+    if fs["range"] == "custom" and fs["hi"] > fs["lo"]:
+        lo, hi = fs["lo"], fs["hi"]
+    elif cmap == "reflectivity" and not fs["rev"]:
+        lo, hi = 0.0, 75.0  # the stepped NWS scale is laid out for 0-75 dBZ
+    else:
+        lo, hi = floor_range(a, d.vrange, d.diverging, fs["range"])
+    return dict(x=run.xh[i0:i1:gs], y=run.yh[j0:j1:gs], a=a, lo=lo, hi=hi, title=title,
+                cmap=cmap, rev=fs["rev"], colorscale=floor_colorscale(cmap, fs["rev"]))
+
+
+def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
+    """Everything a 3D scene draws, as arrays (no plotting): the isosurface meshes, the
+    floor, the vector planes and the streamlines, for the plotly scene of the viewer
+    and the rendered 3D figure alike.
+
+    scene: the request dict (t, box, ztop, exag, smooth, res, isos, vecs, stream, ground,
+    storm, fstorm) built by the viewer's request_3d.  progress(done, total, name) reports
+    the loading; cancelled() stops it (then None is returned).  cache: a dict kept by the
+    caller across calls; the streamlines are traced again only when what they depend on
+    changed (an isosurface or floor edit keeps the same lines).
+
+    Returns dict(meshes, ground, vecs, stream, notes, stride, off)."""
+    t, box, ztop = scene["t"], scene["box"], scene["ztop"]
+    ss = scene["stream"]
+    names = []
+    for iso in scene["isos"]:
+        names += F.native_deps(iso["var"])
+    if ss["on"]:
+        names += ["uinterp", "vinterp", "winterp"]
+    if not run.load_volumes(names, t, progress=progress, cancelled=cancelled):
+        return None
+    stride = scene["res"] or auto_stride(run, box, ztop, 12e6)
+    meshes, notes = [], []
+    for iso in scene["isos"]:
+        d = F[iso["var"]]
+        m = isosurface(run, F.volume(iso["var"], t, scene["fstorm"][0]), box, iso["val"],
+                       stride, scene["smooth"], ztop)
+        name = f'{d.label} = {iso["val"]:g} {d.units}'
+        if d.storm:
+            name += f' ({scene["fstorm"][1]})'
+        if m is None:
+            notes.append(f"{name}: no surface in region")
+            continue
+        if m["step"] > 1:
+            notes.append(f"{name}: coarsened ×{m['step']} (mesh too large)")
+        m.update(color=iso["color"], opacity=iso["op"], name=name)
+        meshes.append(m)
+    ground = floor_surface(run, F, scene["ground"], box, t, scene["fstorm"])
+    vecs = []
+    for vs in scene["vecs"]:
+        u, v = vectors.plane(F, vs["q"], t, "height", vs["level"], vs["frame"],
+                             scene["storm"])
+        X, Y, _ = surface_vectors(run, u, v, box, vs["density"], vs["ref"])
+        zlev = max(vs["level"], float(run.z[0]))
+        # drawn at least 2% of the scene height up: right at z = 0 the opaque
+        # reflectivity floor hides them (depth-buffer ties); label keeps zlev
+        vecs.append(dict(x=X, y=Y, z=max(zlev, 0.02 * ztop), color=vs["color"],
+                         name=f'{vectors.label(vs["q"], vs["frame"])} @ '
+                              f'{zlev * 1000:.0f} m'))
+    off = frame_offset(run, ss["frame"], scene["storm"])
+    stream = None
+    if ss["on"]:
+        key = (id(run), t, box, ztop, ss["z"], ss["n"], ss["length"], ss["dir"], off,
+               ss["seed_box"])
+        if cache is not None and cache.get("stream_key") == key:
+            stream = cache["stream"]
+        else:
+            stream = streamlines(run, run.volume("uinterp", t), run.volume("vinterp", t),
+                                 run.volume("winterp", t), box, ztop, ss["z"], ss["n"],
+                                 ss["length"], ss["dir"], off, seed_box=ss["seed_box"])
+            if cache is not None:
+                cache.update(stream_key=key, stream=stream)
+        stream = dict(stream) if stream is not None else None
+        if stream is None:
+            notes.append("streamlines: none (calm or outside region)")
+        else:
+            stream.update(color_by=ss["color_by"], seed_box=ss["seed_box"],
+                          seed_z=max(ss["z"], float(run.z[0])),
+                          name=f'Streamlines ({vectors.FRAME_SHORT[ss["frame"]]}, '
+                               f'{stream["n"]})')
+    return dict(meshes=meshes, ground=ground, vecs=vecs, stream=stream, notes=notes,
+                stride=stride, off=off)
 
 def _ref_colorscale():
     """Stepped NWS reflectivity colorscale for 0-75 dBZ (dark below 5)."""
