@@ -12,6 +12,7 @@ import panel as pn
 
 from .. import spec as fg
 from .base import SECTION, _grid, _hint
+from ...viewer.ui import held
 
 BLANK = "blank"  # (the Yours column of a blanked point)
 _BLANKS = ("blank", "nan", "none", "-", "–", "x")
@@ -167,14 +168,11 @@ class SeriesValues:
         w = self.w
         opts = self._run_opts()
         if w["run"].options != opts:
-            hold, self.ed._hold = self.ed._hold, True
-            try:
+            with held(self.ed):
                 keep = w["run"].value
                 w["run"].param.update(options=opts,
                                       value=keep if keep in opts.values()
                                       else next(iter(opts.values()), None))
-            finally:
-                self.ed._hold = hold
         w["run"].visible = len(opts) > 1
         self.k = k = w["run"].value
         ent = self.card.collect()

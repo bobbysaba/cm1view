@@ -11,6 +11,7 @@ import panel as pn
 from . import draw as figdraw, spec as fg
 from .cards import FONTS, GRID_DIMS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num, _xy, _xy_text
 from .times import _heights
+from ..viewer.ui import held
 
 
 class FigureSpecIO:
@@ -25,8 +26,7 @@ class FigureSpecIO:
         self._started = True  # (no quick start over a figure made from the viewer)
         self.quick.hide()
         self._auto_size = bool(spec.get("size_auto", False))  # until set by hand
-        self._hold = True
-        try:
+        with held(self):
             s = spec
             self._build_runs(s["runs"])
             self.kind.value = s["kind"]
@@ -211,8 +211,6 @@ class FigureSpecIO:
             self._show_joints()
             self._show_azims()
             self._show_anns()
-        finally:
-            self._hold = False
         self._show_region()
         self._on_kind(render_=False)
         self._show_vary()

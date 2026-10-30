@@ -13,6 +13,7 @@ from .. import config, registry
 from . import draw as figdraw, spec as fg
 from ..core.fields import GROUP_ORDER, deriv_def, split_deriv
 from .cards import CARD, _hex, _row
+from ..viewer.ui import held
 
 
 class AllFields:
@@ -260,13 +261,10 @@ class FigureRuns:
     def _pick_other(self, w, old):
         """A run list picked a run not in the figure: add it, and pick it."""
         k = self._add_run(w.value, grid=False)
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             if k is None:  # (the message says why)
                 w.value = old if isinstance(old, int) else 0
                 return
-        finally:
-            self._hold = hold
         w.value = k  # (as if picked from the list: the panel's times follow)
 
     def _run_names(self):
@@ -275,8 +273,7 @@ class FigureRuns:
 
     def _refresh_run_names(self):
         names = self._run_names()
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for w in [self.run_sel] + \
                     [c.w["run"] for c in self.snd_cards + self.dist_cards
                      + self.joint_cards + self.azim_cards + self.sec_cards]:
@@ -301,8 +298,6 @@ class FigureRuns:
                     v = [k for k in c.w["ens_runs"].value if k in names.values()]
                     c.w["ens_runs"].options = opts
                     c.w["ens_runs"].value = v
-        finally:
-            self._hold = hold
         self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \
             not self._uses("runs") and self.kind.value in ("plan", "scene")  # (sections: cards')
 
@@ -316,16 +311,13 @@ class FigureRuns:
                 pass
         self.fields = AllFields(fields)
         g = self.fields.groups()
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for w in ([c.w["field"] for c in self.cards if "field" in c.w]
                       + [r["field"] for r in self.pf_rows]
                       + [c.w["field"] for c in self.ser_cards if "field" in c.w]):
                 v = w.value
                 w.groups = g
                 w.value = v
-        finally:
-            self._hold = hold
 
     def _add_run(self, path=None, grid=False):
         """Add the run in `path` (default: the box) with its storm track (a
@@ -415,8 +407,7 @@ class FigureRuns:
         self.run_rows.remove(r)
         names = self._run_names()  # (the new numbering)
         gone = []
-        self._hold = True
-        try:
+        with held(self):
             if self.run_sel.value is not None and self.run_sel.value >= k:
                 self.run_sel.value = max(0, self.run_sel.value - (self.run_sel.value > k))
             self.gg_runs.value = [j - (j > k) for j in self.gg_runs.value  # (a grid of runs)
@@ -470,8 +461,6 @@ class FigureRuns:
                     c.set_runs(new)
                     keep.append(c)
                 cards[:] = keep
-        finally:
-            self._hold = False
         self._show_runs()
         self._show_soundings()
         self._show_dists()

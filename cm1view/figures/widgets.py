@@ -4,7 +4,6 @@ A mixin of the FigureEditor (figures/editor.py)."""
 
 import os
 
-import numpy as np
 import panel as pn
 
 from .. import config

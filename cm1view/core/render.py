@@ -11,7 +11,7 @@ import contourpy
 from scipy.ndimage import map_coordinates
 
 from . import vectors as vectors_mod
-from .fields import palette
+from .fields import finite_sample, palette
 
 
 # ------------------------------------------------------------ helpers
@@ -237,10 +237,10 @@ def regrid(a, x, y, xn, yn):
 
 def diff_range(a):
     """Auto range of a difference: symmetric about 0 (99.5th percentile of |a|)."""
-    finite = np.abs(a[np.isfinite(a)])
-    if finite.size == 0:
+    sub = finite_sample(a)
+    if sub.size == 0:
         return (-1.0, 1.0)
-    m = float(np.percentile(finite[:: max(1, finite.size // 200000)], 99.5)) or 1.0
+    m = float(np.percentile(np.abs(sub), 99.5)) or 1.0
     return (-m, m)
 
 

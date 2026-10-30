@@ -6,7 +6,8 @@ import panel as pn
 
 from .. import draw as figdraw
 from ..spec.sections import MOTION, ORIENTS, POSITIONS, describe, section_defaults
-from .base import _f, _grid, _hint, _fold, _load_widgets, _BTN
+from .base import _f, _grid, _fold, _load_widgets, _BTN
+from ...viewer.ui import held
 
 
 class SectionCard:
@@ -168,23 +169,17 @@ class SectionCard:
         """Run k, at its time nearest time_s (None: the card's time)."""
         o = self.ed._time_opts(k)
         cur = self.w["time"].value if time_s is None else time_s
-        hold, self.ed._hold = self.ed._hold, True
-        try:
+        with held(self.ed):
             self.w["run"].value = k
             self.w["time"].options = o
             self.w["time"].value = self.ed._nearest(o, cur)
-        finally:
-            self.ed._hold = hold
         self._show()
 
     def set_ab(self, a, b):
         """Make this an A–B section from a to b (grid km)."""
         self.sec = dict(self.sec, a=list(a), b=list(b))
-        hold, self.ed._hold = self.ed._hold, True
-        try:
+        with held(self.ed):
             self.w["orient"].value = "ab"
-        finally:
-            self.ed._hold = hold
         self._show()
 
     def collect(self):

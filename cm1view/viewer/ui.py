@@ -3,6 +3,7 @@ toolbars, and the tool rail."""
 
 import base64
 import io
+from contextlib import contextmanager
 from functools import partial
 
 import numpy as np
@@ -20,6 +21,18 @@ LEVEL_MODES = {"Height AGL (km)": "height", "Model level (k)": "level",
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
 EMPTY_LINES = dict(xs=[], ys=[])
 EMPTY_VEC = dict(x0=[], y0=[], x1=[], y1=[], angle=[])
+
+
+@contextmanager
+def held(obj, attr="_hold"):
+    """obj.<attr> True meanwhile (widgets set in code: their callbacks hold off), then
+    as it was."""
+    was = getattr(obj, attr)
+    setattr(obj, attr, True)
+    try:
+        yield
+    finally:
+        setattr(obj, attr, was)
 
 
 def pd_empty():

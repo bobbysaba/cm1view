@@ -14,6 +14,7 @@ from ..core import render, series as ser, vectors
 from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
                     ProfileDataCard,
                     DataCard, SeriesCard, SoundingCard, _dark)
+from ..viewer.ui import held
 
 
 class FigureSources:
@@ -402,11 +403,8 @@ class FigureSources:
         elif r * c < n:
             r = -(-n // c)
         if (r, c) != (self.rows.value, self.cols.value):
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 self.rows.value, self.cols.value = r, c
-            finally:
-                self._hold = hold
             self._fit_size()
             self._build_titles()
 
@@ -440,37 +438,55 @@ class FigureSources:
             w, h = 6.5, 5.2
         else:
             w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.width.value, self.height.value = round(min(16.0, w), 2), round(min(16.0, h), 2)
             self.size_preset.value = ""
-        finally:
-            self._hold = hold
 
     def _size_by_hand(self):
         if not self._hold:
             self._auto_size = False
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 self.size_preset.value = ""
-            finally:
-                self._hold = hold
+
+    # ------------------------------------------------------------ entry cards
+    @staticmethod
+    def _listed(box, cards, empty):
+        """Drawer box shows the cards' panels, or (none) the words empty."""
+        box.objects = [c.panel for c in cards] or [pn.pane.HTML(
+            f'<div class="cv-empty">{empty}</div>')]
+
+    def _cards_changed(self, show, fit=True):
+        """Cards added or removed: show() lists them again; fit: the grid of panels
+        fitted to them; the preview drawn again."""
+        show()
+        if fit:
+            self._fit_grid()
+        self.request()
+
+    def _entry_card(self, cls, e, remove):
+        c = cls(self, e)
+        c.rm.on_click(lambda ev: remove(c))
+        return c
+
+    def _from_tool(self, cards, new, make, show, none):
+        """Cards (make(entry)) for entries `new` of a viewer tool; none: what to say
+        when there are none."""
+        if not new:
+            self._msg(none, True)
+            return
+        cards.extend(make(e) for e in new)
+        self._cards_changed(show, fit=False)
 
     # ------------------------------------------------------------ sounding cards
     def _snd_card(self, e):
-        c = SoundingCard(self, e)
-        c.rm.on_click(lambda ev: self._remove_snd(c))
-        return c
+        return self._entry_card(SoundingCard, e, self._remove_snd)
 
     def _show_soundings(self):
-        self.snd_box.objects = [c.panel for c in self.snd_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No soundings: add the map\'s, or a new one.'
-            '</div>')]
+        self._listed(self.snd_box, self.snd_cards, "No soundings: add the map's, or a new one.")
 
     def _remove_snd(self, c):
         self.snd_cards.remove(c)
-        self._show_soundings()
-        self.request()
+        self._cards_changed(self._show_soundings, fit=False)
 
     def _own_index(self):
         paths = [r["path"] for r in self.run_rows]
@@ -492,40 +508,28 @@ class FigureSources:
         return out
 
     def _add_tab_soundings(self):
-        new = self.tab_soundings()
-        if not new:
-            self._msg("No soundings yet: click the map with the Sounding tool first, or "
-                      "add one here.", True)
-            return
-        self.snd_cards += [self._snd_card(e) for e in new]
-        self._show_soundings()
-        self.request()
+        self._from_tool(self.snd_cards, self.tab_soundings(), self._snd_card,
+                        self._show_soundings, "No soundings yet: click the map with the "
+                        "Sounding tool first, or add one here.")
 
     def _add_sounding(self):
         e = fg.sounding_defaults(self._own_index(), float(self.run.times[self.v.t]),
                                  dict(kind="trk", x=0.0, y=0.0, avg=0.0), len(self.snd_cards))
         e["panel"] = len(self.snd_cards)
         self.snd_cards.append(self._snd_card(e))
-        self._show_soundings()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_soundings)
 
     # ------------------------------------------------------------ distribution cards
     def _dist_card(self, e):
-        c = DistCard(self, e)
-        c.rm.on_click(lambda ev: self._remove_dist(c))
-        return c
+        return self._entry_card(DistCard, e, self._remove_dist)
 
     def _show_dists(self):
-        self.dist_box.objects = [c.panel for c in self.dist_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No distributions: add the map\'s (Distribution tool), '
-            'or a new one.</div>')]
+        self._listed(self.dist_box, self.dist_cards, "No distributions: add the map's "
+                     "(Distribution tool), or a new one.")
 
     def _remove_dist(self, c):
         self.dist_cards.remove(c)
-        self._show_dists()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_dists)
 
     def tab_dists(self):
         """spec["dists"] entries of the Distribution tool's distributions (this run),
@@ -538,14 +542,9 @@ class FigureSources:
         return out
 
     def _add_tab_dists(self):
-        new = self.tab_dists()
-        if not new:
-            self._msg("No distributions yet: compute one with the Distribution tool on "
-                      "the map first, or add one here.", True)
-            return
-        self.dist_cards += [self._dist_card(e) for e in new]
-        self._show_dists()
-        self.request()
+        self._from_tool(self.dist_cards, self.tab_dists(), self._dist_card, self._show_dists,
+                        "No distributions yet: compute one with the Distribution tool on "
+                        "the map first, or add one here.")
 
     def _new_dist_recipe(self):
         """A recipe for a new distribution: w over the whole domain at 1 km."""
@@ -557,9 +556,7 @@ class FigureSources:
                              float(self.run.times[self.v.t]), len(self.dist_cards))
         e["panel"] = 0
         self.dist_cards.append(self._dist_card(e))
-        self._show_dists()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_dists)
 
     # ------------------------------------------------------------ profile cards
     def _prof_card(self, e):
@@ -577,9 +574,7 @@ class FigureSources:
         e["panel"] = int(self.prof_cards[-1].w["panel"].value or 1) - 1 \
             if self.prof_cards else 0
         self.prof_cards.append(self._prof_card(e))
-        self._show_profiles()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_profiles)
 
     def _new_profs(self, ents, at):
         """Cards for profile entries ents after card `at`."""
@@ -634,15 +629,12 @@ class FigureSources:
         self._new_profs(new, at=c)
 
     def _show_profiles(self):
-        self.prof_box.objects = [c.panel for c in self.prof_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No profiles: add the Series tool\'s layer series, or a '
-            'new one.</div>')]
+        self._listed(self.prof_box, self.prof_cards, "No profiles: add the Series tool's "
+                     "layer series, or a new one.")
 
     def _remove_prof(self, c):
         self.prof_cards.remove(c)
-        self._show_profiles()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_profiles)
 
     def tab_profiles(self):
         """spec["profiles"] entries of the Series tool's layer series (this run) at the
@@ -656,38 +648,26 @@ class FigureSources:
         return out
 
     def _add_tab_profiles(self):
-        new = self.tab_profiles()
-        if not new:
-            self._msg("No layer series yet: make one with the Series tool (Vertical: "
-                      "Layer) first, or add a profile here.", True)
-            return
-        self.prof_cards += [self._prof_card(e) for e in new]
-        self._show_profiles()
-        self.request()
+        self._from_tool(self.prof_cards, self.tab_profiles(), self._prof_card,
+                        self._show_profiles, "No layer series yet: make one with the "
+                        "Series tool (Vertical: Layer) first, or add a profile here.")
 
     def _add_profile(self):
         e = fg.profile_defaults(self._new_recipe(), self._own_index(),
                                 float(self.run.times[self.v.t]), len(self.prof_cards))
         self.prof_cards.append(self._prof_card(e))
-        self._show_profiles()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_profiles)
 
     # ------------------------------------------------------------ joint distribution cards
     def _joint_card(self, e):
-        c = JointCard(self, e)
-        c.rm.on_click(lambda ev: self._remove_joint(c))
-        return c
+        return self._entry_card(JointCard, e, self._remove_joint)
 
     def _show_joints(self):
-        self.joint_box.objects = [c.panel for c in self.joint_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No joint distributions: add one.</div>')]
+        self._listed(self.joint_box, self.joint_cards, "No joint distributions: add one.")
 
     def _remove_joint(self, c):
         self.joint_cards.remove(c)
-        self._show_joints()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_joints)
 
     def _new_joint_recipe(self):
         """A recipe for a new joint distribution: vertical vorticity against w (the
@@ -702,25 +682,18 @@ class FigureSources:
         e = fg.joint_defaults(self._new_joint_recipe(), self._own_index(),
                               float(self.run.times[self.v.t]), len(self.joint_cards))
         self.joint_cards.append(self._joint_card(e))
-        self._show_joints()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_joints)
 
     # ------------------------------------------------------------ azimuthal mean cards
     def _azim_card(self, e):
-        c = AzimCard(self, e)
-        c.rm.on_click(lambda ev: self._remove_azim(c))
-        return c
+        return self._entry_card(AzimCard, e, self._remove_azim)
 
     def _show_azims(self):
-        self.azim_box.objects = [c.panel for c in self.azim_cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No azimuthal means: add one.</div>')]
+        self._listed(self.azim_box, self.azim_cards, "No azimuthal means: add one.")
 
     def _remove_azim(self, c):
         self.azim_cards.remove(c)
-        self._show_azims()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_azims)
 
     def _new_azim_recipe(self):
         """A recipe for a new azimuthal mean: w (the previous one's field and sector,
@@ -739,9 +712,7 @@ class FigureSources:
         e = fg.azim_defaults(self._new_azim_recipe(), self._own_index(),
                              float(self.run.times[self.v.t]), len(self.azim_cards))
         self.azim_cards.append(self._azim_card(e))
-        self._show_azims()
-        self._fit_grid()
-        self.request()
+        self._cards_changed(self._show_azims)
 
     # ------------------------------------------------------------ annotations
     def _ann_row(self, a):

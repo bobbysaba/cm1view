@@ -16,6 +16,7 @@ from panel.reactive import ReactiveHTML
 
 from .cards import ANN_FIELDS, _hint
 from .draw.base import ann_on
+from ..viewer.ui import held
 
 PLACE = {"Click: nothing": "", "Click to add text": "text",
          "Click to add a marker": "marker", "Click twice: arrow (text, then tip)": "arrow",
@@ -299,11 +300,8 @@ class FigureClick:
         ys = sorted((p1[1] + d[1], p2[1] + d[1]))
         self._set_box([*xs, *ys])
         box = self.spec["domain"]["box"]
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.dom.value = "box"
-        finally:
-            self._hold = hold
         self._show_region()
         self._status("Area x {:g} – {:g}, y {:g} – {:g} km.".format(*box))
         self.request()
@@ -341,12 +339,9 @@ class FigureClick:
                 new[kx] = round(x, 4 if axes else 2)
             if ky in a and a["kind"] != "vline":
                 new[ky] = round(y, 4 if axes else 2)
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for k, v in new.items():
                 row.w[k].value = v
-        finally:
-            self._hold = hold
         row._show()
         self._status(f"Moved the {a['kind']}" + (" (one end)" if grip in ("1", "2") else "")
                      + ": see <b>Annotate</b>.")

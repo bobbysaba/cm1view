@@ -206,20 +206,6 @@ def _reduce(a, how, pct):
     return float(np.percentile(a[ok], pct)), -1
 
 
-def _ddz(f, z, k, nk):
-    """∂/∂z (per km) on model level k of f(level) -> plane: centred on the stretched
-    levels inside, one-sided at the bottom and top (as Fields._ddz_level)."""
-    k = min(max(int(k), 0), nk - 1)
-    lo, hi = max(k - 1, 0), min(k + 1, nk - 1)
-    if lo == hi:
-        return np.zeros_like(f(k))
-    if lo == k or hi == k:
-        return (f(hi) - f(lo)) / (z[hi] - z[lo])
-    hl, hr = z[k] - z[lo], z[hi] - z[k]
-    return (hl * hl * f(hi) - hr * hr * f(lo) + (hr * hr - hl * hl) * f(k)) / \
-        (hl * hr * (hl + hr))
-
-
 def _worker(task):
     """Reader process: the recipe at one time.  Returns dict(t, value, x, y, z, prof,
     npts) or dict(t, error).  A derivative (task "op", of field task "field") and
@@ -227,7 +213,7 @@ def _worker(task):
     border (task "halo"), so their values at its edge are those of the map."""
     import netCDF4
 
-    from .fields import hgrad, split_deriv, stride_cols
+    from .fields import ddz_level, hgrad, split_deriv, stride_cols
 
     t = task["t"]
     try:
@@ -278,7 +264,7 @@ def _worker(task):
                     a = np.where(mask, a, np.nan)
                 return a
 
-            zfull, nk = task.get("zfull"), task.get("nk", 0)
+            zfull = task.get("zfull")
             raw = {}  # (native, level) -> plane on the box read; ∂/∂z inputs reuse them
 
             def read(n, k):
@@ -298,7 +284,7 @@ def _worker(task):
                         dop, dn = split_deriv(n)
                         sc = np.float32(task.get("dscale", {}).get(dn, 1.0))
                         if dop == "ddz":
-                            memo[n] = sc * _ddz(lambda kk: read(dn, kk), zfull, k, nk)
+                            memo[n] = sc * ddz_level(lambda kk: read(dn, kk), zfull, k)
                         elif dop:
                             memo[n] = sc * hgrad(dop, read(dn, k), task["xe"], task["ye"])
                         else:
@@ -318,7 +304,7 @@ def _worker(task):
             def level(k):
                 """The final field on model level k, cut to the region and masked."""
                 if op == "ddz":
-                    return finish(_ddz(level_base, zfull, k, nk))
+                    return finish(ddz_level(level_base, zfull, k))
                 return finish(base(fetcher(k)))
 
             how, pct = task["reduce"], task.get("pct", 99.0)
@@ -551,7 +537,7 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
             pct=recipe.get("pct", 99.0), vmode=vmode, weights=weights,
             zkm=recipe.get("z", np.nan), levels=ks,
             zlev=None if ks is None else run.z[ks], xh=run.xh[i0:i1], yh=run.yh[j0:j1],
-            xe=run.xh[e0:e1], ye=run.yh[f0:f1], zfull=np.asarray(run.z), nk=run.nk,
+            xe=run.xh[e0:e1], ye=run.yh[f0:f1], zfull=np.asarray(run.z),
             column=column, stride=column_stride(run) if b.costly else 1, ni=run.ni,
             nj=run.nj, center=cen))
     total, done = len(tasks), 0

@@ -515,6 +515,14 @@ def _sounding_thermo():
 COSTLY = frozenset(d.name for d in _sounding_thermo())  # (names of the costly fields)
 
 
+def finite_sample(a, n=200000):
+    """About n of a's finite values, evenly spaced (for percentiles of a large array:
+    the stride is taken before the finite test, so no full-size copy is made)."""
+    a = np.asarray(a).ravel()
+    sub = a[:: max(1, a.size // n)]
+    return sub[np.isfinite(sub)]
+
+
 def column_stride(run):
     """Columns apart of the costly column fields' computed columns: the column_stride
     setting; auto: the smallest that keeps them to about 250 000 (1 up to 500 x 500)."""
@@ -639,6 +647,22 @@ def deriv_def(op, base):
                     storm=base.storm)
 
 
+def ddz_level(f, z, k):
+    """∂/∂z (per km) on model level k of f(level) -> plane, on levels z (km): centred
+    on the stretched levels inside, one-sided at the bottom and top (as np.gradient of
+    the volume, so maps, sections and series agree)."""
+    nk = len(z)
+    k = min(max(int(k), 0), nk - 1)
+    lo, hi = max(k - 1, 0), min(k + 1, nk - 1)
+    if lo == hi:
+        return np.zeros_like(f(k))
+    if lo == k or hi == k:
+        return (f(hi) - f(lo)) / (z[hi] - z[lo])
+    hl, hr = z[k] - z[lo], z[hi] - z[k]
+    return (hl * hl * f(hi) - hr * hr * f(lo) + (hr * hr - hl * hl) * f(k)) / \
+        (hl * hr * (hl + hr))
+
+
 def hgrad(op, a, xkm, ykm):
     """Horizontal derivative op ('ddx', 'ddy', 'gradh') of a (..., ny, nx) array on
     the grid's x / y (km; stretched grids too), per km."""
@@ -649,6 +673,18 @@ def hgrad(op, a, xkm, ykm):
     if op == "ddy":
         return d(-2, ykm)
     return np.hypot(d(-1, xkm), d(-2, ykm))
+
+
+def once(fetch):
+    """fetch(name), each name fetched once: a derived field asks for its inputs several
+    times (θe: prs three times), and each ask of a plane not cached is a read."""
+    got = {}
+
+    def f(n):
+        if n not in got:
+            got[n] = fetch(n)
+        return got[n]
+    return f
 
 
 class Fields:
@@ -758,7 +794,7 @@ class Fields:
                     return run.read_level(n, t)
                 return run.read_height(n, t, float(value))
 
-            a = d.func(fetch, ctx) if d.derived else fetch(name) * d.scale
+            a = d.func(once(fetch), ctx) if d.derived else fetch(name) * d.scale
         # a copy: a slice of a cached volume would keep the whole volume alive
         a = np.array(a, dtype=np.float32)
         with self._lock:
@@ -773,8 +809,9 @@ class Fields:
         run = self.run
         ks, dz = d.levels(run.z, run.zf)
         c = dict(ctx, dz=dz, zk=run.z[ks], top=layer_top(d, run))
+        layers = once(lambda n: np.stack([run.read_level(n, t, k) for k in ks]))
         if not d.costly:
-            return d.func(lambda n: np.stack([run.read_level(n, t, k) for k in ks]), c)
+            return d.func(layers, c)
         s = column_stride(run)
         with self._lock:
             memo = self._memo.setdefault((t, s), {})
@@ -783,11 +820,11 @@ class Fields:
                 self._memo.popitem(last=False)
         c.update(memo=memo, threads=run.workers)
         if s == 1:
-            return d.func(lambda n: np.stack([run.read_level(n, t, k) for k in ks]), c)
+            return d.func(layers, c)
         r0, r1, tj, bj = stride_cols(0, run.nj, run.nj, s)
         c0, c1, ti, bi = stride_cols(0, run.ni, run.ni, s)
-        a = d.func(lambda n: np.stack([run.read_level(n, t, k)[r0:r1, c0:c1][
-            np.ix_(tj, ti)] for k in ks]), c)
+        a = d.func(once(lambda n: np.stack([run.read_level(n, t, k)[r0:r1, c0:c1][
+            np.ix_(tj, ti)] for k in ks])), c)
         return np.asarray(a)[np.ix_(bj, bi)]
 
     def _deriv_plane(self, op, base, t, mode, value, storm):
@@ -808,21 +845,8 @@ class Fields:
         return (1.0 - w) * a + w * self._ddz_level(base, t, k1, storm)
 
     def _ddz_level(self, base, t, k, storm):
-        """∂/∂z (per km) of field base on model level k: centred on the stretched
-        levels inside, one-sided at the bottom and top."""
-        z, nk = self.run.z, self.run.nk
-        k = min(max(int(k), 0), nk - 1)
-        lo, hi = max(k - 1, 0), min(k + 1, nk - 1)
-
-        def f(kk):
-            return self.plane(base, t, "level", kk, storm)
-        if lo == hi:
-            return np.zeros_like(f(k))
-        if lo == k or hi == k:
-            return (f(hi) - f(lo)) / (z[hi] - z[lo])
-        hl, hr = z[k] - z[lo], z[hi] - z[k]
-        return (hl * hl * f(hi) - hr * hr * f(lo) + (hr * hr - hl * hl) * f(k)) / \
-            (hl * hr * (hl + hr))
+        """∂/∂z (per km) of field base on model level k (ddz_level)."""
+        return ddz_level(lambda kk: self.plane(base, t, "level", kk, storm), self.run.z, k)
 
     def forget(self, t, names):
         """Drop cached planes at time t of `names` and the fields derived from them
@@ -877,7 +901,7 @@ class Fields:
         d = self[name]
         if d.derived and d.pointwise:
             self.run.load_volumes(d.natives, t)
-            return np.asarray(d.func(lambda n: sample(self.run.volume(n, t)),
+            return np.asarray(d.func(once(lambda n: sample(self.run.volume(n, t))),
                                      self._ctx(d, storm)))
         if d.derived:
             return np.asarray(sample(self.volume(name, t, storm)))
@@ -887,10 +911,9 @@ class Fields:
         d = self[name]
         if d.vrange is not None:
             return d.vrange
-        finite = a[np.isfinite(a)]
-        if finite.size == 0:
+        sub = finite_sample(a)
+        if sub.size == 0:
             return (0.0, 1.0)
-        sub = finite[:: max(1, finite.size // 200000)]
         if d.diverging:
             m = float(np.percentile(np.abs(sub), 99.5)) or 1.0
             return (-m, m)

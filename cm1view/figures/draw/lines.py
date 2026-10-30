@@ -8,8 +8,8 @@ from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, VPacker
 from matplotlib.patches import Patch, Rectangle
 from matplotlib.ticker import MaxNLocator
 
-from .base import (SND_COLORS, by_run, colormap, font_size, panel_legend, run_color,
-                   run_style, _levels)
+from .base import (SND_COLORS, by_run, colormap, entry_colors, font_size, panel_legend,
+                   run_color, run_style, _levels)
 
 def _lines(ax, d, spec, fs):
     """Time-series panel: one line per (series, run).  Series in other units get
@@ -276,15 +276,8 @@ def _bar_labels(ax, st, v, edges, how, color, fs):
 
 
 def dist_colors(spec, d):
-    """Colour of each distribution of panel data d: its own, else its run's when each
-    of the panel's distributions comes from another run (by_run), else the next of SND_COLORS."""
-    ents = spec.get("dists", [])
-    n = int(d.get("ndist", 0))
-    es = [ents[int(d[f"D{j}_e"])] if int(d[f"D{j}_e"]) < len(ents) else {} for j in range(n)]
-    runs = [int(e.get("run", 0)) for e in es]
-    rc = by_run(spec, runs)
-    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
-            for j, (e, k) in enumerate(zip(es, runs))]
+    """Colour of each distribution of panel data d (entry_colors)."""
+    return entry_colors(spec, d, "dists", "ndist", "D")
 
 
 def _dists(ax, d, spec, fs):
@@ -600,16 +593,8 @@ def joint_stats_text(st, keys):
 
 
 def joint_colors(spec, d):
-    """Colour of each joint distribution of panel data d: its own, else its run's
-    when each of the panel's comes from another run (by_run), else the next of
-    SND_COLORS."""
-    ents = spec.get("joints", [])
-    n = int(d.get("njoint", 0))
-    es = [ents[int(d[f"J{j}_e"])] if int(d[f"J{j}_e"]) < len(ents) else {} for j in range(n)]
-    runs = [int(d[f"J{j}_r"]) for j in range(n)]
-    rc = by_run(spec, runs)
-    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
-            for j, (e, k) in enumerate(zip(es, runs))]
+    """Colour of each joint distribution of panel data d (entry_colors)."""
+    return entry_colors(spec, d, "joints", "njoint", "J", data_runs=True)
 
 
 def _joints(ax, d, spec, fs):

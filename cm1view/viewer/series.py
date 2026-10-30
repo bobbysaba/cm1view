@@ -24,7 +24,7 @@ from ..core import series as ser
 from ..core.fields import CMAPS, deriv_name, deriv_options, palette
 from ..theme import BG, GRID, MUTED, POINT_COLORS, TEXT
 from .numinput import FloatInput
-from .ui import _bokeh, _html, _settings_toggle, style_fig
+from .ui import _bokeh, _html, _settings_toggle, style_fig, held
 
 
 class SeriesPanel:
@@ -210,13 +210,10 @@ class SeriesPanel:
             w.param.watch(lambda e: self._ser_draw(), "value")
 
         def auto(e):
-            self._ser_hold = True
-            try:
+            with held(self, "_ser_hold"):
                 for w in self.ser_lims:
                     w.value = None
                 self.ser_cmap.value, self.ser_crev.value = "auto", False
-            finally:
-                self._ser_hold = False
             self._ser_draw()
         self.ser_auto.on_click(auto)
         self.ser_view.param.watch(lambda e: self._ser_set_vis(), "value")

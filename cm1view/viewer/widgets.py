@@ -92,14 +92,24 @@ class Widgets:
         o["vmin"].disabled = o["vmax"].disabled = o["auto"].value
         return o
 
+    def _drop_row(self, o, rows, box, add, glyphs, fig, drawn, request):
+        """Remove layer row o (of rows, listed in drawer box): its glyphs (its entry of
+        glyphs; drawn(entry) -> its renderers, and a fill's colorbar "cbar") off fig; its
+        Add button on again; then request() the redraw."""
+        i = rows.index(o)
+        rows.pop(i)
+        _unlist(box, rows, o)
+        add.disabled = False
+        g = glyphs.pop(i)
+        gone = drawn(g)
+        fig.renderers = [r for r in fig.renderers if all(r is not x for x in gone)]
+        if isinstance(g, dict) and "cbar" in g:
+            fig.right = [x for x in fig.right if x is not g["cbar"]]
+        request()
+
     def _drop_overlay(self, o):
-        i = self.ovs.index(o)
-        self.ovs.pop(i)
-        _unlist(self.ov_list, self.ovs, o)
-        self.ov_add.disabled = False
-        _, _, pr, nr = self.ov_r.pop(i)
-        self.fig.renderers = [r for r in self.fig.renderers if r is not pr and r is not nr]
-        self.request_map()
+        self._drop_row(o, self.ovs, self.ov_list, self.ov_add, self.ov_r, self.fig,
+                       lambda g: g[2:], self.request_map)
 
     def _vec_row(self, rows, colors, on, level, density, dens_range, styles):
         """The widgets of one more vector layer (map or 3D): the wind first, then a
@@ -164,13 +174,8 @@ class Widgets:
             self.request_map()
 
     def _drop_vec(self, o):
-        i = self.vecs.index(o)
-        self.vecs.pop(i)
-        _unlist(self.vec_list, self.vecs, o)
-        self.vec_add.disabled = False
-        g = self.vec_r.pop(i)
-        self.fig.renderers = [r for r in self.fig.renderers if r not in g["rs"]]
-        self.request_map()
+        self._drop_row(o, self.vecs, self.vec_list, self.vec_add, self.vec_r, self.fig,
+                       lambda g: g["rs"], self.request_map)
 
     def _add_sv(self, on=True):
         """One more 3D vector layer: its row in the Vectors drawer (arrows at a
@@ -224,15 +229,8 @@ class Widgets:
         self.request_map()
 
     def _drop_fill(self, o):
-        i = self.fills.index(o)
-        self.fills.pop(i)
-        _unlist(self.fill_list, self.fills, o)
-        self.fill_add.disabled = False
-        g = self.fill_r.pop(i)
-        self.fig.renderers = [r for r in self.fig.renderers
-                              if r is not g["img"] and r is not g["poly"]]
-        self.fig.right = [x for x in self.fig.right if x is not g["cbar"]]
-        self.request_map()
+        self._drop_row(o, self.fills, self.fill_list, self.fill_add, self.fill_r, self.fig,
+                       lambda g: (g["img"], g["poly"]), self.request_map)
 
     def _level_pair(self, mode="height", value=1.0, compact=False):
         """Level-mode select + level value.  compact: unlabelled spinner for the

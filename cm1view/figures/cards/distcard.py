@@ -8,6 +8,7 @@ from .. import draw as figdraw
 from ...viewer.numinput import FloatInput
 from .base import (
     _hex, _f, _num, _grid, _hint, _fold, SER_REGIONS, ANN_KINDS, ANN_FIELDS, _BTN, _chk,
+    TimeCard,
 )
 
 
@@ -26,7 +27,7 @@ DIST_WHIS = {"1.5 × IQR (Tukey)": "tukey", "Min – max": "range", "5th – 95t
              "1st – 99th percentile": "p1"}
 
 
-class DistCard:
+class DistCard(TimeCard):
     """One distribution of a distribution figure: run, time, a dist recipe (field,
     height, layer or whole depth, region, value limits), look and panel."""
 
@@ -40,8 +41,7 @@ class DistCard:
         k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
         w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
         opts = ed._time_opts(k)
-        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
-                                      value=ed._nearest(opts, ent.get("time_s")))
+        self._time_widgets(opts)
         field = r["field"] if r["field"] in F else next(iter(F.defs))
         w["field"] = pn.widgets.Select(name="Field", groups=F.groups(), value=field, width=210)
         w["vmode"] = pn.widgets.Select(name="Vertical", options=DIST_VMODES, width=170,
@@ -96,31 +96,8 @@ class DistCard:
         w["radius"].visible = w["offx"].visible = w["offy"].visible = trk
         w["color"].visible = not w["auto_color"].value
         d = self.ed.fields[w["field"].value]
-        when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
-        self.title.object = (f"<b>Distribution</b> · {d.label} · "
-                             f"{when.split('(')[-1].rstrip(')')} · panel {w['panel'].value}")
-
-    def _changed(self):
-        if self.w["region"].value == "box" and self.box is None:
-            self.box = [float(v) for v in self.ed.v.view]
-        self._show()
-        self.ed.request()
-
-    def _on_run(self, ev):
-        if self.ed._hold:
-            return
-        if isinstance(ev.new, str):  # a run not in the figure yet
-            self.ed._pick_other(self.w["run"], ev.old)
-            return
-        o = self.ed._time_opts(ev.new)
-        cur = self.w["time"].value
-        self.ed._hold = True
-        try:
-            self.w["time"].options = o
-            self.w["time"].value = self.ed._nearest(o, cur)
-        finally:
-            self.ed._hold = False
-        self.ed.request()
+        self.title.object = (f"<b>Distribution</b> · {d.label} · {self._when()} · panel "
+                             f"{w['panel'].value}")
 
     def recipe(self):
         w, d = self.w, self.ed.fields[self.w["field"].value]
@@ -133,11 +110,7 @@ class DistCard:
             lo=_num(w["lo"].value), hi=_num(w["hi"].value)))
 
     def collect(self):
-        w = self.w
-        return dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0),
-                    panel=max(0, int(w["panel"].value or 1) - 1), label=w["label"].value,
-                    color="" if w["auto_color"].value else w["color"].value,
-                    recipe=self.recipe())
+        return dict(self._entry(), recipe=self.recipe())
 
 
 class AnnotationRow:

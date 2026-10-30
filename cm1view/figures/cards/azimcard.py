@@ -4,13 +4,13 @@ import panel as pn
 
 from ...core import azim
 from ...viewer.numinput import FloatInput
-from .base import _hex, _f, _grid, _hint, _fold, AZ_REFS, AZ_CENTERS, _BTN, _chk
-from .profcard import ONE_TIME
+from .base import (_hex, _f, _grid, _hint, _fold, AZ_REFS, AZ_CENTERS, _BTN, _chk,
+                   TimeCard)
 
 AZ_OPS = {"Mean": "mean", "Maximum": "max", "Minimum": "min"}
 
 
-class AzimCard:
+class AzimCard(TimeCard):
     """One azimuthal mean of an azimuthal mean figure: run, time (or a time window it
     is a composite of), an azimuthal mean recipe (field, centre, sector, radius, layer,
     reduction), look and panel."""
@@ -24,13 +24,8 @@ class AzimCard:
         k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
         w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
         opts = ed._time_opts(k)
-        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
-                                      value=ed._nearest(opts, ent.get("time_s")))
-        t1 = ent.get("time_s1")
-        w["time1"] = pn.widgets.Select(
-            name="Composite to (a time window)", options=self._to_opts(opts), width=210,
-            value=ONE_TIME if t1 is None else ed._nearest(opts, t1),
-            description="Every output from Time to this one, each around its own centre")
+        self._time_widgets(opts, "Composite to (a time window)",
+                           "Every output from Time to this one, each around its own centre")
         field = r["field"] if r["field"] in F else next(iter(F.defs))
         w["field"] = pn.widgets.Select(name="Field", groups=F.groups(), value=field, width=210)
         w["op"] = pn.widgets.Select(name="Reduce", options=AZ_OPS, value=r["op"], width=110)
@@ -85,10 +80,6 @@ class AzimCard:
                    "below).")])
         self._show()
 
-    @staticmethod
-    def _to_opts(opts):
-        return {"— (this time only)": ONE_TIME} | dict(opts)
-
     def _show(self):
         w = self.w
         pt = w["center"].value == "point"
@@ -96,43 +87,9 @@ class AzimCard:
         w["offx"].visible = w["offy"].visible = not pt
         w["color"].visible = not w["auto_color"].value
         d = self.ed.fields[w["field"].value]
-        when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
-        when = when.split("(")[-1].rstrip(")")
-        if self._t1() is not None:
-            to = next((k for k, v in w["time1"].options.items() if v == w["time1"].value), "")
-            when += f" to {to.split('(')[-1].rstrip(')')}"
         two = " · <i>a 3D field is needed</i>" if d.ndim == 2 else ""
-        self.title.object = (f"<b>Azimuthal</b> · {d.label} · {when} · panel "
+        self.title.object = (f"<b>Azimuthal</b> · {d.label} · {self._when()} · panel "
                              f"{w['panel'].value}{two}")
-
-    def _t1(self):
-        """The end of the time window (None: one time)."""
-        t0, t1 = self.w["time"].value, self.w["time1"].value
-        return None if t1 in (None, ONE_TIME) or t0 is None or float(t1) <= float(t0) \
-            else float(t1)
-
-    def _changed(self):
-        self._show()
-        self.ed.request()
-
-    def _on_run(self, ev):
-        if self.ed._hold:
-            return
-        if isinstance(ev.new, str):  # a run not in the figure yet
-            self.ed._pick_other(self.w["run"], ev.old)
-            return
-        o = self.ed._time_opts(ev.new)
-        cur, cur1 = self.w["time"].value, self._t1()
-        self.ed._hold = True
-        try:
-            self.w["time"].options = o
-            self.w["time"].value = self.ed._nearest(o, cur)
-            self.w["time1"].options = self._to_opts(o)
-            self.w["time1"].value = ONE_TIME if cur1 is None else self.ed._nearest(o, cur1)
-        finally:
-            self.ed._hold = False
-        self._show()
-        self.ed.request()
 
     def recipe(self):
         w = self.w
@@ -147,9 +104,5 @@ class AzimCard:
 
     def collect(self):
         w = self.w
-        return dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0),
-                    time_s1=self._t1(), panel=max(0, int(w["panel"].value or 1) - 1),
-                    label=w["label"].value,
-                    color="" if w["auto_color"].value else w["color"].value,
-                    lw=float(w["lw"].value or 1.0), levels=w["levels"].value.strip(),
-                    recipe=self.recipe())
+        return dict(self._entry(), lw=float(w["lw"].value or 1.0),
+                    levels=w["levels"].value.strip(), recipe=self.recipe())

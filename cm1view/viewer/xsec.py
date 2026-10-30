@@ -20,7 +20,7 @@ from ..core.fields import CMAPS, palette
 from ..theme import ACCENT, BG, MUTED
 from .numinput import FloatInput
 from .ui import EMPTY_LINES, EMPTY_VEC, _cbar_label, _html, style_fig
-from .widgets import _layer_row, _unlist
+from .widgets import _layer_row
 
 
 class SectionPanel:
@@ -195,15 +195,8 @@ class SectionPanel:
         self._xs_added(o, self._wire_fill)
 
     def _xs_drop_fill(self, o):
-        i = self.xs_fills.index(o)
-        self.xs_fills.pop(i)
-        _unlist(self.xs_fill_list, self.xs_fills, o)
-        self.xs_fill_add.disabled = False
-        g = self.xs_fill_r.pop(i)
-        fig = self.xs_fig
-        fig.renderers = [r for r in fig.renderers if r is not g["img"] and r is not g["poly"]]
-        fig.right = [x for x in fig.right if x is not g["cbar"]]
-        self.request_xsec()
+        self._drop_row(o, self.xs_fills, self.xs_fill_list, self.xs_fill_add, self.xs_fill_r,
+                       self.xs_fig, lambda g: (g["img"], g["poly"]), self.request_xsec)
 
     def _xs_add_contour(self, on=True):
         """One more contour layer: its row in Contours, its lines on the section."""
@@ -230,14 +223,8 @@ class SectionPanel:
         self._xs_added(o, self._wire_overlay)
 
     def _xs_drop_contour(self, o):
-        i = self.xs_ovs.index(o)
-        self.xs_ovs.pop(i)
-        _unlist(self.xs_ov_list, self.xs_ovs, o)
-        self.xs_ov_add.disabled = False
-        _, _, pr, nr = self.xs_ov_r.pop(i)
-        self.xs_fig.renderers = [r for r in self.xs_fig.renderers
-                                 if r is not pr and r is not nr]
-        self.request_xsec()
+        self._drop_row(o, self.xs_ovs, self.xs_ov_list, self.xs_ov_add, self.xs_ov_r,
+                       self.xs_fig, lambda g: g[2:], self.request_xsec)
 
     def _xs_add_vec(self):
         """One more vector layer: its row in Vectors, its arrows on the section (the
@@ -266,14 +253,8 @@ class SectionPanel:
         self._xs_added(o, self._wire_vec)
 
     def _xs_drop_vec(self, o):
-        i = self.xs_vecs.index(o)
-        self.xs_vecs.pop(i)
-        _unlist(self.xs_vec_list, self.xs_vecs, o)
-        self.xs_vec_add.disabled = False
-        g = self.xs_vec_r.pop(i)
-        self.xs_fig.renderers = [r for r in self.xs_fig.renderers
-                                 if r is not g["seg"] and r is not g["head"]]
-        self.request_xsec()
+        self._drop_row(o, self.xs_vecs, self.xs_vec_list, self.xs_vec_add, self.xs_vec_r,
+                       self.xs_fig, lambda g: (g["seg"], g["head"]), self.request_xsec)
 
     def _xs_names(self, spec=None):
         """The fields the section draws (of its spec, or of the widgets)."""

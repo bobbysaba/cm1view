@@ -12,7 +12,7 @@ from ..core import vectors, volume3d
 from ..core.fields import deriv_options
 from .diff import DIFF_CMAP
 from .zoomview import ZoomImage
-from .ui import PANELS
+from .ui import PANELS, held
 
 
 class Events:
@@ -168,8 +168,7 @@ class Events:
     def _on_fill_var(self, ev):
         if ev.obj is self.fill_op and self._hold:  # (following the Field, below)
             return
-        self._hold = True
-        try:
+        with held(self):
             if ev.obj is self.fill_var:  # (a 2D field has no ∂/∂z)
                 opts = deriv_options(self.F[ev.new])
                 if opts != self.fill_op.options:
@@ -183,35 +182,31 @@ class Events:
                 self.fill_min.value, self.fill_max.value = d.vrange
             self.fill_auto.value = True
             self.fill_mode.disabled = self.fill_lvl.disabled = d.ndim == 2
-        finally:
-            self._hold = False
         self.request_map()
 
     def _on_fill_auto(self, ev):
-        self.fill_min.disabled = self.fill_max.disabled = ev.new
-        if not ev.new and self._last_range is not None:
-            self._hold = True
-            self.fill_min.value, self.fill_max.value = [round(v, 4) for v in self._last_range]
-            self._hold = False
+        self._auto_toggled(ev.new, self.fill_min, self.fill_max, self._last_range, "_hold")
         self.request_map()
+
+    def _auto_toggled(self, on, lo, hi, last, attr):
+        """Auto range on: Min / Max off; off: they start from the range last drawn."""
+        lo.disabled = hi.disabled = on
+        if not on and last is not None:
+            with held(self, attr):
+                lo.value, hi.value = [round(v, 4) for v in last]
 
     _last_range = None
 
     _xs_range = None
 
     def _on_xs_fill(self, ev):
-        self._hold_xs = True
-        self.xs_cmap.value, self.xs_rev.value, self.xs_auto.value = \
-            DIFF_CMAP if self.xs_diff["on"].value else self.F[ev.new].cmap, False, True
-        self._hold_xs = False
+        with held(self, "_hold_xs"):
+            self.xs_cmap.value, self.xs_rev.value, self.xs_auto.value = \
+                DIFF_CMAP if self.xs_diff["on"].value else self.F[ev.new].cmap, False, True
         self.request_xsec()
 
     def _on_xs_auto(self, ev):
-        self.xs_min.disabled = self.xs_max.disabled = ev.new
-        if not ev.new and self._xs_range is not None:
-            self._hold_xs = True
-            self.xs_min.value, self.xs_max.value = [round(v, 4) for v in self._xs_range]
-            self._hold_xs = False
+        self._auto_toggled(ev.new, self.xs_min, self.xs_max, self._xs_range, "_hold_xs")
         self.request_xsec()
 
     def _on_storm(self, ev):

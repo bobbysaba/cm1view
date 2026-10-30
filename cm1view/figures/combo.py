@@ -14,6 +14,7 @@ import panel as pn
 from . import draw as figdraw, spec as fg
 from .render import panel_name  # noqa: F401  (combo.panel_name, as before)
 from .cards import _auto, _chk, _grid, _hint, _num, _section
+from ..viewer.ui import held
 
 KIND_NAMES = {"plan": "plan views", "xsec": "cross-sections", "th": "time–height",
               "line": "time series", "sounding": "soundings", "dist": "distributions",
@@ -78,12 +79,9 @@ class FigureCombo:
         if multi:
             kinds[self.part_i] = self.kind.value
         opts = {f"Part {k + 1}: {KIND_NAMES.get(kd, kd)}": k for k, kd in enumerate(kinds)}
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.part_sel.options = opts
             self.part_sel.value = self.part_i if multi else 0
-        finally:
-            self._hold = hold
         self.part_sel.visible = self.part_rm.visible = self.part_arr.visible = \
             self.part_title.visible = self.part_size.visible = multi
         self.parts_sec.title = (f"Figure parts ({len(self.parts)}: editing part "
@@ -136,15 +134,12 @@ class FigureCombo:
             return
         self.parts = list(spec["parts"])
         self.part_i = min(max(int(part), 0), len(self.parts) - 1)
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.part_arr.value = spec.get("arrange", "row")
             self.part_title.value = spec.get("suptitle", "")
             own = spec.get("size_set") or [None, None]
             self.part_w.value, self.part_h.value = _num(own[0]), _num(own[1])
             self.part_cb.value = (spec.get("colorbar") or {}).get("mode") == "figure"
-        finally:
-            self._hold = hold
         if len(self.parts) == 1:
             self.parts, self.part_i = [], 0
         self.set_spec(json.loads(json.dumps(spec["parts"][self.part_i], default=float)))

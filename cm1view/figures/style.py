@@ -15,6 +15,7 @@ from .cards import (
     CB_LOCS, CB_MODES, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS, TICKDIR, TYPE_LABEL,
     _auto, _checks, _f, _grid, _hint, _label, _row, _section, _when,
 )
+from ..viewer.ui import held
 
 class FigureStyle:
     def _build_text(self):
@@ -234,15 +235,12 @@ class FigureStyle:
             if "field" in c.w:
                 name += f": {self.fields[c.w['field'].value].label}"
             opts[name] = j
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             v, to = self.look_from.value, self.look_to.value
             self.look_from.options = opts
             self.look_from.value = v if v in opts.values() else next(iter(opts.values()), None)
             self.look_to.options = opts
             self.look_to.value = [j for j in to or [] if j in opts.values()]
-        finally:
-            self._hold = hold
 
     def _copy_look(self):
         i, to = self.look_from.value, [j for j in self.look_to.value if j != self.look_from.value]

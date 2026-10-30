@@ -7,6 +7,7 @@ import panel as pn
 
 from . import draw as figdraw, spec as fg
 from .cards import NONE, _grid
+from ..viewer.ui import held
 
 
 def _tlabel(t_s):
@@ -164,12 +165,9 @@ class FigureTimes:
         if v is not None and tl:
             v = _place(tl, v, snap)
         opts = self._topts([v])
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.time1.options = opts
             self.time1.value = v if v in opts.values() else next(iter(opts.values()), None)
-        finally:
-            self._hold = hold
 
     def _on_run_sel(self, ev):
         if self._hold:
@@ -198,11 +196,8 @@ class FigureTimes:
                 k = self._add_run(v) if isinstance(v, str) else v
                 if k is not None and k not in keep:
                     keep.append(k)
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 self.gg_runs.value = keep
-            finally:
-                self._hold = hold
         self._on_layout()
 
     def _fill_times(self):
@@ -211,13 +206,10 @@ class FigureTimes:
         if not tl:
             return
         step, p0 = int(self.tstep.value or 1), tl.index(_nearest_t(tl, self._shown_s()))
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for k, w in enumerate(self.tm_rows):
                 q = p0 + step * k
                 w.value = tl[q] if q < len(tl) else NONE
-        finally:
-            self._hold = hold
         self.request()
 
     def _build_titles(self, titles=None, row_titles=None):
@@ -245,12 +237,9 @@ class FigureTimes:
         self.titles_box.objects = [_grid(*ws)] * bool(ws) + [_grid(*rws)] * bool(rws)
 
     def _set_titles(self, titles, row_titles=()):
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for i, w in enumerate(self.title_ws):
                 w.value = titles[i] if i < len(titles) else ""
             for k, w in enumerate(self.row_ws):
                 w.value = row_titles[k] if k < len(row_titles) else ""
-        finally:
-            self._hold = hold
         self.request()

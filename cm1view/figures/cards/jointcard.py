@@ -4,14 +4,14 @@ import panel as pn
 
 from ...core import joint
 from ...viewer.numinput import FloatInput
-from .base import _hex, _f, _num, _grid, _hint, _fold, SER_REGIONS, _BTN, _chk
+from .base import (_hex, _f, _num, _grid, _hint, _fold, SER_REGIONS, _BTN, _chk,
+                   TimeCard)
 from .distcard import DIST_VMODES
-from .profcard import ONE_TIME
 
 JOINT_PLOTS = {"2D histogram": "hist", "Scatter": "scatter", "Density contours": "contour"}
 
 
-class JointCard:
+class JointCard(TimeCard):
     """One joint distribution of a joint distribution figure: run, time (or a time
     window whose pairs are all taken), a joint recipe (x and y fields, height, layer or
     whole depth, region, value limits of each), look and panel."""
@@ -27,13 +27,8 @@ class JointCard:
         k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
         w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
         opts = ed._time_opts(k)
-        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
-                                      value=ed._nearest(opts, ent.get("time_s")))
-        t1 = ent.get("time_s1")
-        w["time1"] = pn.widgets.Select(
-            name="To (a time window)", options=self._to_opts(opts), width=210,
-            value=ONE_TIME if t1 is None else ed._nearest(opts, t1),
-            description="Take the pairs of every output from Time to this one")
+        self._time_widgets(opts, "To (a time window)",
+                           "Take the pairs of every output from Time to this one")
         first = next(iter(F.defs))
         w["field"] = pn.widgets.Select(name="x field", groups=F.groups(), width=210,
                                        value=r["field"] if r["field"] in F else first)
@@ -87,10 +82,6 @@ class JointCard:
                    "the panel is from another run, else the next colour.")])
         self._show()
 
-    @staticmethod
-    def _to_opts(opts):
-        return {"— (this time only)": ONE_TIME} | dict(opts)
-
     def _show(self):
         w = self.w
         F = self.ed.fields
@@ -102,45 +93,9 @@ class JointCard:
         trk = w["region"].value == "track"
         w["radius"].visible = w["offx"].visible = w["offy"].visible = trk
         w["color"].visible = not w["auto_color"].value
-        when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
-        when = when.split("(")[-1].rstrip(")")
-        if self._t1() is not None:
-            to = next((k for k, v in w["time1"].options.items() if v == w["time1"].value), "")
-            when += f" to {to.split('(')[-1].rstrip(')')}"
         self.title.object = (f"<b>Joint</b> · {F[w['yfield'].value].label} vs "
-                             f"{F[w['field'].value].label} · {when} · panel "
+                             f"{F[w['field'].value].label} · {self._when()} · panel "
                              f"{w['panel'].value}")
-
-    def _t1(self):
-        """The end of the time window (None: one time)."""
-        t0, t1 = self.w["time"].value, self.w["time1"].value
-        return None if t1 in (None, ONE_TIME) or t0 is None or float(t1) <= float(t0) \
-            else float(t1)
-
-    def _changed(self):
-        if self.w["region"].value == "box" and self.box is None:
-            self.box = [float(v) for v in self.ed.v.view]
-        self._show()
-        self.ed.request()
-
-    def _on_run(self, ev):
-        if self.ed._hold:
-            return
-        if isinstance(ev.new, str):  # a run not in the figure yet
-            self.ed._pick_other(self.w["run"], ev.old)
-            return
-        o = self.ed._time_opts(ev.new)
-        cur, cur1 = self.w["time"].value, self._t1()
-        self.ed._hold = True
-        try:
-            self.w["time"].options = o
-            self.w["time"].value = self.ed._nearest(o, cur)
-            self.w["time1"].options = self._to_opts(o)
-            self.w["time1"].value = ONE_TIME if cur1 is None else self.ed._nearest(o, cur1)
-        finally:
-            self.ed._hold = False
-        self._show()
-        self.ed.request()
 
     def recipe(self):
         w, F = self.w, self.ed.fields
@@ -156,9 +111,4 @@ class JointCard:
             ylo=_num(w["ylo"].value), yhi=_num(w["yhi"].value)))
 
     def collect(self):
-        w = self.w
-        return dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0),
-                    time_s1=self._t1(), panel=max(0, int(w["panel"].value or 1) - 1),
-                    label=w["label"].value,
-                    color="" if w["auto_color"].value else w["color"].value,
-                    recipe=self.recipe())
+        return dict(self._entry(), recipe=self.recipe())

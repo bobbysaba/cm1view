@@ -17,9 +17,9 @@ import panel as pn
 from panel.widgets.select import SingleSelectBase
 
 from .. import config, pdecomp
-from ..core import dist, series as ser, track as trk
+from ..core import dist, series as ser
 from ..theme import DIALOG_DARK
-from .ui import PANELS, TOOL_OF, _html
+from .ui import PANELS, TOOL_OF, _html, held
 
 FORMAT = 1  # the session file's version ("cm1view_session")
 
@@ -368,16 +368,13 @@ class Sessions:
     def _put_soundings(self, sd, put):
         if sd is None:
             return
-        self._hold_style = True
-        try:
+        with held(self, "_hold_style"):
             for k, a in SND:
                 put(getattr(self, a), sd.get(k), k)
             st = sd.get("style", {})
             for k in SND_STYLE:
                 if k in st:
                     put(self.ps[k], st[k], k, blank=k in ("tmin", "tmax"))
-        finally:
-            self._hold_style = False
         pts = []
         for p in sd.get("points") or []:
             kind, where = p.get("kind"), p.get("where")
@@ -399,8 +396,7 @@ class Sessions:
     def _put_section(self, xs, put):
         if xs is None:
             return
-        hold, self._hold_xs = self._hold_xs, True
-        try:
+        with held(self, "_hold_xs"):
             for k, a in XS_FILL:
                 put(getattr(self, a), xs.get(k), f"section {k}")
             self._put_diff(self.xs_diff, xs.get("diff", {}), put)
@@ -415,8 +411,6 @@ class Sessions:
                            self._xs_drop_contour, OV_KEYS, put)
             self._put_rows(xs.get("vectors"), self.xs_vecs, self._xs_add_vec,
                            self._xs_drop_vec, VEC_KEYS, put)
-        finally:
-            self._hold_xs = hold
         pts = xs.get("points") or []
         self.xs_pts = [tuple(float(c) for c in p) for p in pts] if len(pts) == 2 else []
         self._draw_xs()
@@ -456,8 +450,7 @@ class Sessions:
         for k, a in SER_FORM:
             put(getattr(self, a), sr.get("form", {}).get(k), f"series {k}")
         run, F = self.run, self.F
-        self._ser_hold = True
-        try:
+        with held(self, "_ser_hold"):
             self.series, self._ser_n = {}, 0  # (the colours of the session's order)
             keys, part = [], 0
             for it in sr.get("items") or []:
@@ -491,8 +484,6 @@ class Sessions:
             for k, w in zip(SER_LIMS, self.ser_lims):
                 if k in lims:
                     put(w, lims[k], f"series {k}", blank=True)
-        finally:
-            self._ser_hold = False
         self._ser_select()
         if sr.get("view"):
             put(self.ser_view, sr["view"], "series view")  # (time–height: a layer series)

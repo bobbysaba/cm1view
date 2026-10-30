@@ -11,9 +11,10 @@ import panel as pn
 
 from .. import config
 from . import draw as figdraw, spec as fg
-from .cards import (EXTEND, FIG_CMAPS, FIG_LOCS, GRID_DIMS, LEVEL_MODES, LOCS, NONE,
+from .cards import (EXTEND, FIG_CMAPS, FIG_LOCS, GRID_DIMS, LEVEL_MODES, LOCS,
                     SectionCard, _f, _grid, _hint, _keep_shown)
 from .times import _heights
+from ..viewer.ui import held
 
 
 PF_KEYS = ("field", "cmap", "vmin", "vmax", "mode", "z", "extend")  # (a new panel's: the fill's)
@@ -85,11 +86,8 @@ class FigurePanelOpts:
                 r, c = (1, n) if n <= 4 else (-(-n // 3), 3)
         r, c = min(r, 8), min(c, 8)
         if (r, c) != (r0, c0):
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 self.rows.value, self.cols.value = r, c
-            finally:
-                self._hold = hold
         self.rows.disabled = both and self._forced(rd) is not None
         self.cols.disabled = both and self._forced(cd) is not None
 
@@ -103,25 +101,19 @@ class FigurePanelOpts:
             r = "times" if c != "times" else "none"
         if c == bad:
             c = "times" if r != "times" else "none"
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for w, v in ((self.g_rows, r), (self.g_cols, c)):
                 if list(w.options) != list(opts):
                     w.options = opts
                 w.value = v
-        finally:
-            self._hold = hold
 
     def _on_axis(self, other, new):
         """Rows or columns now step through `new`: the other no longer does."""
         if self._hold:
             return
         if new != "none" and other.value == new:
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 other.value = "none"
-            finally:
-                self._hold = hold
         self._on_vary()
         typed = [w.value.strip() for w in self.title_ws + self.row_ws]
         was = getattr(self, "_auto_typed", None)  # (row labels go with the grid of two: what
@@ -207,13 +199,10 @@ class FigurePanelOpts:
 
         def on_field(ev):
             d = fg.layer_defaults("fill", F, ev.new)
-            self._hold = True
-            try:
+            with held(self):
                 r["cmap"].value = d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis"
                 r["vmin"].value, r["vmax"].value = d["vmin"], d["vmax"]
                 r["cbar_label"].placeholder = d["units"]
-            finally:
-                self._hold = False
             self.request()
 
         r["field"].param.watch(on_field, "value")
@@ -261,11 +250,8 @@ class FigurePanelOpts:
             new = [int(np.argmin(np.abs(z - v))) for v in vals]
         else:
             new = [round(float(z[min(max(int(round(v)), 0), z.size - 1)]), 2) for v in vals]
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.pz.value = ", ".join(f"{v:g}" for v in new)
-        finally:
-            self._hold = hold
         self._show_vary()
         self.request()
 
@@ -443,11 +429,8 @@ class FigurePanelOpts:
             w = float(ev.new)
             s = self.collect()
             h = self.fit_height(dict(s, size=[w, s["size"][1]]))
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.width.value, self.height.value = round(w, 2), round(h, 2)
-        finally:
-            self._hold = hold
         self._auto_size = "x" not in ev.new  # a width: the height still follows
         self.request()
 
@@ -463,11 +446,8 @@ class FigurePanelOpts:
             return
         h = self.fit_height()
         if abs(h - float(self.height.value or 0)) > 0.02:
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 self.height.value = h
-            finally:
-                self._hold = hold
 
     def _panel_shape(self, s):
         """Height / width of a panel's plotting area: the plan-view area at equal
@@ -520,8 +500,7 @@ class FigurePanelOpts:
     def _on_kind(self, render_=True):
         kind = self.kind.value
         if render_ and not self._hold:
-            self._hold = True
-            try:
+            with held(self):
                 self.xlabel.placeholder = ""
                 if kind == "xsec":  # (blank: x, y or the distance, as each section runs)
                     self.xlabel.value, self.ylabel.value = "", "height (km)"
@@ -548,8 +527,6 @@ class FigurePanelOpts:
                 else:
                     self.xlabel.value, self.ylabel.value = "temperature (°C)", "pressure (hPa)"
                     self.cb_mode.value = "none"
-            finally:
-                self._hold = False
             if kind == "sounding" and not self.snd_cards:
                 self.snd_cards = [self._snd_card(e) for e in self.tab_soundings()]
                 if not self.snd_cards:
@@ -602,13 +579,10 @@ class FigurePanelOpts:
     def _set_box(self, box):
         """The fixed box [x0, x1, y0, y1] (grid km), in the spec and its fields."""
         self.spec["domain"] = dict(self.spec["domain"], box=[round(v, 2) for v in box])
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for w, v in zip((self.box_x0, self.box_x1, self.box_y0, self.box_y1),
                             self.spec["domain"]["box"]):
                 w.value = v
-        finally:
-            self._hold = hold
 
     def _on_box(self):
         if self._hold:

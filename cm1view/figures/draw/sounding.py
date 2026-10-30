@@ -6,8 +6,8 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle
 from matplotlib.ticker import NullFormatter
 
-from .base import (SND_COLORS, STORM_NAMES, SND_PARAMS, HODO_BANDS, KT, _levels, by_run,
-                   anchor_kw, font_size, panel_legend, run_color)
+from .base import (STORM_NAMES, SND_PARAMS, HODO_BANDS, KT, _levels,
+                   anchor_kw, entry_colors, font_size, panel_legend)
 
 def _moist(T0, p):
     """Pseudo-adiabats: temperatures (deg C) along p (hPa, decreasing) from T0 (deg C,
@@ -61,15 +61,8 @@ def hodo_heights(o):
 
 
 def sounding_colors(spec, d):
-    """Colour of each sounding of panel data d: its own, else its run's when each of
-    the panel's soundings comes from another run (by_run), else the next of SND_COLORS."""
-    ents = spec.get("soundings", [])
-    n = int(d.get("nsnd", 0))
-    es = [ents[int(d[f"N{j}_e"])] if int(d[f"N{j}_e"]) < len(ents) else {} for j in range(n)]
-    runs = [int(e.get("run", 0)) for e in es]
-    rc = by_run(spec, runs)
-    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
-            for j, (e, k) in enumerate(zip(es, runs))]
+    """Colour of each sounding of panel data d (entry_colors)."""
+    return entry_colors(spec, d, "soundings", "nsnd", "N")
 
 
 def _sounding(fig, ax, d, spec, fs):

@@ -19,7 +19,7 @@ from ..figures import editor as figui
 from .picker import RunPicker
 from .settings import Settings
 from ..theme import ACCENT, BG, CSS, GRID, PANEL, Fast
-from .ui import PANELS, _html
+from .ui import PANELS, _html, held
 # the Viewer's feature groups, one module each
 from .events import Events
 from .export import DataExport
@@ -243,23 +243,16 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
 
         def on_var(ev):  # the field's own colormap and range
             d = self.F[ev.new]
-            setattr(self, hold, True)
-            try:
+            with held(self, hold):
                 o["cmap"].value, o["rev"].value = d.cmap, False
                 if d.vrange:
                     o["vmin"].value, o["vmax"].value = d.vrange
                 if "mode" in o:
                     o["mode"].disabled = o["level"].disabled = d.ndim == 2
-            finally:
-                setattr(self, hold, False)
             rq()
 
         def on_auto(ev):
-            o["vmin"].disabled = o["vmax"].disabled = ev.new
-            if not ev.new and o["last"] is not None:
-                setattr(self, hold, True)
-                o["vmin"].value, o["vmax"].value = [round(v, 4) for v in o["last"]]
-                setattr(self, hold, False)
+            self._auto_toggled(ev.new, o["vmin"], o["vmax"], o["last"], hold)
             rq()
 
         o["var"].param.watch(on_var, "value")

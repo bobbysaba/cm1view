@@ -5,6 +5,7 @@ import panel as pn
 from ...core import vectors
 from ...core.fields import CMAPS
 from .base import FRAMES, _BTN, _f, _grid, _hex
+from ...viewer.ui import held
 
 SCENE_VIEWS = {"From the southwest": "oblique", "From above": "top", "From the south": "south",
                "From the north": "north", "From the west": "west", "From the east": "east"}
@@ -91,11 +92,8 @@ class VecRow:
 
     def _on_q(self, ev):
         """A new vector: its typical magnitude as the reference."""
-        hold, self.ed._hold = self.ed._hold, True
-        try:
+        with held(self.ed):
             self.w["ref"].value = vectors.VECTORS[ev.new].ref
-        finally:
-            self.ed._hold = hold
         self._show()
         self.ed.request()
 

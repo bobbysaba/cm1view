@@ -19,6 +19,7 @@ from .cards import (FRAMES, IsoRow, SCENE_ARROWS, SCENE_BARS, SCENE_BG,
                     SCENE_FLOOR_CMAPS, SCENE_FLOOR_RANGE, SCENE_LIGHTS, SCENE_PROJ, SCENE_RES,
                     SCENE_STREAM_BY, SCENE_STREAM_DIR, SCENE_VIEWS, VecRow, _auto, _checks,
                     _chk, _dark, _f, _grid, _hex, _hint, _row, _section)
+from ..viewer.ui import held
 
 ISO_MAX = VEC_MAX = 6
 
@@ -263,11 +264,8 @@ class FigureScene:
         if not self._hold and g["range"].value == "custom" and ev.obj is g["range"]:
             d = self.fields[g["var"].value] if g["var"].value in self.fields else None
             if d is not None and d.vrange:
-                hold, self._hold = self._hold, True
-                try:
+                with held(self):
                     g["lo"].value, g["hi"].value = (float(v) for v in d.vrange)
-                finally:
-                    self._hold = hold
         self._scene_show()
 
     def _on_camera_edit(self, ev):
@@ -280,8 +278,7 @@ class FigureScene:
     # ------------------------------------------------------------ spec <-> widgets
     def _scene_set(self, sc):
         """Show scene block sc (fg.scene3d_of's) in the widgets (no render)."""
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for k, x in self.sc_w.items():
                 x.value = sc[k] if k == "res" else float(sc[k])
             box = sc.get("box")
@@ -308,8 +305,6 @@ class FigureScene:
                                    if k not in self.sc_l and k != "labels"}
             self.iso_rows = [self._iso_row(e) for e in sc["isos"]]
             self.svec_rows = [self._svec_row(e) for e in sc["vecs"]]
-        finally:
-            self._hold = hold
         self._scene_rows()
         self._scene_show()
 
@@ -346,13 +341,10 @@ class FigureScene:
         if b is None:
             self._msg("Draw a 3D box on the map first (3D tool), or type one.", True)
             return
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             self.sc_region.value = "box"
             for x, v in zip(self.sc_box, b):
                 x.value = round(float(v), 2)
-        finally:
-            self._hold = hold
         self._scene_show()
         self.request()
 
@@ -385,11 +377,8 @@ class FigureScene:
 
     def _scene_camera_from_3d(self):
         cam = self._view_camera()
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             _put(self.sc_c, cam)
-        finally:
-            self._hold = hold
         self._cam_fixed = {}
         self.request()
 

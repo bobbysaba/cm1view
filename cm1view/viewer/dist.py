@@ -20,7 +20,7 @@ from .. import pdecomp
 from ..core.fields import palette
 from ..theme import GRID, MUTED, POINT_COLORS, TEXT
 from .numinput import FloatInput
-from .ui import _bokeh, _html, style_fig
+from .ui import _bokeh, _html, style_fig, held
 
 DIST_PLOTS = {"Histogram": "hist", "Box": "box", "Violin": "violin", "Cumulative": "ecdf"}
 
@@ -244,12 +244,9 @@ class DistPanel:
             self._dist_request(s["recipe"], replace=self.dist_pick.value)
 
     def _dist_set_pick(self, key):
-        hold, self._dist_hold = self._dist_hold, True
-        try:
+        with held(self, "_dist_hold"):
             self.dist_pick.options = {v["label"]: k for k, v in self.dists.items()}
             self.dist_pick.value = key
-        finally:
-            self._dist_hold = hold
         self._dist_buttons()
         self._dist_draw()
 

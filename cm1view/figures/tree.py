@@ -16,6 +16,7 @@ import panel as pn
 
 from . import draw as figdraw, spec as fg
 from .cards import LOCS, TYPE_LABEL, LayerCard, _chk, _grid, _hint, _xy, _xy_text
+from ..viewer.ui import held
 
 PANELS = "the panel's"  # (a layer's run / time: the panel's)
 LAYOUT = "as laid out"  # (a panel's run / time / height / title: the layout's)
@@ -294,12 +295,9 @@ class FigureTree:
             kk = ref[0] if ev.new == -1 else ev.new
             o = {LAYOUT: ""} | self._time_opts(kk)
             cur = time.value
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 time.options = o
                 time.value = _pick(o, None if cur == "" else cur)
-            finally:
-                self._hold = hold
             if time.value != cur:
                 self._tree_edit(i)["time_s"] = None if time.value == "" else float(time.value)
             self._tree_changed()
@@ -432,12 +430,9 @@ class FigureTree:
             kk = ref[0] if ev.new == -1 else ev.new
             o = {PANELS: ""} | self._time_opts(kk)
             cur = time.value
-            hold, self._hold = self._hold, True
-            try:
+            with held(self):
                 time.options = o
                 time.value = _pick(o, None if cur == "" else cur)
-            finally:
-                self._hold = hold
             if time.value != cur:
                 own()["time_s"] = None if time.value == "" else float(time.value)
             set_own("run", None if ev.new == -1 else int(ev.new))

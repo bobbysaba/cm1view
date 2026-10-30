@@ -9,6 +9,7 @@ import panel as pn
 
 from .. import registry
 from ..figures.spec import tindex
+from .ui import held
 
 DIFF_CMAP = "RdBu_r"  # (a difference's colours: diverging, centred on 0)
 
@@ -53,12 +54,9 @@ class Differences:
             w["run"].visible = w["time"].visible = ev.new
             if ev.new and len(w["run"].options) == 1:
                 w["run"].options = self._minus_runs()
-            setattr(self, hold, True)
-            try:
+            with held(self, hold):
                 cmap.value = DIFF_CMAP if ev.new else self.F[field()].cmap
                 rev.value, auto.value = False, True
-            finally:
-                setattr(self, hold, False)
             request()
 
         w["on"].param.watch(toggle, "value")

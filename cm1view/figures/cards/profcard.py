@@ -7,19 +7,20 @@ from ...core.fields import deriv_name
 from .. import spec as fg
 from .base import (
     _hex, _f, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, _BTN, _chk, _deriv_pair,
+    TimeCard,
 )
-from .seriescard import ALL_RUNS, ENS_BANDS, SOME_RUNS, several_run_choices
+from .seriescard import ALL_RUNS, ENS_BANDS, SOME_RUNS, SeveralRuns, several_run_choices
 from .seriesvals import ProfileValues
 
 PROF_STYLES = {"Solid": "", "Dashed": "--", "Dotted": ":", "Dash-dot": "-."}
-ONE_TIME = -1.0  # (the "to" time of a profile at one time)
 PROF_OPS = {"Value": "", "d/dz (per m)": "ddz"}
 
 
-class ProfileCard:
+class ProfileCard(SeveralRuns, TimeCard):
     """One profile of a profile figure: its run (or every run, or the runs picked:
     a line each, or an ensemble band), time (or a time window it is averaged over), a
     layer series recipe (field, bottom and top, region, reduction), look and panel."""
+    _EDITS = "profile before its recipe, time or Plot changed"
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
@@ -42,13 +43,8 @@ class ProfileCard:
                                            value=[int(j) for j in (runs or [])]
                                            if k == SOME_RUNS else [], width=260)
         opts = ed._time_opts(self._time_run())
-        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
-                                      value=ed._nearest(opts, ent.get("time_s")))
-        t1 = ent.get("time_s1")
-        w["time1"] = pn.widgets.Select(
-            name="Mean to (a time window)", options=self._to_opts(opts), width=210,
-            value=ONE_TIME if t1 is None else ed._nearest(opts, t1),
-            description="Average the profiles of every output from Time to this one")
+        self._time_widgets(opts, "Mean to (a time window)",
+                           "Average the profiles of every output from Time to this one")
         w["field"], w["deriv"] = _deriv_pair(F, r["field"])
         w["z0"] = _f("Bottom (km)", float(r.get("z0", 0.0)), 90, step=0.5)
         w["z1"] = _f("Top (km)", float(r.get("z1", 10.0)), 80, step=0.5)
@@ -116,10 +112,6 @@ class ProfileCard:
                    "profile of the panel is from another run, else the next colour.")])
         self._show()
 
-    @staticmethod
-    def _to_opts(opts):
-        return {"— (this time only)": ONE_TIME} | dict(opts)
-
     def _show(self):
         w = self.w
         trk = w["region"].value == "track"
@@ -132,11 +124,7 @@ class ProfileCard:
         for k in ("ens_mid", "ens_members", "ens_alpha"):
             w[k].visible = several and bool(w["ens"].value)
         d = self.ed.fields[self.field_name()]
-        when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
-        when = when.split("(")[-1].rstrip(")")
-        if self._t1() is not None:
-            to = next((k for k, v in w["time1"].options.items() if v == w["time1"].value), "")
-            when += f" to {to.split('(')[-1].rstrip(')')}"
+        when = self._when()
         two = " · <i>a 3D field is needed</i>" if d.ndim == 2 else ""
         runs = self.run_list()
         names = {k: n.split(". ", 1)[-1] for n, k in self.ed._run_names().items()}
@@ -146,12 +134,6 @@ class ProfileCard:
         self.title.object = (f"<b>Profile</b> · {d.label}{op} · {run} · {when} · panel "
                              f"{w['panel'].value}{two}")
 
-    def _t1(self):
-        """The end of the time window (None: one time)."""
-        t0, t1 = self.w["time"].value, self.w["time1"].value
-        return None if t1 in (None, ONE_TIME) or t0 is None or float(t1) <= float(t0) \
-            else float(t1)
-
     def _changed(self, stale=False):
         if self.w["region"].value == "box" and self.box is None:
             self.box = [float(v) for v in self.ed.v.view]
@@ -160,118 +142,24 @@ class ProfileCard:
             self._edits_stale()
         self.ed.request()
 
-    def _edits_stale(self):
-        """What the values are of changed: hand edits (made on the values before)
-        are kept, with a word on the card."""
-        self._stale = bool(self.vals.count())
-        self.edits_changed()
-        self.vals.refresh()
-
-    def edits_changed(self):
-        n = self.vals.count()
-        self._stale = getattr(self, "_stale", False) and bool(n)
-        self.info.object = (
-            f'<div class="cv-hint">{n} hand edit{"s" if n != 1 else ""} made on this '
-            f'profile before its recipe, time or Plot changed are still drawn: check them '
-            f'under Values (Reset all edits clears them).</div>' if self._stale else "")
-
     # ---- run
-    def _run_values(self):
-        o = self.w["run"].groups or {"": self.w["run"].options}
-        return [v for g in o.values() for v in (g.values() if isinstance(g, dict) else g)]
-
-    def run_list(self):
-        """The card's runs: None for every run, else a list of run indices."""
-        k = self.w["run"].value
-        if k == ALL_RUNS:
-            return None
-        if k == SOME_RUNS:
-            return sorted(int(j) for j in self.w["runs"].value if not isinstance(j, str)) \
-                or None
-        return [int(k)] if isinstance(k, int) and k >= 0 else [0]
-
     def _time_run(self):
         """The run whose outputs the Time lists offer: the first of the card's."""
         ks = self.run_list()
         return int(ks[0]) if ks else 0
 
-    def set_runs(self, runs):
-        """Show runs (None: every run)."""
-        w = self.w
-        hold, self.ed._hold = self.ed._hold, True
-        try:
-            if runs is not None and len(runs) == 1:
-                w["runs"].value = []
-                w["run"].value = int(runs[0])
-            elif runs is None:
-                w["runs"].value = []
-                w["run"].value = ALL_RUNS
-            else:
-                w["runs"].value = sorted(int(k) for k in runs)
-                w["run"].value = SOME_RUNS
-        finally:
-            self.ed._hold = hold
+    def _reshow(self):
         self._show()
 
-    def refresh_runs(self, names=None):
-        """The run lists' choices again (runs renamed, added or removed), keeping the
-        card's runs."""
-        names = names or self.ed._run_names()
-        keep = self.run_list()
-        hold, self.ed._hold = self.ed._hold, True
-        try:
-            self.w["runs"].options = self.ed._series_run_opts(names)
-            self.w["run"].param.update(**several_run_choices(self.ed, names))
-        finally:
-            self.ed._hold = hold
-        self.set_runs([k for k in keep if k in names.values()] or [0]
-                      if keep is not None else None)
-
-    def _on_run(self, ev):
-        if self.ed._hold:
-            return
-        if isinstance(ev.new, str):  # a run not in the figure yet
-            self.ed._pick_other(self.w["run"], ev.old)
-            return
-        if ev.new == SOME_RUNS and not self.w["runs"].value:  # (from every run)
-            hold, self.ed._hold = self.ed._hold, True
-            try:
-                self.w["runs"].value = sorted(self.ed._run_names().values())
-            finally:
-                self.ed._hold = hold
+    def _run_picked(self):
         self._runs_changed()
 
-    def _on_runs(self, ev):
-        """A run not in the figure picked (its path): add it to the figure, and keep
-        it picked here."""
-        if self.ed._hold:
-            return
-        new = [v for v in ev.new if isinstance(v, str)]
-        if new:
-            keep = [v for v in ev.new if not isinstance(v, str)]
-            for p in new:
-                k = self.ed._add_run(p, grid=False)
-                if k is not None:
-                    keep.append(k)
-            hold, self.ed._hold = self.ed._hold, True
-            try:
-                self.w["runs"].value = sorted(set(keep))
-            finally:
-                self.ed._hold = hold
+    def _runs_picked(self):
         self._runs_changed()
 
     def _runs_changed(self):
         """The card's runs changed: the Time lists offer its first run's outputs."""
-        o = self.ed._time_opts(self._time_run())
-        cur, cur1 = self.w["time"].value, self._t1()
-        hold, self.ed._hold = self.ed._hold, True
-        try:
-            self.w["time"].options = o
-            self.w["time"].value = self.ed._nearest(o, cur)
-            self.w["time1"].options = self._to_opts(o)
-            self.w["time1"].value = ONE_TIME if cur1 is None else self.ed._nearest(o, cur1)
-        finally:
-            self.ed._hold = hold
+        self._set_times(self._time_run())
         self._show()
         self.vals.refresh()
         self.ed.request()

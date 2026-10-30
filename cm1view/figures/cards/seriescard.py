@@ -9,10 +9,11 @@ from ...core import series as ser
 from ...core.fields import deriv_name
 from .. import spec as fg
 from .base import (
-    FIG_CMAPS, _hex, _f, _auto, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, SER_OPS,
-    MARKERS, SND_WHERE, _BTN, _chk, _deriv_pair,
+    FIG_CMAPS, _hex, _f, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, SER_OPS,
+    MARKERS, SND_WHERE, _BTN, _chk, _deriv_pair, TimeCard, _take_new_runs,
 )
 from .seriesvals import SeriesValues
+from ...viewer.ui import held
 
 ENS_BANDS = {"Off": "", "Min to max": "minmax", "10–90th percentile": "p10p90",
              "25–75th percentile": "p25p75", "Mean ± 1 sd": "sd"}
@@ -33,7 +34,94 @@ def several_run_choices(ed, names=None):
     return dict(groups=None, options=names | more)
 
 
-class SeriesCard:
+class SeveralRuns:
+    """The Run list of a card that may show one run, every run or the runs picked (Runs
+    box): a series card (but a time-height one: one run) and a profile card.  After a
+    change: _run_picked() (the Run list), _runs_picked() (the Runs box), _reshow()."""
+    _EDITS = "series before its recipe or Plot changed"  # (what edits_changed says)
+
+    def _several(self):
+        return True
+
+    def _run_choices(self, names=None):
+        return several_run_choices(self.ed, names)
+
+    def _run_values(self):
+        o = self.w["run"].groups or {"": self.w["run"].options}
+        return [v for g in o.values() for v in (g.values() if isinstance(g, dict) else g)]
+
+    def run_list(self):
+        """The card's runs: None for every run, else a list of run indices."""
+        k = self.w["run"].value
+        if self._several() and k == ALL_RUNS:
+            return None
+        if self._several() and k == SOME_RUNS:
+            return sorted(int(j) for j in self.w["runs"].value if not isinstance(j, str)) \
+                or None
+        return [int(k)] if isinstance(k, int) and k >= 0 else [0]
+
+    def set_runs(self, runs):
+        """Show runs (None: every run; a card of one run: the first)."""
+        w = self.w
+        with held(self.ed):
+            if runs is not None and len(runs) == 1 or not self._several():
+                w["runs"].value = []
+                w["run"].value = int((runs or [0])[0])
+            elif runs is None:
+                w["runs"].value = []
+                w["run"].value = ALL_RUNS
+            else:
+                w["runs"].value = sorted(int(k) for k in runs)
+                w["run"].value = SOME_RUNS
+        self._reshow()
+
+    def refresh_runs(self, names=None):
+        """The run lists' choices again (runs renamed, added or removed, or another
+        kind of figure), keeping the card's runs."""
+        names = names or self.ed._run_names()
+        keep = self.run_list()
+        with held(self.ed):
+            self.w["runs"].options = self.ed._series_run_opts(names)
+            self.w["run"].param.update(**self._run_choices(names))
+        self.set_runs([k for k in keep if k in names.values()] or [0]
+                      if keep is not None else None)
+
+    def _on_run(self, ev):
+        if self.ed._hold:
+            return
+        if isinstance(ev.new, str):  # a run not in the figure yet
+            self.ed._pick_other(self.w["run"], ev.old)
+            return
+        if ev.new == SOME_RUNS and not self.w["runs"].value:  # (from every run)
+            with held(self.ed):
+                self.w["runs"].value = sorted(self.ed._run_names().values())
+        self._run_picked()
+
+    def _on_runs(self, ev):
+        """A run not in the figure picked (its path): add it to the figure, and keep
+        it picked here."""
+        if self.ed._hold:
+            return
+        _take_new_runs(self.ed, self.w["runs"], ev.new)
+        self._runs_picked()
+
+    def _edits_stale(self):
+        """What the values are of changed: hand edits (made on the values before) are
+        kept, with a word on the card."""
+        self._stale = bool(self.vals.count())
+        self.edits_changed()
+        self.vals.refresh()
+
+    def edits_changed(self):
+        n = self.vals.count()
+        self._stale = getattr(self, "_stale", False) and bool(n)
+        self.info.object = (
+            f'<div class="cv-hint">{n} hand edit{"s" if n != 1 else ""} made on this '
+            f'{self._EDITS} are still drawn: check them under Values (Reset all edits '
+            f'clears them).</div>' if self._stale else "")
+
+
+class SeriesCard(SeveralRuns):
     """One series of a time-height / time-series figure, like a sounding card: its
     run (a time series: also every run, or the runs picked), panel, a Series-tab
     recipe (field, level or layer, region, reduction), an optional derivative, and its
@@ -222,6 +310,9 @@ class SeriesCard:
         self.trk_box.objects, self.trk_box.visible = out, True
 
     # ---- run
+    def _several(self):  # (a time-height card: one run)
+        return self._kind != "th"
+
     def _run_choices(self, names=None):
         """The Run list's choices: the figure's runs (a time series: then every run, or
         the runs picked), and the others (picking one adds it)."""
@@ -229,91 +320,19 @@ class SeriesCard:
             return self.ed._run_choices(names)
         return several_run_choices(self.ed, names)
 
-    def _run_values(self):
-        o = self.w["run"].groups or {"": self.w["run"].options}
-        return [v for g in o.values() for v in (g.values() if isinstance(g, dict) else g)]
-
-    def run_list(self):
-        """The card's runs: None for every run, else a list of run indices."""
-        k = self.w["run"].value
-        if self._kind != "th" and k == ALL_RUNS:
-            return None
-        if self._kind != "th" and k == SOME_RUNS:
-            return sorted(int(j) for j in self.w["runs"].value if not isinstance(j, str)) \
-                or None
-        return [int(k)] if isinstance(k, int) and k >= 0 else [0]
-
-    def set_runs(self, runs):
-        """Show runs (None: every run; a time-height card: its first run)."""
-        w = self.w
-        hold, self.ed._hold = self.ed._hold, True
-        try:
-            if runs is not None and len(runs) == 1 or self._kind == "th":
-                w["runs"].value = []
-                w["run"].value = int((runs or [0])[0])
-            elif runs is None:
-                w["runs"].value = []
-                w["run"].value = ALL_RUNS
-            else:
-                w["runs"].value = sorted(int(k) for k in runs)
-                w["run"].value = SOME_RUNS
-        finally:
-            self.ed._hold = hold
+    def _reshow(self):
         self.show(self._kind)
 
-    def refresh_runs(self, names=None):
-        """The run lists' choices again (runs renamed, added or removed, or another
-        kind of figure), keeping the card's runs."""
-        names = names or self.ed._run_names()
-        keep = self.run_list()
-        hold, self.ed._hold = self.ed._hold, True
-        try:
-            self.w["runs"].options = self.ed._series_run_opts(names)
-            self.w["run"].param.update(**self._run_choices(names))
-        finally:
-            self.ed._hold = hold
-        self.set_runs([k for k in keep if k in names.values()] or [0]
-                      if keep is not None else None)
-
-    def _on_run(self, ev):
-        if self.ed._hold:
-            return
-        if isinstance(ev.new, str):  # a run not in the figure yet
-            self.ed._pick_other(self.w["run"], ev.old)
-            return
-        if ev.new == SOME_RUNS and not self.w["runs"].value:  # (from every run)
-            hold, self.ed._hold = self.ed._hold, True
-            try:
-                self.w["runs"].value = sorted(self.ed._run_names().values())
-            finally:
-                self.ed._hold = hold
+    def _run_picked(self):
         self._where_changed()
+
+    def _runs_picked(self):
+        self.ed._series_changed()
 
     def _where_changed(self):
         self.show(self.ed.kind.value)
         self.ed._series_changed()
         self.vals.refresh()
-
-    def _on_runs(self, ev):
-        """A run not in the figure picked (its path): add it to the figure, and keep
-        it picked here."""
-        new = [v for v in ev.new if isinstance(v, str)]
-        if self.ed._hold:
-            return
-        if not new:
-            self.ed._series_changed()
-            return
-        keep = [v for v in ev.new if not isinstance(v, str)]
-        for p in new:
-            k = self.ed._add_run(p, grid=False)
-            if k is not None:
-                keep.append(k)
-        hold, self.ed._hold = self.ed._hold, True
-        try:
-            self.w["runs"].value = sorted(set(keep))
-        finally:
-            self.ed._hold = hold
-        self.ed._series_changed()
 
     def _set_title(self):
         w = self.w
@@ -338,44 +357,23 @@ class SeriesCard:
         self._set_title()
         self._edits_stale()
 
-    def _edits_stale(self):
-        """The recipe or derivative changed: hand edits (made on the values before)
-        are kept, with a word on the card."""
-        self._stale = bool(self.vals.count())
-        self.edits_changed()
-        self.vals.refresh()
-
-    def edits_changed(self):
-        n = self.vals.count()
-        self._stale = getattr(self, "_stale", False) and bool(n)
-        self.info.object = (
-            f'<div class="cv-hint">{n} hand edit{"s" if n != 1 else ""} made on this '
-            f'series before its recipe or Plot changed are still drawn: check them under '
-            f'Values (Reset all edits clears them).</div>' if self._stale else "")
-
     def _auto_label(self):
         """Keep an automatic label in step with the recipe (an edited one stays)."""
         old = self.ent.get("_auto", self.ent.get("label", ""))
         d = self.ed.fields[self.field_name()]
         new = ser.describe(self.recipe(), d.label)
         if self.w["label"].value in ("", old):
-            hold, self.ed._hold = self.ed._hold, True
-            try:
+            with held(self.ed):
                 self.w["label"].value = new
-            finally:
-                self.ed._hold = hold
         self.ent["_auto"] = new
 
     def _on_field(self, ev):
         """New field: its colours and range."""
         e = fg.series_defaults(self.ed.fields, self.recipe())
-        self.ed._hold = True
-        try:
+        with held(self.ed):
             for k in ("vmin", "vmax", "extend", "white_first"):
                 self.w[k].value = e[k]
             self.w["cmap"].value = e["cmap"] if e["cmap"] in FIG_CMAPS else "viridis"
-        finally:
-            self.ed._hold = False
         self._set_title()
         self._changed()
 
@@ -419,7 +417,7 @@ class SeriesCard:
         return e
 
 
-class SoundingCard:
+class SoundingCard(TimeCard):
     """One sounding of a sounding figure: run, time, where, look and panel."""
 
     def __init__(self, ed, ent):
@@ -430,8 +428,7 @@ class SoundingCard:
         k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
         w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
         opts = ed._time_opts(k)
-        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
-                                      value=ed._nearest(opts, ent.get("time_s")))
+        self._time_widgets(opts)
         wh = ent.get("where", {})
         w["kind"] = pn.widgets.Select(name="Where", options=SND_WHERE,
                                       value=wh.get("kind", "trk"), width=180)
@@ -465,35 +462,11 @@ class SoundingCard:
         w["x"].visible = w["y"].visible = w["avg"].visible = w["kind"].value != "mean"
         w["color"].visible = not w["auto_color"].value
         where = {"trk": "storm", "pt": "point", "mean": "domain mean"}[w["kind"].value]
-        when = next((k for k, v in w["time"].options.items() if v == w["time"].value), "")
-        self.title.object = (f"<b>Sounding</b> · {where} · {when.split('(')[-1].rstrip(')')} "
+        self.title.object = (f"<b>Sounding</b> · {where} · {self._when()} "
                              f"· panel {w['panel'].value}")
-
-    def _changed(self):
-        self._show()
-        self.ed.request()
-
-    def _on_run(self, ev):
-        if self.ed._hold:
-            return
-        if isinstance(ev.new, str):  # a run not in the figure yet
-            self.ed._pick_other(self.w["run"], ev.old)
-            return
-        o = self.ed._time_opts(ev.new)
-        cur = self.w["time"].value
-        self.ed._hold = True
-        try:
-            self.w["time"].options = o
-            self.w["time"].value = self.ed._nearest(o, cur)
-        finally:
-            self.ed._hold = False
-        self.ed.request()
 
     def collect(self):
         w = self.w
-        return dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0),
-                    panel=max(0, int(w["panel"].value or 1) - 1), label=w["label"].value,
-                    color="" if w["auto_color"].value else w["color"].value,
-                    where=dict(kind=w["kind"].value, x=float(w["x"].value or 0.0),
-                               y=float(w["y"].value or 0.0),
-                               avg=float(w["avg"].value or 0.0)))
+        return dict(self._entry(), where=dict(
+            kind=w["kind"].value, x=float(w["x"].value or 0.0), y=float(w["y"].value or 0.0),
+            avg=float(w["avg"].value or 0.0)))

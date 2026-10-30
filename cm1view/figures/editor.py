@@ -45,6 +45,7 @@ from .specio import FigureSpecIO
 from .times import FigureTimes
 from .tree import FigureTree
 from .widgets import FigureWidgets
+from ..viewer.ui import held
 
 
 class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, FigureRuns,
@@ -296,14 +297,11 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         ex_opts = {"First fill": -1} | {
             f"{j + 1}. {self.fields[c.w['field'].value].label}": j
             for j, c in enumerate(self.cards) if c.type in figdraw.EXTREME_TYPES}
-        hold, self._hold = self._hold, True
-        try:
+        with held(self):
             for w, o in ((self.ck_layer, opts), (self.ex_layer, ex_opts)):
                 v = w.value
                 w.options = o
                 w.value = v if v in o.values() else -1
-        finally:
-            self._hold = hold
 
     def _add_layer(self, kind, ev=None):
         F = self.fields

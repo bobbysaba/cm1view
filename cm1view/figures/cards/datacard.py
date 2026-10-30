@@ -11,6 +11,7 @@ import panel as pn
 from .. import spec as fg
 from .base import _hex, _f, _grid, _hint, _fold, MARKERS, _BTN
 from .seriescard import SER_STYLES
+from ...viewer.ui import held
 
 UPLOAD_MAX = 2_000_000  # (bytes of a file loaded)
 DEFAULT_LABEL = "My data"
@@ -68,14 +69,11 @@ class _TableCard:
             return
         m = re.match(r"^(.*?)\s*[\(\[](.+)[\)\]]\s*$", names[1])
         lab, units = (m.group(1), m.group(2)) if m else (names[1], "")
-        hold, self.ed._hold = self.ed._hold, True
-        try:
+        with held(self.ed):
             if lab and self.w["label"].value.strip() in ("", DEFAULT_LABEL):
                 self.w["label"].value = lab
             if units and not self.w["units"].value.strip():
                 self.w["units"].value = units
-        finally:
-            self.ed._hold = hold
 
     def _note(self, notes=(), bad=False):
         if bad:

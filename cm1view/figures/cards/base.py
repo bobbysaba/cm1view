@@ -11,6 +11,7 @@ from .. import draw as figdraw
 from ...core.fields import CMAPS, DERIVS, deriv_options, split_deriv
 from ...viewer.numinput import FloatInput
 from ...theme import GRID, PANEL, RAISED, TEXT
+from ...viewer.ui import held
 
 
 PYART_CMAPS = ["HomeyerRainbow", "ChaseSpectral", "NWSRef", "NWSVel", "LangRainbow12",
@@ -372,3 +373,99 @@ def _deriv_pair(F, name, width=210, first=None):
     field.param.watch(follow, "value")
     return field, deriv
 
+
+
+# ------------------------------------------------------------ runs and times of a card
+ONE_TIME = -1.0  # (the "to" time of an entry at one time)
+
+
+def _take_new_runs(ed, box, picked):
+    """Runs picked in a Runs box `box` that are not in the figure (their paths): add
+    them to the figure and keep them picked (as their indices)."""
+    new = [v for v in picked if isinstance(v, str)]
+    if not new:
+        return
+    keep = [v for v in picked if not isinstance(v, str)]
+    for p in new:
+        k = ed._add_run(p, grid=False)
+        if k is not None:
+            keep.append(k)
+    with held(ed):
+        box.value = sorted(set(keep))
+
+
+class TimeCard:
+    """The run and time of a card of one entry (a sounding, distribution, joint
+    distribution, azimuthal mean or profile), and its time window when it has a "to"
+    time (w["time1"])."""
+
+    @staticmethod
+    def _to_opts(opts):
+        return {"— (this time only)": ONE_TIME} | dict(opts)
+
+    def _time_widgets(self, opts, to=None, about=""):
+        """The Time list (w["time"], from the entry's time_s) of choices opts, and with
+        a `to` label the time window's end (w["time1"], from time_s1; about: its
+        tooltip)."""
+        ed, ent, w = self.ed, self.ent, self.w
+        w["time"] = pn.widgets.Select(name="Time", options=opts, width=210,
+                                      value=ed._nearest(opts, ent.get("time_s")))
+        if to:
+            t1 = ent.get("time_s1")
+            w["time1"] = pn.widgets.Select(
+                name=to, options=self._to_opts(opts), width=210, description=about,
+                value=ONE_TIME if t1 is None else ed._nearest(opts, t1))
+
+    def _t1(self):
+        """The end of the time window (None: one time)."""
+        if "time1" not in self.w:
+            return None
+        t0, t1 = self.w["time"].value, self.w["time1"].value
+        return None if t1 in (None, ONE_TIME) or t0 is None or float(t1) <= float(t0) \
+            else float(t1)
+
+    def _when(self):
+        """The time (or window) as the title shows it: '1:30:00 to 1:45:00'."""
+        def short(k):
+            w = self.w[k]
+            label = next((n for n, v in w.options.items() if v == w.value), "")
+            return label.split("(")[-1].rstrip(")")
+        return short("time") + (f" to {short('time1')}" if self._t1() is not None else "")
+
+    def _set_times(self, k):
+        """The Time lists offer run k's outputs (the nearest to the times shown)."""
+        o = self.ed._time_opts(k)
+        cur, cur1 = self.w["time"].value, self._t1()
+        with held(self.ed):
+            self.w["time"].options = o
+            self.w["time"].value = self.ed._nearest(o, cur)
+            if "time1" in self.w:
+                self.w["time1"].options = self._to_opts(o)
+                self.w["time1"].value = ONE_TIME if cur1 is None else \
+                    self.ed._nearest(o, cur1)
+
+    def _on_run(self, ev):
+        if self.ed._hold:
+            return
+        if isinstance(ev.new, str):  # a run not in the figure yet
+            self.ed._pick_other(self.w["run"], ev.old)
+            return
+        self._set_times(ev.new)
+        self._show()
+        self.ed.request()
+
+    def _changed(self):
+        r = self.w.get("region")
+        if r is not None and r.value == "box" and self.box is None:
+            self.box = [float(v) for v in self.ed.v.view]
+        self._show()
+        self.ed.request()
+
+    def _entry(self):
+        """The spec entry's keys every such card has (run, time, panel, label, colour)."""
+        w = self.w
+        e = dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0))
+        if "time1" in w:
+            e["time_s1"] = self._t1()
+        return dict(e, panel=max(0, int(w["panel"].value or 1) - 1), label=w["label"].value,
+                    color="" if w["auto_color"].value else w["color"].value)

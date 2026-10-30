@@ -368,6 +368,22 @@ def by_run(spec, runs):
     return n > 0 and len(set(runs)) == n and (n > 1 or several_runs(spec))
 
 
+def entry_colors(spec, d, key, n_key, p, data_runs=False):
+    """Colour of each entry of panel data d (soundings, distributions, joint
+    distributions): its own, else its run's when each of the panel's entries comes from
+    another run (by_run), else the next of SND_COLORS.  spec[key] holds the entries,
+    d[n_key] says how many the panel has, d[f"{p}{j}_e"] is the j-th's index; its run is
+    the entry's, or with data_runs d[f"{p}{j}_r"]."""
+    ents, n = spec.get(key, []), int(d.get(n_key, 0))
+    es = [ents[int(d[f"{p}{j}_e"])] if int(d[f"{p}{j}_e"]) < len(ents) else {}
+          for j in range(n)]
+    runs = [int(d[f"{p}{j}_r"]) if data_runs else int(e.get("run", 0))
+            for j, e in enumerate(es)]
+    rc = by_run(spec, runs)
+    return [e.get("color") or (run_color(spec, k) if rc else SND_COLORS[j % len(SND_COLORS)])
+            for j, (e, k) in enumerate(zip(es, runs))]
+
+
 def layer_color(spec, lay, d):
     """Colour of a layer in panel data d: the run's (a track with "run_color"), else
     its own."""

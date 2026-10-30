@@ -10,8 +10,9 @@ from ...core.fields import DERIVS, deriv_name, deriv_options, split_deriv
 from .base import (
     FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, AZ_REFS,
     AZ_CENTERS, _hex, _f, _grid, _hint, _checks, _fold, _near, _nice, _panels_parse, _panels_text,
-    _chk, _load_widgets,
+    _chk, _load_widgets, _take_new_runs,
 )
+from ...viewer.ui import held
 
 ENS_STATS = {"Mean": "mean", "Median": "median", "Spread (sd)": "sd", "Min": "min",
              "Max": "max", "Range (max − min)": "range",
@@ -289,15 +290,12 @@ class LayerCard:
         w = self.w
         if "reduce_t0" in w:  # (the window's times are the layer's run's)
             topts = self.ed._time_opts(ev.new if ev.new != -1 else 0) or {}
-            self.ed._hold = True
-            try:
+            with held(self.ed):
                 for k, first in (("reduce_t0", "the run's first output"),
                                  ("reduce_t1", "the panel's time")):
                     cur = w[k].value
                     w[k].options = {first: ""} | topts
                     w[k].value = "" if cur == "" else _near(topts, cur)
-            finally:
-                self.ed._hold = False
         self._changed()
 
     def _rows(self):
@@ -474,14 +472,11 @@ class LayerCard:
             return
         d = fg.layer_defaults("fill", self.ed.fields, self.field_name())
         self.lay["units"] = d["units"]
-        self.ed._hold = True
-        try:
+        with held(self.ed):
             for k in ("cmap", "vmin", "vmax", "extend"):
                 self.w[k].value = d[k] if k != "cmap" or d[k] in FIG_CMAPS else "viridis"
             self.w["mask_below"].value = "" if d["mask_below"] is None else f"{d['mask_below']:g}"
             self.w["cbar_label"].placeholder = d["units"]
-        finally:
-            self.ed._hold = False
         if self.w["ens_on"].value:  # (an ensemble: its statistic's colours)
             self._on_ens(None)
             return
@@ -508,8 +503,7 @@ class LayerCard:
         if self._loading:
             return
         d = fg.layer_defaults("fill", self.ed.fields, self.field_name())
-        self.ed._hold = True
-        try:
+        with held(self.ed):
             if ev.new:
                 a = _nice(0.25 * (float(w["vmax"].value) - float(w["vmin"].value)))
                 vals = dict(cmap="RdBu", reverse=True, white_first=False, vmin=-a, vmax=a,
@@ -520,8 +514,6 @@ class LayerCard:
                             mask_below="" if d["mask_below"] is None else f"{d['mask_below']:g}")
             for k, v in vals.items():
                 w[k].value = v
-        finally:
-            self.ed._hold = False
         self._changed()
 
     def _on_ens(self, ev):
@@ -549,32 +541,18 @@ class LayerCard:
                         scale="linear", mask_below="")
         else:
             vals = own
-        self.ed._hold = True
-        try:
+        with held(self.ed):
             if w["ens_on"].value:
                 w["minus_on"].value = False
             for k, v in vals.items():
                 w[k].value = v
-        finally:
-            self.ed._hold = False
         self._changed()
 
     def _on_ens_runs(self, ev):
         """A run not in the figure picked (its path): add it, and keep it picked."""
         if self.ed._hold or self._loading:
             return
-        new = [v for v in ev.new if isinstance(v, str)]
-        if new:
-            keep = [v for v in ev.new if not isinstance(v, str)]
-            for p in new:
-                k = self.ed._add_run(p, grid=False)
-                if k is not None:
-                    keep.append(k)
-            hold, self.ed._hold = self.ed._hold, True
-            try:
-                self.w["ens_runs"].value = sorted(set(keep))
-            finally:
-                self.ed._hold = hold
+        _take_new_runs(self.ed, self.w["ens_runs"], ev.new)
         self._changed()
 
     def collect(self):

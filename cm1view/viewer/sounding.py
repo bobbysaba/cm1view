@@ -11,7 +11,7 @@ import panel as pn
 
 from ..core import sounding_plot as sp, thermo, track as trk
 from ..theme import POINT_COLORS, POINT_LABELS
-from .ui import BASE_VARS, SOUNDING_VARS, _svg
+from .ui import BASE_VARS, SOUNDING_VARS, _svg, held
 
 _BASE_CACHE = {}  # base-state soundings per run and time (see _base_result)
 
@@ -362,12 +362,9 @@ class SoundingPanel:
                         tmax=None, ring=0, htop=12, hheights=st["hodo_heights"],
                         shade=st["shade"], barbs=st["barbs"],
                         guides=st["guides"])
-        self._hold_style = True
-        try:
+        with held(self, "_hold_style"):
             for k, v in defaults.items():
                 self.ps[k].value = v
-        finally:
-            self._hold_style = False
         self._restyle()
 
     def _lim_copy(self):

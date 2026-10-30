@@ -338,144 +338,22 @@ class FigureData:
         return fg.share_time_range(spec, data)
 
     # ------------------------------------------------------------ soundings, distributions
-    def _sounding_data(self, spec, progress=None, cancelled=None):
-        runs, ents = spec["runs"], spec.get("soundings", [])
-        res, labels = {}, {}
-        multi = len(runs) > 1
-        storm = fg.storm_choice(spec.get("skewt", {}))  # (of the SRH and the ring)
+    def _entries(self, spec, key, entry, panel, progress=None, cancelled=None):
+        """{panel: arrays} of a figure of entries spec[key] (soundings, distributions,
+        joint distributions, azimuthal means): entry(e, ent, run spec, note) gives entry
+        e's result (an error is its message), each at most once; note() reports it being
+        computed (progress); panel(i, get) draws panel i with get(e) -> that result."""
+        runs, ents = spec["runs"], spec.get(key, [])
+        res = {}
 
         def get(e):
             if e in res:
                 return res[e]
             ent = ents[e]
             k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
             try:
-                run, _ = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                sig = track_sig(fx) if ent["where"].get("kind") == "trk" else ""
-                key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig, storm],
-                                 sort_keys=True)
-                r = self.snd_cache.get(key)
-                if r is None:
-                    if progress:
-                        progress(e, len(ents))
-                    r = fg.sounding_column(run, ent, fx, storm=storm)
-                    self.snd_cache[key] = r
-                    while len(self.snd_cache) > 40:
-                        self.snd_cache.popitem(last=False)
-                labels[e] = fg.sounding_label(ent, runs[k].get("label", ""), run, multi)
-            except (MissingAtTime, FileBusy) as ex:
-                r = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                r = f"{type(ex).__name__}: {ex}"
-            res[e] = r
-            return r
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.sounding_panel(spec, i, get, lambda e: labels.get(e, ""))
-        return data
-
-    def _dist_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of a distribution figure; the summaries are kept
-        (dist_cache), so restyling reads nothing."""
-        runs, ents = spec["runs"], spec.get("dists", [])
-        res, labels, vlabs = {}, {}, {}
-        multi = len(runs) > 1
-
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, F = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                track = ent["recipe"]["region"] == "track" or \
-                    (ent["recipe"]["field"] in F and F[ent["recipe"]["field"]].storm)
-                sig = track_sig(fx) if track else ""
-                key = json.dumps([run.path, float(ent["time_s"]), ent["recipe"], sig],
-                                 sort_keys=True)
-                r = self.dist_cache.get(key)
-                if r is None:
-                    if progress:
-                        progress(e, len(ents))
-                    r = fg.dist_compute(run, F, ent, fx)
-                    self.dist_cache[key] = r
-                    while len(self.dist_cache) > 60:
-                        self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({round(float(x["time_s"]), 1) for x in mine}) > 1
-                labels[e] = fg.dist_label(ent, runs[k].get("label", ""), F, multi, times)
-                vlabs[e] = fg.profile_value_label(F, ent)
-            except (MissingAtTime, FileBusy) as ex:
-                r = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                r = f"{type(ex).__name__}: {ex}"
-            res[e] = r
-            return r
-
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.dist_panel(spec, i, get, lambda e: labels.get(e, ""),
-                                    lambda e: vlabs.get(e, ""))
-        return data
-
-    def _joint_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of a joint distribution figure; the summaries are kept
-        (dist_cache, with the distributions'), so restyling reads nothing."""
-        runs, ents = spec["runs"], spec.get("joints", [])
-        res, labels, axlabs = {}, {}, {}
-        multi = len(runs) > 1
-
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, F = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                r = ent["recipe"]
-                track = r["region"] == "track" or any(
-                    f in F and F[f].storm for f in (r["field"], r["yfield"]))
-                sig = track_sig(fx) if track else ""
-                key = json.dumps(["joint", run.path, float(ent["time_s"]),
-                                  ent.get("time_s1"), r, sig], sort_keys=True)
-                res[e] = self.dist_cache.get(key)
-                if res[e] is None:
-                    if progress:
-                        progress(e, len(ents))
-                    res[e] = fg.joint_compute(run, F, ent, fx, cancelled)
-                    if res[e] is None:  # (stopped for a newer preview: not kept)
-                        res[e] = "cancelled"
-                        return res[e]
-                    self.dist_cache[key] = res[e]
-                    while len(self.dist_cache) > 60:
-                        self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
-                             for x in mine}) > 1
-                labels[e] = fg.joint_label(ent, runs[k].get("label", ""), F, multi, times)
-                axlabs[e] = (fg.dist_value_label(F, r["field"]),
-                             fg.dist_value_label(F, r["yfield"]))
+                note = (lambda: progress(e, len(ents))) if progress else (lambda: None)
+                res[e] = entry(e, ent, runs[k], note) if k < len(runs) else "no such run"
             except (MissingAtTime, FileBusy) as ex:
                 res[e] = str(ex)
             except Exception as ex:  # noqa: BLE001
@@ -487,9 +365,106 @@ class FigureData:
         for i in range(fg.npanels(spec)):
             if cancelled and cancelled():
                 return None
-            data[i] = fg.joint_panel(spec, i, get, lambda e: labels.get(e, ""),
-                                     lambda e: axlabs.get(e, ("", "")))
+            data[i] = panel(i, get)
         return data
+
+    @staticmethod
+    def _kept(cache, key, most, compute, note):
+        """cache[key], computed (note(), then compute()) when not there and kept, the
+        `most` used last; None (not kept) when compute() gives None (stopped for a newer
+        preview)."""
+        r = cache.get(key)
+        if r is not None:
+            cache.move_to_end(key)
+            return r
+        note()
+        r = compute()
+        if r is not None:
+            cache[key] = r
+            while len(cache) > most:
+                cache.popitem(last=False)
+        return r
+
+    @staticmethod
+    def _times_vary(ents, ent, when):
+        """Whether the entries in ent's panel (your own data aside: no time) are at
+        more than one time (when(x): an entry's time)."""
+        mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
+                and not fg.is_table(x)]
+        return len({when(x) for x in mine}) > 1
+
+    # ------------------------------------------------------------ soundings, distributions
+    def _sounding_data(self, spec, progress=None, cancelled=None):
+        runs, ents = spec["runs"], spec.get("soundings", [])
+        labels, multi = {}, len(runs) > 1
+        storm = fg.storm_choice(spec.get("skewt", {}))  # (of the SRH and the ring)
+
+        def entry(e, ent, rs, note):
+            run, _ = self.open_run(rs["path"])
+            fx = self.run_fixes(rs, run)
+            sig = track_sig(fx) if ent["where"].get("kind") == "trk" else ""
+            key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig, storm],
+                             sort_keys=True)
+            r = self._kept(self.snd_cache, key, 40, note=note, compute=lambda:
+                           fg.sounding_column(run, ent, fx, storm=storm))
+            labels[e] = fg.sounding_label(ent, rs.get("label", ""), run, multi)
+            return r
+
+        return self._entries(spec, "soundings", entry, lambda i, get: fg.sounding_panel(
+            spec, i, get, lambda e: labels.get(e, "")), progress, cancelled)
+
+    def _dist_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of a distribution figure; the summaries are kept
+        (dist_cache), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("dists", [])
+        labels, vlabs, multi = {}, {}, len(runs) > 1
+
+        def entry(e, ent, rs, note):
+            run, F = self.open_run(rs["path"])
+            fx = self.run_fixes(rs, run)
+            r = ent["recipe"]
+            track = r["region"] == "track" or (r["field"] in F and F[r["field"]].storm)
+            key = json.dumps([run.path, float(ent["time_s"]), r,
+                              track_sig(fx) if track else ""], sort_keys=True)
+            res = self._kept(self.dist_cache, key, 60, note=note, compute=lambda:
+                           fg.dist_compute(run, F, ent, fx))
+            times = self._times_vary(ents, ent, lambda x: round(float(x["time_s"]), 1))
+            labels[e] = fg.dist_label(ent, rs.get("label", ""), F, multi, times)
+            vlabs[e] = fg.profile_value_label(F, ent)
+            return res
+
+        return self._entries(spec, "dists", entry, lambda i, get: fg.dist_panel(
+            spec, i, get, lambda e: labels.get(e, ""), lambda e: vlabs.get(e, "")),
+            progress, cancelled)
+
+    def _joint_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of a joint distribution figure; the summaries are kept
+        (dist_cache, with the distributions'), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("joints", [])
+        labels, axlabs, multi = {}, {}, len(runs) > 1
+
+        def entry(e, ent, rs, note):
+            run, F = self.open_run(rs["path"])
+            fx = self.run_fixes(rs, run)
+            r = ent["recipe"]
+            track = r["region"] == "track" or any(
+                f in F and F[f].storm for f in (r["field"], r["yfield"]))
+            key = json.dumps(["joint", run.path, float(ent["time_s"]), ent.get("time_s1"),
+                              r, track_sig(fx) if track else ""], sort_keys=True)
+            res = self._kept(self.dist_cache, key, 60, note=note, compute=lambda:
+                           fg.joint_compute(run, F, ent, fx, cancelled))
+            if res is None:  # (stopped for a newer preview: not kept)
+                return "cancelled"
+            times = self._times_vary(ents, ent, lambda x: (round(float(x["time_s"]), 1),
+                                                           x.get("time_s1")))
+            labels[e] = fg.joint_label(ent, rs.get("label", ""), F, multi, times)
+            axlabs[e] = (fg.dist_value_label(F, r["field"]),
+                         fg.dist_value_label(F, r["yfield"]))
+            return res
+
+        return self._entries(spec, "joints", entry, lambda i, get: fg.joint_panel(
+            spec, i, get, lambda e: labels.get(e, ""), lambda e: axlabs.get(e, ("", ""))),
+            progress, cancelled)
 
     def _scene_data(self, spec, cancelled=None):
         """{0: arrays} of a 3D scene figure; kept (scene_cache) by what they depend on
@@ -531,58 +506,30 @@ class FigureData:
         """{panel: arrays} of an azimuthal mean figure; the results are kept
         (dist_cache, with the distributions'), so restyling reads nothing."""
         runs, ents = spec["runs"], spec.get("azims", [])
-        res, labels, cbl, look = {}, {}, {}, {}
-        multi = len(runs) > 1
+        labels, cbl, look, multi = {}, {}, {}, len(runs) > 1
 
-        def get(e):
-            if e in res:
-                return res[e]
-            ent = ents[e]
-            k = int(ent.get("run", 0))
-            if k >= len(runs):
-                res[e] = "no such run"
-                return res[e]
-            try:
-                run, F = self.open_run(runs[k]["path"])
-                fx = self.run_fixes(runs[k], run)
-                r = ent["recipe"]
-                # (the track: centres, and azimuth 0 / storm-relative fields: motion)
-                key = json.dumps(["azim", run.path, float(ent["time_s"]),
-                                  ent.get("time_s1"), r, track_sig(fx)], sort_keys=True)
-                res[e] = self.dist_cache.get(key)
-                if res[e] is None:
-                    if progress:
-                        progress(e, len(ents))
-                    res[e] = fg.azim_compute(run, F, ent, fx, cancelled)
-                    if res[e] is None:  # (stopped for a newer preview: not kept)
-                        res[e] = "cancelled"
-                        return res[e]
-                    self.dist_cache[key] = res[e]
-                    while len(self.dist_cache) > 60:
-                        self.dist_cache.popitem(last=False)
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
-                             for x in mine}) > 1
-                labels[e] = fg.azim_label(ent, runs[k].get("label", ""), F, multi, times)
-                cbl[e] = fg.dist_value_label(F, r["field"])
-                d = F[r["field"]] if r["field"] in F else None
-                look[e] = (d.cmap, d.diverging) if d is not None else ("viridis", False)
-            except (MissingAtTime, FileBusy) as ex:
-                res[e] = str(ex)
-            except Exception as ex:  # noqa: BLE001
-                traceback.print_exc()
-                res[e] = f"{type(ex).__name__}: {ex}"
-            return res[e]
+        def entry(e, ent, rs, note):
+            run, F = self.open_run(rs["path"])
+            fx = self.run_fixes(rs, run)
+            r = ent["recipe"]
+            # (the track: centres, and azimuth 0 / storm-relative fields: motion)
+            key = json.dumps(["azim", run.path, float(ent["time_s"]), ent.get("time_s1"),
+                              r, track_sig(fx)], sort_keys=True)
+            res = self._kept(self.dist_cache, key, 60, note=note, compute=lambda:
+                           fg.azim_compute(run, F, ent, fx, cancelled))
+            if res is None:  # (stopped for a newer preview: not kept)
+                return "cancelled"
+            times = self._times_vary(ents, ent, lambda x: (round(float(x["time_s"]), 1),
+                                                           x.get("time_s1")))
+            labels[e] = fg.azim_label(ent, rs.get("label", ""), F, multi, times)
+            cbl[e] = fg.dist_value_label(F, r["field"])
+            d = F[r["field"]] if r["field"] in F else None
+            look[e] = (d.cmap, d.diverging) if d is not None else ("viridis", False)
+            return res
 
-        data = {}
-        for i in range(fg.npanels(spec)):
-            if cancelled and cancelled():
-                return None
-            data[i] = fg.azim_panel(spec, i, get, lambda e: labels.get(e, ""),
-                                    lambda e: cbl.get(e, ""),
-                                    lambda e: look.get(e, ("viridis", False)))
-        return data
+        return self._entries(spec, "azims", entry, lambda i, get: fg.azim_panel(
+            spec, i, get, lambda e: labels.get(e, ""), lambda e: cbl.get(e, ""),
+            lambda e: look.get(e, ("viridis", False))), progress, cancelled)
 
     # ------------------------------------------------------------ profiles
     def _profile_data(self, spec, progress=None, cancelled=None):
@@ -604,10 +551,8 @@ class FigureData:
                 n = sum(len(fg.profile_runs(x, len(runs))) for x in ents)
                 res[e, k] = self.profile_get(runs[k], ent, len(res), n, progress, cancelled)
                 run, F = self.open_run(runs[k]["path"])
-                mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
-                        and not fg.is_table(x)]  # (your own data: no time)
-                times = len({(round(float(x["time_s"]), 1), x.get("time_s1"))
-                             for x in mine}) > 1
+                times = self._times_vary(ents, ent, lambda x: (round(float(x["time_s"]), 1),
+                                                               x.get("time_s1")))
                 labels[e, k] = fg.profile_label(ent, runs[k].get("label", ""), F, multi, times)
                 labels.setdefault((e, -1), fg.profile_label(ent, "", F, False, times))
                 vlabs[e] = fg.profile_value_label(F, ent)
