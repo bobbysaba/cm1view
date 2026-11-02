@@ -137,6 +137,7 @@ def as_saved(spec, fd, time_s=None, code=False):
                 notes.append(f"{e['path']}: the viewer's track is not saved with the "
                              "figure; " + (f"using {e['track']}" if e["track"] else
                                            "no storm_tracks file found, so no track"))
+    fg.fill_outputs(s, fd.open_run)  # (runs paired by output number: as they are now)
     notes = list(dict.fromkeys(notes))
     for path in fg.changed_runs(s):
         notes.append(f"{path}: namelist.input changed since the figure was saved, so its "
@@ -148,7 +149,8 @@ def as_saved(spec, fd, time_s=None, code=False):
     if time_s is not None:  # (to the output nearest it)
         t0 = first_time(s)
         if t0 is not None:
-            s = fg.shift_times(s, float(run.times[nearest(run, time_s)]) - t0)
+            i, i0 = nearest(run, time_s), nearest(run, t0)
+            s = fg.shift_times(s, fg.OutputStep(float(run.times[i]) - t0, i - i0))
     ts = first_time(s)
     t = 0 if ts is None else nearest(run, ts)
     return finish(s, run, F, t, code), notes
@@ -187,10 +189,12 @@ def anim_frame(spec, offsets, j, dpi):
 
 
 def auto_ends(spec):
-    """Whether the figure has fills with "auto" colorbar ends (an animation reads every
-    frame first, so all frames have the same)."""
-    return any(lay.get("type") == "fill" and lay.get("extend") == "auto"
-               for p in figdraw.upgrade(spec)[0]["panels"] for lay in p.get("layers") or [])
+    """Whether the figure has fills with "auto" colorbar ends or panels whose scales
+    follow their data (an animation reads every frame first, so all frames have the
+    same)."""
+    return figdraw.scales_free(spec) or any(
+        lay.get("type") == "fill" and lay.get("extend") == "auto"
+        for p in figdraw.upgrade(spec)[0]["panels"] for lay in p.get("layers") or [])
 
 
 def frame_image(s, data, ends, dpi):
@@ -218,9 +222,10 @@ def save_gif(fd, spec, base, offsets, fps=4.0, dpi=110, loop=True, frames=False,
     ends = {}
     if auto_ends(spec):
         for j, dt in enumerate(offsets):
-            say(f"reading frame {j + 1}/{len(offsets)} for the colorbar ends")
+            say(f"reading frame {j + 1}/{len(offsets)} for the scales")
             s = fg.shift_times(spec, dt)
             ends = figdraw.fill_ends(s, fd.panel_data(s), ends)
+        ends = figdraw.fit_scales(spec, ends)
     fdir, name = base + "_frames", os.path.basename(base)
     if frames:
         os.makedirs(fdir, exist_ok=True)
@@ -373,8 +378,8 @@ def main(argv=None):
             say(f"{rp or name}: reading")
             if args.gif:
                 if not fg.animated(s):
-                    raise ValueError("animations are made of plan views, cross-sections "
-                                     "or 3D scenes")
+                    raise ValueError("time-height plots and time series show every time "
+                                     "already: nothing to animate")
                 end_s = None if args.end is None else args.end * 60.0
                 offsets = frame_offsets(fd, s, max(1, args.step), end_s)
                 if len(offsets) < 2:

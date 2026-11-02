@@ -122,6 +122,14 @@ class FigureWidgets:
                                   exclude=lambda: [r["path"] for r in self.run_rows])
         self.add_path = self.add_pick.query  # (a folder typed or pasted there)
         self.runs_msg = pn.pane.HTML(sizing_mode="stretch_width")
+        self.time_match = pn.widgets.Select(
+            name="Line runs up by", width=240, value="time",
+            options={"Time since each run's time zero": "time", "Output number": "output"},
+            description="Time since time zero: a run's output at the same time since its time "
+                        "zero. Output number: the nth output of each run, whatever its model "
+                        "time; times are labelled with the first run's, and past a shorter "
+                        "run's end its panels are blank")
+        self.time_match.param.watch(self._on_time_match, "value")
 
     def _build_layer_widgets(self):
         """Layers tab: series, soundings, distributions, profiles and time axes."""
@@ -147,6 +155,15 @@ class FigureWidgets:
             name="+ Your data", button_type="light", button_style="outline", height=32,
             description="A series of your own (observations, another model): paste "
                         "time and value columns or load a CSV file")
+        self.ser_par = pn.widgets.Button(
+            name="+ Parcels", button_type="light", button_style="outline", height=32,
+            description="A variable of a parcel set over the parcel times (the viewer's "
+                        "Parcels tab sets): its mean or median, a band, and parcels' own "
+                        "lines")
+        self.ser_wb = pn.widgets.MenuButton(
+            name="+ w budget", button_type="light", button_style="outline", height=32,
+            items=[("Rates: Dw/Dt, b, vpg, the rest", "rates"),
+                   ("Integrated since the set's time: Δw, ∫b, ∫vpg, ∫rest", "int")])
         self.series_col = pn.Column(
             _hint('Each card picks its <b>Run</b> and <b>Panel</b>, like the sounding and '
                   'section cards; regions around the storm use each run’s track, and every '
@@ -155,8 +172,11 @@ class FigureWidgets:
                   'can draw <b>All runs</b> or <b>Several runs…</b> (with an ensemble band). '
                   'Time–height: one card per panel; <b>One per run</b> copies a card down '
                   'its column for the other runs.  Time series: <b>+ Your data</b> draws points of '
-                  'your own beside them.'),
-            _grid((self.ser_from, 2), self.ser_add, self.ser_new, self.ser_data), self.ser_box,
+                  'your own beside them, <b>+ Parcels</b> a parcel set\'s variable and '
+                  '<b>+ w budget</b> its w budget.'),
+            _grid((self.ser_from, 2), self.ser_add, self.ser_new, self.ser_data, self.ser_par,
+                  self.ser_wb),
+            self.ser_box,
             sizing_mode="stretch_width", margin=0)
         # soundings
         sk = self.sk = dict(
@@ -545,11 +565,11 @@ class FigureWidgets:
             "Runs used", _hint(
                 "Each layer, section, sounding, distribution and series picks its run in its "
                 "own <b>Run</b> list (a run not in the figure yet is added by picking it); a "
-                "run nothing uses any more is dropped.  Here: each run's name, colour and "
-                "storm track (for storm-centred panels and storm-relative fields and "
+                "run nothing uses any more is dropped.  Here: each run's name, colour, time "
+                "zero and storm track (for storm-centred panels and storm-relative fields and "
                 "regions: the viewer's track for this run, or a track file; "
                 "storm_tracks/*.csv is found automatically)."),
-            self.runs_box,
+            self.time_match, self.runs_box,
             _hint("<b>Add a run</b> here if you want it before using it: your recent runs, "
                   "the runs next to this one and those under <b>Where your runs live</b> "
                   "(⚙ Settings). Type to filter, or paste a folder."),

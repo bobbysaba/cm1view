@@ -58,7 +58,7 @@ class FigureStyle:
         self.let_bold = pn.widgets.Checkbox(name="Bold")
         self.let_box = pn.widgets.Checkbox(name="White box")
         self.tl_on = pn.widgets.Checkbox(name="Time label")
-        self.tl_fmt = pn.widgets.TextInput(name="Text", description="{min}: minutes, {s}: "
+        self.tl_fmt = pn.widgets.TextInput(name="Text", description="{min}: minutes (from time zero), {model}: model minutes, {s}: "
                                            "seconds, {hms}: h:mm:ss; e.g. t = {min:g} min")
         self.tl_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
         self.tl_size = _f("Size (pt)", 12.0, step=1)

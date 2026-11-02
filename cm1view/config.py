@@ -36,10 +36,10 @@ KEYS = [
         "and spec in _src/).", kind="outdir"),
     Key("exports_dir", "paths", "~/cm1view/exports", "Saved data",
         "Saved series go to <this>/<parent>_<run>/series, data exports to .../data, "
-        "sessions to .../sessions; tracks go to .../tracks when no track folder exists.",
+        "sessions to .../sessions, parcel sets to .../parcels; tracks go to .../tracks when no track folder exists.",
         kind="outdir"),
     Key("cache_dir", "paths", "~/.cache/cm1view", "Cache",
-        "Throwaway files cm1view can rebuild (computed series). Scratch is a good "
+        "Throwaway files cm1view can rebuild (computed series, parcel trajectories). Scratch is a good "
         "place: home quotas are small.", kind="outdir"),
     Key("pdecomp_script", "paths", "", "Pressure-decomposition script",
         "Optional: your own script for times whose files lack p_b/p_l/p_nl, with the "
@@ -59,6 +59,9 @@ KEYS = [
     Key("output_glob", "data", "cm1out_[0-9]*.nc", "Output file names",
         "Which files in a run folder are CM1 output (applies to runs opened after "
         "saving)."),
+    Key("parcel_glob", "data", "cm1out_pdata*.nc", "Parcel file names",
+        "Which files in a run folder hold parcel (trajectory) output; several (e.g. "
+        "one per restart) are joined by time."),
     Key("allow_writes_to_output", "data", False, "Allow writing into output files",
         "Lets the pressure decomposition write its fields into the CM1 output files. "
         "Off: results stay in memory.", kind="bool"),

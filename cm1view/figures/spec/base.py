@@ -48,6 +48,12 @@ def layer_defaults(kind, F, field=None, z=1.0):
         return dict(type="sector", on=True, color="k", lw=1.5, ls="-", az0=0.0, az1=360.0,
                     rmax=20.0, ref="motion", center="track", offx=0.0, offy=0.0, cx=0.0,
                     cy=0.0, legend="")
+    if kind == "parcels":  # (a parcel set: its rule, or its indices without one)
+        return dict(type="parcels", on=True, name="parcels", rule=None, ids=None,
+                    color="#d62728", cvar="", units="", cmap="viridis", reverse=False,
+                    vmin=None, vmax=None, tails="until", minutes=10.0, heads=True,
+                    interp=True, lw=0.8, alpha=0.8, ms=3.0, within=1.0, xs_tails="near",
+                    moving="grid", move_u=0.0, move_v=0.0, cbar_label="", legend="")
     raise ValueError(kind)
 
 
@@ -185,7 +191,8 @@ def layer_groups(spec, i):
         if not lay.get("on", True):
             continue
         k, ts = lay.get("run"), lay.get("time_s")
-        g = (ref[0] if k is None else int(k), ref[1] if ts is None else float(ts))
+        k = ref[0] if k is None else int(k)
+        g = (k, figdraw.moved_time(spec, ref[1], ref[0], k) if ts is None else float(ts))
         if g != ref and g[0] < len(spec.get("runs") or [None]):
             out.setdefault(g, []).append(j)
     return out
@@ -227,14 +234,24 @@ def merge_group(d, dd, js, layers):
     return d
 
 
+def _layer_time(spec, ref, lay, k):
+    """Model time (s) of a layer of run k in a panel at ref (run index, time s): its
+    own, else the panel's moved to its run."""
+    if lay.get("time_s") is not None:
+        return float(lay["time_s"])
+    return figdraw.moved_time(spec, ref[1], ref[0], k)
+
+
 def minus_ref(spec, i, lay):
     """(run index, time s) that fill layer `lay` of panel i subtracts: its "minus"
-    {run, time_s}, each None for the layer's own (itself the panel's when unset)."""
+    {run, time_s}, each None for the layer's own (itself the panel's when unset).
+    Another run without a time of its own: the same time since each run's time zero."""
     ref, m = panel_ref(spec, i), lay.get("minus") or {}
     k = ref[0] if lay.get("run") is None else int(lay["run"])
-    ts = ref[1] if lay.get("time_s") is None else float(lay["time_s"])
-    return (k if m.get("run") is None else int(m["run"]),
-            ts if m.get("time_s") is None else float(m["time_s"]))
+    ts = _layer_time(spec, ref, lay, k)
+    k1 = k if m.get("run") is None else int(m["run"])
+    return k1, figdraw.moved_time(spec, ts, k, k1) if m.get("time_s") is None \
+        else float(m["time_s"])
 
 
 def subtract(d, dd, j, grid="ask"):
@@ -268,12 +285,13 @@ ENS_STATS = ("mean", "median", "sd", "min", "max", "range", "prob")
 def ens_refs(spec, i, lay):
     """[(run index, time s)] that fill layer `lay` of panel i is an ensemble of: its
     "ens" runs (None: every run of the figure) at the layer's time (itself the
-    panel's when unset)."""
+    panel's when unset), each at the same time since its time zero."""
     ref, e = panel_ref(spec, i), lay.get("ens") or {}
-    ts = ref[1] if lay.get("time_s") is None else float(lay["time_s"])
+    own = ref[0] if lay.get("run") is None else int(lay["run"])
+    ts = _layer_time(spec, ref, lay, own)
     nr = len(spec.get("runs") or [])
     ks = range(nr) if e.get("runs") is None else [int(k) for k in e["runs"] if int(k) < nr]
-    return [(k, ts) for k in dict.fromkeys(ks)]
+    return [(k, figdraw.moved_time(spec, ts, own, k)) for k in dict.fromkeys(ks)]
 
 
 def ensemble(d, dds, j, ens):
@@ -438,44 +456,89 @@ def storm_motion(run, fixes, t):
     return (run.umove, run.vmove)
 
 
+class OutputStep(float):
+    """A step through time of `n` outputs, the seconds it is on the run it was counted
+    on: shift_times moves a figure pairing its runs by output number by n outputs of
+    each time's own run, and any other by the seconds."""
+
+    def __new__(cls, dt_s, n):
+        step = super().__new__(cls, dt_s)
+        step.n = int(n)
+        return step
+
+
+def fill_outputs(spec, open_run):
+    """The runs of a figure pairing them by output number (time_match "output"; all
+    parts of a figure of parts) with their output times now.  open_run(path) -> (run, _)."""
+    for p in [spec] + list(spec.get("parts") or []):
+        if p.get("time_match") == "output":
+            for r in p.get("runs") or []:
+                r["outputs_s"] = [float(t) for t in open_run(r["path"])[0].times]
+
+
+def _edit_run(spec, key, e, default):
+    """The run of panel edit e (spec["edits"][key]): its own, else the panel's."""
+    if e.get("run") is not None:
+        return int(e["run"])
+    ref = figdraw.form_ref(spec, int(key))
+    return default if ref is None else ref[0]
+
+
 def shift_times(spec, dt_s):
     """A copy of `spec` with every panel's time moved by dt_s seconds (a frame of an
     animation: the panels step through time together; in a figure of parts, the
-    panels of every part, and the soundings)."""
+    panels of every part, and the soundings).  dt_s an OutputStep and the runs paired by
+    output number: moved by its outputs, each time in its own run."""
     s = json.loads(json.dumps(spec, default=float))
     if s.get("kind") == "combo":
         s["parts"] = [shift_times(p, dt_s) for p in s["parts"]]
         return s
-    s["times_s"] = [None if t is None else float(t) + dt_s for t in s.get("times_s", [])]
+    by_output = isinstance(dt_s, OutputStep) and \
+        any(r.get("outputs_s") for r in s.get("runs") or [])
+    own = figdraw.time_run(s) if by_output else 0  # (the run of the figure's times)
+
+    def moved(ts, k):
+        times = figdraw.output_times(s, k) if by_output else None
+        if times:
+            return figdraw.output_at(times, figdraw.output_number(times, ts) + dt_s.n)
+        return float(ts) + dt_s
+
+    s["times_s"] = [None if t is None else moved(t, own) for t in s.get("times_s", [])]
     if s.get("kind") == "scene" and s.get("time_s") is not None:  # (a box following the
         s["scene3d"] = dict(s.get("scene3d") or {})                # track: from here)
         s["scene3d"].setdefault("t0_s", float(s["time_s"]))
     if s.get("time_s") is not None:
-        s["time_s"] = float(s["time_s"]) + dt_s
+        s["time_s"] = moved(s["time_s"], own)
     for p in s.get("panels") or []:
-        p["time_s"] = float(p["time_s"]) + dt_s
+        p["time_s"] = moved(p["time_s"], int(p.get("run", own)))
     for sec in s.get("sections") or []:  # (section cards with their own time)
         if sec.get("time_s") is not None:
-            sec["time_s"] = float(sec["time_s"]) + dt_s
+            sec["time_s"] = moved(sec["time_s"], int(sec.get("run") or 0))
     for e in [e for key in ("soundings", "dists", "profiles", "joints", "azims")
               for e in s.get(key) or []]:
-        e["time_s"] = float(e["time_s"]) + dt_s
+        k = entry_run(e)
+        e["time_s"] = moved(e["time_s"], k)
         if e.get("time_s1") is not None:
-            e["time_s1"] = float(e["time_s1"]) + dt_s
-    for e in (s.get("edits") or {}).values():  # (panels and layers with their own time)
+            e["time_s1"] = moved(e["time_s1"], k)
+    for key, e in (s.get("edits") or {}).items():  # (panels and layers with their own time)
+        k = _edit_run(s, key, e, own) if by_output else 0
         if e.get("time_s") is not None:
-            e["time_s"] = float(e["time_s"]) + dt_s
+            e["time_s"] = moved(e["time_s"], k)
         for lay in list((e.get("layers") or {}).values()) + list(e.get("extra") or []):
             if lay.get("time_s") is not None and not lay.get("time_lock"):
-                lay["time_s"] = float(lay["time_s"]) + dt_s
+                lay["time_s"] = moved(lay["time_s"], k if lay.get("run") is None
+                                      else int(lay["run"]))
     return s
 
 
+STEP_ENTRIES = ("sounding", "dist", "profile", "joint", "azim")  # (kinds of timed entries)
+
+
 def animated(spec):
-    """Whether the spec has panels that step in time (plan views, sections, 3D scenes,
-    soundings; time-height and time-series panels stay as they are)."""
+    """Whether the spec has panels that step in time (plan views, sections, 3D scenes
+    and STEP_ENTRIES; time-height and time-series panels stay as they are)."""
     parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
-    return any(p["kind"] in ("plan", "xsec", "scene") for p in parts)
+    return any(p["kind"] in ("plan", "xsec", "scene") + STEP_ENTRIES for p in parts)
 
 
 def scene_frame(spec, j, n):
@@ -491,10 +554,75 @@ def scene_frame(spec, j, n):
     return s
 
 
+def profile_runs(entry, nr=None):
+    """A profile entry's runs: None for every run (nr given: then range(nr)), else
+    run indices (below nr).  An entry from before "runs": its "run"."""
+    runs = entry["runs"] if "runs" in entry else [int(entry.get("run", 0))]
+    if nr is None:
+        return None if runs is None else [int(k) for k in runs]
+    return list(range(nr)) if runs is None else [int(k) for k in runs if int(k) < nr]
+
+
+def entry_run(entry):
+    """The run an entry's times are of: the first of its runs (every run: run 0)."""
+    runs = profile_runs(entry)
+    return int(runs[0]) if runs else 0
+
+
+def _entry_moved(entry, dt):
+    """Entry `entry` with its time and the end of its time window moved by dt s."""
+    if not dt:
+        return entry
+    t1 = entry.get("time_s1")
+    return dict(entry, time_s=float(entry["time_s"]) + dt,
+                **({} if t1 is None else {"time_s1": float(t1) + dt}))
+
+
+def entry_at(spec, entry, k):
+    """Entry `entry` with its times moved to run k: the same time since each run's time
+    zero (figdraw.moved_time) as they are in entry_run, or with the runs paired by output
+    number the same outputs."""
+    k0 = entry_run(entry)
+    if k != k0 and figdraw.output_times(spec, k0) and figdraw.output_times(spec, k):
+        t1 = entry.get("time_s1")
+        return dict(entry, time_s=figdraw.moved_time(spec, entry["time_s"], k0, k),
+                    **({} if t1 is None else {"time_s1": figdraw.moved_time(spec, t1, k0, k)}))
+    return _entry_moved(entry, figdraw.moved_time(spec, 0.0, k0, k))
+
+
+def since_t0(spec, entry):
+    """Entry `entry` with its times counted from its run's time zero, for its legend
+    (runs paired by output number: the reference run's times at those outputs)."""
+    k = entry_run(entry)
+    if figdraw.output_times(spec, k) and figdraw.output_times(spec, 0):
+        return _entry_moved(entry_at(spec, entry, 0), -60.0 * figdraw.run_t0(spec, 0))
+    return _entry_moved(entry, -60.0 * figdraw.run_t0(spec, k))
+
+
+def time_key(spec, entry):
+    """What entries at one moment share: (time since its run's time zero, the same of
+    its time window's end or None), in s."""
+    e = since_t0(spec, entry)
+    ts, t1 = float(e["time_s"]), e.get("time_s1")
+    return round(ts, 1), round(float(t1), 1) if t1 is not None and float(t1) > ts else None
+
+
+def _entry_refs(p):
+    """(run path, model time s, end of its time window or None) of each run of each
+    timed entry of part p (your own data: no time)."""
+    runs = p.get("runs") or []
+    for e in p.get(figdraw.ENTRIES[p["kind"]]) or []:
+        if e.get("source") == "table":
+            continue
+        for k in profile_runs(e, len(runs)):
+            at = entry_at(p, e, k)
+            yield runs[k]["path"], float(at["time_s"]), at.get("time_s1")
+
+
 def time_refs(spec):
     """(run path, model time s) of every panel that steps in an animation: plan views
-    and sections (all parts of a figure of parts), soundings, distributions, profiles,
-    joint distributions and azimuthal means."""
+    and sections (all parts of a figure of parts), soundings, distributions, profiles
+    (each of their runs), joint distributions and azimuthal means."""
     out = []
     for p in spec["parts"] if spec.get("kind") == "combo" else [spec]:
         runs = p.get("runs") or []
@@ -511,33 +639,51 @@ def time_refs(spec):
             k = int(p.get("run", 0))
             if k < len(runs):
                 out.append((runs[k]["path"], float(p["time_s"])))
-        elif p["kind"] in ("sounding", "dist", "profile", "joint", "azim"):
-            out += [(runs[int(e.get("run", 0))]["path"], float(e["time_s"]))
-                    for e in p.get(figdraw.ENTRIES[p["kind"]]) or []
-                    if int(e.get("run", 0)) < len(runs)
-                    and e.get("source") != "table"]  # (your own data: no time)
+        elif p["kind"] in STEP_ENTRIES:
+            out += [(path, t) for path, t, _ in _entry_refs(p)]
     return out
+
+
+def _window_ends(spec):
+    """(run path, model time s) of the ends of the time windows of the timed entries."""
+    return [(path, float(t1))
+            for p in (spec["parts"] if spec.get("kind") == "combo" else [spec])
+            if p["kind"] in STEP_ENTRIES
+            for path, t, t1 in _entry_refs(p) if t1 is not None and float(t1) > t]
 
 
 def frame_offsets(spec, runs, step=1, end_s=None, limit=None):
     """Time offsets (s) of the animation frames, every `step` outputs of the first
     panel's run from the figure's own times up to that run's model time end_s (None:
-    its end), while every panel has an output at its shifted time; at most `limit`
-    frames.  runs: {run path: CM1Run} of the panels' runs (time_refs)."""
+    its end), while every panel has an output at its shifted time and every time window
+    is whole; at most `limit` frames.  runs: {run path: CM1Run} of the panels' runs
+    (time_refs).  Runs paired by output number: OutputSteps, each run stepping its own
+    outputs."""
     refs = time_refs(spec)
     if not refs:
         return []
+    ends = _window_ends(spec)
     p0, ts0 = refs[0]
     run0 = runs[p0]
     i0 = tindex(run0, ts0)
     if i0 is None:
         return []
     out = []
+    by_output = any(r.get("outputs_s") for p in (spec["parts"] if spec.get("kind") == "combo"
+                                                 else [spec]) for r in p.get("runs") or [])
     for i in range(i0, len(run0.times), max(int(step), 1)):
         if end_s is not None and run0.times[i] > end_s + 1.0:
             break
         dt = float(run0.times[i] - run0.times[i0])
-        if any(tindex(runs[p], ts + dt) is None for p, ts in refs):
+        if by_output:
+            dt = OutputStep(dt, i - i0)
+            s = shift_times(spec, dt)
+            shifted, whole = time_refs(s), _window_ends(s)
+        else:
+            shifted = [(p, ts + dt) for p, ts in refs]
+            whole = [(p, t1 + dt) for p, t1 in ends]
+        if any(tindex(runs[p], ts) is None for p, ts in shifted) or \
+                any(t1 > runs[p].times[-1] + 1.0 for p, t1 in whole):
             break
         out.append(dt)
         if limit is not None and len(out) >= limit:

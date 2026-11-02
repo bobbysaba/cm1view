@@ -33,9 +33,11 @@ Each label is switched on by its checkbox and then has its own *Where* (the corn
 edges of the panel, or above its left or right corner), *Size*, *Bold* and *White box*:
 
 - **Panel letters**: *Style* `a`, `(a)`, `a)`, `A` or `(A)`.
-- **Time label**: *Text* with `{min}` (minutes), `{s}` (seconds) or `{hms}` (h:mm:ss),
-  e.g. `t = {min:g} min`. **Minutes counted from** sets time zero in model minutes (e.g.
-  the initiation time).
+- **Time label**: *Text* with `{min}` (minutes from time zero), `{model}` (model minutes),
+  `{s}` (seconds) or `{hms}` (h:mm:ss), e.g. `t = {min:g} min`. **Minutes counted from**
+  sets time zero in model minutes (e.g. the initiation time); a run's own
+  [time zero](figures-panels.md#runs) adds to it on plan views, cross-sections, time
+  series and time–height panels.
 - **Height label** (for panels at several heights): *Text* with `{z}` (the height, km)
   or `{k}` (the model level), e.g. `{z:g} km AGL`; blank gives `z = … km` or `k = …`.
 - **Run name** (for figures of several runs), optionally *In the run's colour*.

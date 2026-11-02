@@ -27,7 +27,9 @@ import netCDF4
 # netCDF/HDF5 is not thread safe: every in-process read goes through this lock.
 IO_LOCK = threading.RLock()
 
-STAG_DIMS = {"nip1": "x", "njp1": "y", "nkp1": "z"}
+# staggered dimensions: CM1's own names (ni/nj/nk on scalar points) and the CF-style
+# ones of newer versions (xh/yh/zh on scalar points, xf/yf/zf staggered)
+STAG_DIMS = {"nip1": "x", "njp1": "y", "nkp1": "z", "xf": "x", "yf": "y", "zf": "z"}
 
 
 def _destagger(a, stag):
@@ -194,7 +196,8 @@ class CM1Run:
         with IO_LOCK, netCDF4.Dataset(self.files[0]) as d:
             self.xh = np.asarray(d["xh"][:], dtype=np.float64)  # km
             self.yh = np.asarray(d["yh"][:], dtype=np.float64)
-            self.z = np.asarray(d["z"][:], dtype=np.float64)
+            # scalar heights: "z" in CM1's own layout, "zh" in the CF-style one
+            self.z = np.asarray(d["z" if "z" in d.variables else "zh"][:], dtype=np.float64)
             self.zf = np.asarray(d["zf"][:], dtype=np.float64)
             self.attrs = {k: d.getncattr(k) for k in d.ncattrs()}
             self.vars = {}

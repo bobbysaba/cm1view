@@ -55,7 +55,13 @@ QUICK_VARY = {"Time": "times", "Field (one time)": "fields", "Height (one time)"
               "Nothing (alike panels)": "none"}  # (the quick start: panels fill the grid)
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
-              "track": "Storm track", "line": "Section line", "sector": "Sector"}
+              "track": "Storm track", "line": "Section line", "sector": "Sector",
+              "parcels": "Parcels"}
+PAR_TAILS = {"Up to the panel time": "until", "All parcel times": "all",
+             "Last minutes": "last", "None (heads only)": "none"}
+PAR_MOVING = {"The grid": "grid", "Moving with the tracked storm": "track",
+              "Moving at a motion": "motion"}
+PAR_XS_TAILS = {"Their parts near it": "near", "Whole, of parcels near it now": "whole"}
 REDUCE = {"One time (off)": "", "Maximum (swath)": "max", "Minimum": "min", "Mean": "mean",
           "Sum": "sum", "Storm-following mean (composite)": "composite"}
 GRIDS = {"Say so (ask)": "ask", "Interpolate onto this layer's grid": "interp",
@@ -394,6 +400,17 @@ def _take_new_runs(ed, box, picked):
         box.value = sorted(set(keep))
 
 
+def wanted_time(card, key, opts, dt):
+    """The time (s) card wants in its list w[key] of outputs opts after moving by dt s:
+    what it wanted before while that still shows, else what it shows."""
+    wants = card.__dict__.setdefault("_want", {})
+    cur, want = float(card.w[key].value), wants.get(key)
+    if want is None or card.ed._nearest(opts, want) != cur:
+        want = cur
+    wants[key] = want + dt
+    return wants[key]
+
+
 class TimeCard:
     """The run and time of a card of one entry (a sounding, distribution, joint
     distribution, azimuthal mean or profile), and its time window when it has a "to"
@@ -432,10 +449,29 @@ class TimeCard:
             return label.split("(")[-1].rstrip(")")
         return short("time") + (f" to {short('time1')}" if self._t1() is not None else "")
 
-    def _set_times(self, k):
-        """The Time lists offer run k's outputs (the nearest to the times shown)."""
+    def _time_run(self):
+        """The run whose outputs the Time lists offer."""
+        return int(self.w["run"].value or 0)
+
+    def move_time(self, dt):
+        """The card's times moved by dt s (a run's time zero changed), to the nearest
+        outputs; what it wants is kept apart from what they show, so small steps add up."""
+        o = self.ed._time_opts(self._time_run())
+        t1 = self._t1()
+        with held(self.ed):
+            self.w["time"].value = self.ed._nearest(o, wanted_time(self, "time", o, dt))
+            if t1 is not None:
+                self.w["time1"].value = self.ed._nearest(o, wanted_time(self, "time1", o, dt))
+        self._show()
+
+    def _set_times(self, k, k0=None):
+        """The Time lists offer run k's outputs: the nearest to the times shown, or with
+        k0 (the run they were of) to the same time since each run's time zero."""
         o = self.ed._time_opts(k)
         cur, cur1 = self.w["time"].value, self._t1()
+        if k0 is not None and cur is not None:
+            cur = self.ed._moved_time(cur, k0, k)
+            cur1 = None if cur1 is None else self.ed._moved_time(cur1, k0, k)
         with held(self.ed):
             self.w["time"].options = o
             self.w["time"].value = self.ed._nearest(o, cur)
@@ -450,7 +486,7 @@ class TimeCard:
         if isinstance(ev.new, str):  # a run not in the figure yet
             self.ed._pick_other(self.w["run"], ev.old)
             return
-        self._set_times(ev.new)
+        self._set_times(ev.new, ev.old if isinstance(ev.old, int) else None)
         self._show()
         self.ed.request()
 

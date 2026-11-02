@@ -334,8 +334,10 @@ class FigureTree:
             objs.append(self._tree_layer(s, i, j, lay, extra=False))
         for j, lay in enumerate(e.get("extra") or []):
             objs.append(self._tree_layer(s, i, j, lay, extra=True))
+        par = {"Parcels": "parcels"} if self.v.pf is not None and \
+            s["kind"] in ("plan", "xsec") else {}
         add = pn.widgets.Select(name="Add a layer to this panel only",
-                                options={"": ""} | ADD, value="")
+                                options={"": ""} | ADD | par, value="")
 
         def on_add(ev):
             if not ev.new:
@@ -346,6 +348,8 @@ class FigureTree:
             lay = fg.layer_defaults(ev.new, self.fields, field, 1.0)
             if ev.new == "vectors" and s["kind"] == "xsec":
                 lay.update(spacing=0.75, scale=400.0, width=0.0015)
+            if ev.new == "parcels":
+                lay = next(iter(self._parcel_layers()), lay)
             self._tree_edit(i).setdefault("extra", []).append(lay)
             self._tree_changed()
             self._tree_sync(force=True)
@@ -529,7 +533,9 @@ class FigureTree:
             if kind == "line":
                 runs = ent.get("runs")
                 src = "every run" if runs is None else ", ".join(
-                    names.get(int(k), str(k)) for k in runs) or "no run"
+                    names.get(int(k), str(k)) for k in runs) or "your data"
+                if fg.is_parcels(ent):
+                    src = f"parcels {ent.get('name', '')} · {src}"
             elif kind == "profile":
                 runs = fg.profile_runs(ent)
                 src = "your data" if fg.is_table(ent) else (

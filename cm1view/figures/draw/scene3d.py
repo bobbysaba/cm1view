@@ -12,6 +12,9 @@ A scene panel's data (scene_data: flat names, so they go in the figure's .npz)
   G_x, G_y, G_a, G_lo, G_hi, G_cmap, G_rev, G_title   the floor (when on)
   nvec, V<n>_x, V<n>_y, V<n>_z, V<n>_color, V<n>_name  vector plane n
   S_x, S_y, S_z, S_w, S_n, S_by, S_seed, S_seed_z, S_name  the streamlines (when on)
+  P<n>_px, P<n>_py, P<n>_pz, P<n>_pv   parcel entry n's tails (NaN-separated, km; pv:
+                the value it is coloured by), P<n>_hx, _hy, _hz, _hv its heads; n counts
+                the spec's scene3d["parcels"] (off ones too), whose look they are drawn in
   box, ztop     the region (km) the scene was computed over
 Redrawing a scene (its script too) needs pyvista.
 
@@ -22,12 +25,13 @@ positions in a spec are in world km (z not exaggerated)."""
 import numpy as np
 import matplotlib
 from matplotlib.cm import ScalarMappable
-from matplotlib.colors import BoundaryNorm, Normalize
+from matplotlib.colors import BoundaryNorm, Normalize, to_rgb
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 
 from .base import colormap, font_size
+from .layers import parcel_label, parcel_norm
 
 CAMERA = dict(preset="oblique", azimuth=None, elevation=None, zoom=1.0,
               projection="perspective", view_angle=30.0,
@@ -37,7 +41,7 @@ CAMERA = dict(preset="oblique", azimuth=None, elevation=None, zoom=1.0,
 LOOK = dict(lighting="kit", background=None, outline=True, outline_color="#475569",
             tube=1.0, arrows="glyph", shine=0.3, ambient=0.25, seed_box=True,
             peels=12, aa=True, ticks=True, labels=["x (km)", "y (km)", "z (km)"],
-            legend=True, floor_bar="bottom", stream_bar="right")
+            legend=True, floor_bar="bottom", stream_bar="right", parcel_bar="left")
 SCENE_MAX_PX = 6000  # (the longer side of a rendered picture)
 
 # compass bearing the viewer stands toward from the centre (deg, 0 = north, 90 = east)
@@ -180,7 +184,8 @@ def camera_from_plotly(cam):
 
 
 def _polylines(x, y, z, scalars=None):
-    """PolyData of NaN-separated polylines (pieces under 2 points dropped)."""
+    """PolyData of NaN-separated polylines (pieces under 2 points dropped); scalars
+    per point, or (n, 3) colours per point."""
     import pyvista as pv
 
     x, y, z = (np.asarray(a, np.float64) for a in (x, y, z))
@@ -226,12 +231,47 @@ def _arrows(vec, ex, radius, style):
     return pd.glyph(orient="v", scale="v", factor=1.0, geom=geom)
 
 
-def render(arrays, scene, size_px):
+def _parcel_rgb(p, v, n):
+    """(n, 3) colours of n parcel points: the entry's colour, or by values v."""
+    if p.get("cm") is None or v is None:
+        return np.tile(to_rgb(p.get("color", "k")), (n, 1))
+    v = np.asarray(v, np.float64)
+    rgb = p["cm"](p["norm"](np.where(np.isfinite(v), v, p["norm"].vmin)))[:, :3]
+    rgb[~np.isfinite(v)] = 0.6
+    return rgb
+
+
+def _add_parcels(pl, p, ex, pt):
+    """One parcel entry: tails as lines drawn as tubes, heads as spheres (sizes in
+    points, pt pixels each)."""
+    import pyvista as pv
+
+    alpha = float(p.get("alpha", 0.8))
+    if p.get("px") is not None and len(p["px"]) > 1:
+        pd = _polylines(p["px"], p["py"], np.asarray(p["pz"], np.float64) * ex,
+                        _parcel_rgb(p, p.get("pv"), len(p["px"])))
+        if pd is not None:
+            pl.add_mesh(pd, scalars="s", rgb=True, opacity=alpha,
+                        line_width=max(1.0, float(p.get("lw", 1.5)) * pt),
+                        render_lines_as_tubes=True, show_scalar_bar=False)
+    if p.get("heads", True) and p.get("hx") is not None and len(p["hx"]):
+        pts = np.column_stack([p["hx"], p["hy"], np.asarray(p["hz"], np.float64) * ex])
+        ok = np.isfinite(pts).all(axis=1)
+        if ok.any():
+            pd = pv.PolyData(pts[ok])
+            pd["s"] = _parcel_rgb(p, p.get("hv"), len(pts))[ok]
+            pl.add_mesh(pd, scalars="s", rgb=True, opacity=min(1.0, alpha + 0.2),
+                        point_size=max(2.0, float(p.get("ms", 3.0)) * pt),
+                        render_points_as_spheres=True, show_scalar_bar=False)
+
+
+def render(arrays, scene, size_px, dpi=None):
     """Render the scene off-screen.
 
-    arrays: build_scene's dict (meshes, ground, vecs, stream).  scene: the figure's
-    scene3d block: box, ztop, exag, camera (CAMERA keys), look (LOOK keys).
-    size_px: (width, height).
+    arrays: build_scene's dict (meshes, ground, vecs, stream) and parcels
+    (scene_parcels').  scene: the figure's scene3d block: box, ztop, exag, camera
+    (CAMERA keys), look (LOOK keys).  size_px: (width, height); dpi: pixels per inch
+    of the picture (the parcels' line widths and head sizes are in points).
 
     Returns (rgba, proj): an (h, w, 4) uint8 image (transparent where nothing is drawn
     when look["background"] is "transparent") and the 4x4 matrix taking display
@@ -292,6 +332,10 @@ def render(arrays, scene, size_px):
                 ring = pv.lines_from_points(np.array(
                     [[s0, t0, zs], [s1, t0, zs], [s1, t1, zs], [s0, t1, zs], [s0, t0, zs]]))
                 pl.add_mesh(ring, color="#64748b", line_width=lw)
+
+        pt = (float(dpi) if dpi else min(w, h) / 4.5) / 72.0  # (pixels per point)
+        for p in arrays.get("parcels") or []:
+            _add_parcels(pl, p, ex, pt)
 
         if lk["outline"]:
             pl.add_mesh(pv.Box(bounds=b).outline(), color=lk["outline_color"],
@@ -386,6 +430,22 @@ def scene_arrays(d):
     return dict(meshes=meshes, ground=ground, vecs=vecs, stream=stream)
 
 
+def scene_parcels(d, sc):
+    """The parcel entries of scene block sc drawn from a scene panel's data d: each
+    entry's look (its colour, or cm and norm when coloured by a variable), its tails
+    (px, py, pz, pv) and heads (hx, hy, hz, hv)."""
+    out = []
+    for n, e in enumerate(sc.get("parcels") or []):
+        g = {k: d.get(f"P{n}_{k}") for k in ("px", "py", "pz", "pv", "hx", "hy", "hz", "hv")}
+        if not e.get("on", True) or (g["px"] is None and g["hx"] is None):
+            continue
+        p = dict(e, **g, cm=None, norm=None)
+        if e.get("cvar") and (g["pv"] is not None or g["hv"] is not None):
+            p["cm"], p["norm"] = parcel_norm(e, (g["pv"], g["hv"]))
+        out.append(p)
+    return out
+
+
 def scene_spec(d, V):
     """The scene block a panel renders with: the panel view's "scene3d" (its camera,
     look, exaggeration), the region and top the data was computed over, and the
@@ -416,6 +476,7 @@ def scene_panel(fig, ax, d, V, fs, legend):
     out, at the size the axes then have."""
     sc = scene_spec(d, V)
     lk, arrays = sc["look"], scene_arrays(d)
+    arrays["parcels"] = pars = scene_parcels(d, sc)
     ax.set_axis_off()
     bars = []
     g, s = arrays["ground"], arrays["stream"]
@@ -425,6 +486,10 @@ def scene_panel(fig, ax, d, V, fs, legend):
     if s is not None and lk["stream_bar"] != "none":
         name, lo, hi, lab = stream_style(s, sc["ztop"])
         bars.append((ScalarMappable(Normalize(lo, hi), colormap(name)), lk["stream_bar"], lab))
+    p = next((p for p in pars if p["cm"] is not None), None)  # (the first coloured set's)
+    if p is not None and lk["parcel_bar"] != "none":
+        lab = p.get("cbar_label") or parcel_label(p)
+        bars.append((ScalarMappable(p["norm"], p["cm"]), lk["parcel_bar"], lab))
     for m, loc, lab in bars:
         c = fig.colorbar(m, ax=ax, location=loc, shrink=0.6, pad=0.02, aspect=30)
         c.set_label(lab, fontsize=font_size(V, "label"))
@@ -438,6 +503,10 @@ def scene_panel(fig, ax, d, V, fs, legend):
             name, *_ = stream_style(s, sc["ztop"])
             legend[s["name"] or "streamlines"] = Line2D([], [], color=colormap(name)(0.85),
                                                         lw=2.0)
+        for p in pars:
+            legend[p.get("legend") or p.get("name") or "parcels"] = Line2D(
+                [], [], lw=1.5, marker="o", ms=3.5,
+                color=p["cm"](0.85) if p["cm"] is not None else p.get("color", "k"))
     ax._cv_scene = (arrays, sc, font_size(V, "tick"), font_size(V, "label"))
 
 
@@ -464,7 +533,7 @@ def finish_scenes(fig, dpi):
         k = min(1.0, SCENE_MAX_PX / max(w, h, 1.0))
         w, h = max(16, int(round(w * k))), max(16, int(round(h * k)))
         try:
-            img, proj = render(arrays, sc, (w, h))
+            img, proj = render(arrays, sc, (w, h), dpi * k)
         except ImportError:
             ax.text(0.5, 0.5, "drawing a 3D scene needs pyvista\n(pip install pyvista)",
                     transform=ax.transAxes, ha="center", va="center", color="0.4")

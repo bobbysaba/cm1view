@@ -446,6 +446,46 @@ def test_each_series_has_its_own_time_zero():
     assert [d["S0_label"], d["S1_label"]] == ["w · run_a", "w · run_b"]
 
 
+def test_a_run_time_zero_shifts_its_lines():
+    """A run's time zero moves that run's lines and time-height panels, on top of the
+    figure's and the card's; hand edits stay at their model time, your own data has no
+    run, and an ensemble band of the runs lines up."""
+    from types import SimpleNamespace
+    import xarray as xr
+    from cm1view.figures import spec as fg
+    times = np.arange(0.0, 5401.0, 600.0)  # 0-90 min
+    nt = times.size
+    run = SimpleNamespace(times=times)
+    ds = xr.Dataset(dict(value=("time", np.arange(nt, dtype=float)),
+                         computed=("time", np.ones(nt, np.int8)),
+                         profile=(("time", "z"), np.ones((nt, 2)))), coords=dict(z=[1.0, 2.0]))
+    a = dict(recipe=dict(z0=0.0, z1=3.0), op="", panel=0, runs=None, label="w", t0_min=1.0)
+    obs = dict(source="table", table=dict(t=[0.0, 5.0], v=[1.0, 2.0]), panel=0, label="obs")
+    spec = dict(kind="line", series=[a, obs], ts={}, time_label=dict(t0_min=10.0),
+                runs=[dict(path="a"), dict(path="b", t0_min=30.0)])
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    assert d["S0_t"][0] == -11.0 and d["S1_t"][0] == -41.0  # (figure + run + card)
+    assert d["S2_label"] == "obs" and d["S2_t"][0] == -10.0  # (figure + its card: no run)
+    assert d["xlim"] == (-41.0, 79.0)
+    assert fg.th_panel(run, ds, a, spec, 1)["x"][0] == -41.0
+    assert fg.th_panel(run, ds, a, spec, 0)["x"][0] == -11.0
+    assert fg.th_panel(run, ds, a, spec)["x"][0] == -11.0  # (no run: none of a run's)
+    # a hand edit stays at its model time, wherever the time zero puts it
+    e = dict(a, runs=[1], edits={"1": {fg.edit_key(600.0): -5.0}})
+    d = fg.line_panel(dict(spec, series=[e]), 0, lambda k, e: (run, ds))
+    assert d["S0_v"][1] == -5.0 and d["S0_t"][1] == -31.0
+    # an ensemble of the runs: on their shifted times (two runs where both have values)
+    b = dict(a, ens="minmax", ens_mid="mean", t0_min=0.0)
+    spec = dict(spec, series=[b], time_label={})
+    d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
+    j = next(j for j in range(d["nlines"]) if f"S{j}_ens" in d)
+    assert d[f"S{j}_t"][0] == 0.0 and d[f"S{j}_t"][-1] == 60.0
+    # no time zero: as before
+    for r in spec["runs"]:
+        r.pop("t0_min", None)
+    assert fg.line_panel(spec, 0, lambda k, e: (run, ds))["S0_t"][0] == 0.0
+
+
 # ------------------------------------------------------------------ series data by hand
 def _line_setup():
     from types import SimpleNamespace

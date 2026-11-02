@@ -1,6 +1,6 @@
 """Figure editor: a 3D scene figure's settings (the Layers tab of kind "scene"): its
-isosurfaces, floor, vectors and streamlines, the region and resolution, the camera
-and the look; copying the viewer's 3D view (from_3d, and its camera as the user left
+isosurfaces, floor, vectors, streamlines and parcels, the region and resolution, the
+camera and the look; copying the viewer's 3D view (from_3d, and its camera as the user left
 it).
 
 The scene's run and time are the Panels tab's (Time); the picture is rendered at the
@@ -14,14 +14,15 @@ import numpy as np
 import panel as pn
 
 from . import draw as figdraw, spec as fg
+from ..core import parcels as P
 from ..viewer.numinput import FloatInput
-from .cards import (FRAMES, IsoRow, SCENE_ARROWS, SCENE_BARS, SCENE_BG,
+from .cards import (FRAMES, IsoRow, ParRow, SCENE_ARROWS, SCENE_BARS, SCENE_BG,
                     SCENE_FLOOR_CMAPS, SCENE_FLOOR_RANGE, SCENE_LIGHTS, SCENE_PROJ, SCENE_RES,
                     SCENE_STREAM_BY, SCENE_STREAM_DIR, SCENE_VIEWS, VecRow, _auto, _checks,
-                    _chk, _dark, _f, _grid, _hex, _hint, _row, _section)
+                    _chk, _dark, _f, _grid, _hex, _hint, _row, _section, parcel_pick)
 from ..viewer.ui import held
 
-ISO_MAX = VEC_MAX = 6
+ISO_MAX = VEC_MAX = PAR_MAX = 6
 
 
 class FigureScene:
@@ -98,6 +99,8 @@ class FigureScene:
             floor_bar=pn.widgets.Select(name="Floor colorbar", options=SCENE_BARS),
             stream_bar=pn.widgets.Select(name="Streamline colorbar", options=SCENE_BARS,
                                          value="right"),
+            parcel_bar=pn.widgets.Select(name="Parcel colorbar", options=SCENE_BARS,
+                                         value="left"),
             outline=_chk("Box outline", True), ticks=_chk("Axis ticks", True),
             legend=_chk("Legend", True), seed_box=_chk("Seed box outline", True))
         self.sc_anim = dict(
@@ -115,13 +118,24 @@ class FigureScene:
             name="Copy the 3D view", button_type="primary", button_style="outline",
             height=32, description="Everything the 3D workspace shows now (its box, "
                                    "surfaces, floor, vectors, streamlines and camera)")
-        self.iso_rows, self.svec_rows = [], []
+        self.iso_rows, self.svec_rows, self.spar_rows = [], [], []
         self.iso_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.svec_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.spar_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.iso_add = pn.widgets.Button(name="+ Isosurface", **btn)
         self.svec_add = pn.widgets.Button(name="+ Vectors", **btn)
+        self.spar_add = pn.widgets.Button(name="+ Parcels", **btn,
+                                          description="The next parcel set of the viewer's "
+                                                      "Parcels tab (or a saved one)")
 
         g, s, c, lk, w = self.sc_g, self.sc_s, self.sc_c, self.sc_l, self.sc_w
+        self._spar_section = _section(
+            "Parcels", self.spar_box, _row(self.spar_add),
+            _hint("Parcel sets as the viewer's Parcels tab chose them (by their rule, from "
+                  "this run's parcel output): tails as lines, heads at the scene's time as "
+                  "balls, inside the region. Coloured by a variable, the first such set "
+                  "gets the parcel colorbar (Look)."))
+        self._spar_section.visible = self.v.pf is not None
         self.scene_col = pn.Column(
             _hint("One 3D picture, rendered off-screen (pyvista) at the preview's "
                   "resolution here and at the export's DPI when saved. Its run and time: "
@@ -141,6 +155,7 @@ class FigureScene:
                                           s["color_by"]),
                      _checks(s["on"]),
                      _row(self.sc_seed_btn, self.sc_seed_clear), self.sc_seed_html),
+            self._spar_section,
             _section("Region and resolution",
                      _grid(self.sc_region, w["ztop"], w["exag"]),
                      _grid(*self.sc_box, n=2), _row(self.sc_box_btn),
@@ -157,7 +172,8 @@ class FigureScene:
                            "workspace (rotate it there, then click)."), collapsed=False),
             _section("Look", _grid(lk["lighting"], lk["background"], lk["arrows"],
                                    lk["shine"], lk["ambient"], lk["tube"],
-                                   lk["floor_bar"], lk["stream_bar"], lk["outline_color"]),
+                                   lk["floor_bar"], lk["stream_bar"], lk["parcel_bar"],
+                                   lk["outline_color"]),
                      _grid(*self.sc_labels),
                      _checks(lk["outline"], lk["ticks"], lk["legend"], lk["seed_box"])),
             _section("Animation", _grid(self.sc_anim["follow"], self.sc_anim["orbit"]),
@@ -187,6 +203,7 @@ class FigureScene:
         self.sc_from.on_click(lambda e: self._scene_copy_3d())
         self.iso_add.on_click(lambda e: self._add_iso())
         self.svec_add.on_click(lambda e: self._add_svec())
+        self.spar_add.on_click(lambda e: self._add_spar())
         # the 3D workspace's camera as the user leaves it (plotly's relayout after a drag)
         self._cam3d = None
         v = self.v
@@ -207,6 +224,11 @@ class FigureScene:
         r.rm.on_click(lambda ev: self._remove_row(self.svec_rows, r))
         return r
 
+    def _spar_row(self, e):
+        r = ParRow(self, e)
+        r.rm.on_click(lambda ev: self._remove_row(self.spar_rows, r))
+        return r
+
     def _remove_row(self, rows, r):
         rows.remove(r)
         self._scene_rows()
@@ -216,8 +238,11 @@ class FigureScene:
         self.iso_box.objects = [r.panel for r in self.iso_rows] or [pn.pane.HTML(
             '<div class="cv-empty">No isosurfaces: add one.</div>')]
         self.svec_box.objects = [r.panel for r in self.svec_rows]
+        self.spar_box.objects = [r.panel for r in self.spar_rows]
         self.iso_add.disabled = len(self.iso_rows) >= ISO_MAX
         self.svec_add.disabled = len(self.svec_rows) >= VEC_MAX
+        self.spar_add.disabled = len(self.spar_rows) >= PAR_MAX
+        self._spar_section.visible = self.v.pf is not None or bool(self.spar_rows)
 
     def _add_iso(self):
         """A new isosurface: reflectivity 30 dBZ first, then updraft 10 m/s, then the
@@ -240,6 +265,32 @@ class FigureScene:
             color=("#000000", "#b45309", "#0e7490")[len(lv) % 3])))
         self._scene_rows()
         self.request()
+
+    def _add_spar(self):
+        """The viewer's next parcel set not in the scene yet, else the run's first
+        saved set."""
+        have = {r.e.get("name") for r in self.spar_rows}
+        e = next((e for e in self._scene_parcels() if e["name"] not in have), None)
+        if e is None:
+            v = self.v
+            saved = P.list_sets(v.run.path) if v.pf is not None else []
+            if not saved:
+                self._msg("Choose parcels in the viewer's <b>Parcels</b> tab first (or save "
+                          "a set there).", True)
+                return
+            src = parcel_pick(self, "f:" + saved[0])
+            if src is None:
+                return
+            e = dict(fg.layer_defaults("parcels", self.F), lw=1.5, **src)
+        self.spar_rows.append(self._spar_row(e))
+        self._scene_rows()
+        self.request()
+
+    def _scene_parcels(self):
+        """The viewer's parcel sets as entries of a scene (as its 2D layers, lines a
+        little wider)."""
+        return [dict(lay, lw=round(1.5 * float(self.v.par_width.value or 1.0), 3))
+                for lay in self._parcel_layers()]
 
     # ------------------------------------------------------------ what is shown
     def _scene_show(self, *e):
@@ -305,6 +356,7 @@ class FigureScene:
                                    if k not in self.sc_l and k != "labels"}
             self.iso_rows = [self._iso_row(e) for e in sc["isos"]]
             self.svec_rows = [self._svec_row(e) for e in sc["vecs"]]
+            self.spar_rows = [self._spar_row(e) for e in sc["parcels"]]
         self._scene_rows()
         self._scene_show()
 
@@ -329,6 +381,7 @@ class FigureScene:
                     smooth=float(w["smooth"].value or 0.0), res=int(w["res"].value or 0),
                     isos=[r.collect() for r in self.iso_rows],
                     vecs=[r.collect() for r in self.svec_rows],
+                    parcels=[r.collect() for r in self.spar_rows],
                     stream=dict(_get(self.sc_s), seed_box=list(self._sc_seed)
                                 if self._sc_seed else None),
                     ground=_get(self.sc_g), camera=cam, look=look,
@@ -384,8 +437,9 @@ class FigureScene:
 
     def viewer_scene(self):
         """The scene block of what the 3D workspace shows (its box, top, exaggeration,
-        smoothing, resolution, surfaces, floor, vectors, streamlines and camera); light
-        vector colours chosen for its dark background turn black."""
+        smoothing, resolution, surfaces, floor, vectors, streamlines, parcel sets when
+        it shows them, and camera); light vector colours chosen for its dark background
+        turn black."""
         v = self.v
         try:
             box = [float(x) for x in v.box] if v.box is not None else None
@@ -408,7 +462,9 @@ class FigureScene:
                           hi=float(v.v3_floor_max.value or 0.0))
             sc = dict(box=box, ztop=float(v.v3_ztop.value), exag=float(v.v3_exag.value),
                       smooth=float(v.v3_smooth.value), res=int(v.v3_res.value), isos=isos,
-                      vecs=vecs, stream=stream, ground=ground)
+                      vecs=vecs, stream=stream, ground=ground,
+                      parcels=self._scene_parcels() if getattr(v, "par_3d", None) is not None
+                      and v.par_3d.value else [])
         except AttributeError:  # (a viewer without the 3D workspace)
             sc = dict(isos=[dict(on=True, var="dbz", val=30.0, color="#7dd3fc", op=0.25)]
                       if "dbz" in self.F else [])

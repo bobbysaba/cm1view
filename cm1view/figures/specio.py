@@ -28,6 +28,7 @@ class FigureSpecIO:
         self._auto_size = bool(spec.get("size_auto", False))  # until set by hand
         with held(self):
             s = spec
+            self.time_match.value = s.get("time_match", "time")  # (the rows' time zeros show it)
             self._build_runs(s["runs"])
             self.kind.value = s["kind"]
             self.g_rows.options = self.g_cols.options = dict(GRID_DIMS)  # (all, then the kind's)
@@ -268,10 +269,13 @@ class FigureSpecIO:
             layers=pf + [c.collect() for c in self.cards],
             panel_fills=[self._pf_collect(r) for r in self.pf_rows],
             panel_z=_heights(self.pz.value), panel_zmode=self.pz_mode.value,
-            share=_num(self.part_share.value),
+            share=_num(self.part_share.value), place=self._part_place(),
             suptitle=self.suptitle.value, titles=titles, row_titles=row_titles,
             coords=self.coords.value, background=self.bg.value,
             mplstyle=self.mplstyle.value.strip())
+        s.pop("time_match", None)
+        if self.time_match.value == "output":
+            s["time_match"] = "output"
         s["domain"] = dict(s["domain"], mode=self.dom.value, half=float(self.half.value or 12.5))
         s["xsec"] = dict(s["xsec"], ztop=float(self.xs_top.value or 6.0),
                          coords=self.xs_coords.value)

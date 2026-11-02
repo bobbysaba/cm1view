@@ -1,5 +1,5 @@
 """The items tray under the map: what has been made (map view, soundings, section,
-3D box, series), to reopen, remove or make a figure from.
+3D box, series, parcel sets), to reopen, remove or make a figure from.
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
@@ -48,6 +48,8 @@ class ItemsTray:
             out.append(("box", 0, f"3D box · {x1 - x0:.1f} × {y1 - y0:.1f} km", ""))
         for k, v in getattr(self, "series", {}).items():
             out.append(("ser", k, v["label"], v["color"]))
+        for k, v in getattr(self, "psets", {}).items():
+            out.append(("par", k, f"{k} · {len(v['set']):,}", v["color"]))
         return out
 
     def _update_items(self):
@@ -124,6 +126,14 @@ class ItemsTray:
             objs.append(icon("photo", "Make a figure of the series (time–height or "
                                       "time series)", to_fig(self.figed.from_series)))
             groups.append(group(*objs))
+        par = [e for e in entries if e[0] == "par"]
+        if par:
+            objs = [_html('<span class="cv-hint">Parcels</span>', margin=(0, 4, 0, 6),
+                          align="center")]
+            for _, k, lab, col in par:
+                objs += label(lab, partial(self._show_parcels, k), col)
+                objs.append(icon("x", "Remove this parcel set", partial(self._par_drop, k)))
+            groups.append(group(*objs))
         self.items_bar.objects = groups
 
     def _remove_point(self, n):
@@ -146,6 +156,10 @@ class ItemsTray:
         self.workspace.value = "3D"
         if self.gen["3d"] == 0:  # nothing rendered yet
             self.request_3d()
+
+    def _show_parcels(self, key):
+        self._show_panel(True, 5)
+        self.par_list.value = key
 
     def _show_series(self, key):
         self._show_panel(True, 3)

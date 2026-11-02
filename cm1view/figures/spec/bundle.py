@@ -94,7 +94,8 @@ def provenance():
 
 
 # the settings that change what a figure shows (which files are output, which track)
-SETTINGS_USED = ("output_glob", "track_dirs", "track_patterns", "pdecomp_script")
+SETTINGS_USED = ("output_glob", "track_dirs", "track_patterns", "pdecomp_script",
+                 "parcel_glob")
 
 
 def namelist_hash(path):

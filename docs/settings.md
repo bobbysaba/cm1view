@@ -11,12 +11,13 @@ edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 | `runs_root` | (required) | folders searched for runs; the run picker starts there |
 | `default_run` | none | run opened when no run is given |
 | `figures_dir` | `~/cm1view/figures` | figures go to `<this>/<parent>_<run>/` |
-| `exports_dir` | `~/cm1view/exports` | saved series / tracks / sessions / data exports go to `<this>/<parent>_<run>/series`, `/tracks`, `/sessions`, `/data` |
-| `cache_dir` | `~/.cache/cm1view` | throwaway files (computed series and time-window swaths) |
+| `exports_dir` | `~/cm1view/exports` | saved series / tracks / sessions / data exports / parcel sets go to `<this>/<parent>_<run>/series`, `/tracks`, `/sessions`, `/data`, `/parcels` |
+| `cache_dir` | `~/.cache/cm1view` | throwaway files (computed series, time-window swaths, parcel trajectories) |
 | `pdecomp_script` | none | your own pressure-decomposition script instead of cm1view's solver |
 | `track_dirs` | `storm_tracks` | where storm track files are found (a plain name: that folder in the run folder or up to 4 above it) |
 | `track_patterns` | `{parent}_{name}.csv`, `{name}.csv`, … | track file names tried in each folder |
 | `output_glob` | `cm1out_[0-9]*.nc` | which files are CM1 output |
+| `parcel_glob` | `cm1out_pdata*.nc` | which files hold parcel (trajectory) output; several are joined by time |
 | `allow_writes_to_output` | off | lets the pressure decomposition write into output files |
 | `column_stride` | auto | CAPE, CIN, LCL, STP and SCP maps on every n-th column (auto: every column up to 500 × 500 points) |
 | `cache_gb`, `workers` | auto | from the job's memory and CPUs (restart to apply) |

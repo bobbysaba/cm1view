@@ -55,11 +55,12 @@ class FigureAnimation:
         self.an_end.param.watch(lambda e: self._anim_count(), "value")
         self.anim_sec = _section(
             "Animation (GIF)",
-            _hint("Plan views, cross-sections and 3D scenes, redrawn at successive output "
-                  "times from the panels' own times: every panel steps forward together, "
-                  "and storm-centred panels follow the storm (a 3D scene: its box and "
-                  "camera orbit, Layers → Animation). In a figure of parts, every "
-                  "part steps (soundings too; time–height and time series stay). Saved at "
+            _hint("The figure redrawn at successive output times from the panels' own "
+                  "times: every panel steps forward together, and storm-centred panels "
+                  "and soundings follow the storm (a 3D scene: its box and camera orbit, "
+                  "Layers → Animation). Time–height plots and time series show every time "
+                  "already: they stay as they are in a figure of parts, and cannot be "
+                  "animated alone. Saved at "
                   "<i>GIF path</i>, or <code>&lt;Save as&gt;.gif</code> if it is blank "
                   "(frames in <code>&lt;name&gt;_frames/</code>)."),
             _grid((self.an_path, 3)),
@@ -118,9 +119,10 @@ class FigureAnimation:
     def _on_anim(self):
         spec = self.collect_all()
         if not fg.animated(spec):
-            self._anim_msg("Animations are made of plan views, cross-sections or 3D "
-                           "scenes (the panels' kind in <b>Panels</b>; in a figure of "
-                           "parts, at least one part of them).", True)
+            self._anim_msg("Time–height plots and time series show every time already, "
+                           "so they have nothing to step (the panels' kind in "
+                           "<b>Panels</b>; in a figure of parts, at least one part of "
+                           "another kind).", True)
             return
         base = config.expand(self.an_path.value.strip() or self.path.value.strip())
         if not base:
@@ -164,8 +166,9 @@ class FigureAnimation:
     def _anim_job(self, g, spec, offsets, base, opts, images=None, missing=0, ends=None,
                   scanned=0):
         """Read the frames from `scanned` on for the colorbar ends of the fills with
-        "auto" ends (`ends`: those of all frames, so every frame has the same), then draw
-        the frames from len(images) on and write the GIF.  When a preview is waiting (an
+        "auto" ends and the scales of the panels that fit their data (`ends`: those of all
+        frames, so every frame has the same), then draw the frames from len(images) on
+        and write the GIF.  When a preview is waiting (an
         edit while the animation is saved) the job puts itself back in the queue after
         the frame it is on, so the preview waits for one frame, not for all of them; the
         frames keep the spec as it was when Save animation was pressed."""
@@ -186,13 +189,14 @@ class FigureAnimation:
                     return
                 self.v._schedule(partial(
                     self._anim_msg, f'<span class="busy">● Reading frame {j + 1}/'
-                                    f'{len(offsets)} for the colorbar ends…</span>'))
+                                    f'{len(offsets)} for the scales…</span>'))
                 s = fg.shift_times(spec, offsets[j])
                 ends = figdraw.fill_ends(s, self.panel_data(s), ends)
                 if self._preview_waiting and j + 1 < len(offsets):
                     self.v.pools["fig"].submit(self._anim_job, g, spec, offsets, base,
                                                opts, images, missing, ends, j + 1)
                     return
+            ends = figdraw.fit_scales(spec, ends)  # (already fitted: stays as it is)
             fdir = base + "_frames"
             name = os.path.basename(base)
             if opts["frames"]:

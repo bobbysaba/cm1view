@@ -9,6 +9,13 @@ OUTDIR/storm_tracks/:
                         grid, plus a weaker second cell 15 km away
   demo/supercell_weak   the same storm with a weak mesocyclone (a tor / ntor pair)
 
+demo/supercell also has parcel output (cm1out_pdata.nc): parcels seeded on a lattice
+around the storm, carried by its winds, written every 60 s (the 3D output is every
+300 s), some leaving the domain.
+
+With --cf the files use the CF-style dimension names of newer CM1 versions (xh/xf, yh/yf,
+zh/zf, heights in "zh") instead of ni/nip1, nj/njp1, nk/nkp1 (heights in "z").
+
 The environment is a Weisman–Klemp sounding with a quarter-circle hodograph. The fields
 are analytic, not a simulation, but they are shaped and named like CM1 output (staggered
 u/v/w, base-state fields, running-max swaths, one horizontal level per chunk), so every
@@ -279,49 +286,66 @@ NAMELIST = """ &param1
 """
 
 
-def _write(path, t, f, swaths, g):
+# dimension names: CM1's own layout, and the CF-style one of newer versions (whose
+# scalar heights are the coordinate "zh", not "z")
+DIMS = dict(ni="ni", nj="nj", nk="nk", nip1="nip1", njp1="njp1", nkp1="nkp1")
+CF_DIMS = dict(ni="xh", nj="yh", nk="zh", nip1="xf", njp1="yf", nkp1="zf")
+
+
+def _write(path, t, f, swaths, g, cf=False):
     import netCDF4
+    D = CF_DIMS if cf else DIMS
     tmp = path + ".part"
     with netCDF4.Dataset(tmp, "w") as d:
         for n, size in (("ni", NI), ("nj", NI), ("nk", NK), ("nip1", NI + 1),
-                        ("njp1", NI + 1), ("nkp1", NK + 1), ("time", 1), ("one", 1)):
-            d.createDimension(n, size)
+                        ("njp1", NI + 1), ("nkp1", NK + 1)):
+            d.createDimension(D[n], size)
+        d.createDimension("time", 1)
+        d.createDimension("one", 1)
         d.setncatts({"cm1 version": "cm1view demo", "x_units": "km", "y_units": "km",
                      "z_units": "km", "nx": NI, "ny": NI, "nz": NK, "imoist": 1,
                      "iorigin": 2, "wbc": 2, "ebc": 2, "sbc": 2, "nbc": 2,
                      "cm1view_demo_version": VERSION})
+        if cf:
+            d.Conventions = "CF-1.7"
         for n, dims, val, ln, un in (
                 ("time", ("time",), [t], "time since beginning of simulation", "seconds"),
-                ("xh", ("ni",), g["xh"], "west-east location of scalar grid points", "km"),
-                ("xf", ("nip1",), g["xf"], "west-east location of staggered u grid points",
+                ("xh", (D["ni"],), g["xh"], "west-east location of scalar grid points",
                  "km"),
-                ("yh", ("nj",), g["xh"], "south-north location of scalar grid points", "km"),
-                ("yf", ("njp1",), g["xf"], "south-north location of staggered v grid points",
+                ("xf", (D["nip1"],), g["xf"],
+                 "west-east location of staggered u grid points", "km"),
+                ("yh", (D["nj"],), g["xh"], "south-north location of scalar grid points",
                  "km"),
-                ("z", ("nk",), g["z"], "nominal height of scalar grid points", "km"),
-                ("zf", ("nkp1",), g["zf"], "nominal height of staggered w grid points", "km"),
+                ("yf", (D["njp1"],), g["xf"],
+                 "south-north location of staggered v grid points", "km"),
+                ("zh" if cf else "z", (D["nk"],), g["z"],
+                 "nominal height of scalar grid points", "km"),
+                ("zf", (D["nkp1"],), g["zf"], "nominal height of staggered w grid points",
+                 "km"),
                 ("ztop", ("one",), [g["zf"][-1]], "model top", "km")):
             v = d.createVariable(n, "f4", dims)
             v.setncatts({"long_name": ln, "units": un})
             v[:] = val
         for n, a in swaths.items():
-            v = d.createVariable(n, "f4", ("time", "nj", "ni"), zlib=True, complevel=1,
-                                 shuffle=True, chunksizes=(1, NI, NI))
+            v = d.createVariable(n, "f4", ("time", D["nj"], D["ni"]), zlib=True,
+                                 complevel=1, shuffle=True, chunksizes=(1, NI, NI))
             v.setncatts(dict(zip(("long_name", "units"), ATTRS[n])))
             v[0] = a
         for n, a in f.items():
             nz = "nkp1" if a.shape[0] == NK + 1 else "nk"
             ny = "njp1" if a.shape[1] == NI + 1 else "nj"
             nx = "nip1" if a.shape[2] == NI + 1 else "ni"
-            v = d.createVariable(n, "f4", ("time", nz, ny, nx), zlib=True, complevel=1,
-                                 shuffle=True, chunksizes=(1, 1, a.shape[1], a.shape[2]))
+            v = d.createVariable(n, "f4", ("time", D[nz], D[ny], D[nx]), zlib=True,
+                                 complevel=1, shuffle=True,
+                                 chunksizes=(1, 1, a.shape[1], a.shape[2]))
             v.setncatts(dict(zip(("long_name", "units"), ATTRS[n])))
             v[0] = a
     os.replace(tmp, path)
 
 
-def write_run(path, vmax, wmax):
-    """One run: namelist.input + one cm1out file per time; returns the track rows."""
+def write_run(path, vmax, wmax, cf=False):
+    """One run: namelist.input + one cm1out file per time; returns the track rows.
+    cf: CF-style dimension names (xh/xf/yh/yf/zh/zf), as newer CM1 versions write."""
     os.makedirs(path, exist_ok=True)
     with open(os.path.join(path, "namelist.input"), "w") as fh:
         fh.write(NAMELIST.format(n=NI, nk=NK, dx=DX * 1000.0, umove=UMOVE, vmove=VMOVE))
@@ -347,12 +371,109 @@ def write_run(path, vmax, wmax):
             run["rain"] = run["rain"] + f["rho"][0] * f["qr"][0] * 5.0 * dt / 10.0
         swaths = {k: run[k] for k in ("rain", "sws", "svs", "sps", "sus", "shs")}
         swaths["cref"] = f["dbz"].max(axis=0)
-        _write(os.path.join(path, f"cm1out_{n + 1:06d}.nc"), t, f, swaths, g)
+        _write(os.path.join(path, f"cm1out_{n + 1:06d}.nc"), t, f, swaths, g, cf)
         if t >= 3600.0:
             (xc, yc), _ = _centres(t)
             ax = xc + 0.25 * 1.0  # updraft axis at 1 km, as the tracking default
             rows.append((t / 60.0, ax, yc + 0.05, STORM[0], STORM[1]))
     return rows
+
+
+# ------------------------------------------------------------------ parcels
+PRCL_TIMES = [3600.0 + 60.0 * n for n in range(41)]  # s: finer than the 3D output
+PRCL_SEEDS = dict(x=(-20.0, 1.0, 21), y=(-16.0, 1.0, 21), z=(0.25, 0.5, 5))  # first, step, n (km)
+PRCL_MISSING = -999999.9
+PRCL_ATTRS = {
+    "x": ("x position", "m"), "y": ("y position", "m"),
+    "z": ("z position (above sea level)", "m"), "u": ("u velocity", "m/s"),
+    "v": ("v velocity", "m/s"), "w": ("w velocity", "m/s"),
+    "th": ("potential temperature", "K"), "prs": ("pressure", "Pa"),
+    "b": ("buoyancy", "m/s/s"),
+    "vpg": ("vertical perturbation pressure gradient", "m/s/s"),
+}
+
+
+def _winds(t, x, y, z, vmax, wmax):
+    """Grid-relative (u, v, w) m/s of the analytic storm at points (km)."""
+    st = Storm(t, vmax, wmax)
+    u0, v0 = hodograph(z)
+    up, vp = st.uv(x, y, z)
+    return u0 - UMOVE + up, v0 - VMOVE + vp, st.w(x, y, z)
+
+
+def _sample(t, x, y, z, vmax, wmax):
+    st = Storm(t, vmax, wmax)
+    u, v, w = _winds(t, x, y, z, vmax, wmax)
+    bs = sounding(z)
+    rho0 = bs["p"] / (RD * bs["th"] * bs["pi"] * (1.0 + bs["qv"] / EPS) / (1.0 + bs["qv"]))
+    th = bs["th"] + st.thp(x, y, z)
+    h = 0.05  # (km: -1/rho0 dp'/dz by centred differences)
+    vpg = -(st.prsp(x, y, z + h, rho0) - st.prsp(x, y, z - h, rho0)) / (2e3 * h * rho0)
+    return dict(x=x * 1000.0, y=y * 1000.0, z=z * 1000.0, u=u, v=v, w=w, th=th,
+                prs=bs["p"] + st.prsp(x, y, z, rho0), b=G * (th - bs["th"]) / bs["th"],
+                vpg=vpg)
+
+
+def parcels(vmax, wmax):
+    """Parcels seeded on a lattice at the first parcel time (x fastest, then y, then z,
+    as CM1 numbers them) and carried by the analytic grid-relative winds (RK2, 10 s
+    steps): {name: (nt, n)} in CM1's units.  A parcel that leaves the domain is -1e30
+    from then on, as CM1 writes it; one value is the file's missing_value."""
+    ax = [x0 + d * np.arange(n) for x0, d, n in PRCL_SEEDS.values()]
+    Z, Y, X = np.meshgrid(ax[2], ax[1], ax[0], indexing="ij")
+    x, y, z = X.ravel(), Y.ravel(), Z.ravel()
+    g = grid()
+    lo, hi, top = g["xf"][0], g["xf"][-1], g["zf"][-1]
+    gone = np.zeros(x.size, dtype=bool)
+    out = {k: [] for k in PRCL_ATTRS}
+    sub = 6
+    for n, t in enumerate(PRCL_TIMES):
+        if n:
+            dt = (t - PRCL_TIMES[n - 1]) / sub
+            for s in range(sub):
+                ts = PRCL_TIMES[n - 1] + s * dt
+                u, v, w = _winds(ts, x, y, z, vmax, wmax)
+                xm, ym = x + 0.5e-3 * dt * u, y + 0.5e-3 * dt * v
+                zm = np.clip(z + 0.5e-3 * dt * w, 0.01, top - 0.01)
+                u, v, w = _winds(ts + 0.5 * dt, xm, ym, zm, vmax, wmax)
+                x, y = x + 1e-3 * dt * u, y + 1e-3 * dt * v
+                z = np.clip(z + 1e-3 * dt * w, 0.01, top - 0.01)
+            gone |= (x < lo) | (x > hi) | (y < lo) | (y > hi)
+        for k, a in _sample(t, x, y, z, vmax, wmax).items():
+            out[k].append(np.where(gone, -1e30, a))
+    out = {k: np.array(a, dtype=np.float32) for k, a in out.items()}
+    out["th"][2, 0] = PRCL_MISSING
+    return out
+
+
+def write_parcels(path, vmax, wmax):
+    """cm1out_pdata.nc in CM1's parcel layout (dimension xh = parcel number)."""
+    import netCDF4
+    p = parcels(vmax, wmax)
+    nt, n = p["x"].shape
+    out = os.path.join(path, "cm1out_pdata.nc")
+    tmp = out + ".part"
+    with netCDF4.Dataset(tmp, "w") as d:
+        d.createDimension("xh", n)
+        d.createDimension("yh", 1)
+        d.createDimension("zh", 1)
+        d.createDimension("time", None)
+        d.setncatts({"CM1 version": "cm1view demo", "Conventions": "CF-1.7",
+                     "missing_value": np.float32(PRCL_MISSING)})
+        for name, dims, val, ln, un in (
+                ("xh", ("xh",), np.arange(1, n + 1), "parcel ID number", ""),
+                ("yh", ("yh",), [0.0], "south-north location", "degree_north"),
+                ("zh", ("zh",), [0.0], "height", "m"),
+                ("time", ("time",), PRCL_TIMES, "time", "seconds")):
+            v = d.createVariable(name, "f4", dims)
+            v.setncatts({"long_name": ln, "units": un})
+            v[:] = val
+        for name, (ln, un) in PRCL_ATTRS.items():
+            v = d.createVariable(name, "f4", ("time", "xh"))
+            v.setncatts({"long_name": ln, "units": un})
+            v[:] = p[name]
+    os.replace(tmp, out)
+    return out
 
 
 def is_demo(run_path):
@@ -361,31 +482,33 @@ def is_demo(run_path):
     return os.path.exists(os.path.join(root, ".cm1view-demo"))
 
 
-def _stamp():
+def _stamp(cf=False):
     src = open(os.path.abspath(__file__), "rb").read()
-    return f"{VERSION} {hashlib.sha1(src).hexdigest()[:12]}"
+    return f"{VERSION} {hashlib.sha1(src).hexdigest()[:12]}" + (" cf" if cf else "")
 
 
-def make(root, force=False):
+def make(root, force=False, cf=False):
     """Write the demo runs under root (skipped when an up-to-date copy is there);
-    returns the path of the main run."""
+    returns the path of the main run.  cf: CF-style dimension names."""
     root = os.path.abspath(os.path.expanduser(root))
     stamp_file = os.path.join(root, ".cm1view-demo")
     main = os.path.join(root, "demo", "supercell")
     try:
-        if not force and open(stamp_file).read().strip() == _stamp():
+        if not force and open(stamp_file).read().strip() == _stamp(cf):
             return main
     except OSError:
         pass
     os.makedirs(os.path.join(root, "storm_tracks"), exist_ok=True)
     for name, kw in RUNS.items():
-        rows = write_run(os.path.join(root, "demo", name), **kw)
+        rows = write_run(os.path.join(root, "demo", name), cf=cf, **kw)
+        if name == "supercell":
+            write_parcels(os.path.join(root, "demo", name), **kw)
         with open(os.path.join(root, "storm_tracks", f"demo_{name}.csv"), "w") as fh:
             fh.write("time,loc_x,loc_y,storm_u,storm_v\n")
             for r in rows:
                 fh.write(",".join(f"{x:.4f}" for x in r) + "\n")
     with open(stamp_file, "w") as fh:
-        fh.write(_stamp() + "\n")
+        fh.write(_stamp(cf) + "\n")
     return main
 
 
@@ -394,8 +517,10 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("outdir", help="folder to write demo/ and storm_tracks/ into")
     ap.add_argument("--force", action="store_true", help="rewrite even if up to date")
+    ap.add_argument("--cf", action="store_true",
+                    help="CF-style dimension names (xh/xf/yh/yf/zh/zf), as newer CM1 writes")
     a = ap.parse_args(argv)
-    print(make(a.outdir, a.force))
+    print(make(a.outdir, a.force, a.cf))
 
 
 if __name__ == "__main__":

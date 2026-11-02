@@ -12,7 +12,8 @@ and prints it. Use `--port` or the `port` setting to choose.
 
 **`no cm1out_[0-9]*.nc files found in …`.** The folder holds no output that matches the
 `output_glob` setting (default `cm1out_[0-9]*.nc`). cm1view reads `output_format = 2`
-(one time per file). If your files have another name, change `output_glob` in
+(one time per file), with either CM1's own dimension names (`ni`, `nip1`, …) or the
+CF-style ones of newer versions (`xh`, `xf`, …). If your files have another name, change `output_glob` in
 [Settings](../settings.md).
 
 **The run picker finds no runs.** It looks under *Where your runs live* (`runs_root`) and

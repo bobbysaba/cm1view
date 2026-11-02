@@ -3,7 +3,9 @@
     cm1view render FIGURE [--run PATH ...] [options]   draws a saved figure or template
                                                       without the viewer (cm1view render -h)
     cm1view export RUN --fields A,B [options]         writes fields to netCDF without the
-                                                      viewer (cm1view export -h)"""
+                                                      viewer (cm1view export -h)
+    cm1view export RUN --parcels SET [options]        writes a saved parcel set's
+                                                      trajectories to netCDF or CSV"""
 
 import argparse
 import os

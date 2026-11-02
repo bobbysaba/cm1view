@@ -21,7 +21,7 @@ import traceback
 from collections import OrderedDict
 
 from . import draw as figdraw, spec as fg
-from ..core import series as ser, track as trk
+from ..core import parcels as P, series as ser, track as trk
 from ..core.fields import Fields
 from ..core.run import CM1Run, FileBusy, MissingAtTime
 
@@ -153,7 +153,7 @@ class FigureData:
             key = fg.data_key(s, i, c, run.path)
             lays = figdraw.spec_layers(s, i)
             if any(lay["type"] in ("track", "sector") or (lay.get("reduce") or {}).get(
-                    "op") == "composite" for lay in lays) or \
+                    "op") == "composite" for lay in lays) or fg.parcels_follow_track(lays) or \
                     (s["kind"] == "xsec" and fg.uses_motion(fg.panel_section(s, i)[1])) or \
                     (any(lay["type"] == "line" for lay in lays)
                      and any(fg.uses_motion(x) for x in fg.sections(s))):
@@ -303,6 +303,27 @@ class FigureData:
         if self.series_pool is not None:
             self.on_series()
 
+    def parcel_series_get(self, spec, e):
+        """(ParcelFile, (nt, n) values of its variable) of parcel series e of spec, or
+        why not (a string)."""
+        runs, ent = spec["runs"], spec["series"][e]
+        k = int((ent.get("runs") or [0])[0])
+        if not 0 <= k < len(runs):
+            return "its run is not in the figure"
+        try:
+            run, F = self.open_run(runs[k]["path"])
+        except Exception as ex:  # noqa: BLE001
+            return f"could not open {runs[k]['path']}: {ex}"
+        pf, var = P.for_run(run, F), ent.get("var") or ""
+        if pf is None:
+            return "no parcel output in this run"
+        if not pf.has(var):
+            return f"no parcel {var or 'variable'} in this run"
+        ps = P.chosen(pf, ent.get("rule"), ent.get("ids"), ent.get("name") or "parcels")
+        if not len(ps):
+            return f"parcels {ent.get('name') or ''}: none chosen".replace("  ", " ")
+        return pf, pf.trajectories(ps, (var,))[var]
+
     def series_pending(self):
         return [v for k, v in self.ser_prog.items() if self.ser_state.get(k) == "running"] \
             or [""] * sum(v == "running" for v in self.ser_state.values())
@@ -315,6 +336,9 @@ class FigureData:
                 got[(k, e)] = self.series_get(spec, k, e, cancelled)
             return None if isinstance(got[(k, e)], str) else got[(k, e)]
 
+        def pget(e):
+            return self.parcel_series_get(spec, e)
+
         data, multi = {}, len(spec["runs"]) > 1
         busy = bool(self.series_pending())
         for i in range(fg.npanels(spec)):
@@ -324,12 +348,12 @@ class FigureData:
                     continue
                 r = get(*ref)
                 d = (dict(missing=got[ref]) if r is None else
-                     fg.th_panel(r[0], r[1], spec["series"][ref[1]], spec))
+                     fg.th_panel(r[0], r[1], spec["series"][ref[1]], spec, ref[0]))
                 d["run"] = ref[0]
                 if multi:
                     d["run_label"] = fg.run_folder(spec, ref[0])
             else:
-                d = fg.line_panel(spec, i, get)
+                d = fg.line_panel(spec, i, get, pget)
             if busy and d.get("missing") == "not computed yet":
                 d["missing"] = "computing…"
             data[i] = d
@@ -407,7 +431,7 @@ class FigureData:
                              sort_keys=True)
             r = self._kept(self.snd_cache, key, 40, note=note, compute=lambda:
                            fg.sounding_column(run, ent, fx, storm=storm))
-            labels[e] = fg.sounding_label(ent, rs.get("label", ""), run, multi)
+            labels[e] = fg.sounding_label(fg.since_t0(spec, ent), rs.get("label", ""), run, multi)
             return r
 
         return self._entries(spec, "soundings", entry, lambda i, get: fg.sounding_panel(
@@ -428,8 +452,8 @@ class FigureData:
                               track_sig(fx) if track else ""], sort_keys=True)
             res = self._kept(self.dist_cache, key, 60, note=note, compute=lambda:
                            fg.dist_compute(run, F, ent, fx))
-            times = self._times_vary(ents, ent, lambda x: round(float(x["time_s"]), 1))
-            labels[e] = fg.dist_label(ent, rs.get("label", ""), F, multi, times)
+            times = self._times_vary(ents, ent, lambda x: fg.time_key(spec, x))
+            labels[e] = fg.dist_label(fg.since_t0(spec, ent), rs.get("label", ""), F, multi, times)
             vlabs[e] = fg.profile_value_label(F, ent)
             return res
 
@@ -455,9 +479,8 @@ class FigureData:
                            fg.joint_compute(run, F, ent, fx, cancelled))
             if res is None:  # (stopped for a newer preview: not kept)
                 return "cancelled"
-            times = self._times_vary(ents, ent, lambda x: (round(float(x["time_s"]), 1),
-                                                           x.get("time_s1")))
-            labels[e] = fg.joint_label(ent, rs.get("label", ""), F, multi, times)
+            times = self._times_vary(ents, ent, lambda x: fg.time_key(spec, x))
+            labels[e] = fg.joint_label(fg.since_t0(spec, ent), rs.get("label", ""), F, multi, times)
             axlabs[e] = (fg.dist_value_label(F, r["field"]),
                          fg.dist_value_label(F, r["yfield"]))
             return res
@@ -469,7 +492,8 @@ class FigureData:
     def _scene_data(self, spec, cancelled=None):
         """{0: arrays} of a 3D scene figure; kept (scene_cache) by what they depend on
         (scene_key), so camera and look changes only render again, and an isosurface
-        edit keeps the traced streamlines (st_cache)."""
+        edit keeps the traced streamlines (st_cache); the parcel sets' arrays are kept
+        apart (scene_parcel_key), so changing them computes no surfaces again."""
         runs, k = spec["runs"], int(spec.get("run", 0))
         ts = float(spec["time_s"])
         if k >= len(runs):
@@ -484,14 +508,22 @@ class FigureData:
                     if total:
                         self.note(f"Loading 3D fields ({done}/{total}) {name}…")
 
-                d = fg.scene_extract(run, F, spec, fx, prog, cancelled, self.st_cache)
+                d = fg.scene_extract(run, F, spec, fx, prog, cancelled, self.st_cache,
+                                     parcels=False)
                 if d is None:  # (stopped for a newer preview)
                     return None
-                self.scene_cache[key] = d
-                while len(self.scene_cache) > 6:  # (meshes are large)
-                    self.scene_cache.popitem(last=False)
+                self._scene_keep(key, d)
             else:
                 self.scene_cache.move_to_end(key)
+            if fg.scene3d_of(spec)["parcels"]:
+                pkey = fg.scene_parcel_key(spec, run.path, d, track_sig(fx))
+                p = self.scene_cache.get(pkey)
+                if p is None:
+                    p = fg.scene_parcels(run, spec, d, fx)
+                    self._scene_keep(pkey, p)
+                else:
+                    self.scene_cache.move_to_end(pkey)
+                d = fg.with_scene_parcels(d, p)
         except (MissingAtTime, FileBusy) as ex:
             d = dict(time_s=ts, missing=str(ex))
         except Exception as ex:  # noqa: BLE001
@@ -501,6 +533,11 @@ class FigureData:
         if len(runs) > 1:
             out["run_label"] = runs[k].get("label", "")
         return {0: out}
+
+    def _scene_keep(self, key, d):
+        self.scene_cache[key] = d
+        while len(self.scene_cache) > 8:  # (meshes are large)
+            self.scene_cache.popitem(last=False)
 
     def _azim_data(self, spec, progress=None, cancelled=None):
         """{panel: arrays} of an azimuthal mean figure; the results are kept
@@ -519,9 +556,8 @@ class FigureData:
                            fg.azim_compute(run, F, ent, fx, cancelled))
             if res is None:  # (stopped for a newer preview: not kept)
                 return "cancelled"
-            times = self._times_vary(ents, ent, lambda x: (round(float(x["time_s"]), 1),
-                                                           x.get("time_s1")))
-            labels[e] = fg.azim_label(ent, rs.get("label", ""), F, multi, times)
+            times = self._times_vary(ents, ent, lambda x: fg.time_key(spec, x))
+            labels[e] = fg.azim_label(fg.since_t0(spec, ent), rs.get("label", ""), F, multi, times)
             cbl[e] = fg.dist_value_label(F, r["field"])
             d = F[r["field"]] if r["field"] in F else None
             look[e] = (d.cmap, d.diverging) if d is not None else ("viridis", False)
@@ -549,12 +585,13 @@ class FigureData:
                 return res[e, k]
             try:
                 n = sum(len(fg.profile_runs(x, len(runs))) for x in ents)
-                res[e, k] = self.profile_get(runs[k], ent, len(res), n, progress, cancelled)
+                res[e, k] = self.profile_get(runs[k], fg.entry_at(spec, ent, k), len(res), n,
+                                             progress, cancelled)
                 run, F = self.open_run(runs[k]["path"])
-                times = self._times_vary(ents, ent, lambda x: (round(float(x["time_s"]), 1),
-                                                               x.get("time_s1")))
-                labels[e, k] = fg.profile_label(ent, runs[k].get("label", ""), F, multi, times)
-                labels.setdefault((e, -1), fg.profile_label(ent, "", F, False, times))
+                times = self._times_vary(ents, ent, lambda x: fg.time_key(spec, x))
+                lab = fg.since_t0(spec, ent)
+                labels[e, k] = fg.profile_label(lab, runs[k].get("label", ""), F, multi, times)
+                labels.setdefault((e, -1), fg.profile_label(lab, "", F, False, times))
                 vlabs[e] = fg.profile_value_label(F, ent)
             except Exception as ex:  # noqa: BLE001
                 traceback.print_exc()

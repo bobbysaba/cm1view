@@ -13,6 +13,7 @@ from .. import config, registry
 from . import draw as figdraw, spec as fg
 from ..core.fields import GROUP_ORDER, deriv_def, split_deriv
 from .cards import CARD, _hex, _row
+from .cards.base import _f
 from ..viewer.ui import held
 
 
@@ -76,6 +77,12 @@ class FigureRuns:
         r["color"] = pn.widgets.ColorPicker(
             name="Colour", width=70, value=_hex(e.get("color") or
                                                  figdraw.RUN_COLORS[k % len(figdraw.RUN_COLORS)]))
+        r["t0"] = _f("Time zero (min)", float(e.get("t0_min") or 0.0), 110, step=1.0,
+                     description="The model time this run counts from, e.g. its initiation: "
+                                 "panels of several runs show them at the same time since "
+                                 "their time zeros, time series and time–height panels count "
+                                 "this run's times from it, and so do time labels and legends "
+                                 "(0: model time)")
         r["rm"] = pn.widgets.Button(name="✕", description="Remove the run", width=32, height=28,
                                     margin=(2, 1), button_type="default", button_style="outline")
         r["info"] = pn.pane.HTML(margin=(0, 4))
@@ -93,25 +100,83 @@ class FigureRuns:
                 c.refresh_tracks()
             self.request()
 
+        def on_t0(ev):
+            if self._hold:
+                return
+            if self.time_match.value != "output":  # (else it doesn't pair the runs)
+                self._t0_moved_cards(r, ev.old, ev.new)
+            self._times_changed()
+
         r["label"].param.watch(on_label, "value")
+        r["t0"].param.watch(on_t0, "value")
         r["tab"].param.watch(on_track, "value")
         r["track"].param.watch(on_track, "value")
         r["color"].param.watch(lambda ev: self.request(), "value")
         r["rm"].on_click(lambda ev: self._remove_run(r))
         r["panel"] = pn.Column(
             pn.Row(r["head"], pn.Spacer(), r["rm"], margin=0, sizing_mode="stretch_width"),
-            _row(r["label"], r["color"], r["tab"], r["track"]), r["info"],
+            _row(r["label"], r["color"], r["t0"], r["tab"], r["track"]), r["info"],
             styles=CARD,
             sizing_mode="stretch_width", margin=(2, 0))
         self._run_info(r)
         return r
 
+    def _times_changed(self):
+        """How the runs line up changed: what shows the times it moved."""
+        if self._uses("runs"):  # (which times every run has)
+            self._build_times()
+        for c in getattr(self, "ser_cards", []) + getattr(self, "prof_cards", []):
+            if hasattr(c, "vals"):  # (their Values: at the times moved)
+                c.vals.refresh()
+            if hasattr(c, "time_note"):
+                c.time_note()
+        self.request()
+
+    def _on_time_match(self, ev):
+        """Runs lined up by time zero or output number: picked times stay as they are."""
+        if self._hold:
+            return
+        self._show_time_match()
+        self._times_changed()
+
+    def _show_time_match(self):
+        """Only the first run's time zero counts when runs pair by output number."""
+        self.time_match.visible = len(self.run_rows) > 1
+        by_output = self.time_match.value == "output"
+        for k, r in enumerate(self.run_rows):
+            r["t0"].disabled = by_output and k > 0
+
     def _run_entry(self, r):
         tr = "viewer" if r["tab"].visible and r["tab"].value else r["track"].value.strip()
-        return dict(path=r["path"], label=r["label"].value, track=tr, color=r["color"].value)
+        e = dict(path=r["path"], label=r["label"].value, track=tr, color=r["color"].value)
+        if self.time_match.value == "output":
+            try:
+                e["outputs_s"] = [float(t) for t in self.open_run(r["path"])[0].times]
+            except Exception:  # noqa: BLE001  (its row says why)
+                pass
+        return dict(e, t0_min=float(r["t0"].value)) if r["t0"].value else e
 
     def _runs_collect(self):
         return [self._run_entry(r) for r in self.run_rows]
+
+    def _t0_moved_cards(self, r, old, new):
+        """Cards with times of their own (sections, soundings, distributions, profiles,
+        joint distributions, azimuthal means) keep their place in time when run row r's
+        time zero goes from old to new (min): in each list, measured from the first
+        card's run, whose cards stay."""
+        if r not in self.run_rows:
+            return
+        k = self.run_rows.index(r)
+        dt = 60.0 * (float(new or 0.0) - float(old or 0.0))
+        for key in ("sec_cards", "snd_cards", "dist_cards", "prof_cards", "joint_cards",
+                    "azim_cards"):
+            cards = [c for c in getattr(self, key, []) if hasattr(c, "move_time")
+                     and isinstance(c._time_run(), int) and c.w["time"].value is not None]
+            first = cards[0]._time_run() if cards else None
+            for c in cards:
+                j = c._time_run()
+                if j != first and (k == first or j == k):
+                    c.move_time(-dt if k == first else dt)
 
     def _run_info(self, r):
         k = self.run_rows.index(r) if r in self.run_rows else len(self.run_rows)
@@ -162,6 +227,7 @@ class FigureRuns:
             r["rm"].visible = len(self.run_rows) > 1
             self._run_info(r)
         self.runs_box.objects = [r["panel"] for r in self.run_rows]
+        self._show_time_match()
         self._show_sections()
         self._find_runs()
         self._refresh_run_names()
@@ -478,5 +544,5 @@ class FigureRuns:
     def _runs_msg(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""
         self.runs_msg.object = f'<div class="cv-status"{col}>{html}</div>'
-        if self.kind.value in ("th", "line"):  # (Runs used hidden: the editor's line)
+        if self.kind.value in ("th", "line"):  # (Runs used is below the cards: the editor's line)
             self._msg(html, err)

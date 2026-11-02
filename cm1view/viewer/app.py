@@ -2,7 +2,7 @@
 
 The Viewer is assembled from mixins, one module each: widgets (the drawers' controls),
 mapview (the map and its job), layout (the page), events (time, tools, map clicks),
-sounding, tracking, series, dist, xsec, view3d (3D, pressure decomposition,
+sounding, tracking, series, dist, parcels, xsec, view3d (3D, pressure decomposition,
 streamline pick), items (the items tray), diff (differences) and session (session
 files).  This module builds it, wires the
 events and makes the page; shared UI pieces are in ui.py, the Figure workspace in
@@ -33,14 +33,15 @@ from .sounding import SoundingPanel
 from .series import SeriesPanel
 from .session import Sessions
 from .session import read as read_session
+from .parcels import ParcelsPanel
 from .tracking import TrackPanel
 from .view3d import View3DPanel
 from .xsec import SectionPanel
 
 
 class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, SeriesPanel,
-             DistPanel, SectionPanel, View3DPanel, ItemsTray, Differences, Sessions,
-             DataExport):
+             DistPanel, ParcelsPanel, SectionPanel, View3DPanel, ItemsTray, Differences,
+             Sessions, DataExport):
     def __init__(self, run, fields, maxpix=900, error="", reg=None):
         self.run, self.F = run, fields
         self.reg = reg  # the shared runs (figures with panels from other runs)
@@ -49,7 +50,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.doc = pn.state.curdoc
         self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
                       for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser", "dist",
-                            "fig", "exp")}
+                            "fig", "exp", "par", "pexp")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
@@ -70,6 +71,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self._build_track()
         self._build_series()
         self._build_dist()
+        self._build_parcels()
         self._build_panels()
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
         self.figed = figui.FigureEditor(self)

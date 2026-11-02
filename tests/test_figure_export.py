@@ -109,10 +109,104 @@ def test_animation_saves_at_gif_path_or_save_as(ed, tmp_path, monkeypatch):
     assert asked[-1] == [str(tmp_path / "fig.gif"), str(tmp_path / "fig_frames")]
 
 
-def test_animation_needs_plan_or_section(ed):
-    ed.from_soundings()
+def test_animation_needs_panels_that_step(ed):
+    ed.from_series()
     ed._on_anim()
-    assert "plan views, cross-sections or 3D scenes" in txt(ed.an_msg.object)
+    assert "nothing to step" in txt(ed.an_msg.object)
+
+
+@pytest.mark.parametrize("kind", ["dist", "profile", "joint", "azim"])
+def test_animation_of_entry_figures(ed, demo_root, tmp_path, kind):
+    import os
+    from PIL import Image
+    ed.kind.value = kind
+    spec = ed.collect_all()
+    assert fg.animated(spec)
+    for e in spec["runs"]:  # (profiles and azimuthal means start on the storm's track)
+        name = os.path.basename(e["path"].rstrip("/"))
+        e["track"] = os.path.join(demo_root, "storm_tracks", f"demo_{name}.csv")
+    ed.an_step.value, ed.an_end.value = 2, None
+    offsets = ed._anim_offsets(spec)[:2]
+    assert len(offsets) == 2
+    base = str(tmp_path / kind)
+    ed._anim_job(ed._anim_gen, spec, offsets, base,
+                 dict(fps=5.0, dpi=40, loop=True, frames=False))
+    msg = txt(ed.an_msg.object)
+    assert "Saved" in msg and "empty panel" not in msg, msg
+    assert Image.open(base + ".gif").n_frames == 2
+
+
+@pytest.mark.parametrize("kind", ["dist", "profile", "joint", "azim"])
+def test_animation_scales_are_those_of_all_frames(ed, demo_root, kind):
+    import os
+    from cm1view.figures import draw as figdraw
+    ed.kind.value = kind
+    spec = ed.collect_all()
+    for e in spec["runs"]:
+        name = os.path.basename(e["path"].rstrip("/"))
+        e["track"] = os.path.join(demo_root, "storm_tracks", f"demo_{name}.csv")
+    offsets = ed._anim_offsets(spec)
+    ends = {}
+    for dt in offsets:
+        s = fg.shift_times(spec, dt)
+        ends = figdraw.fill_ends(s, ed.panel_data(s), ends)
+    ends = figdraw.fit_scales(spec, ends)
+    assert figdraw.fit_scales(spec, ends) == ends  # (fitted once: as it is)
+    seen = set()
+    for dt in (offsets[0], offsets[-1]):
+        s = fg.shift_times(spec, dt)
+        ax = figdraw.draw(s, ed.panel_data(s), ends)._cv_axes[0]
+        clim = ax.collections[0].get_clim() if kind in ("joint", "azim") else None
+        seen.add((ax.get_xlim(), ax.get_ylim() if kind != "profile" else None, clim))
+    assert len(seen) == 1
+
+
+def test_animation_scales_keep_limits_set_by_hand(ed):
+    from cm1view.figures import draw as figdraw
+    ed.kind.value = "dist"
+    ed.ds["xmin"].value = -1.0
+    spec = ed.collect_all()
+    s = fg.shift_times(spec, 0.0)
+    ends = figdraw.fit_scales(spec, figdraw.fill_ends(s, ed.panel_data(s)))
+    fit = next(v["dist"] for k, v in ends.items() if k[1] == "opts")
+    assert "xmin" not in fit and "xmax" in fit
+
+
+def test_animation_frames_stop_where_a_panel_runs_out():
+    class Run:
+        def __init__(self, n):
+            self.times = np.arange(n) * 60.0
+
+    runs = [dict(path="/long"), dict(path="/short")]
+    long_run = {"/long": Run(11), "/short": Run(6)}
+    prof = dict(kind="profile", runs=runs, profiles=[
+        dict(run=0, runs=[0, 1], time_s=0.0, time_s1=None, panel=0)])
+    assert fg.frame_offsets(prof, long_run)[-1] == 300.0  # (every run of a profile)
+    prof["profiles"][0]["runs"] = None  # (None: all of them)
+    assert fg.frame_offsets(prof, long_run)[-1] == 300.0
+    # a time window stays whole: its length is kept to the end of the run
+    prof["profiles"][0].update(runs=[0], time_s1=120.0)
+    assert fg.frame_offsets(prof, long_run)[-1] == 480.0
+    table = dict(kind="profile", runs=runs, profiles=[
+        dict(source="table", run=0, runs=[], time_s=0.0, panel=0)])
+    assert fg.time_refs(table) == [] and fg.frame_offsets(table, long_run) == []
+
+
+@pytest.mark.parametrize("layout", ["inset", "hodo"])
+def test_animation_of_soundings(ed, tmp_path, layout):
+    from PIL import Image
+    ed.from_soundings()
+    ed.sk["layout"].value = layout
+    spec = ed.collect_all()
+    assert fg.animated(spec)
+    ed.an_step.value, ed.an_end.value = 2, None
+    offsets = ed._anim_offsets(spec)[:2]
+    assert len(offsets) == 2
+    base = str(tmp_path / layout)
+    ed._anim_job(ed._anim_gen, spec, offsets, base,
+                 dict(fps=5.0, dpi=40, loop=True, frames=False))
+    assert "Saved" in txt(ed.an_msg.object), ed.an_msg.object
+    assert Image.open(base + ".gif").n_frames == 2
 
 
 def test_stopped_animation_saves_nothing(ed, tmp_path):

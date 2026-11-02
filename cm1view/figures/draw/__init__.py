@@ -21,7 +21,8 @@ data: {panel index: {name: array}} with, per panel,
                 cross-section lines (plan views; older data: line [xa, ya, xb, yb])
   sector        [x, y, bearing] centre of a Sector layer (track centres; nan: none) and
                 the storm motion's direction (deg clockwise from north) (plan views)
-  time_s        model time (s)
+  time_s        model time (s; labelled from spec["runs"][run]["t0_min"], the run's time zero)
+  time_match    "output": runs paired by output number, each with its "outputs_s" (output_times)
   run           index of the panel's run in spec["runs"] (its colour: tracks, run names)
   run_label     name of the panel's run (figures with panels from several runs)
   missing       reason the panel has no data (a string), if any
@@ -78,8 +79,11 @@ figures of parts (kind "combo"): part k's panel i under k * 1000 + i
 
 Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts):
   the figure's own settings (size, fonts, colorbar, labels, axes, skewt, ts, ...),
-  blocks   [{rows, cols, share, size, opts}]: grids of panels side by side (arrange
-           "row") or stacked ("col"); opts: settings of the block's own
+  blocks   [{rows, cols, share, place, size, opts}]: grids of panels side by side
+           (arrange "row"), stacked ("col") or anywhere on a grid of their own (arrange
+           "grid": spec["part_grid"] {rows, cols, widths, heights}, each block's place
+           [row, col, rowspan, colspan]; base.grid_layout); opts: settings of the
+           block's own
   panels   [{id, block, cell [row, col, rowspan, colspan], kind (plan, xsec, th, line,
            sounding, dist, profile, joint, azim), run, time_s, z, zmode, title,
            rowlabel (left of the panel: its row's label), letter, opts,

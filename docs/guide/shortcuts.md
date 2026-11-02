@@ -30,6 +30,8 @@
 | Section | Click A, then B | Draw the section; a third click starts a new one. |
 | Track (auto) | Click a storm | Track it; click near the track at another time to correct it. |
 | Track (by hand) | Click | Set the fix at the shown time (and step on). |
+| Parcels (click a point) | Click | The parcels within the radius become a set. |
+| Parcels (drag a box) | Drag | The parcels inside the box become a set. |
 | 3D box | Drag | Choose the region and open the 3D workspace. |
 | 3D box → Seed box | Drag | Seeds for the 3D streamlines, inside the region. |
 

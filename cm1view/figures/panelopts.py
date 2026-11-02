@@ -368,11 +368,10 @@ class FigurePanelOpts:
         self.equal.visible = kind == "plan"
         for k in ("track", "line", "sector"):  # plan views only
             self.add_btns[k].visible = kind == "plan"
+        self.add_btns["parcels"].visible = kind in ("plan", "xsec") and self.v.pf is not None
         for c in self.cards:
             c.show(kind)
             c._set_title()
-        if hasattr(self, "runs_sec"):  # (series: the cards pick runs and tracks)
-            self.runs_sec.visible = kind not in ("th", "line")
         self._show_sections()
         self._show_region()
 
@@ -700,7 +699,8 @@ class FigurePanelOpts:
             while p in taken:
                 p += 1
             taken.add(p)
-            new.append(dict(s, run=k, panel=p))  # (its time: the run's nearest)
+            new.append(dict(s, run=k, panel=p, time_s=None if s["time_s"] is None else
+                            self._moved_time(s["time_s"], s["run"], k)))  # (the run's nearest)
         if not new:
             self._msg("Every run has this section already.", True)
             return
@@ -866,5 +866,6 @@ class FigurePanelOpts:
             words.append(f"k = {int(round(z))}" if s.get("panel_zmode") == "level"
                          else f"{z:g} km")
         if times and not words and cell.get("time_s") is not None:
-            words.append(figdraw.time_text(float(cell["time_s"]), s["time_label"]))
+            ts = float(cell["time_s"])
+            words.append(figdraw.time_text(ts, figdraw.run_time_opts(s, figdraw.time_run(s), ts)))
         return " – ".join(words)

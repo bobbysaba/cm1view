@@ -1,7 +1,8 @@
 """netCDF export of fields: a box of the domain, some output times, any fields the
 viewer shows (native, derived, derivatives, column fields) on the model levels or at
 heights, written one time after another to a CF-style file.  Used by the viewer's
-Export data dialog and by `cm1view export` (no Panel / Bokeh here)."""
+Export data dialog and by `cm1view export` (no Panel / Bokeh here).  `cm1view export
+RUN --parcels SET` writes a saved parcel set instead (core/parcels.py, export_set)."""
 
 import datetime
 import os
@@ -106,6 +107,8 @@ def _coord_attrs(run, name, extra):
     a = {}
     try:
         with IO_LOCK, netCDF4.Dataset(run.files[0]) as d:
+            if name == "z" and "z" not in d.variables:  # (CF-style output: "zh")
+                name = "zh"
             if name in d.variables:
                 v = d[name]
                 a = {k: v.getncattr(k) for k in v.ncattrs() if k in ("long_name", "units")}
@@ -351,6 +354,17 @@ def parser():
                     help="no zlib compression (larger, quicker to write)")
     ap.add_argument("--overwrite", action="store_true",
                     help="replace the file if it is there (default: stop)")
+    ap.add_argument("--parcels", default=None, metavar="SET",
+                    help="write a saved parcel set's trajectories instead (its name, as "
+                         "--list --parcels . shows, or an .npz file): --fields are then "
+                         "parcel variables (default: all; @FIELD: a 3D field at the "
+                         "parcels), times are parcel times, .csv --out writes CSV")
+    ap.add_argument("--csv", action="store_true",
+                    help="with --parcels: CSV instead of netCDF")
+    ap.add_argument("--relative", type=float, default=None, metavar="MIN",
+                    help="with --parcels: also x_sr, y_sr, the positions in a frame moving "
+                         "with the storm (--storm U,V, else the --track), the same as x, "
+                         "y at this model time (min)")
     ap.add_argument("--config", default=None, help="settings file")
     ap.add_argument("--cache-gb", type=float, default=None,
                     help="memory budget for cached 3D fields")
@@ -385,6 +399,8 @@ def main(argv=None):
     except (OSError, ValueError) as e:
         return fail(str(e))
     F = Fields(run)
+    if args.parcels is not None:
+        return _parcels_main(args, run, F, fail)
     if args.list:
         for g, items in F.groups().items():
             print(f"{g}:")
@@ -436,4 +452,99 @@ def main(argv=None):
         print(f"cm1view export: note: {n} is not in the output at {len(ts)} time(s) "
               "(NaN there)", flush=True)
     print(f"cm1view export: saved {r['path']} [{_time.time() - t0:.1f}s]", flush=True)
+    return 0
+
+
+def _parcel_frame(run, pf, args):
+    """(shift, frame text) of --relative: moving at --storm, else with the --track."""
+    from . import parcels as P, track as trk
+    t_ref = 60.0 * float(args.relative)
+    if args.storm is not None:
+        how, motion, fixes = "motion", tuple(_floats(args.storm, 2, "--storm")), None
+    else:
+        path = None if args.track == "none" else \
+            config.find_track(run.path) if args.track == "auto" else config.expand(args.track)
+        if not path:
+            raise ValueError("--relative needs --storm U,V or a storm track (--track)")
+        how, motion, fixes = "track", None, trk.load(run, path)
+    shift = P.frame_shift(pf, run, t_ref, how, motion, fixes)
+    if shift is None:
+        raise ValueError("--relative: the frame does not move across the grid (a track of "
+                         "fewer than two fixes, or the storm motion is the grid's)")
+    return shift, f"{P.frame_label(how, motion)}, the same as x, y at {t_ref:g} s"
+
+
+def _parcels_main(args, run, F, fail):
+    """cm1view export RUN --parcels SET: a saved parcel set to netCDF / CSV."""
+    import sys
+    import time as _time
+    from . import parcels as P
+    pf = P.for_run(run, F)
+    if pf is None:
+        return fail(f"no parcel output in {run.path} (parcel_glob setting)")
+    if args.list:
+        print("parcel variables:")
+        for n in pf.vars:
+            print(f"  {n:14s} {pf.long_name(n)} ({pf.units(n) or '-'})")
+        for n in P.ALONG:
+            if pf.computed(n):
+                print(f"  {n:14s} {pf.long_name(n)} ({pf.units(n)}; computed)")
+        print("3D fields at the parcels (any field of the lists, e.g.):")
+        for label, n in list(pf.grid_names().items())[:12]:
+            print(f"  {n:14s} {label.rsplit(' [', 1)[0]}")
+        print("saved sets:")
+        for p in P.list_sets(run.path):
+            print(f"  {os.path.basename(p)[:-4]}")
+        return 0
+    src = config.expand(args.parcels)
+    if not src.endswith(".npz") or not os.path.exists(src):
+        src = P.set_path(run.path, args.parcels)
+    if not os.path.exists(src):
+        return fail(f"no saved parcel set {args.parcels!r} (--list --parcels . lists them)")
+    try:
+        ps = P.ParcelSet.load(src)
+        if len(ps.ids) and ps.ids[-1] >= pf.n:
+            return fail(f"{src} is from parcel output with more parcels")
+        names = [n.strip() for n in args.fields.split(",") if n.strip()] or None
+        if names:
+            names = [n if pf.has(n) or not pf.has(P.GRID + n) else P.GRID + n
+                     for n in names]  # (a 3D field's name alone: the field at the parcels)
+        names = P.export_names(pf, names)
+        t0, t1 = (args.time, args.time) if args.time is not None else (args.t0, args.t1)
+        times = P.export_times(pf, None if t0 is None else 60.0 * t0,
+                               None if t1 is None else 60.0 * t1, args.every)
+        shift, frame = None, ""
+        if args.relative is not None:
+            shift, frame = _parcel_frame(run, pf, args)
+    except (OSError, ValueError, KeyError) as e:
+        return fail(str(e))
+    ext = ".csv" if args.csv else ".nc"
+    name = os.path.basename(P.export_path(run.path, ps, ext))
+    out = P.export_path(run.path, ps, ext) if args.out is None else config.expand(
+        args.out.format(run=os.path.basename(run.path.rstrip("/")), name=name))
+    try:
+        fmt = P.export_format(out)
+    except ValueError as e:
+        return fail(str(e))
+    if os.path.exists(out) and not args.overwrite:
+        return fail(f"{out} is already there (--overwrite replaces it)")
+    print(f"cm1view export: parcel set {ps.name}: {len(ps)} parcels x {len(times)} "
+          f"parcel time(s) x {len(names)} variable(s) "
+          f"(~{size_text(P.export_bytes(ps, names, len(times), fmt))}) -> {out}", flush=True)
+    t_start, last = _time.time(), [0.0]
+
+    def progress(done, total, what):
+        if _time.time() - last[0] >= 5.0 or done == total:
+            last[0] = _time.time()
+            print(f"cm1view export: {done}/{total} {what} [{_time.time() - t_start:.0f}s]",
+                  flush=True)
+    try:
+        r = P.export_set(pf, ps, out, names, times, not args.no_compress, progress,
+                         shift=shift, frame=frame)
+    except Exception as e:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        print(f"cm1view export: failed: {e}", file=sys.stderr)
+        return 1
+    print(f"cm1view export: saved {r['path']} [{_time.time() - t_start:.1f}s]", flush=True)
     return 0

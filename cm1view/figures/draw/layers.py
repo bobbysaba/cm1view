@@ -2,7 +2,8 @@
 
 import numpy as np
 import matplotlib
-from matplotlib.colors import LogNorm
+from matplotlib.collections import LineCollection
+from matplotlib.colors import LogNorm, Normalize
 from matplotlib.patches import Circle, Rectangle
 from matplotlib.ticker import MultipleLocator
 from matplotlib.transforms import Bbox
@@ -124,6 +125,71 @@ def _vectors(ax, d, j, lay, xsec, nkey=0):
         ax.quiverkey(q, 0.88 - 0.3 * nkey, 1.02, float(ref), f"{float(ref):g} {units}",
                      labelpos="E", coordinates="axes",
                      fontproperties={"size": max(6, 0.8 * matplotlib.rcParams["font.size"])})
+
+
+def parcel_label(lay):
+    """Colour bar label of parcels coloured by lay["cvar"]: "parcel w (m/s)"; a 3D field
+    sampled at them ("@thpert"): "thpert at the parcels (K)"."""
+    cv, u = lay["cvar"], lay.get("units")
+    lab = f"{cv[1:]} at the parcels" if cv.startswith("@") else f"parcel {cv}"
+    return f"{lab} ({u})" if u else lab
+
+
+def parcel_norm(lay, values):
+    """(colormap, norm) of parcels coloured by a variable: parcel layer `lay`'s vmin..vmax,
+    blank ones from the 2nd-98th percentile of `values` (arrays or None), symmetric about
+    0 when it straddles 0."""
+    lo, hi = lay.get("vmin"), lay.get("vmax")
+    if lo in (None, "") or hi in (None, ""):
+        v = [np.ravel(a) for a in values if a is not None]
+        v = np.concatenate(v) if v else np.zeros(0)
+        v = v[np.isfinite(v)]
+        plo, phi = (np.percentile(v, [2, 98]) if v.size else (0.0, 1.0))
+        if plo < 0 < phi:
+            plo, phi = -max(-plo, phi), max(-plo, phi)
+        lo = float(plo) if lo in (None, "") else float(lo)
+        hi = float(phi) if hi in (None, "") else float(hi)
+    cm = colormap(lay.get("cmap", "viridis"), lay.get("reverse", False))
+    return cm, Normalize(float(lo), float(hi) if float(hi) > float(lo) else float(lo) + 1.0)
+
+
+def _parcels(ax, d, j, lay):
+    """A parcel layer: tails (L<j>_px, L<j>_py: NaN-separated lines) and heads at the
+    panel time (L<j>_hx, L<j>_hy), in the layer's colour or coloured by a parcel
+    variable (L<j>_pv, L<j>_hv; its range vmin..vmax, blank: the 2nd-98th percentile,
+    symmetric about 0 when it straddles 0).  Returns the mappable of a coloured layer,
+    else None."""
+    px, py, pv = (d.get(f"L{j}_p{c}") for c in "xyv")
+    hx, hy, hv = (d.get(f"L{j}_h{c}") for c in "xyv")
+    by = bool(lay.get("cvar")) and (pv is not None or hv is not None)
+    lw, alpha = float(lay.get("lw", 0.8)), float(lay.get("alpha", 0.8))
+    cm = norm = m = None
+    if by:
+        cm, norm = parcel_norm(lay, (pv, hv))
+    if px is not None and len(px) > 1:
+        pts = np.column_stack([px, py])
+        seg = np.stack([pts[:-1], pts[1:]], axis=1)
+        ok = np.isfinite(seg).all(axis=(1, 2))
+        lc = LineCollection(seg[ok], linewidths=lw, alpha=alpha, zorder=2.5,
+                            capstyle="round")
+        if by and pv is not None:
+            lc.set_array(0.5 * (pv[:-1] + pv[1:])[ok])
+            lc.set_cmap(cm)
+            lc.set_norm(norm)
+            m = lc
+        else:
+            lc.set_color(lay.get("color", "k"))
+        lc.set_rasterized(bool(ok.sum() > 20000))  # (a PDF of many lines: as pixels)
+        ax.add_collection(lc)
+    if lay.get("heads", True) and hx is not None and len(hx):
+        kw = dict(s=float(lay.get("ms", 3.0)) ** 2, edgecolors="none", zorder=2.6,
+                  alpha=min(1.0, alpha + 0.2))
+        if by and hv is not None:
+            sc = ax.scatter(hx, hy, c=hv, cmap=cm, norm=norm, **kw)
+            m = m or sc
+        else:
+            ax.scatter(hx, hy, color=lay.get("color", "k"), **kw)
+    return m
 
 
 def extend_of(lay, a):

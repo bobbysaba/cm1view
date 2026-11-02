@@ -1,6 +1,6 @@
 """Session files: what the viewer shows (run, time, map view, the map's fill, more
 fills, contours and vectors, the storm track, soundings, the cross-section, the 3D
-setup, series, distributions, the active tool and workspace) saved to JSON and put
+setup, series, distributions, parcel sets, the active tool and workspace) saved to JSON and put
 back, from the Session dialog or with ?session=/path/to/file.json.
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
@@ -203,6 +203,7 @@ class Sessions:
                               for t, f in sorted(self.fixes.items())]),
             soundings=self._snd_state(), section=self._xs_state(), view3d=self._3d_state(),
             series=self._ser_state(), distributions=self._dist_state(),
+            parcels=self._par_state(),
         )
         return _plain(s)
 
@@ -337,6 +338,7 @@ class Sessions:
             self._put_3d(s.get("view3d"), put)
             self._put_series(s.get("series"), put, skipped)
             dists = self._put_dists(s.get("distributions"), put, skipped)
+            self._put_parcels(s.get("parcels"), put)
             if s.get("view"):
                 self._put_view(s["view"])
             if s.get("workspace") in self.workspace.options:

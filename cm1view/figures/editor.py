@@ -234,6 +234,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
         self.ser_data.on_click(lambda e: self._add_data())
+        self.ser_par.on_click(lambda e: self._add_parcel_series())
+        self.ser_wb.on_click(lambda e: self._add_w_budget(e.new))
         self.snd_tab.on_click(lambda e: self._add_tab_soundings())
         for k in ("layout", "table"):
             self.sk[k].param.watch(lambda e: self._fit_size(), "value")
@@ -313,6 +315,10 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         lay = fg.layer_defaults(kind, F, field, 1.0)
         if kind == "vectors" and self.kind.value == "xsec":
             lay.update(spacing=0.75, scale=400.0, width=0.0015)
+        if kind == "parcels":  # (the viewer's first set not drawn yet, as it draws it)
+            have = {c.lay.get("name") for c in self.cards if c.type == "parcels"}
+            lays = self._parcel_layers()
+            lay = next((x for x in lays if x["name"] not in have), lays[0] if lays else lay)
         self.cards.append(self._card(lay))
         self._show_cards()
         self.request()
@@ -425,8 +431,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                     f"{spec['export']['dpi']} dpi) · {_time.time() - t0:.1f} s")
             kinds = {p["kind"] for p in spec.get("parts", [spec])}
             pend = self.series_pending() if kinds & {"th", "line"} else []
-            scene_notes = [str(d["notes"]) for d in data.values() if d.get("notes")]
-            if scene_notes:  # (a 3D scene: surfaces not found, meshes coarsened, ...)
+            scene_notes = list(dict.fromkeys(str(d["notes"]) for d in data.values()
+                                             if d.get("notes")))
+            if scene_notes:  # (3D scenes: surfaces not found, ...; parcels: none chosen)
                 note += " · " + html.escape("; ".join(scene_notes))
             if pend:
                 note += (' · <span class="busy">● computing series '

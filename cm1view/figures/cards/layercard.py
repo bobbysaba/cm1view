@@ -5,18 +5,55 @@ from types import SimpleNamespace
 import panel as pn
 
 from .. import draw as figdraw, spec as fg
-from ...core import vectors
+import os
+
+from ...core import parcels as P, vectors
 from ...core.fields import DERIVS, deriv_name, deriv_options, split_deriv
 from .base import (
     FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, AZ_REFS,
-    AZ_CENTERS, _hex, _f, _grid, _hint, _checks, _fold, _near, _nice, _panels_parse, _panels_text,
-    _chk, _load_widgets, _take_new_runs,
+    AZ_CENTERS, PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _hex, _f, _grid, _hint, _checks, _fold, _near,
+    _nice, _panels_parse, _panels_text, _chk, _load_widgets, _take_new_runs,
 )
 from ...viewer.ui import held
 
 ENS_STATS = {"Mean": "mean", "Median": "median", "Spread (sd)": "sd", "Min": "min",
              "Max": "max", "Range (max − min)": "range",
              "Probability of exceeding (%)": "prob"}
+
+
+def parcel_source(name, e):
+    """A parcels layer's set: the viewer's set `name` (e: {set, color}) as its rule
+    (its parcel indices when it has none)."""
+    ps = e["set"]
+    return dict(name=name, color=e["color"], rule=dict(ps.rule) or None,
+                ids=None if ps.rule else [int(i) for i in ps.ids])
+
+
+def parcel_sets(v, lay, own="this layer's"):
+    """{label: source} of a Parcels list: the set of `lay` (""), viewer v's sets
+    ("v:<name>") and its run's saved sets ("f:<path>")."""
+    opts = {f"{lay.get('name') or 'parcels'} ({own})": ""}
+    opts |= {f"{n} (viewer)": f"v:{n}" for n in getattr(v, "psets", {})}
+    if v.pf is not None:
+        opts |= {f"{os.path.splitext(os.path.basename(p))[0]} (saved)": f"f:{p}"
+                 for p in P.list_sets(v.run.path)}
+    return opts
+
+
+def parcel_pick(ed, choice):
+    """The set (parcel_source's keys) of choice `choice` of a Parcels list
+    (parcel_sets'), or None (a saved set that does not load: a message)."""
+    v = ed.v
+    if choice.startswith("v:"):
+        e = v.psets.get(choice[2:])
+        return None if e is None else parcel_source(choice[2:], e)
+    try:
+        ps = P.ParcelSet.load(choice[2:])
+    except (OSError, ValueError, KeyError) as e:
+        getattr(ed, "_msg", lambda *a: None)(f"Could not load that parcel set: {e}", True)
+        return None
+    return dict(name=ps.name, rule=ps.rule or None,
+                ids=None if ps.rule else [int(i) for i in ps.ids])
 
 
 class LayerCard:
@@ -213,7 +250,9 @@ class LayerCard:
             w["which"] = pn.widgets.Select(name="Sections", options={
                 "All, labelled in turn": "all", "The panel's own": "panel"},
                 value=lay.get("which", "all"))
-        if t in ("contour", "shade", "track", "line", "sector"):
+        if t == "parcels":
+            self._parcel_widgets(lay)
+        if t in ("contour", "shade", "track", "line", "sector", "parcels"):
             w["legend"] = pn.widgets.TextInput(name="Legend entry (blank: none)",
                                                value=lay.get("legend", ""),
                                                placeholder="e.g. w = 10, 20 m s⁻¹")
@@ -336,6 +375,19 @@ class LayerCard:
         if t == "track":
             return [_grid(w["run_color"], w["color"], w["lw"], w["ls"],
                           (w["legend"], 3), (w["panels"], 3)), _checks(w["marker"])]
+        if t == "parcels":
+            return [_grid((w["pset"], 2), w["color"], w["cvar"], w["cmap"], w["reverse"],
+                          w["vmin"], w["vmax"], (w["cbar_label"], 2), w["tails"],
+                          w["minutes"], (w["moving"], 2), w["move_u"], w["move_v"],
+                          w["lw"], w["alpha"], w["ms"], w["within"],
+                          (w["xs_tails"], 2), (w["legend"], 3), (w["panels"], 3)),
+                    _checks(w["heads"], w["interp"], title="Options"),
+                    _hint("The parcels of a set of the viewer's Parcels tab, or of a saved "
+                          "set, chosen again by its rule from this layer's run's parcel "
+                          "output. Tails end at the panel time; heads are where the "
+                          "parcels are then. Coloured by a variable, the panel's colorbar "
+                          "is theirs when it has no fill; give a Min and Max so panels "
+                          "agree.")]
         if t == "sector":
             return [_grid((w["center"], 2), w["offx"], w["offy"], w["cx"], w["cy"],
                           (w["ref"], 2), w["az0"], w["az1"], w["rmax"], w["color"], w["lw"],
@@ -388,6 +440,14 @@ class LayerCard:
             w["hatch_lw"].visible = bool(w["hatch"].value)
         if t == "track":  # (each panel's run's colour: Layers → Runs used)
             w["color"].visible = not w["run_color"].value
+        if t == "parcels":
+            by = bool(w["cvar"].value)
+            w["color"].visible = not by
+            for k in ("cmap", "reverse", "vmin", "vmax", "cbar_label"):
+                w[k].visible = by
+            w["minutes"].visible = w["tails"].value == "last"
+            w["move_u"].visible = w["move_v"].visible = w["moving"].value == "motion"
+            w["within"].visible = w["xs_tails"].visible = xs
         if t == "sector":
             pt = w["center"].value == "point"
             w["cx"].visible = w["cy"].visible = pt
@@ -451,6 +511,9 @@ class LayerCard:
             sub = (f" · {a0:g}–{a1:g}° from "
                    f"{'motion' if w['ref'].value == 'motion' else 'north'}"
                    f" · {w['rmax'].value or 0:g} km")
+        elif t == "parcels":
+            sub = f" · {self.lay.get('name') or 'parcels'}" + (
+                f" · coloured by {w['cvar'].value}" if w["cvar"].value else "")
         elif t == "vectors":
             sub = (f' · {vectors.VECTORS[w["vector"].value].label}'
                    + {"streamlines": " · streamlines", "barbs": " · barbs"}.get(
@@ -596,5 +659,76 @@ class LayerCard:
             lay["alpha"] = float(w["alpha"].value if w["alpha"].value is not None else 1.0)
         if self.type == "shade":
             lay["outline"] = w["outline"].value if w["outline_on"].value else ""
+        if self.type == "parcels":
+            lay.pop("pset", None)
+            pf = self.ed.v.pf
+            lay["units"] = pf.units(lay["cvar"]) if pf is not None and lay["cvar"] and \
+                pf.has(lay["cvar"]) else ""
         lay["panels"] = _panels_parse(w["panels"].value)
         return lay
+
+    # ------------------------------------------------------------ parcels
+    def _parcel_widgets(self, lay):
+        """A parcels layer's widgets: its set (the viewer's sets and the saved ones can
+        replace it) and how it is drawn."""
+        w, pf = self.w, self.ed.v.pf
+        cvar = lay.get("cvar") or ""
+        w["pset"] = pn.widgets.Select(name="Parcels", options=self._parcel_sets(lay),
+                                      value="", description="The parcel set drawn: pick "
+                                      "another set of the viewer, or a saved one")
+        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(lay.get("color", "k")))
+        w["cvar"] = pn.widgets.Select(name="Colour by", value=cvar, groups=P.var_choices(
+            pf, {"Set colour": ""}, keep=cvar))
+        w["cmap"] = pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
+                                      value=lay.get("cmap") if lay.get("cmap") in FIG_CMAPS
+                                      else "viridis")
+        w["reverse"] = pn.widgets.Checkbox(name="Reverse", value=lay.get("reverse", False))
+        for k, lab in (("vmin", "Min"), ("vmax", "Max")):
+            w[k] = _f(lab, lay.get(k), placeholder="auto")
+        w["cbar_label"] = pn.widgets.TextInput(
+            name="Colorbar label (blank: variable)", value=lay.get("cbar_label", "") or "")
+        w["tails"] = pn.widgets.Select(name="Tails", options=PAR_TAILS,
+                                       value=lay.get("tails", "until"))
+        w["minutes"] = _f("Minutes", float(lay.get("minutes", 10.0)), step=5.0, start=0.0)
+        w["lw"] = _f("Line width", float(lay.get("lw", 0.8)), step=0.2, start=0.0)
+        w["alpha"] = _f("Opacity (0–1)", float(lay.get("alpha", 0.8)), step=0.1, start=0.0,
+                        end=1.0)
+        w["ms"] = _f("Head size", float(lay.get("ms", 3.0)), step=0.5, start=0.0)
+        w["within"] = _f("Section ± (km)", float(lay.get("within", 1.0)), step=0.5,
+                         start=0.0, description="The parcels at most this far from the "
+                         "section's line, drawn where they project onto it")
+        w["xs_tails"] = pn.widgets.Select(name="Tails on the section", options=PAR_XS_TAILS,
+                                          value=lay.get("xs_tails", "near"))
+        w["heads"] = pn.widgets.Checkbox(name="Heads at the panel time",
+                                         value=lay.get("heads", True))
+        w["interp"] = pn.widgets.Checkbox(name="Between parcel times: interpolate",
+                                          value=lay.get("interp", True))
+        w["moving"] = pn.widgets.Select(
+            name="Tails seen from", options=PAR_MOVING, value=lay.get("moving", "grid"),
+            description="Relative to the storm: each point moved back by how far the storm "
+                        "went between its time and the panel time (the heads stay put)")
+        for k in ("move_u", "move_v"):
+            w[k] = _f(f"{k[-1]} (m/s)", float(lay.get(k, 0.0) or 0.0), step=1.0,
+                      description="Ground-relative motion of the frame")
+        w["pset"].param.watch(self._on_pset, "value")
+
+    def _parcel_sets(self, lay):
+        return parcel_sets(self.ed.v, lay)
+
+    def _on_pset(self, ev):
+        """Another set: its parcels (its rule) and colour."""
+        if self._loading or not ev.new:
+            return
+        src = parcel_pick(self.ed, ev.new)
+        if src is None:
+            return
+        self.lay.update(src)
+        self._loading = True
+        try:
+            if src.get("color"):
+                self.w["color"].value = _hex(src["color"])
+            self.w["pset"].options = self._parcel_sets(self.lay)
+            self.w["pset"].value = ""
+        finally:
+            self._loading = False
+        self._changed()

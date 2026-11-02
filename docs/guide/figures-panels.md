@@ -120,7 +120,9 @@ no series.
 A card's points can be changed or blanked by hand, and **+ Your data** adds a series of
 your own (observations, another model) from pasted text or a CSV file; see
 [Editing a series' values](figures-layers.md#editing-a-series-values) and
-[Your own data](figures-layers.md#your-own-data).
+[Your own data](figures-layers.md#your-own-data). With parcel output, **+ Parcels** adds a
+parcel set's variable over the parcel times ([Parcels in figures](parcels.md#in-figures)),
+and **+ w budget** a set's [w budget](parcels.md#the-w-budget) as a panel of four.
 
 **Ensemble of its runs** (a card of *All runs* or *Several runs…*) draws a series from
 several runs as one band: its *Centre line*
@@ -134,9 +136,13 @@ the times where two runs or more have values.
 the same stage of different runs lines up. For example, if one run initiates at 0 min
 and another at 30 min, give the second run's card a time zero of 30. Both then show
 their first hour at 0–60 on the time axis; set *Time and value axes* to 0–60 to show just
-that hour. The figure's own time zero (*Style → Panel labels*) adds to every card's. A
-card of several runs shifts all of them alike (an ensemble band uses the shifted times);
-for a time zero per run, use **One per run**.
+that hour. A card of several runs shifts all of them alike.
+
+To shift a run on every card, set its own time zero in
+[*Layers → Runs used*](#runs) instead: a card of several runs then lines them up, and an
+ensemble band uses the shifted times. The times add up: the figure's (*Style → Panel
+labels*), the run's and the card's. Your own data has no run, so it uses the figure's and
+its card's only.
 
 With **Region: Around tracked storm**, a card shows the **storm track** of each of its
 runs: the viewer's track (for the viewer's run) or a track file (storm_tracks/*.csv next
@@ -294,6 +300,7 @@ and camera included, at the shown time. Rotate the 3D view first to choose the c
 | **Floor** | As in the 3D workspace: a field (a 3D one at a height), colormap, *Reverse*, *Range*. |
 | **Vectors** | Up to 6 planes of arrows: vector, height, frame, *Arrows across*, *Ref. length*, colour. |
 | **Streamlines** | Seed height, seeds (*n × n*), maximum length, direction, frame, *Colour by* height or w. **The map's seed box** seeds inside the box picked on the map; **Whole region** clears it. |
+| **Parcels** | Runs with parcel output: up to 6 parcel sets, each as the viewer's *Parcels* tab chose it (its rule), with colour or *Colour by* a parcel variable, tails, line width, head size, opacity. **+ Parcels** adds the viewer's next set (or a saved one). See [Parcels in figures](parcels.md#in-figures). |
 | **Region and resolution** | *Whole domain* or a *Fixed box* (typed, or **The map's 3D box**), *Top*, *Vertical exaggeration*, *Smoothing σ*, *Resolution*. |
 | **Camera** | *View* (from the southwest, above, south, north, west, east), *Azimuth* and *Elevation* (blank: the view's), *Zoom* (1: the whole region fits), *Projection* (perspective or orthographic), *View angle*. **Camera of the 3D view** takes the 3D workspace's, as you left it. |
 | **Look** | *Lighting* (a soft light kit, three lights, or a headlight), *Background* (the figure's, white, black or transparent), vectors as 3D arrows or lines, *Shine*, *Ambient light*, *Line thickness*, where the colorbars go, box colour, axis labels; box outline, axis ticks, legend, seed box outline. |
@@ -329,12 +336,54 @@ run nothing uses any more is dropped. The field lists hold the fields of every r
 **Layers → Runs used** lists the runs of the figure. Each has
 
 - a **label**,
-- a **colour**, and
+- a **colour**,
+- a **time zero**, and
 - a **storm track**.
 
-Time series and time–height figures don't have this section: each series card picks its
-run, sets its own colour, line style and time zero, and (with *Region: Around tracked
-storm*) shows the storm track of each of its runs (see [Time series](#time-series)).
+**Time zero (min)** is the model time the run counts from, e.g. its initiation. Time
+series and time–height panels count that run's times from it (see
+[Time series](#time-series)). Every other panel lines up runs by time since their time
+zeros. If one run initiates
+at 60 min and another at 90 min, give them 60 and 90: a grid of the two runs at 75 min of
+the first shows 105 min of the second, and both panels are labelled `t = 15 min`.
+Differences and ensembles of other runs read the same matched times, and so does a profile
+card of several runs: its *Time* is its first run's, and each other run draws the matching
+output.
+
+- A time picked for a run stays that run's model time; only a time taken over from
+  another run moves (a grid of runs, from its first run).
+- A card with its own time (sections, soundings, distributions, profiles, joint
+  distributions, azimuthal means) follows when you change a run's time zero, measured from
+  the first card's run in the list, and when you pick another run on the card. *One per run*
+  copies a card to the matching time. All of these go to that run's nearest output.
+- Otherwise a moved time needs an output there: the panel says it has none, and a profile
+  card says which run has no line (it isn't moved to the nearest output), so runs with
+  different output intervals only show the times they share. The time pickers mark times
+  that aren't in every run.
+- `{min}` in the *Time label* counts from the time zero, on 3D scenes too; `{model}`, `{s}`
+  and `{hms}` stay model time. Times in automatic legend text count from the run's time
+  zero. The Time lists on the cards stay model time.
+
+**Line runs up by** (shown with two runs or more) chooses how runs pair up: *Time since each
+run's time zero*, as above, or **Output number**: the nth output of each run, whatever its
+model time, e.g. for runs that output at different intervals or restart at different times.
+
+- The first run in the list is the reference: time labels (`{min}`), automatic legends and
+  the time axes of time series and time–height panels use its times, from its time zero. The
+  other runs' time zeros don't apply, so they are greyed out. `{model}`, `{s}` and `{hms}` stay
+  each panel's own model time.
+- Past a shorter run's end its panels are blank and it has no line on a profile card. On a
+  time series, a run with more outputs than the first carries on at the first run's last
+  interval.
+- A time picked for a run stays that run's model time, and animations step every run one output
+  at a time.
+- Parcel series keep their own finer times, counted from their run's time zero, so they
+  aren't paired.
+- A saved figure pairs the runs by the outputs they have when it is opened or redrawn.
+
+On time series and time–height figures each series card also sets its own colour, line
+style and time zero, and (with *Region: Around tracked storm*) shows the storm track of
+each of its runs (see [Time series](#time-series)); that track is the one here.
 
 A run can be added there first by filtering or pasting a folder (the runs under *Where
 your runs live* are found in the background and join the lists when the search is done).
@@ -386,8 +435,32 @@ one part is the others' too (the section part's cards keep their runs, times and
 panels).
 
 - Each part has its own panels, runs, layers and style, and keeps its own size.
-- The parts are side by side or stacked, and the panel letters run on from part to part.
+- The parts are side by side, stacked or on a custom grid (below), and the panel letters
+  run on from part to part.
 - Edit one part at a time (*Figure parts* picks it; *New figure from* then makes the part
   anew).
 - The whole figure can be given a width and height (the parts then share it by their
   sizes), each part a share of it (0–1), and the figure one colorbar for all its parts.
+
+A part can already hold several panels of its kind, so a plan view beside two stacked
+cross-sections needs only two parts side by side, the second with 2 rows and 1 column.
+
+### Custom grid
+
+*Parts are → Custom grid* is for layouts a single row or column of parts cannot make, such
+as a plan view on the left with a cross-section above a sounding on its right:
+
+| Part | Row | Column | Rows it spans | Columns it spans |
+|---|---|---|---|---|
+| 1: plan view | 1 | 1 | 2 | 1 |
+| 2: cross-section | 1 | 2 | 1 | 1 |
+| 3: sounding | 2 | 2 | 1 | 1 |
+
+- Give the grid's rows and columns, then pick each part in *Figure parts* and give its row
+  and column (from the top left) and how many rows and columns it spans. The map under
+  them shows where the parts are, with the part you are editing marked.
+- The parts start in reading order. A part added later takes the first free cell, or a new
+  row if there is none. Making the grid smaller moves parts back inside it.
+- Columns and rows are as large as their parts need; *Column widths* and *Row heights* set
+  them instead, as relative sizes (`2, 1`). A part's share does not apply on a grid.
+- The map warns when two parts overlap; they are drawn on top of each other until moved.

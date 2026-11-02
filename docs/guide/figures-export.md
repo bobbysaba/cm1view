@@ -38,16 +38,18 @@ Use a template to make the same figure for each of several runs (or `cm1view ren
 
 ## Animations
 
-**Export → Animation (GIF)** saves plan-view, cross-section and 3D scene figures as
+**Export → Animation (GIF)** saves plan views, cross-sections, soundings (skew-T and
+hodograph), distributions, profiles, joint distributions, azimuthal means and 3D scenes as
 animated GIFs (a 3D scene's box can follow the storm and its camera orbit: see
-[3D scenes](figures-panels.md#3d-scenes)). Figures made of parts work if at least one part
-is a plan view or cross-section: every
-part steps together (soundings too), while time–height and time-series parts stay as they
-are.
+[3D scenes](figures-panels.md#3d-scenes)). Time–height plots and time series show every
+time already: they cannot be animated alone, and in a figure of parts they stay as they
+are while the other parts step together.
 
 Each frame redraws the figure exactly as it is set up, a few outputs later. Every panel
-steps forward together, and storm-centred panels and sections follow the storm. A fixed
-*Minus time* in a difference layer stays put.
+steps forward together, and storm-centred panels, sections and soundings follow the storm
+(a sounding at a fixed point stays there). A fixed *Minus time* in a difference layer stays
+put. A profile, joint distribution or azimuthal mean over a time window keeps its length,
+and the animation ends when the window reaches the end of the run.
 
 | Setting | Meaning |
 |---|---|
@@ -66,6 +68,12 @@ running animation.
 Colorbars stay the same in every frame: a fill whose colorbar ends are *auto* gets the
 ends of the whole animation (every frame is read for them before the first is drawn), so
 an arrow drawn for one frame is drawn for all of them.
+
+Scales that normally fit the data stay still too, using a range that holds every frame:
+the value and count axes of distributions, the value axis of profiles, the axes and
+shading of joint distributions, the shading of azimuthal means, and a hodograph centred on
+*fit*. Limits you set in *Layers* are kept. Extra contour lines of an azimuthal mean with
+automatic levels still pick them per frame: set *Levels* to keep them the same.
 
 A single panel (1 × 1) is the usual choice, but any grid works: a 1 × 2 figure of two
 runs makes a side-by-side loop.

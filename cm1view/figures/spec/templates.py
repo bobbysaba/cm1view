@@ -58,7 +58,8 @@ def from_template(tpl, run, t):
     run itself is added by the editor (as for a saved figure without runs)."""
     s = _plain(tpl)
     t0 = (s.pop("template", None) or {}).get("time_s")
-    s = shift_times(s, 0.0 if t0 is None else float(run.times[t]) - float(t0))
+    dt = 0.0 if t0 is None else float(run.times[t]) - float(t0)
+    s = shift_times(s, dt)
     tt = np.asarray(run.times, dtype=float)
 
     def near(ts, clip=True):
@@ -84,6 +85,13 @@ def from_template(tpl, run, t):
             for lay in [e] + list((e.get("layers") or {}).values()) + list(e.get("extra") or []):
                 if lay.get("time_s") is not None and not lay.get("time_lock"):
                     lay["time_s"] = near(lay["time_s"])
+        for lay in (p.get("layers") or []) + \
+                list((p.get("scene3d") or {}).get("parcels") or []) + \
+                list(p.get("series") or []):  # (parcels chosen as long after as before;
+            r = lay.get("rule") or {}  # animations keep theirs)
+            if (lay.get("type") == "parcels" or lay.get("source") == "parcels") \
+                    and r.get("t") is not None:
+                lay["rule"] = dict(r, t=float(r["t"]) + dt)
     return s
 
 

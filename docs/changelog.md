@@ -7,6 +7,99 @@ has a matching git tag.
 
 ### Figures
 
+- **Time zero per run** ([Runs](guide/figures-panels.md#runs)): plan views and
+  cross-sections of several runs line up by time since each run's time zero, including
+  their time labels, differences and ensembles. A time picked for a run stays its model
+  time; figures saved before are unchanged. New time label text `{model}`: model minutes.
+  Time series and time–height panels (parcel series too) count each run's times from it,
+  on top of the figure's and the card's, so a card of several runs and its ensemble band
+  line up. *Runs used* now shows on those figures. A profile card of several runs reads each
+  run at the matching time, and says when a run has no output there. Cards with their own
+  time (soundings, distributions, profiles, joint distributions, azimuthal means) move
+  with a time zero and with a new run, as section cards do. Time labels (3D scenes too) and
+  automatic legends count from the time zero.
+- **Line runs up by output number** ([Runs](guide/figures-panels.md#runs)): a figure's runs
+  can pair by their nth output instead of by time zero. The first run's times label the panels
+  and time axes; past a shorter run's end its panels are blank.
+- **Custom grid for figure parts**
+  ([Figure parts](guide/figures-panels.md#custom-grid)): besides side by side and stacked,
+  parts can go anywhere on a grid of rows and columns, each spanning as many cells as it
+  needs, e.g. a plan view on the left with a cross-section above a sounding on its right.
+  A map in the editor shows where the parts are. Figures saved before keep their layout.
+
+### Parcels
+
+- **Parcel trajectories** ([Parcels](guide/parcels.md)): runs with CM1 parcel output
+  (`cm1out_pdata.nc`; new setting `parcel_glob`; several files, e.g. one per restart,
+  are joined by time) get a **Parcels** tool. Click the map to choose the parcels near a
+  point, or drag a box, limited by height, by a value range of a parcel variable and by
+  a cap (every n-th or a random sample), at the shown time or the first parcel time.
+  Each choice is a named set, drawn as trajectories coloured by height, by any parcel
+  variable or in the set's colour, with tails over all parcel times, up to the shown
+  time or the last minutes, and heads at the shown time. Parcel times are their own
+  axis: heads are interpolated between them when the 3D output is coarser. Sets can be
+  saved, loaded, renamed and removed (also from the items tray) and are kept in
+  sessions. Parcels that wrap across a periodic boundary are not joined across the
+  domain; parcels that leave an open domain stop there. The demo run `supercell` now
+  has parcels, written every 60 s. Reading, selection and caching are in
+  `cm1view/core/parcels.py`, usable without the viewer.
+- **Parcels on cross-sections, in 3D and in a plot** ([Parcels](guide/parcels.md)): the
+  parcels within a distance of a cross-section's line are drawn on it, projected (the
+  parts of their tails near it, or the whole tails of those near it now), at the
+  section's time; the sets' tails and heads are drawn in the 3D view inside its region.
+  The Parcels panel plots a parcel variable over the parcel times (each parcel, the mean
+  or median, and a band) or two variables against each other at the shown time.
+- **Parcels in figures** ([Parcels](guide/parcels.md#in-figures)): plan-view and
+  cross-section figures have a *Parcels* layer (tails up to each panel's time and heads
+  there, in the set's colour or coloured by a parcel variable, with its own colorbar
+  when the panel has no fill). *From the map* and *From the cross-section* bring the
+  viewer's sets along, drawn as the viewer draws them. A layer keeps the rule that chose
+  its set and chooses the parcels again when drawn, so saved figures, templates,
+  animations, `cm1view-render` and exported scripts all carry them.
+- **Parcels in 3D scene figures** ([Parcels](guide/parcels.md#in-figures)): a 3D scene
+  draws parcel sets as lines with balls at the scene's time, inside its region, in the
+  set's colour or coloured by a parcel variable (with a colorbar). *Copy the 3D view*
+  brings the sets the 3D view shows. Restyling the parcels or changing the sets does not
+  recompute the isosurfaces.
+- **Parcel series** ([Parcels](guide/parcels.md#parcel-series)): time-series figures
+  draw a parcel set's variable over the parcel times (**+ Parcels**): mean or median,
+  a band over the parcels (min–max, percentiles or ± 1 sd) and, if you like, some
+  parcels' own lines; *d/dt along the parcel* gives e.g. Dw/Dt. They share panels and
+  y axes with computed series and your own data.
+- **3D fields at the parcels** ([Parcels](guide/parcels.md#3d-fields-at-the-parcels)):
+  parcels can be coloured and plotted by any 3D field of the run, native or derived,
+  sampled at their positions (trilinear in space, linear in time between the 3D outputs
+  around each parcel time), in the viewer and in figures (parcel layers, 3D scenes and
+  parcel series). Sampled once per set and field, then cached; in specs and scripts
+  `@<field>`, e.g. `@thpert`.
+- **Export a parcel set** ([Parcels](guide/parcels.md#exporting-a-set)): *Export set*
+  writes a set's trajectories (any parcel variables and 3D fields at the parcels; all
+  parcel times, up to the shown time or the last minutes) to netCDF (`(time, parcel)`
+  arrays) or CSV (one row per parcel and time), in the background with Stop.
+  `cm1view export RUN --parcels SET` does it for a saved set without the viewer.
+- **Parcels relative to the storm** ([Parcels](guide/parcels.md#relative-to-the-storm)):
+  *Seen from* draws the tails in a frame moving with the tracked storm or at a set
+  motion, the same as the grid at the shown time (heads stay where they are), on the
+  map, the cross-section and in the 3D view; figures' parcel layers and 3D scenes have
+  it too. Exports can add storm-relative `x_sr`, `y_sr` (`--relative MIN` on the
+  command line).
+- **Lagrangian w budget** ([Parcels](guide/parcels.md#the-w-budget)): with *w*, *b* and
+  *vpg* in the parcel output, two parcel variables computed along the trajectories,
+  *Dw/Dt* (`dwdt`, from the parcel's own w) and *Dw/Dt − b − vpg* (`wres`, mixing and
+  the rest), wherever parcel variables go (colour, plots, figures, export). The
+  Parcels plot has a *w budget* view of the picked set, rates or integrated since the
+  set's time (Δw = ∫b + ∫vpg + ∫rest). Parcel series cards plot a variable's change or
+  time integral since the set's time; **+ w budget** adds the four terms as a panel.
+  The demo's parcels have *vpg* now.
+
+### Figures
+
+- **More figures animate**: soundings (skew-T and hodograph), distributions, profiles,
+  joint distributions and azimuthal means can be saved as animated GIFs (*Export →
+  Animation*, `cm1view render --gif`) on their own, not only as a part of a figure with
+  a plan view or section. Their axes and shading, and a hodograph centred on *fit*, use
+  one range for all frames unless you set limits. In every animation, the frames now
+  stop while a profile's every run has output and a time window is still whole.
 - **Publication 3D scenes**: a new figure kind, *3D scene (one picture)*, renders the 3D
   workspace's isosurfaces, floor, vectors and streamlines off-screen with PyVista at the
   export's DPI (smooth shading, lighting, translucent surfaces in the right order,
@@ -188,6 +281,9 @@ has a matching git tag.
   match the map at the region's edge (they were taken with one-sided differences there).
 - **Linked clicks**: clicking the track's time series shows that time; clicking the
   time–height plot also moves the map to the clicked height.
+- **CF-style output**: runs whose files use the CF-style names of newer CM1 versions
+  (dimensions `xh`/`xf`, `yh`/`yf`, `zh`/`zf`, heights in `zh`) now open; before, they
+  failed for want of `z`. `python -m cm1view.demo --cf` writes the demo that way.
 
 ### Under the hood
 

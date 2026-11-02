@@ -251,15 +251,19 @@ TOOLS = {
     "Distribution": ("chart-histogram", "Distrib.", "Distribution of a field over a region "
                                                     "at one time: histogram, box, violin, "
                                                     "cumulative"),
+    "Parcels": ("grain", "Parcels", "Parcels: click the map (or drag a box) to choose "
+                                    "parcels and draw their trajectories"),
     "3D region": ("cube", "3D box", "Drag a box on the map to view it in 3D"),
 }
 # click mode -> its tool button (both kinds of sounding are the Sounding tool)
-TOOL_OF = {"Area sounding": "Sounding", "Seed box": "3D region"}
+TOOL_OF = {"Area sounding": "Sounding", "Seed box": "3D region", "Parcel box": "Parcels"}
 # click mode -> its panel (tab of the analysis panel); 3D region has none
 PANELS = {"Sounding": 0, "Area sounding": 0, "Cross-section": 1, "Track": 2, "Series": 3,
-          "Distribution": 4}
-TAB_MODE = {0: "Sounding", 1: "Cross-section", 2: "Track", 3: "Series", 4: "Distribution"}
-PANEL_TITLES = ["Sounding", "Cross-section", "Storm track", "Time series", "Distribution"]
+          "Distribution": 4, "Parcels": 5, "Parcel box": 5}
+TAB_MODE = {0: "Sounding", 1: "Cross-section", 2: "Track", 3: "Series", 4: "Distribution",
+            5: "Parcels"}
+PANEL_TITLES = ["Sounding", "Cross-section", "Storm track", "Time series", "Distribution",
+                "Parcels"]
 
 RAIL_BTN = """
 .bk-btn { display: flex !important; flex-direction: column; align-items: center; gap: 3px;

@@ -380,6 +380,9 @@ class TrackPanel:
         # every fix while auto-tracking (that ends with one redraw in _apply_track)
         if self._storm_fields_shown() and self.trk_stop_btn.disabled:
             self.request_map()
+        if self.pf is not None and self.par_frame.value == "track" and \
+                self.trk_stop_btn.disabled:  # (parcels seen moving with the track)
+            self._par_redraw()
 
     def _on_storm_btn(self, ev):
         """The Storm chip: load the run's track file if there is no track yet, and open

@@ -6,40 +6,77 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Patch, Rectangle
 
 from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_letter,
-                   time_text, _new_fig, _fs, _cell, rc, anchor_kw, font_size, run_code, run_color, layer_color)
+                   time_text, _new_fig, _fs, _cell, grid_layout, rc, anchor_kw, font_size,
+                   run_code, run_color, layer_color, run_time_opts)
 from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text,
                  LEGEND_OPTS)
-from .layers import (_fill, _contour, _shade, _vectors, sector_outline, extend_of,
+from .layers import (_fill, _contour, _shade, _vectors, _parcels, parcel_label,
+                     sector_outline, extend_of,
                      union_extend, _extends, _ticks, _colorbars, _cbar_style, _contour_key)
-from .lines import _lines, _dists, _profiles, _joints, _azims
-from .sounding import _sounding, shared_hodo_half
+from .lines import (_lines, _dists, _profiles, _joints, _azims, azim_range, dist_edges,
+                    dist_hist, dist_of, joint_edges, joint_hist, joint_of)
+from .sounding import _sounding, _hodo_view, shared_hodo_half, sounding_layout
 from .scene3d import scene_panel, finish_scenes, scene_dpi
+
+SCALE_OPTS = {"dist": "dist", "profile": "prof", "joint": "joint", "azim": "azim",
+              "sounding": "skewt"}  # (a kind whose scales follow its data -> its options)
 
 
 def draw(spec, data, ends=None):
     """The matplotlib Figure of `spec` (either version) with arrays `data` (see the
-    module notes); `ends` ({(panel id, layer): colorbar ends}, fill_ends) fixes the
-    "auto" ends of those fills (an animation's, the same in every frame).  Save it
+    module notes); `ends` ({(panel id, layer): colorbar ends}, fill_ends; and
+    {(panel id, "opts"): options}, fit_scales) fixes the "auto" ends of those fills and
+    the scales of those panels (an animation's, the same in every frame).  Save it
     with save(), which keeps the spec's fonts for what matplotlib draws late (tick
     labels)."""
     spec, data = upgrade(spec, data)
     if ends:
-        spec = dict(spec, panels=[dict(p, layers=[
+        spec = dict(spec, panels=[dict(_with_scales(p, ends), layers=[
             dict(lay, extend=ends[(p["id"], j)]) if (p["id"], j) in ends else lay
             for j, lay in enumerate(p.get("layers") or [])]) for p in spec["panels"]])
     with RC_LOCK:
         return _draw2(spec, data)
 
 
+def _with_scales(p, ends):
+    fit = ends.get((p["id"], "opts"))
+    if not fit:
+        return p
+    opts = dict(p.get("opts") or {})
+    for k, v in fit.items():
+        opts[k] = dict(opts.get(k) or {}, **v)
+    return dict(p, opts=opts)
+
+
+def _scales_free(V):
+    """Whether panel view V has scales that follow its data, frame by frame."""
+    kind = V["kind"]
+    if kind != "sounding":
+        return kind in SCALE_OPTS
+    o = V.get("skewt", {})
+    return o.get("hodo_center") == "fit" and sounding_layout(o) != "skewt"
+
+
+def scales_free(spec):
+    """Whether an animation of `spec` needs fit_scales to keep its scales still."""
+    spec = upgrade(spec)[0]
+    return any(_scales_free(panel_view(spec, p)) for p in spec["panels"])
+
+
 def fill_ends(spec, data, ends=None):
     """{(panel id, layer): colorbar ends} of the fills with "auto" ends (extend_of),
     united with `ends` (another frame's: an animation's ends are those of all its
-    frames)."""
+    frames); {(panel id, "frames"): each frame's panel arrays} of the panels with free
+    scales (_scales_free), for fit_scales once all the frames are read."""
     spec, data = upgrade(spec, data)
     out = dict(ends or {})
     for p in spec["panels"]:
         d = (data or {}).get(p["id"])
-        if d is None or d.get("missing") or p["kind"] in ENTRIES:
+        if d is None or d.get("missing"):
+            continue
+        if p["kind"] in ENTRIES:
+            if _scales_free(panel_view(spec, p)):
+                out[(p["id"], "frames")] = out.get((p["id"], "frames"), []) + [d]
             continue
         for j, lay in enumerate(_panel_layers(p)):
             a = d.get(f"L{j}")
@@ -48,6 +85,91 @@ def fill_ends(spec, data, ends=None):
                 out[(p["id"], j)] = union_extend([extend_of(lay, a),
                                                   out.get((p["id"], j), "neither")])
     return out
+
+
+def fit_scales(spec, ends):
+    """`ends` (fill_ends, all frames read) with each panel's frames replaced by
+    {(panel id, "opts"): {options group: limits}}: the scales that hold all its frames,
+    so they stay still in an animation.  Limits set in the spec stay."""
+    spec = upgrade(spec)[0]
+    out = dict(ends)
+    for p in spec["panels"]:
+        frames = out.pop((p["id"], "frames"), None)
+        if frames:
+            group = SCALE_OPTS[p["kind"]]
+            o = panel_view(spec, p).get(group, {})
+            out[(p["id"], "opts")] = {group: _frame_scales(p["kind"], o, frames)}
+    return out
+
+
+def _free(o, **limits):
+    """The limits not already set in options o."""
+    return {k: float(v) for k, v in limits.items() if o.get(k) in (None, "")}
+
+
+def _padded(a, b, frac=0.05):
+    pad = frac * (b - a)
+    return a - pad, b + pad
+
+
+def _frame_scales(kind, o, frames):
+    """The options (limits) that hold every frame's arrays of a panel of `kind`."""
+    def num(k):
+        v = o.get(k)
+        return None if v in (None, "") else float(v)
+
+    if kind == "dist":
+        sts = [dist_of(d, j) for d in frames for j in range(int(d.get("ndist", 0)))]
+        plot, logy = o.get("plot", "hist"), bool(o.get("logy"))
+        edges = dist_edges(sts, o.get("bins", 50), num("width"), num("xmin"), num("xmax"))
+        a, b = float(edges[0]), float(edges[-1])
+        if plot not in ("hist", "ecdf"):  # (box, violin: room around the extremes)
+            a, b = (a, b * 1.1 if b > 0 else b) if logy else _padded(a, b)
+        fit = _free(o, xmin=a, xmax=b)
+        if plot == "hist":
+            edges = dist_edges(sts, o.get("bins", 50), num("width"), fit.get("xmin", a),
+                               fit.get("xmax", b))
+            v = np.concatenate([np.ravel(dist_hist(s, edges, o.get("norm", "count")))
+                                for s in sts] or [[]])
+            v = v[np.isfinite(v) & (v > 0)]
+            if v.size and logy:
+                fit.update(_free(o, ymin=v.min() * 0.7, ymax=v.max() * 1.4))
+            elif v.size:
+                room = 1.25 if o.get("bar_labels") else 1.05
+                fit.update(_free(o, ymin=0.0, ymax=v.max() * room))
+        return fit
+    if kind == "profile":
+        v = [np.ravel(np.asarray(d[f"P{j}_{k}"], dtype=float)) for d in frames
+             for j in range(int(d.get("nprof", 0))) for k in ("v", "lo", "hi")
+             if f"P{j}_{k}" in d]
+        v = np.concatenate(v or [[]])
+        v = v[np.isfinite(v)]
+        return _free(o, **dict(zip(("xmin", "xmax"), _padded(v.min(), v.max())))) \
+            if v.size and v.max() > v.min() else {}
+    if kind == "joint":
+        ends = [(num(k + "min"), num(k + "max")) for k in "xy"]
+        per = [[joint_of(d, j) for j in range(int(d.get("njoint", 0)))] for d in frames]
+        ex, ey = joint_edges([s for ss in per for s in ss], o.get("bins", 60), *ends[0], *ends[1])
+        fit = _free(o, xmin=ex[0], xmax=ex[-1], ymin=ey[0], ymax=ey[-1])
+        v = np.concatenate([np.ravel(joint_hist(ss[0], ex, ey, o.get("norm", "count")))
+                            for ss in per if ss] or [[]])
+        v = v[v > 0]
+        if o.get("plot", "hist") == "hist" and v.size:
+            fit.update(_hmin=float(v.min()), _hmax=float(v.max()))
+        return fit
+    if kind == "azim":
+        rs = [azim_range(np.asarray(d["A0_v"]), o, bool(int(d.get("A0_div", 0))))
+              for d in frames if int(d.get("nazim", 0))]
+        return _free(o, vmin=min(r[0] for r in rs), vmax=max(r[1] for r in rs)) if rs else {}
+    top, hm = float(o.get("hodo_top", 9.0)), float(o.get("hodo_max", 40.0))  # (a hodograph)
+    vs = [_hodo_view(d, int(d["nsnd"]), o, top, hm, str(o.get("srh") or "")) for d in frames
+          if int(d.get("nsnd", 0))]
+    if not vs:
+        return {}
+    u0, u1 = min(c - h for c, _, h in vs), max(c + h for c, _, h in vs)
+    v0, v1 = min(c - h for _, c, h in vs), max(c + h for _, c, h in vs)
+    return dict(hodo_center="custom", hodo_cu=0.5 * (u0 + u1), hodo_cv=0.5 * (v0 + v1),
+                hodo_max=float(5.0 * np.ceil(0.5 * max(u1 - u0, v1 - v0) / 5.0)))
 
 
 def _draw2(spec, data):
@@ -83,9 +205,12 @@ def _draw2(spec, data):
         host, bar = (subs[0], subs[1]) if loc in ("right", "bottom") else (subs[1], subs[0])
         host.set_facecolor("none")
         bar.set_facecolor("none")
-    ratios = block_shares(spec)
-    subs = np.atleast_1d(host.subfigures(1, len(blocks), width_ratios=ratios) if row else
-                         host.subfigures(len(blocks), 1, height_ratios=ratios)).ravel()
+    if spec.get("arrange") == "grid":
+        subs = _grid_subfigures(host, spec)
+    else:
+        ratios = block_shares(spec)
+        subs = np.atleast_1d(host.subfigures(1, len(blocks), width_ratios=ratios) if row else
+                             host.subfigures(len(blocks), 1, height_ratios=ratios)).ravel()
     fig._cv_axes, mappables = {}, []
     ext = _extends(spec, data)
     for k, sf in enumerate(subs):
@@ -121,6 +246,14 @@ def _draw2(spec, data):
         run_code(fig, [fig._cv_axes[i] for i in sorted(fig._cv_axes)], data, spec,
                  code["text"])
     return fig
+
+
+def _grid_subfigures(host, spec):
+    """A subfigure of `host` for each block, in the cells grid_layout gives it."""
+    g = grid_layout(spec["blocks"], spec.get("part_grid"))
+    gs = host.add_gridspec(g["rows"], g["cols"], width_ratios=g["width_ratios"],
+                           height_ratios=g["height_ratios"], left=0, right=1, bottom=0, top=1)
+    return [host.add_subfigure(gs[r:r + rs, c:c + cs]) for r, c, rs, cs in g["places"]]
 
 
 def _block(fig, spec, k, bv, data, fs, ext):
@@ -337,6 +470,7 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
         xsec = kind == "xsec"
         x, y = d["x"], d["y"]
         nkey = 0  # vector key arrows so far
+        pm_lay = None  # (mappable, layer) of the first parcel layer coloured by a value
         for j, lay in enumerate(layers):
             if not lay.get("on", True):
                 continue
@@ -368,7 +502,13 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                             ls=lay.get("ls", "-"))
             elif t == "line" and ("lines" in d or "line" in d):
                 _section_lines(ax, d, lay, y, fs)
-            if lay.get("legend") and t in ("contour", "shade", "track", "line", "sector"):
+            elif t == "parcels":  # (its colorbar: the panel's when it has no fill)
+                pm = _parcels(ax, d, j, lay)
+                if pm is not None and pm_lay is None:
+                    pm_lay = (pm, dict(lay, extend=lay.get("extend") or "neither",
+                                       units=parcel_label(lay)))
+            if lay.get("legend") and t in ("contour", "shade", "track", "line", "sector",
+                                           "parcels"):
                 legend[lay["legend"]] = (
                     Patch(facecolor="none" if lay.get("hatch") else lay.get("color", "magenta"),
                           alpha=float(lay.get("alpha", 0.6)), hatch=lay.get("hatch") or None,
@@ -377,6 +517,7 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                     if t == "shade" else
                     Line2D([], [], color=layer_color(spec, lay, d),
                            lw=float(lay.get("lw", 1.0))))
+        m = m or pm_lay
         _extremes(ax, d, spec, layers, fs)
     return ax, m
 
@@ -513,7 +654,8 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
     if labels.get("on", True):
         _anchored(ax, panel_letter(letter, labels.get("fmt", "{a}")), labels, fs * 1.2)
     if tlab.get("on", True) and "time_s" in d:
-        _anchored(ax, time_text(d["time_s"], tlab), tlab, fs * 1.2)
+        _anchored(ax, time_text(d["time_s"], run_time_opts(spec, int(d.get("run", 0)), d["time_s"])),
+                  tlab, fs * 1.2)
     zlab = spec.get("z_label", {})
     if zlab.get("on") and ztxt:
         _anchored(ax, ztxt, zlab, fs * 1.2)

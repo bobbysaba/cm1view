@@ -8,7 +8,7 @@ import panel as pn
 
 from ..core.fields import CMAPS
 from .zoomview import ParamTable
-from ..theme import CSS, GRID, PANEL
+from ..theme import BG, CSS, GRID, PANEL
 from .numinput import FloatInput
 from .ui import (
     BAR, DRAWER, FILL, FRAMES, PANEL_TITLES, PANELS, RAIL_BTN, TAB_MODE, Drawer, Plotly3D,
@@ -271,15 +271,29 @@ class Layout:
                            styles={"border-top": f"1px solid {GRID}"}),
                 self.dist_plot, self.dist_table, scroll="y-auto",
                 sizing_mode="stretch_both")),
+            ("Parcels", self._par_layout()),
             sizing_mode="stretch_both", dynamic=False, margin=0,
-            # no tab strip: the tool rail picks the panel (_show_panel)
-            stylesheets=[":host > .bk-header { display: none !important; }"])
+            # (only the floor: a flex basis of 0 here left the panel empty)
+            styles={"min-height": "0"},
+            # no tab strip: the tool rail picks the panel (_show_panel). The tabs' row
+            # ("stack", under the hidden header) is held to the panel's height: Bokeh's
+            # 1fr grows to the content, and a long tab (Parcels) ran off the bottom of
+            # the window instead of scrolling
+            stylesheets=[":host > .bk-header { display: none !important; }",
+                         ":host { grid-template-rows: max-content minmax(0, 1fr)"
+                         " !important; }"])
         # the open tool's panel, right of the map: its name, expand and close
         self.panel_col = pn.Column(
             pn.Row(self.panel_title, pn.Spacer(), self.full_btn, self.panel_btn, margin=0,
-                   sizing_mode="stretch_width", styles={"border-bottom": f"1px solid {GRID}"}),
+                   sizing_mode="stretch_width",
+                   # the title stays put while the panel scrolls under it
+                   styles={"border-bottom": f"1px solid {GRID}", "position": "sticky",
+                           "top": "0", "z-index": "5", "background": BG}),
             self.tabs, sizing_mode="stretch_both", margin=(0, 8, 0, 4),
-            styles={"flex": "1 1 48%", "min-width": "0"})
+            # the panel scrolls itself: a tab longer than the window (Parcels) was cut
+            # off, its own scroll never set off since nothing inside held its height
+            styles={"flex": "1 1 48%", "min-width": "0", "max-height": "100%",
+                    "overflow-y": "auto"})
 
     def _top_bar(self):
         """Run, time and workspace pills floating across the top of the window."""
@@ -430,7 +444,8 @@ class Layout:
             self.tabs.active = tab
             self.panel_title.object = f'<div class="cv-h" style="margin:0">{PANEL_TITLES[tab]}</div>'
             if show and PANELS.get(self.mode.value) != tab:
-                self.mode.set(self.snd_pick.value if tab == 0 else TAB_MODE[tab])
+                self.mode.set(self.snd_pick.value if tab == 0 else
+                              self.par_pick.value if tab == 5 else TAB_MODE[tab])
 
     def _on_workspace(self, ev):
         is3d, isfig = ev.new == "3D", ev.new == "Figure"

@@ -2,7 +2,7 @@
 
 import copy
 
-from .base import FILL_KEYS, ENTRIES, part_shares
+from .base import FILL_KEYS, ENTRIES, part_shares, moved_time
 
 GRID_DIMS = ("runs", "sections", "times", "fields", "heights")  # (or "none")
 LEGACY_VARY = {"time": "times", "field": "fields", "height": "heights", "custom": "custom"}
@@ -152,7 +152,7 @@ def th_grid(spec):
         cells, seen = [None] * (r * c), set()
         for e, ent in enumerate(ents):
             p, k = int(ent.get("panel", 0)), int((ent.get("runs") or [0])[0])
-            if p in seen or not 0 <= p < r * c or ent.get("source") == "table":
+            if p in seen or not 0 <= p < r * c or ent.get("source") in ("table", "parcels"):
                 continue
             seen.add(p)
             cells[p] = (k, e) if 0 <= k < nr else None
@@ -243,32 +243,43 @@ def edited_layers(layers, e):
 def panel_ref(spec, i):
     """(run index, model time in s) of panel i of a version-1 spec, or None for an
     empty grid cell: as its layout says (form_ref), or as changed in this panel alone
-    (panel_edit)."""
+    (panel_edit).  A time picked for a run is that run's model time; a time a panel
+    takes over from another run moves with their time zeros (moved_time)."""
     ref = form_ref(spec, i)
     e = panel_edit(spec, i)
     if ref is None or not e:
         return ref
     k = int(e["run"]) if e.get("run") is not None and \
         int(e["run"]) < len(spec.get("runs") or [None]) else ref[0]
-    return k, float(e["time_s"]) if e.get("time_s") is not None else ref[1]
+    return k, float(e["time_s"]) if e.get("time_s") is not None else \
+        moved_time(spec, ref[1], ref[0], k)
+
+
+def time_run(spec):
+    """The run whose outputs the figure's times are picked from: the first of a grid
+    of runs, else the figure's one run."""
+    return grid_runs(spec)[0] if "runs" in grid_axes(spec) else int(spec.get("run", 0))
 
 
 def form_ref(spec, i):
     """(run index, model time in s) of panel i as the layout says, or None for an
     empty cell: the run and time of its row or column (grid_cell), else the figure's
     one run (spec["run"]) and time (spec["time_s"]); a section figure of cards: the
-    panel's card's run and time (blank: the figure's time)."""
+    panel's card's run and time (blank: the figure's time).  In a grid of runs the
+    times are those of its first run (time_run), moved for the others (moved_time)."""
     if xsec_cards(spec) is not None:
         kc = xsec_card(spec, i)
         if kc is None:
             return None
-        ts = kc[1].get("time_s")
-        return int(kc[1].get("run") or 0), float(spec["time_s"] if ts is None else ts)
+        k, ts = int(kc[1].get("run") or 0), kc[1].get("time_s")
+        return k, float(ts) if ts is not None else \
+            moved_time(spec, spec["time_s"], int(spec.get("run", 0)), k)
     cell = grid_cell(spec, i)
     if cell is None:
         return None
-    return (int(cell["run"]) if "run" in cell else int(spec.get("run", 0)),
-            float(cell["time_s"]) if "time_s" in cell else float(spec["time_s"]))
+    k = int(cell["run"]) if "run" in cell else int(spec.get("run", 0))
+    ts = float(cell["time_s"]) if "time_s" in cell else float(spec["time_s"])
+    return k, moved_time(spec, ts, time_run(spec), k) if "runs" in grid_axes(spec) else ts
 
 
 V1_PANEL_KEYS = ("version", "kind", "rows", "cols", "vary", "times", "time", "times_s",
@@ -277,7 +288,8 @@ V1_PANEL_KEYS = ("version", "kind", "rows", "cols", "vary", "times", "time", "ti
                  "dists", "edits",
                  "form")
 FIG_ONLY = ("version", "kind", "arrange", "parts", "blocks", "panels", "size", "size_set",
-            "size_auto", "share", "suptitle", "export", "made_with", "code")
+            "size_auto", "share", "place", "part_grid", "suptitle", "export", "made_with",
+            "code")
 EXTENDS = ("auto", "neither", "min", "max", "both")
 
 
@@ -310,7 +322,8 @@ def upgrade(spec, data=None):
             opts = {key: copy.deepcopy(v) for key, v in part.items() if key not in V1_PANEL_KEYS}
             opts["annotations"] = [dict(a, panel=_part_panels(k, a.get("panel", -1)))
                                    for a in opts.get("annotations", [])]
-            b.update(share=part.get("share"), size=list(part["size"]), opts=opts)
+            b.update(share=part.get("share"), place=part.get("place"),
+                     size=list(part["size"]), opts=opts)
             ck = opts.get("contour_key")
         else:
             ck = out.get("contour_key")

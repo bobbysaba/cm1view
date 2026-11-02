@@ -69,13 +69,13 @@ class SeriesValues:
     def _fetch(self, k, ent):
         """(row keys, the leading columns {name: values}, computed values, why there
         are none) of run k."""
-        spec = {"runs": self.ed._runs_collect(), "series": [ent]}
+        spec = {"runs": self.ed._runs_collect(), "series": [ent],
+                "time_label": {"t0_min": self._fig_t0()}}
         got = self.ed.data.series_get(spec, k, 0)
         if isinstance(got, str):
             return [], dict(t=[], model_s=[]), [], got
         run, ds = got
-        t0 = fg.series_t0({"time_label": {"t0_min": self._fig_t0()}}, ent)
-        t, v, _, _ = fg.series_arrays(run, ds, ent, t0)
+        t, v, _, _ = fg.series_of_run(spec, run, ds, ent, k)
         why = ""
         if v is None:
             v, why = np.full(len(run.times), np.nan), "d/dz applies to time–height panels"
@@ -308,7 +308,8 @@ class ProfileValues(SeriesValues):
         runs = self.ed._runs_collect()
         if k >= len(runs):
             return [], dict(z=[]), [], "no such run"
-        got = self.ed.data.profile_get(runs[k], ent, 0, 1, compute=False)
+        got = self.ed.data.profile_get(runs[k], fg.entry_at(dict(runs=runs), ent, k), 0, 1,
+                                       compute=False)
         if isinstance(got, str):
             return [], dict(z=[]), [], got
         z, v = got

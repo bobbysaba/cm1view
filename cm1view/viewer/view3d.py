@@ -215,7 +215,8 @@ class View3DPanel:
                                         camera=self.v3_cam.value, dragmode=self.v3_drag.value,
                                         revision=f"cam{self._cam_rev}")
             nf = sum(len(m["faces"]) for m in meshes)
-            s3 = dict(t=t, stream=stream, off=sc["off"], frame=spec["stream"]["frame"])
+            s3 = dict(t=t, stream=stream, off=sc["off"], frame=spec["stream"]["frame"],
+                      box=tuple(spec["box"]), ztop=spec["ztop"])
             res = (fig, sc["notes"], nf, stride, s3)
         except (MissingAtTime, FileBusy) as e:  # expected: no traceback
             res = e
@@ -281,6 +282,8 @@ class View3DPanel:
         self._sl_scale = base.line.colorscale if base is not None else None
         self._sl_dim, self._hl_line, self._pl_key = False, None, ()
         self._select_line(line)
+        self._par_3d_traces(fig)  # (parcels at the scene's time)
+        self._par_redraw()
         self.plot3d.object = fig
         self.plot3d.visible = True
         extra = (" · " + " · ".join(notes)) if notes else ""

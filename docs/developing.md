@@ -50,6 +50,7 @@ processes and renders figures.
 | `test_session.py` | Session files: save, load, rows and values a run cannot take, another run's session; soundings, section, 3D, series and distributions back |
 | `test_export.py` | netCDF export: values == the volumes / map planes, heights, box, stop, missing times, the dialog, `cm1view export` |
 | `test_series.py`, `test_dist.py` | Series (cache, time–height, files) and distributions |
+| `test_parcels.py` | Parcel output: reads, lattice, selections, sets, trajectory cache, heads, wraps, split files; the Parcels panel |
 | `test_pdecomp.py` | The pressure decomposition, on copies of demo files |
 | `test_figure.py`, `test_figure_layers.py`, `test_figure_runs.py`, `test_figure_export.py`, `test_figure_spec.py` | The figure editor: widgets ↔ spec, layers, several runs, export and animation, spec upgrades |
 | `test_legend.py` | Legends of blocks and panels |
@@ -81,6 +82,8 @@ core/                     model output, no UI
   series.py               time series of reduced fields: compute, cache, files
   dist.py                 distributions: a field's values over a region, their summary
   swath.py                time-window reductions (swaths, storm-following composites)
+  parcels.py              parcel output: reads grouped by parcel ID, selections, saved
+                          sets, trajectory cache, heads between parcel times
   export.py               netCDF export of fields (box, times, model levels or heights,
                           streamed per time) and `cm1view export`
 
@@ -99,6 +102,7 @@ viewer/                   the interactive page (Panel / Bokeh)
   tracking.py             Viewer mixin: storm tracking and the storm chip
   series.py               Viewer mixin: the Series panel and plots
   dist.py                 Viewer mixin: the Distribution panel, plots and statistics
+  parcels.py              Viewer mixin: the Parcels panel, sets, trajectories on the map
   xsec.py                 Viewer mixin: cross-sections
   diff.py                 Viewer mixin: map / section fill differences (minus a time or run)
   session.py              Viewer mixin: session files (collect / put back what the viewer

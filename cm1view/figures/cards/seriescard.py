@@ -198,7 +198,8 @@ class SeriesCard(SeveralRuns):
         w["t0"] = _f("Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
                      description="This series' times are shown from here, e.g. its run's "
                                  "initiation, so runs line up (0: model time; adds to "
-                                 "Style → Panel labels → Minutes counted from)")
+                                 "its run's time zero in Runs used and to Style → Panel "
+                                 "labels → Minutes counted from)")
         w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS,
                                         value=ent.get("marker", ""), width=100)
         w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,

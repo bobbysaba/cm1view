@@ -7,7 +7,7 @@ import numpy as np
 import panel as pn
 
 from .. import config, pdecomp
-from ..core import sounding_plot as sp, track as trk, vectors
+from ..core import parcels, sounding_plot as sp, track as trk, vectors
 from ..core.fields import CMAPS, deriv_options
 from .numinput import FloatInput
 from .picker import RunPicker
@@ -297,7 +297,8 @@ class Widgets:
             options=["Map", "3D", "Figure"], value="Map", button_type="primary",
             button_style="outline", width=190, height=32, margin=(4, 2))
         tools = ["Sounding", "Cross-section"] + (["Track"] if trk.available(run) else []) \
-            + ["Series", "Distribution", "3D region"]
+            + ["Series", "Distribution"] \
+            + (["Parcels"] if parcels.find_files(run.path) else []) + ["3D region"]
         self.mode = ToolRail(tools)
         self.hint = _html()
         # the Sounding tool's click: a point, or a dragged box (area mean)

@@ -86,13 +86,19 @@ class FigureTimes:
         tl = [float(t) for t in self._sel_run().times]
         if not self._uses("runs"):
             return tl, set()
-        others = []
-        for k in self._grid_runs()[1:]:
+        ks, others = self._grid_runs(), []
+        for k in ks[1:]:
             try:
-                others.append([float(t) for t in self.open_run(self.run_rows[k]["path"])[0].times])
+                others.append((k, [float(t) for t in
+                                   self.open_run(self.run_rows[k]["path"])[0].times]))
             except Exception:  # noqa: BLE001
                 continue
-        return tl, {t for t in tl if any(_match(o, t) is None for o in others)}
+        return tl, {t for t in tl if any(_match(o, self._moved_time(t, ks[0], k)) is None
+                                         for k, o in others)}
+
+    def _moved_time(self, ts, k0, k1):
+        """Model time (s) in run k1 of the moment ts is in run k0 (their time zeros)."""
+        return figdraw.moved_time(dict(runs=self._runs_collect()), ts, k0, k1)
 
     def _topts(self, values=()):
         """Time picker options: the outputs, plus any chosen time that has none (a

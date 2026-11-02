@@ -22,6 +22,7 @@ class Events:
         self._update_track_now()
         self.ser_now.location = self.ser_th_now.location = self.run.times[self.t] / 60.0
         self._draw_points()
+        self._par_redraw()
         self.request_map()
 
     def _refresh_panels(self):
@@ -67,7 +68,7 @@ class Events:
     def _on_mode(self, mode, init=False):
         hints = {
             None: "Pick a tool on the left (Sounding, Section, Track, Series, Distribution, "
-                  "3D box) to query the map",
+                  "Parcels, 3D box) to query the map",
             "Sounding": "Click: sounding at a point · <kbd>Shift</kbd>-click: add a point "
                         "(up to 4)",
             "Area sounding": "Drag a box: sounding averaged over it · <kbd>Shift</kbd>-drag: "
@@ -82,13 +83,19 @@ class Events:
                       "series plot to go to that time",
             "Distribution": "Choose a field, height or layer and a region in the panel, then "
                             "Compute: every value there at the shown time",
+            "Parcels": "Click: the parcels within the panel's radius of the point become a "
+                       "set (height and value limits in the panel)",
+            "Parcel box": "Drag a box: the parcels inside it become a set (height and value "
+                          "limits in the panel)",
         }
         self.hint.object = f'<div class="cv-hint">{hints[mode]}</div>'
         self.fig.toolbar.active_drag = self.bsel if mode in ("3D region", "Area sounding",
-                                                             "Seed box") \
+                                                             "Seed box", "Parcel box") \
             else self.pan
         if mode in ("Sounding", "Area sounding"):  # the Sounding button reopens this kind
             self.mode.mode_for["Sounding"] = self.snd_pick.value = mode
+        if mode in ("Parcels", "Parcel box"):
+            self.mode.mode_for["Parcels"] = self.par_pick.value = mode
         if init:
             return
         if self.full and PANELS.get(mode) != self.tabs.active:
@@ -230,6 +237,8 @@ class Events:
         elif mode == "Track":
             self._show_panel(True, 2)
             self.request_track(x, y)
+        elif mode == "Parcels":
+            self._par_choose(x, y)
         elif mode == "Cross-section":
             self.xs_pts = [(x, y)] if len(self.xs_pts) != 1 else self.xs_pts + [(x, y)]
             self._draw_xs()
@@ -253,6 +262,9 @@ class Events:
             if x1 - x0 > 0 and y1 - y0 > 0:
                 self._add_sounding((x0 + x1) / 2, (y0 + y1) / 2, self._drag_shift,
                                    (x1 - x0, y1 - y0))
+            return
+        if self.mode.value == "Parcel box":
+            self._par_choose(box=(g["x0"], g["x1"], g["y0"], g["y1"]))
             return
         if self.mode.value == "Seed box":
             self._set_seed_box((g["x0"], g["x1"], g["y0"], g["y1"]))

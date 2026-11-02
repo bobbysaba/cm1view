@@ -92,6 +92,8 @@ class ProfileCard(SeveralRuns, TimeCard):
         w["panel"].param.watch(lambda e: (self._show(), ed._fit_grid(), ed.request()), "value")
         self.title = pn.pane.HTML("<b>Profile</b>", margin=(6, 4, 0, 4))
         self.info = pn.pane.HTML(margin=(0, 4))
+        self.t_note = pn.pane.HTML(margin=(0, 4))  # (a run with no output at the time)
+        self._t_run = self._time_run()  # (the run the Time lists are of)
         self.vals = ProfileValues(self)  # (its values, and your edits of them)
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.rm],
@@ -102,14 +104,15 @@ class ProfileCard(SeveralRuns, TimeCard):
                    w["lw"],
                    (w["label"], 3)),
              _grid(w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"]),
-             self.vals.section, self.info,
+             self.vals.section, self.t_note, self.info,
              _hint("The field reduced over the region at every model level from Bottom to "
                    "Top (a layer series, computed only at the times needed and cached with "
                    "the Series tool's). Around the storm: a disc around each run's track. "
                    "A time window averages the profiles of its outputs. Several runs: a "
-                   "line each at the nearest output to Time (the first run's times), or "
-                   "an ensemble band. Automatic colour: the run's colour when each "
-                   "profile of the panel is from another run, else the next colour.")])
+                   "line each at the same time since each run's time zero (Time is the "
+                   "first run's), or an ensemble band. Automatic colour: the run's colour "
+                   "when each profile of the panel is from another run, else the next "
+                   "colour.")])
         self._show()
 
     def _show(self):
@@ -133,6 +136,25 @@ class ProfileCard(SeveralRuns, TimeCard):
         op = " · d/dz" if w["op"].value == "ddz" else ""
         self.title.object = (f"<b>Profile</b> · {d.label}{op} · {run} · {when} · panel "
                              f"{w['panel'].value}{two}")
+        self.time_note()
+
+    def time_note(self):
+        """Says which of the card's runs have no line: no output at the matching time."""
+        ed, t = self.ed, self.w["time"].value
+        rows, gone = ed.run_rows, []
+        if t is not None and self._t1() is None:
+            k0 = self._time_run()
+            names = {k: n.split(". ", 1)[-1] for n, k in ed._run_names().items()}
+            ks = range(len(rows)) if self.run_list() is None else self.run_list()
+            for k in ks:
+                if k == k0 or k >= len(rows):
+                    continue
+                o = ed._time_opts(k)
+                at = ed._moved_time(t, k0, k)
+                if o and abs(ed._nearest(o, at) - at) > 1.0:
+                    gone.append(f"{names.get(k, k)} (no output at {at / 60:g} min)")
+        self.t_note.object = f'<div class="cv-hint">No line for {", ".join(gone)}.</div>' \
+            if gone else ""
 
     def _changed(self, stale=False):
         if self.w["region"].value == "box" and self.box is None:
@@ -149,6 +171,7 @@ class ProfileCard(SeveralRuns, TimeCard):
         return int(ks[0]) if ks else 0
 
     def _reshow(self):
+        self._t_run = self._time_run()
         self._show()
 
     def _run_picked(self):
@@ -158,8 +181,11 @@ class ProfileCard(SeveralRuns, TimeCard):
         self._runs_changed()
 
     def _runs_changed(self):
-        """The card's runs changed: the Time lists offer its first run's outputs."""
-        self._set_times(self._time_run())
+        """The card's runs changed: the Time lists offer its first run's outputs, at the
+        same time since their time zeros."""
+        k = self._time_run()
+        self._set_times(k, self._t_run)
+        self._t_run = k
         self._show()
         self.vals.refresh()
         self.ed.request()

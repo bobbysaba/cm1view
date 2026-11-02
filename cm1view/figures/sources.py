@@ -10,10 +10,11 @@ import json
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from ..core import render, series as ser, vectors
+from ..core import parcels as P, render, series as ser, vectors
 from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
                     ProfileDataCard,
-                    DataCard, SeriesCard, SoundingCard, _dark)
+                    DataCard, ParcelSeriesCard, SeriesCard, SoundingCard, _dark,
+                    parcel_source)
 from ..viewer.ui import held
 
 
@@ -72,6 +73,23 @@ class FigureSources:
         if rng:
             lay.update(vmin=round(float(rng[0]), 6), vmax=round(float(rng[1]), 6))
 
+    def _parcel_layers(self):
+        """A parcels layer per parcel set of the viewer, drawn as it draws them (empty
+        without parcel output or sets)."""
+        v = self.v
+        if v.pf is None:
+            return []
+        look = dict(cvar=v.par_color.value or "", cmap=v.par_cmap.value,
+                    units=v.pf.units(v.par_color.value) if v.par_color.value else "",
+                    tails=v.par_window.value, minutes=float(v.par_minutes.value or 0.0),
+                    heads=bool(v.par_heads.value), interp=bool(v.par_interp.value),
+                    lw=round(0.8 * float(v.par_width.value or 1.0), 3),
+                    alpha=float(v.par_alpha.value), within=float(v.par_xs_within.value or 0.0),
+                    xs_tails=v.par_xs_tails.value, moving=v.par_frame.value,
+                    move_u=float(v.par_fu.value or 0.0), move_v=float(v.par_fv.value or 0.0))
+        return [dict(fg.layer_defaults("parcels", self.F), **look, **parcel_source(name, e))
+                for name, e in v.psets.items()]
+
     def from_map(self):
         """A one-panel figure of what the map shows (field, levels, contours, vectors,
         view), at the shown time."""
@@ -121,6 +139,7 @@ class FigureSources:
             lay.update(vector=o["q"], z=o["level"], frame=o["frame"], style=o["style"],
                        color=_dark(o["color"]), scale=vectors.FIG_SCALE * o["ref"])
             layers.append(lay)
+        layers += self._parcel_layers()
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
         self._minus(s, layers[0], sp["fill"].get("minus"), v._last_range)
@@ -165,6 +184,7 @@ class FigureSources:
                 lay.update(vector=o["q"], frame=o["frame"], spacing=0.75,
                            scale=20.0 * o["ref"], width=0.0015, color=_dark(o["color"]))
                 layers.append(lay)
+        layers += self._parcel_layers()
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
         self._minus(s, layers[0], sp["minus"], v._xs_range)
@@ -179,12 +199,13 @@ class FigureSources:
 
     # ------------------------------------------------------------ series cards
     def _ser_card(self, e):
-        c = DataCard(self, e) if fg.is_table(e) else SeriesCard(self, e)
+        c = DataCard(self, e) if fg.is_table(e) else ParcelSeriesCard(self, e) \
+            if fg.is_parcels(e) else SeriesCard(self, e)
         c.up.on_click(lambda ev: self._move_ser(c, -1))
         c.down.on_click(lambda ev: self._move_ser(c, 1))
         c.rm.on_click(lambda ev: self._remove_ser(c))
         c.dup.on_click(lambda ev: self._dup_series(c))
-        if not isinstance(c, DataCard):
+        if isinstance(c, SeriesCard):
             c.per_run.on_click(lambda ev: self._per_run_series(c))
         return c
 
@@ -192,6 +213,9 @@ class FigureSources:
         for c in self.ser_cards:
             c.show(self.kind.value)
         self.ser_data.visible = self.kind.value == "line"
+        self.ser_par.visible = self.kind.value == "line" and \
+            getattr(self.v, "pf", None) is not None
+        self.ser_wb.visible = self.ser_par.visible and self.v.pf.has_budget()
         self.ser_box.objects = [c.panel for c in self.ser_cards] or [pn.pane.HTML(
             '<div class="cv-empty">No series yet, so nothing is computed: add one of the '
             'Series tool’s (above) or a new one.</div>')]
@@ -260,7 +284,7 @@ class FigureSources:
         have = {(x["runs"][0] if x["runs"] else -1,
                  x["panel"] if line else -1, json.dumps(x["recipe"], sort_keys=True,
                                                          default=float))
-                for x in (y.collect() for y in self.ser_cards) if not fg.is_table(x)}
+                for x in (y.collect() for y in self.ser_cards if isinstance(y, SeriesCard))}
         C = int(self.cols.value or 1)
         row, col = divmod(s["panel"], C)
         taken = {int(x.w["panel"].value or 1) - 1 for x in self.ser_cards}
@@ -287,7 +311,7 @@ class FigureSources:
         per run when the series split all have the same runs, else its panel when no
         card before it is there (else the next free one)."""
         names = sorted(self._run_names().values())
-        mine = [c for c in self.ser_cards if isinstance(c, DataCard)]  # (stay as they are)
+        mine = [c for c in self.ser_cards if not isinstance(c, SeriesCard)]  # (stay so)
         ents = [c.collect() for c in self.ser_cards if c not in mine]
         own = [e["runs"] or names for e in ents]
         split = any(len(ks) > 1 for ks in own)
@@ -310,7 +334,7 @@ class FigureSources:
         if not any(c._kind == "th" for c in self.ser_cards):
             return
         names = sorted(self._run_names().values())
-        mine = [c for c in self.ser_cards if isinstance(c, DataCard)]  # (stay as they are)
+        mine = [c for c in self.ser_cards if not isinstance(c, SeriesCard)]  # (stay so)
         groups = {}
         for e in (c.collect() for c in self.ser_cards if c not in mine):
             key = json.dumps({k: v for k, v in e.items() if k not in ("runs", "panel")},
@@ -375,6 +399,56 @@ class FigureSources:
         self.ser_cards.append(self._ser_card(e))
         self._series_changed()
 
+    def _parcel_series_source(self):
+        """The set a new parcel series draws: the next viewer set no card draws yet
+        (else the first; no set: the first saved one), or None (and a message)."""
+        v = self.v
+        have = {c.ent.get("name") for c in self.ser_cards if isinstance(c, ParcelSeriesCard)}
+        src = next((parcel_source(n, e) for n, e in v.psets.items() if n not in have),
+                   None) or next((parcel_source(n, e) for n, e in v.psets.items()), None)
+        if src is None:
+            saved = P.list_sets(v.run.path)
+            if not saved:
+                self._msg("No parcel set yet: choose some in the viewer's <b>Parcels</b> "
+                          "tab first.", True)
+                return None
+            ps = P.ParcelSet.load(saved[0])
+            src = dict(name=ps.name, rule=ps.rule or None,
+                       ids=None if ps.rule else [int(i) for i in ps.ids])
+        return src
+
+    def _add_parcel_series(self):
+        """A parcel series of the next set (_parcel_series_source), w in the last card's
+        panel."""
+        v = self.v
+        if v.pf is None:
+            return
+        src = self._parcel_series_source()
+        if src is None:
+            return
+        var = "w" if "w" in v.pf.vars else next(n for n in v.pf.vars if n != "mtime")
+        e = fg.parcel_series_defaults(src, var, v.pf.units(var), self._own_index(),
+                                      len(self.ser_cards))
+        e["panel"] = int(self.ser_cards[-1].w["panel"].value or 1) - 1 if self.ser_cards \
+            else 0
+        self.ser_cards.append(self._ser_card(e))
+        self._series_changed()
+
+    def _add_w_budget(self, how="rates"):
+        """The w budget of the next set (_parcel_series_source) in a new panel: a card
+        per term (fg.w_budget_entries), rates or integrated since the set's time."""
+        v = self.v
+        if v.pf is None or not v.pf.has_budget():
+            return
+        src = self._parcel_series_source()
+        if src is None:
+            return
+        panel = 1 + max((int(c.w["panel"].value or 1) - 1 for c in self.ser_cards),
+                        default=-1)
+        for e in fg.w_budget_entries(v.pf, src, how, self._own_index(), panel):
+            self.ser_cards.append(self._ser_card(e))
+        self._series_changed()
+
     def _fit_grid(self, reset=False, wide=False):
         """Time-series / sounding / distribution / section figures: enough grid cells
         for the highest panel number of the cards (reset: a column of up to 3, else 2
@@ -390,7 +464,7 @@ class FigureSources:
                  "joint": self.joint_cards, "azim": self.azim_cards,
                  "xsec": self.sec_cards}[kind]
         if kind == "th":  # (your own data: time series only)
-            cards = [c for c in cards if not isinstance(c, DataCard)]
+            cards = [c for c in cards if isinstance(c, SeriesCard)]
         n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
         r, c = int(self.rows.value or 1), int(self.cols.value or 1)
         runs = len({c.w["run"].value for c in cards}) if kind in ("xsec", "th") else 1
@@ -606,7 +680,8 @@ class FigureSources:
             i = self.prof_cards.index(c)
             self.prof_cards.remove(c)
             self.prof_cards[i:i] = [self._prof_card(dict(
-                s, run=k, runs=[k], ens="", color=figdraw.run_color(spec, k))) for k in ks]
+                fg.entry_at(spec, s, k), run=k, runs=[k], ens="",
+                color=figdraw.run_color(spec, k))) for k in ks]
             self._show_profiles()
             self._build_titles()
             self.request()
@@ -621,8 +696,9 @@ class FigureSources:
                  json.dumps(x["recipe"], sort_keys=True, default=float))
                 for x in (y.collect() for y in self.prof_cards)
                 if x["runs"] is not None and len(x["runs"]) == 1}
-        new = [dict(s, run=k, runs=[k], label="", color="") for k in others
-               if (k, s["panel"], s["time_s"], s["time_s1"], key) not in have]
+        new = [dict(a, run=k, runs=[k], label="", color="") for k, a in
+               ((k, fg.entry_at(spec, s, k)) for k in others)
+               if (k, s["panel"], a["time_s"], a["time_s1"], key) not in have]
         if not new:
             self._msg("Each run has this profile in this panel already.", True)
             return

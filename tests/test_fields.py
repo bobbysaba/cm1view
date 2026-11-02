@@ -280,3 +280,31 @@ def test_parcel_maps_match_the_soundings(reg, monkeypatch):
     i0, i1, j0, j1 = S.region_at(run, r, None)[:4]
     ref = float(np.mean(s3[j0:j1, i0:i1], dtype=np.float64))
     assert not skipped and abs(ds.value.values[T] - ref) < 1e-3 * abs(ref)
+
+
+def test_cf_style_output_reads_like_cm1s_own(reg, demo_run, tmp_path_factory):
+    """Newer CM1 writes CF-style names (dims xh/xf, yh/yf, zh/zf; heights in "zh"): the
+    same run in that layout opens and reads exactly as in CM1's own (ni/nip1, z)."""
+    from cm1view import demo
+    from cm1view.core import export
+    path = str(tmp_path_factory.mktemp("cf") / "supercell_cf")
+    demo.write_run(path, cf=True, **demo.RUNS["supercell"])
+    with netCDF4.Dataset(os.path.join(path, "cm1out_000002.nc")) as d:
+        assert d["w"].dimensions == ("time", "zf", "yh", "xh") and "z" not in d.variables
+    ref, Fr = reg.get(demo_run)
+    run, F = reg.get(path)
+    assert np.array_equal(run.z, ref.z) and np.array_equal(run.zf, ref.zf)
+    assert np.array_equal(run.times, ref.times)
+    assert {n: (i.ndim, i.stag) for n, i in run.vars.items()} == \
+        {n: (i.ndim, i.stag) for n, i in ref.vars.items()}
+    assert (run.vars["u"].stag, run.vars["v"].stag, run.vars["w"].stag) == ("x", "y", "z")
+    T, K = 4, 6
+    for n in ("u", "v", "w", "th", "sws"):
+        assert np.array_equal(run.read_level(n, T, K), ref.read_level(n, T, K)), n
+    assert np.array_equal(run.volume("w", T), ref.volume("w", T))
+    assert np.array_equal(run.read_box("u", T, 10, 20, 30, 40),
+                          ref.read_box("u", T, 10, 20, 30, 40))
+    for n in ("zvort", "thrhopert"):
+        assert np.array_equal(F.plane(n, T, "height", 1.0), Fr.plane(n, T, "height", 1.0))
+    assert export._coord_attrs(run, "z", {})["long_name"] == \
+        "nominal height of scalar grid points"

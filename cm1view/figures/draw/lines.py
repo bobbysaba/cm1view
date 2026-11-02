@@ -626,10 +626,13 @@ def _joints(ax, d, spec, fs):
             Hm = np.ma.masked_less_equal(H, 0.0)
             cm = colormap(o.get("cmap") or "viridis", bool(o.get("reverse")))
             pos = H[H > 0]
-            if o.get("log") and pos.size and pos.max() > pos.min():
-                nm = LogNorm(vmin=float(pos.min()), vmax=float(pos.max()))
+            hmax = o.get("_hmax")  # (an animation's, of all its frames: fit_scales)
+            lo, hi = (o["_hmin"], hmax) if hmax else \
+                (float(pos.min()), float(pos.max())) if pos.size else (0.0, 0.0)
+            if o.get("log") and hi > lo:
+                nm = LogNorm(vmin=lo, vmax=hi)
             else:
-                nm = Normalize(vmin=0.0, vmax=float(H.max()) or 1.0)
+                nm = Normalize(vmin=0.0, vmax=hmax or float(H.max()) or 1.0)
             m = ax.pcolormesh(ex, ey, Hm.T, cmap=cm, norm=nm, rasterized=True)
             if o.get("colorbar", True):
                 cb = ax.figure.colorbar(m, ax=ax, pad=0.02, fraction=0.06, aspect=30)

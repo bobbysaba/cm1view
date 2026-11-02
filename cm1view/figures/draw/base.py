@@ -196,10 +196,84 @@ def panel_letter(i, fmt):
 
 
 def time_text(t_s, opts):
+    """A time label of model time t_s (s): {min} counted from opts' t0_min; {model},
+    {s} and {hms} the model time (minutes, seconds, h:mm:ss)."""
     mins = (float(t_s) - 60.0 * float(opts.get("t0_min", 0.0))) / 60.0
     s = int(round(float(t_s)))
     return opts.get("fmt", "t = {min:g} min").format(
-        min=round(mins, 2), s=s, hms=f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}")
+        min=round(mins, 2), model=round(float(t_s) / 60.0, 2), s=s,
+        hms=f"{s // 3600:d}:{(s % 3600) // 60:02d}:{s % 60:02d}")
+
+
+def run_t0(spec, k):
+    """Time zero (model minutes) of run k of the figure (spec["runs"][k]["t0_min"], e.g.
+    its initiation): times of other runs are moved so the runs line up (moved_time)."""
+    runs = spec.get("runs") or []
+    return float(runs[k].get("t0_min") or 0.0) if 0 <= int(k) < len(runs) else 0.0
+
+
+def output_times(spec, k):
+    """Output times (s) of run k when the figure pairs its runs by output number
+    (spec["runs"][k]["outputs_s"], there with spec["time_match"] "output"), else None.
+    The first run is then the reference: its times label the panels and the time axes."""
+    runs = spec.get("runs") or []
+    return (runs[k].get("outputs_s") or None) if 0 <= int(k) < len(runs) else None
+
+
+def _end_steps(t):
+    """The spacing of output times t at their start and end (one output: a minute)."""
+    return (t[1] - t[0], t[-1] - t[-2]) if t.size > 1 else (60.0, 60.0)
+
+
+def output_number(times, ts):
+    """Which output of `times` model time ts (s) is: its index within tindex's second;
+    between outputs a fraction, and before or past the ends counted on at the spacing
+    there, so a time that is no output stays none in the run it is paired with."""
+    t, ts = np.asarray(times, dtype=float), float(ts)
+    i = int(np.argmin(np.abs(t - ts)))
+    if abs(t[i] - ts) <= 1.0:
+        return float(i)
+    first, last = _end_steps(t)
+    if ts < t[0]:
+        return (ts - t[0]) / first
+    if ts > t[-1]:
+        return t.size - 1 + (ts - t[-1]) / last
+    return float(np.interp(ts, t, np.arange(t.size)))
+
+
+def output_at(times, n):
+    """Model time (s) of output number n of `times` (see output_number)."""
+    t, n = np.asarray(times, dtype=float), float(n)
+    first, last = _end_steps(t)
+    if n < 0.0:
+        return float(t[0] + n * first)
+    if n > t.size - 1:
+        return float(t[-1] + (n - t.size + 1) * last)
+    return float(np.interp(n, np.arange(t.size), t))
+
+
+def moved_time(spec, ts, k0, k1):
+    """Model time (s) in run k1 of the moment model time ts (s) is in run k0: the same
+    time since each run's time zero, or in a figure pairing its runs by output number
+    the same output (past the end of run k1: a time it has no output at)."""
+    a, b = output_times(spec, k0), output_times(spec, k1)
+    if int(k0) == int(k1):
+        return float(ts)
+    if a and b:
+        return output_at(b, output_number(a, ts))
+    return float(ts) + 60.0 * (run_t0(spec, k1) - run_t0(spec, k0))
+
+
+def run_time_opts(spec, k, ts=None):
+    """The figure's time label options (spec["time_label"]) for a panel of run k: its
+    minutes counted from the figure's time zero plus the run's.  Runs paired by output
+    number, for model time ts (s): the reference run's minutes at that output."""
+    tlab = spec.get("time_label") or {}
+    t0 = float(tlab.get("t0_min", 0.0))
+    if ts is not None and output_times(spec, k) and output_times(spec, 0):
+        return dict(tlab, t0_min=t0 + run_t0(spec, 0)
+                    + (float(ts) - moved_time(spec, ts, k, 0)) / 60.0)
+    return dict(tlab, t0_min=t0 + run_t0(spec, k))
 
 
 def _new_fig(spec):
@@ -235,6 +309,61 @@ def part_shares(spec):
     rest = max(0.0, 1.0 - sum(s for s in own if s is not None))
     return [max(0.02, s if s is not None else (rest * sz / free if free else 0.0))
             for s, sz in zip(own, size)]
+
+
+def grid_layout(items, grid=None):
+    """Where the parts (or blocks) `items` go on a custom grid (arrange "grid"; `grid`:
+    spec["part_grid"]: rows, cols and, optional, widths and heights, the columns' and
+    rows' relative sizes):
+    rows, cols   the grid's size (with more rows if a part has no place and no cell free)
+    places       each item's [row, col, rowspan, colspan]: its own "place" kept within
+                 the grid, or without one the first free cell
+    widths, heights  the columns' and rows' sizes (in) that keep the items' own sizes
+    width_ratios, height_ratios  the relative sizes to draw with: `grid`'s, or those."""
+    grid = grid or {}
+    rows, cols = max(1, int(grid.get("rows") or 1)), max(1, int(grid.get("cols") or 1))
+    places, taken = [], set()
+    for it in items:
+        p = it.get("place")
+        if p:
+            r, c, rs, cs = [int(v) for v in p]
+            r, c = min(max(r, 0), rows - 1), min(max(c, 0), cols - 1)
+            p = [r, c, min(max(rs, 1), rows - r), min(max(cs, 1), cols - c)]
+            taken |= {(i, j) for i in range(r, r + p[2]) for j in range(c, c + p[3])}
+        places.append(p)
+    for k, p in enumerate(places):
+        if p is None:
+            free = next(((i, j) for i in range(rows) for j in range(cols)
+                         if (i, j) not in taken), None)
+            if free is None:
+                free, rows = (rows, 0), rows + 1
+            taken.add(free)
+            places[k] = [free[0], free[1], 1, 1]
+
+    def sizes(n, at, span, along):
+        out = [0.0] * n
+        for it, p in zip(items, places):
+            for i in range(p[at], p[at] + p[span]):
+                out[i] = max(out[i], float(it["size"][along]) / p[span])
+        used = [v for v in out if v > 0.0]
+        return [v or (sum(used) / len(used) if used else 1.0) for v in out]
+
+    def ratios(own, n, natural):
+        ok = own and len(own) == n and all(float(v) > 0.0 for v in own)
+        return [float(v) for v in own] if ok else natural
+
+    w, h = sizes(cols, 1, 3, 0), sizes(rows, 0, 2, 1)
+    return dict(rows=rows, cols=cols, places=places, widths=w, heights=h,
+                width_ratios=ratios(grid.get("widths"), cols, w),
+                height_ratios=ratios(grid.get("heights"), rows, h))
+
+
+def grid_overlaps(places):
+    """The pairs (k, m) of places of grid_layout that share a cell."""
+    def cells(p):
+        return {(i, j) for i in range(p[0], p[0] + p[2]) for j in range(p[1], p[1] + p[3])}
+    return [(k, m) for k, p in enumerate(places) for m, q in enumerate(places)
+            if k < m and cells(p) & cells(q)]
 
 
 def save(spec, fig, fname, **kw):

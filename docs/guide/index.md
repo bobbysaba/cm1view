@@ -13,6 +13,7 @@ one area each.
 | [Cross-sections](cross-sections.md) | Vertical sections between two points |
 | [3D](3d.md) | Isosurfaces, vectors and streamlines in a 3D scene |
 | [Series and distributions](series.md) | A field reduced over a region at every time; all values at one time |
+| [Parcels](parcels.md) | Choosing parcels from CM1's parcel output; trajectories and heads on the map, cross-section and 3D view, on the grid or relative to the storm; plots of their values; 3D fields sampled along them; the Lagrangian w budget; export to netCDF / CSV; in figures (layers, 3D scenes, time series) |
 | [Figures](figures.md) | The quick start and saving; then [panels](figures-panels.md), [layers](figures-layers.md), [style and annotations](figures-style.md), and [export, animations and the script](figures-export.md) |
 | [Notes on the fields](fields.md) | Winds, parcels, derived fields, pressure decomposition |
 | [Worked examples](recipes.md) | Short walkthroughs that combine the tools |
@@ -182,7 +183,8 @@ cm1view export /path/to/run --fields thpert,srh03 --time 90 --heights 0.5,1,3 \
 `--track FILE` (default: the run's storm track file, if one is found) sets the storm
 motion of storm-relative fields, `--storm U,V` a fixed one; `--no-compress` writes
 faster, larger files; an existing file is replaced only with `--overwrite`. See
-`cm1view export -h`.
+`cm1view export -h`. `--parcels SET` writes a saved parcel set's trajectories instead
+([Parcels](parcels.md#exporting-a-set)).
 
 ## Switching runs
 

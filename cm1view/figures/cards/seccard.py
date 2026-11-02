@@ -6,7 +6,7 @@ import panel as pn
 
 from .. import draw as figdraw
 from ..spec.sections import MOTION, ORIENTS, POSITIONS, describe, section_defaults
-from .base import _f, _grid, _fold, _load_widgets, _BTN
+from .base import _f, _grid, _fold, _load_widgets, _BTN, wanted_time
 from ...viewer.ui import held
 
 
@@ -162,8 +162,18 @@ class SectionCard:
         if isinstance(ev.new, str):  # a run not in the figure yet
             self.ed._pick_other(self.w["run"], ev.old)
             return
-        self.set_run(ev.new)
+        cur = self.w["time"].value
+        self.set_run(ev.new, None if cur is None or not isinstance(ev.old, int) else
+                     self.ed._moved_time(cur, ev.old, ev.new))  # (the same time since t0)
         self._changed()
+
+    def _time_run(self):
+        return self.w["run"].value
+
+    def move_time(self, dt):
+        """The card's time moved by dt s (a run's time zero changed), see TimeCard's."""
+        k = self.w["run"].value
+        self.set_run(k, wanted_time(self, "time", self.ed._time_opts(k), dt))
 
     def set_run(self, k, time_s=None):
         """Run k, at its time nearest time_s (None: the card's time)."""

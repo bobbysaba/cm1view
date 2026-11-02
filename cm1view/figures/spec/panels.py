@@ -6,9 +6,10 @@ import re
 
 import numpy as np
 
-from ...core import azim, dist, joint, series as ser, thermo, track as trk
+from ...core import azim, dist, joint, parcels as par, series as ser, thermo, \
+    track as trk
 from .. import draw as figdraw
-from .base import npanels, tindex, storm_motion
+from .base import npanels, tindex, storm_motion, profile_runs, entry_run, time_key
 
 LINE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "k"]
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
@@ -53,6 +54,12 @@ def op_units(units, op):
         return "s$^{-1}$" if ms else (f"{units} m$^{{-1}}$" if units else "m$^{-1}$")
     if op == "ddt":
         return "m s$^{-2}$" if ms else (f"{units} s$^{{-1}}$" if units else "s$^{-1}$")
+    if op == "int":  # (a parcel series' time integral)
+        if units in ("m/s/s", "m s-2", "m s$^{-2}$"):
+            return "m s$^{-1}$"
+        return f"{units} s" if units else "s"
+    if op == "delta" and ms:  # (a parcel series' change: on the integrals' axis)
+        return "m s$^{-1}$"
     return units
 
 
@@ -73,7 +80,9 @@ def series_pairs(spec):
 
 
 def _entry_runs(ent, nr):
-    if is_table(ent):  # (your own data: no run)
+    """The runs whose series (computed) entry `ent` draws: none for your own data and
+    parcels (no series computed)."""
+    if is_table(ent) or is_parcels(ent):
         return []
     runs = ent.get("runs")
     return list(range(nr)) if runs is None else [int(k) for k in runs if int(k) < nr]
@@ -120,6 +129,125 @@ def table_arrays(entry, t0_min=0.0):
     t, v = t[ok], v[ok]
     o = np.argsort(t, kind="stable")
     return t[o] - t0_min, v[o]
+
+
+def is_parcels(entry):
+    """Whether a series entry is a variable of a parcel set over the parcel times
+    (entry: its run runs[0], the set's name, rule or ids, var; nothing computed)."""
+    return entry.get("source") == "parcels"
+
+
+PARCEL_EACH_MAX = 500  # (parcels drawn with a line of their own, at most)
+
+
+def parcel_series_defaults(src, var="w", units="", run=0, n=0, label=""):
+    """A spec["series"] entry of parcel variable `var` of the set src (a parcels
+    layer's name, rule or ids, colour): its centre (ens_mid) and band (ens) over the
+    parcels, and the lines of up to `each` parcels (faint, as an ensemble's runs)."""
+    name = src.get("name") or "parcels"
+    return dict(source="parcels", recipe={}, runs=[int(run)], name=name,
+                rule=src.get("rule"), ids=src.get("ids"), var=var,
+                label=label or f"{name}: {var}", op="", units=units, base_units=units,
+                color=src.get("color") or LINE_COLORS[n % len(LINE_COLORS)], lw=1.5,
+                ls="-", t0_min=0.0, marker="", panel=0, axis="auto", ylabel="",
+                ens="p10p90", ens_mid="mean", ens_members="faint", ens_alpha=0.25, each=0)
+
+
+W_BUDGET_LOOK = {"dwdt": ("k", "-"), "b": ("#d62728", "-"), "vpg": ("#1f77b4", "-"),
+                 "wres": ("0.5", "--")}  # (term: colour, line)
+
+
+def w_budget_entries(pf, src, how="rates", run=0, panel=0):
+    """spec["series"] entries of the w budget of the set src (parcel_series_defaults'),
+    one per term, mean over the parcels, in one panel: how "rates" (Dw/Dt, b, vpg and
+    the rest) or "int" (Δw and the time integrals of the others, since the set's
+    time: Δw = ∫b + ∫vpg + ∫rest)."""
+    name = src.get("name") or "parcels"
+    out = []
+    for var in par.BUDGET:
+        col, ls = W_BUDGET_LOOK[var]
+        lab = par.var_label(var)
+        if how == "int":
+            var, op = ("w", "delta") if var == "dwdt" else (var, "int")
+            lab = "Δw" if var == "w" else f"∫ ({lab}) dt" if " " in lab else f"∫ {lab} dt"
+        else:
+            op = ""
+        base = pf.units(var)
+        e = parcel_series_defaults(dict(src, color=col), var, base, run,
+                                   label=f"{name}: {lab}")
+        e.update(op=op, units=op_units(base, op), ls=ls, panel=int(panel), ens="")
+        out.append(e)
+    return out
+
+
+def parcel_series_arrays(pf, a, entry, t0_min=0.0):
+    """Lines of a parcel series: a (nt, n) its variable at the parcel times pf.times
+    (NaN: a parcel not there), with the entry's op applied: "ddt" (d/dt along each
+    parcel), "delta" (its change) or "int" (its time integral) since the set's time.
+    {"t": minutes from t0_min, "each": (t, v) NaN-separated lines of up to entry
+    "each" parcels (evenly spread through the set) or None, "mid": centre values or
+    None, "lo"/"hi": the band or None, "n": parcels}."""
+    tm = np.asarray(pf.times, dtype=np.float64)
+    a = np.asarray(a, dtype=np.float64)
+    op = entry.get("op")
+    if op == "ddt":
+        a = par.d_dt(tm, a)
+    elif op in par.SINCE:
+        a = par.since(tm, a, par.ref_index(pf, entry.get("rule")), op)
+    t, n = tm / 60.0 - t0_min, a.shape[1]
+    out = dict(t=t, each=None, mid=None, lo=None, hi=None, n=n)
+    m = min(int(entry.get("each") or 0), PARCEL_EACH_MAX, n)
+    if m:
+        cols = np.unique(np.linspace(0, n - 1, m).round().astype(int))
+        T = np.concatenate([np.append(t, np.nan)] * len(cols))
+        V = np.concatenate([np.append(a[:, j], np.nan) for j in cols])
+        out["each"] = (T[:-1], V[:-1])
+    how, mid = entry.get("ens") or "", entry.get("ens_mid", "mean") or ""
+    if n == 1:  # (one parcel: its own line)
+        out["mid"] = a[:, 0]
+    elif how or mid:
+        c, lo, hi = ser.band(a.T, how or "minmax", mid)
+        out["mid"] = c if mid else None
+        if how:
+            out["lo"], out["hi"] = lo, hi
+    return out
+
+
+def _parcel_lines(out, n, e, ent, got):
+    """Put the lines of parcel series e (got: (ParcelFile, its (nt, n) values)) as
+    S<n>...: centre (with the band: S<n>_ens, lo, hi) and each parcel's (one
+    NaN-separated line, S<n>_mem when there is a centre or band).  (lines, t lo, hi)."""
+    pf, a = got
+    P = parcel_series_arrays(pf, a, ent, float(ent.get("_t0", 0.0)))
+    t, el, k = P["t"], ent.get("label", ""), int((ent.get("runs") or [0])[0])
+    lo, hi, n0 = np.inf, -np.inf, n
+    main = P["mid"] is not None or P["lo"] is not None
+    if P["each"] is not None:
+        T, V = P["each"]
+        if np.isfinite(V).any():
+            out[f"S{n}_t"], out[f"S{n}_v"] = T, V
+            out[f"S{n}_e"], out[f"S{n}_r"] = e, k
+            out[f"S{n}_label"] = f"{el} · each parcel" if main else el
+            if main:
+                out[f"S{n}_mem"] = 1
+            ok = np.isfinite(V) & np.isfinite(T)
+            lo, hi = float(T[ok].min()), float(T[ok].max())
+            n += 1
+    if main:
+        v = P["mid"] if P["mid"] is not None else np.full(t.size, np.nan)
+        have = np.isfinite(v) if P["lo"] is None else np.isfinite(P["lo"])
+        if have.any():
+            fin = np.flatnonzero(have)
+            sl = slice(fin[0], fin[-1] + 1)
+            out[f"S{n}_t"], out[f"S{n}_v"] = t[sl], v[sl]
+            out[f"S{n}_e"], out[f"S{n}_r"] = e, k
+            out[f"S{n}_label"] = el
+            if P["lo"] is not None:
+                out[f"S{n}_lo"], out[f"S{n}_hi"] = P["lo"][sl], P["hi"][sl]
+                out[f"S{n}_ens"] = P["n"]
+            lo, hi = min(lo, t[fin[0]]), max(hi, t[fin[-1]])
+            n += 1
+    return n - n0, lo, hi
 
 
 TABLE_MAX = 10000  # (points in a series of your own: it is kept in the spec)
@@ -231,17 +359,29 @@ def apply_edits(v, times_s, entry, k, tol=EDIT_TOL):
     return v, used, gone
 
 
-def series_t0(spec, entry):
-    """Time zero (min) of a series: the figure's (Style: panel labels) plus the
-    series' own (e.g. its run's initiation, so runs line up)."""
+def series_t0(spec, entry, k=None):
+    """Time zero (min) of a series' line of run k: the figure's (Style: panel labels)
+    plus the run's (Runs used; k None: no run, as your own data) plus the series' own."""
     return float(spec.get("time_label", {}).get("t0_min", 0.0)) + \
-        float(entry.get("t0_min") or 0.0)
+        (0.0 if k is None else figdraw.run_t0(spec, k)) + float(entry.get("t0_min") or 0.0)
 
 
-def th_panel(run, ds, entry, spec):
-    """Arrays of a time-height panel."""
-    t0 = series_t0(spec, entry)
-    t, v, z, P = series_arrays(run, ds, entry, t0)
+def series_of_run(spec, run, ds, entry, k=None):
+    """series_arrays of run k's line on the figure's time axis: counted from series_t0,
+    or with the runs paired by output number each output at the reference run's time (the
+    first run's; past its end, at the spacing there)."""
+    if k is not None and figdraw.output_times(spec, k) and figdraw.output_times(spec, 0):
+        t0 = series_t0(spec, entry, 0)
+        _, v, z, P = series_arrays(run, ds, entry, t0)
+        ref = figdraw.output_times(spec, 0)
+        t = np.array([figdraw.output_at(ref, n) for n in range(len(run.times))])
+        return t / 60.0 - t0, v, z, P
+    return series_arrays(run, ds, entry, series_t0(spec, entry, k))
+
+
+def th_panel(run, ds, entry, spec, k=None):
+    """Arrays of a time-height panel of run k."""
+    t, v, z, P = series_of_run(spec, run, ds, entry, k)
     if P is None:
         return dict(missing="time–height panels need a layer series (Vertical: Layer)"
                     if "profile" not in ds else "d/dz needs at least two levels")
@@ -267,7 +407,7 @@ def th_panel(run, ds, entry, spec):
                 ylim=(z0, min(z1, hi)) if z1 > z0 else (z0, z0 + 1.0))
 
 
-ENS_BANDS = ("minmax", "p10p90", "p25p75", "sd")
+ENS_BANDS = ser.BANDS
 
 
 def ensemble_band(members, how="minmax", mid="mean"):
@@ -292,16 +432,7 @@ def ensemble_band(members, how="minmax", mid="mean"):
     if not have.any():
         return None
     T, V = T[have], V[:, have]
-    if how == "sd":
-        c, sd = np.nanmean(V, axis=0), np.nanstd(V, axis=0)
-        lo, hi = c - sd, c + sd
-    elif how in ("p10p90", "p25p75"):
-        q = (10, 90) if how == "p10p90" else (25, 75)
-        lo, hi = np.nanpercentile(V, q[0], axis=0), np.nanpercentile(V, q[1], axis=0)
-    else:
-        lo, hi = np.nanmin(V, axis=0), np.nanmax(V, axis=0)
-    c = (np.nanmedian(V, axis=0) if mid == "median" else np.nanmean(V, axis=0)
-         if mid == "mean" else np.full(T.size, np.nan))
+    c, lo, hi = ser.band(V, how, mid)
     return T, c, lo, hi
 
 
@@ -318,9 +449,10 @@ def run_folder(spec, k):
         or f"run {k + 1}"
 
 
-def line_panel(spec, i, get):
+def line_panel(spec, i, get, pget=None):
     """Arrays of time-series panel i.  get(run index, series index) -> (run, dataset)
-    or None (not available).  A series with an ensemble band (its "ens") and two runs
+    or None (not available); pget(series index) -> (ParcelFile, (nt, n) values) of a
+    parcel series, or why not (a string).  A series with an ensemble band (its "ens") and two runs
     or more: its runs' lines as members (S<n>_mem 1; none when its ens_members is
     "hidden") and one line more of the ensemble (S<n>_ens: the number of members,
     S<n>_r -1, S<n>_v the centre, S<n>_lo / S<n>_hi the band)."""
@@ -332,9 +464,23 @@ def line_panel(spec, i, get):
     out, n, lo, hi, why = {}, 0, np.inf, -np.inf, ""
     lines += [(e, -1) for e, ent in enumerate(ents)
               if is_table(ent) and int(ent.get("panel", 0)) == i]
+    lines += [(e, -2) for e, ent in enumerate(ents)
+              if is_parcels(ent) and int(ent.get("panel", 0)) == i]
     members = {}  # (entry index: [(t, v)] of its runs, with an ensemble band)
     edited = set()  # ((entry, run) drawn with hand edits)
     for e, k in lines:
+        if k == -2:  # (a parcel set's variable)
+            got = pget(e) if pget is not None else "parcels need their run"
+            if isinstance(got, str):
+                why = why or got
+                continue
+            k0 = int((ents[e].get("runs") or [0])[0])
+            m, a, b = _parcel_lines(out, n, e,
+                                    dict(ents[e], _t0=series_t0(spec, ents[e], k0)), got)
+            if not m:
+                why = why or "no parcel values"
+            n, lo, hi = n + m, min(lo, a), max(hi, b)
+            continue
         if k < 0:  # (your own data)
             t, v = table_arrays(ents[e], series_t0(spec, ents[e]))
             if not np.isfinite(v).any():
@@ -353,7 +499,7 @@ def line_panel(spec, i, get):
             why = "not computed yet"
             continue
         run, ds = got
-        t, v, _, _ = series_arrays(run, ds, ents[e], series_t0(spec, ents[e]))
+        t, v, _, _ = series_of_run(spec, run, ds, ents[e], k)
         if v is not None:
             v, used, _ = apply_edits(v, run.times, ents[e], k)  # (edits at times the
             if used:  # run lacks wait, not moved to other times: the card says so)
@@ -498,13 +644,23 @@ def sounding_label(entry, run_label, run, multi):
     return " ".join(p for p in ((run_label if multi else ""), where, when) if p)
 
 
+def _one_time(spec, out, ents):
+    """Panel arrays `out` with the time label's time and run ("time_s", "run"), when
+    its entries `ents` are all at one moment (the same time since their time zeros,
+    not a time window): the first's."""
+    keys = {time_key(spec, x) for x in ents}
+    if len(keys) == 1 and keys.pop()[1] is None:
+        out["time_s"], out["run"] = round(float(ents[0]["time_s"]), 1), entry_run(ents[0])
+    return out
+
+
 def sounding_panel(spec, i, get, auto_label=None):
     """Arrays of sounding panel i.  get(sounding index) -> thermo result or a string
     (why there is none); auto_label(sounding index) -> legend text when it has no
     label of its own."""
     ents = spec.get("soundings", [])
     parcel = spec.get("skewt", {}).get("parcel", "ml")
-    out, n, why, times = {}, 0, "", set()
+    out, n, why, shown = {}, 0, "", []
     for e, ent in enumerate(ents):
         if int(ent.get("panel", 0)) != i:
             continue
@@ -534,14 +690,12 @@ def sounding_panel(spec, i, get, auto_label=None):
             lab += (f" ({parcel.upper()}CAPE {r[parcel]['cape']:.0f}, "
                     f"CIN {r[parcel]['cin']:.0f} J kg$^{{-1}}$)")
         out[f"N{n}_label"] = lab.strip()
-        times.add(round(float(ent["time_s"]), 1))
+        shown.append(ent)
         n += 1
     if not n:
         return dict(missing=why or "no sounding in this panel")
     out["nsnd"] = n
-    if len(times) == 1:
-        out["time_s"] = times.pop()
-    return out
+    return _one_time(spec, out, shown)
 
 
 def dist_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
@@ -594,7 +748,7 @@ def dist_panel(spec, i, get, auto_label=None, value_label=None):
     """Arrays of distribution panel i.  get(entry index) -> summary or a string (why
     there is none); auto_label(entry index) -> legend text when it has no label of its
     own; value_label(entry index) -> its value axis label."""
-    out, n, why, times = {}, 0, "", set()
+    out, n, why, shown = {}, 0, "", []
     for e, ent in enumerate(spec.get("dists", [])):
         if int(ent.get("panel", 0)) != i:
             continue
@@ -606,14 +760,12 @@ def dist_panel(spec, i, get, auto_label=None, value_label=None):
         out[f"D{n}_e"] = e
         out[f"D{n}_label"] = (ent.get("label") or (auto_label(e) if auto_label else "")).strip()
         out[f"D{n}_xl"] = value_label(e) if value_label else ""
-        times.add(round(float(ent["time_s"]), 1))
+        shown.append(ent)
         n += 1
     if not n:
         return dict(missing=why or "no distribution in this panel")
     out["ndist"] = n
-    if len(times) == 1:
-        out["time_s"] = times.pop()
-    return out
+    return _one_time(spec, out, shown)
 
 
 def profile_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
@@ -629,15 +781,6 @@ def profile_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
                 time_s1=None, panel=0, label=label, recipe=ser.normalize(r), color="",
                 ls="", lw=1.5,  # ("": automatic)
                 ens="", ens_mid="mean", ens_members="faint", ens_alpha=0.25, op="")
-
-
-def profile_runs(entry, nr=None):
-    """A profile entry's runs: None for every run (nr given: then range(nr)), else
-    run indices (below nr).  An entry from before "runs": its "run"."""
-    runs = entry["runs"] if "runs" in entry else [int(entry.get("run", 0))]
-    if nr is None:
-        return None if runs is None else [int(k) for k in runs]
-    return list(range(nr)) if runs is None else [int(k) for k in runs if int(k) < nr]
 
 
 def profile_times(run, entry):
@@ -717,8 +860,8 @@ def profile_label(entry, run_label, F, multi, times):
 
 def profile_panel(spec, i, get, auto_label=None, value_label=None):
     """Arrays of profile panel i: a line per (profile, run).  get(entry index, run
-    index) -> (z, values) or a string (why there is none); auto_label(entry index, run
-    index) -> legend text when the entry has no label of its own; value_label(entry
+    index) -> (z, values) or a string (why there is none), each run at its entry_at
+    times; auto_label(entry index, run index) -> legend text when the entry has no label of its own; value_label(entry
     index) -> its value axis label.  Hand edits (entry["edits"] {str(run): {edit_key(z
     km): value or None}}) are applied.  A profile with an ensemble band (its "ens") and
     two runs or more: its runs' lines as members (P<n>_mem 1; none when its
@@ -727,7 +870,7 @@ def profile_panel(spec, i, get, auto_label=None, value_label=None):
     members' heights P<n>_z)."""
     ents, nr = spec.get("profiles", []), len(spec.get("runs") or [])
     flag = spec.get("prof", {}).get("mark_edited", True)
-    out, n, why, times, members, edited = {}, 0, "", set(), {}, set()
+    out, n, why, shown, members, edited = {}, 0, "", [], {}, set()
     for e, ent in enumerate(ents):
         if int(ent.get("panel", 0)) != i:
             continue
@@ -753,7 +896,7 @@ def profile_panel(spec, i, get, auto_label=None, value_label=None):
             v, used, _ = apply_edits(v, z, ent, k, EDIT_ZTOL)  # (edits at heights
             if used:  # the profile lacks wait, not moved: the card says so)
                 edited.add(e)
-            times.add((round(float(ent["time_s"]), 1), ent.get("time_s1")))
+            shown.append(ent)
             if ens:
                 members.setdefault(e, []).append((z, v))
                 if ent.get("ens_members", "faint") == "hidden":
@@ -785,11 +928,7 @@ def profile_panel(spec, i, get, auto_label=None, value_label=None):
     if not n:
         return dict(missing=why or "no profile in this panel")
     out["nprof"] = n
-    if len(times) == 1:
-        t0, t1 = times.pop()
-        if t1 is None or float(t1) <= t0:
-            out["time_s"] = t0
-    return out
+    return _one_time(spec, out, shown)
 
 
 def joint_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
@@ -843,7 +982,7 @@ def joint_panel(spec, i, get, auto_label=None, axis_labels=None):
     """Arrays of joint distribution panel i.  get(entry index) -> summary or a string
     (why there is none); auto_label(entry index) -> legend text when it has no label of
     its own; axis_labels(entry index) -> its (x, y) axis labels."""
-    out, n, why, times = {}, 0, "", set()
+    out, n, why, shown = {}, 0, "", []
     for e, ent in enumerate(spec.get("joints", [])):
         if int(ent.get("panel", 0)) != i:
             continue
@@ -856,16 +995,12 @@ def joint_panel(spec, i, get, auto_label=None, axis_labels=None):
         out[f"J{n}_r"] = int(ent.get("run", 0))
         out[f"J{n}_label"] = (ent.get("label") or (auto_label(e) if auto_label else "")).strip()
         out[f"J{n}_xl"], out[f"J{n}_yl"] = axis_labels(e) if axis_labels else ("", "")
-        times.add((round(float(ent["time_s"]), 1), ent.get("time_s1")))
+        shown.append(ent)
         n += 1
     if not n:
         return dict(missing=why or "no joint distribution in this panel")
     out["njoint"] = n
-    if len(times) == 1:
-        t0, t1 = times.pop()
-        if t1 is None or float(t1) <= t0:
-            out["time_s"] = t0
-    return out
+    return _one_time(spec, out, shown)
 
 
 def azim_defaults(recipe, run_index=0, time_s=0.0, n=0, label=""):
@@ -927,7 +1062,7 @@ def azim_panel(spec, i, get, auto_label=None, value_label=None, field_look=None)
     string (why there is none); auto_label(entry index) -> legend text when it has no
     label of its own; value_label(entry index) -> its colorbar label;
     field_look(entry index) -> (colormap name, diverging) of its field."""
-    out, n, why, times = {}, 0, "", set()
+    out, n, why, shown = {}, 0, "", []
     for e, ent in enumerate(spec.get("azims", [])):
         if int(ent.get("panel", 0)) != i:
             continue
@@ -944,13 +1079,9 @@ def azim_panel(spec, i, get, auto_label=None, value_label=None, field_look=None)
         out[f"A{n}_cl"] = value_label(e) if value_label else ""
         cm, div = field_look(e) if field_look else ("viridis", False)
         out[f"A{n}_cm"], out[f"A{n}_div"] = cm, int(bool(div))
-        times.add((round(float(ent["time_s"]), 1), ent.get("time_s1")))
+        shown.append(ent)
         n += 1
     if not n:
         return dict(missing=why or "no azimuthal mean in this panel")
     out["nazim"] = n
-    if len(times) == 1:
-        t0, t1 = times.pop()
-        if t1 is None or float(t1) <= t0:
-            out["time_s"] = t0
-    return out
+    return _one_time(spec, out, shown)

@@ -72,6 +72,7 @@ def _sounding(fig, ax, d, spec, fs):
     lay = sounding_layout(o)
     n = int(d.get("nsnd", 0))
     cols = sounding_colors(spec, d)
+    key_fs = font_size(spec, "legend") if spec.get("font", {}).get("legend") else None
     keys = [k for k in (o.get("table") or []) if k in [p[0] for p in SND_PARAMS]]
     if keys and n:  # a row per sounding, under the panel
         gs = ax.get_subplotspec().subgridspec(
@@ -81,7 +82,7 @@ def _sounding(fig, ax, d, spec, fs):
         ax, tx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
         _param_table(tx, d, n, cols, keys, spec)
     if lay == "hodo":
-        _hodo(ax, d, n, cols, o, fs, full=True)
+        _hodo(ax, d, n, cols, o, fs, full=True, key_fs=key_fs)
         return ax
     if lay == "side":
         w = float(o.get("hodo_width", 0.62))  # hodograph width / skew-T width
@@ -89,7 +90,7 @@ def _sounding(fig, ax, d, spec, fs):
         ax.remove()
         ax, hx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
         _skewt(ax, d, spec, fs, cols, inset=False)
-        _hodo(hx, d, n, cols, o, fs, full=True)
+        _hodo(hx, d, n, cols, o, fs, full=True, key_fs=key_fs)
         ax._cv_more = [hx]  # (its key goes into a figure legend with the skew-T's)
         return ax
     _skewt(ax, d, spec, fs, cols, inset=lay == "inset")
@@ -291,14 +292,14 @@ def shared_hodo_half(items):
     return max(halves) if len(halves) > 1 else None
 
 
-def _hodo(hx, d, n, cols, o, fs, full=False):
+def _hodo(hx, d, n, cols, o, fs, full=False, key_fs=None):
     """Hodograph of the panel's soundings (one sounding: coloured by height bands).
     Bunkers right / left movers and the 0-6 km mean wind (hodo_marks), a ring at the
     storm motion of the SRH (hodo_storm; one sounding: with the storm-relative
     inflow and the 0-0.5 km shear, as the Sounding tab draws them), height labels
     along the trace (hodo_labels); full (a hodograph panel, not an inset): a key of
-    the height bands (hodo_key) and SRH shading (srh "1" / "3": 0-1 / 0-3 km). The
-    view: _hodo_view."""
+    the height bands (hodo_key; key_fs: its font size, else in step with the rest) and
+    SRH shading (srh "1" / "3": 0-1 / 0-3 km). The view: _hodo_view."""
     hx._cv_hodo = True
     many = n > 1
     hm = float(o.get("hodo_max", 40.0))
@@ -398,7 +399,7 @@ def _hodo(hx, d, n, cols, o, fs, full=False):
                    for j in range(n)]
         leg = hx.legend(handles=hs, **anchor_kw(o.get("hodo_key_loc") or "upper right",
                                                 o.get("hodo_key_anchor")),
-                        fontsize=fs * small, ncol=int(o.get("hodo_key_ncol") or 1),
+                        fontsize=key_fs or fs * small, ncol=int(o.get("hodo_key_ncol") or 1),
                         frameon=bool(o.get("hodo_key_frame", False)), framealpha=0.85,
                         handlelength=2.6 if many else 1.2, borderaxespad=0.3,
                         labelspacing=0.25)

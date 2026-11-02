@@ -732,3 +732,26 @@ def load(run, path, F=None):
     ds["computed"].values[idx] = 1
     note = f"computed for another run ({src})" if src and src != run.path else ""
     return ds, recipe, note
+
+
+BANDS = ("minmax", "p10p90", "p25p75", "sd")
+
+
+def band(V, how="minmax", mid="mean"):
+    """(centre, low, high) over axis 0 of V (members × times, NaN: none): the centre
+    ("mean", "median"; "": none, NaN) and band "minmax", "p10p90", "p25p75"
+    (percentiles) or "sd" (mean -/+ one standard deviation)."""
+    import warnings
+    with warnings.catch_warnings():  # (all-NaN columns: NaN, quietly)
+        warnings.simplefilter("ignore", RuntimeWarning)
+        if how == "sd":
+            c, sd = np.nanmean(V, axis=0), np.nanstd(V, axis=0)
+            lo, hi = c - sd, c + sd
+        elif how in ("p10p90", "p25p75"):
+            q = (10, 90) if how == "p10p90" else (25, 75)
+            lo, hi = np.nanpercentile(V, q[0], axis=0), np.nanpercentile(V, q[1], axis=0)
+        else:
+            lo, hi = np.nanmin(V, axis=0), np.nanmax(V, axis=0)
+        c = (np.nanmedian(V, axis=0) if mid == "median" else np.nanmean(V, axis=0)
+             if mid == "mean" else np.full(V.shape[1], np.nan))
+    return c, lo, hi

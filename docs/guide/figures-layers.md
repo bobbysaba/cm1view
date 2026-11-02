@@ -97,7 +97,7 @@ ticked, **Reset all edits** on every run of the card; **Download CSV** saves the
 drawn, **Refresh** reads the values again (e.g. after more output was written).
 
 Edits are kept in the figure, per run, at the model time of the point, so they stay put
-when the card's or the figure's time zero changes. They are on the plotted values (after
+when the card's, the run's or the figure's time zero changes. They are on the plotted values (after
 *d/dt*); changing the card's field or reduction keeps them, with a warning in the card.
 Everything drawn from the line uses them: ensemble bands, maxima and minima, axis
 ranges. An edit at a time the run no longer has is not drawn; the section lists those,

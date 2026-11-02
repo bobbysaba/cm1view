@@ -444,6 +444,8 @@ class SectionPanel:
             f' · {spec["fnote"][1]}' if spec["fnote"] and d.storm else "") + (
             " · difference" if spec["minus"] else "")
         self._xs_labels(spec)
+        self._par_xs_t = float(self.run.times[spec["t"]])  # (parcels at the section's time)
+        self._par_redraw()
         (xa, ya), (xb, yb) = spec["A"], spec["B"]
         parts = [f'<b>{d.label}</b>{self._minus_note(spec["minus"])}']
         parts += [f'+ <b>{F[f["var"]].label}</b>' for f in spec["fills"] if f["on"]]

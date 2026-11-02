@@ -870,6 +870,92 @@ def test_parts_size_share_and_one_colorbar(ed):
     assert ed.part_i == 1 and ed.part_share.value == 0.3
 
 
+def test_grid_layout_places_parts_and_sizes_cells():
+    from cm1view.figures import draw as figdraw
+    tall, wide = dict(size=[8.0, 8.0]), dict(size=[6.0, 4.0])
+    g = figdraw.grid_layout([dict(tall, place=[0, 0, 2, 1]), wide, wide],
+                            dict(rows=2, cols=2))
+    assert g["places"] == [[0, 0, 2, 1], [0, 1, 1, 1], [1, 1, 1, 1]]  # (the free cells)
+    assert g["widths"] == [8.0, 6.0] and g["heights"] == [4.0, 4.0]
+    assert g["width_ratios"] == g["widths"] and figdraw.grid_overlaps(g["places"]) == []
+    g = figdraw.grid_layout([dict(wide, place=[5, 5, 3, 3]), wide],  # (kept within; more rows)
+                            dict(rows=1, cols=1, widths=[2.0], heights=[1.0, 2.0, 3.0]))
+    assert g["places"] == [[0, 0, 1, 1], [1, 0, 1, 1]] and g["rows"] == 2
+    assert g["width_ratios"] == [2.0] and g["height_ratios"] == g["heights"]  # (3 for 2 rows)
+    g = figdraw.grid_layout([wide, wide], dict(rows=1, cols=1, heights=[1.0, 2.0]))
+    assert g["rows"] == 2 and g["height_ratios"] == [1.0, 2.0]  # (they fit the rows it grew to)
+    assert figdraw.grid_overlaps([[0, 0, 2, 1], [1, 0, 1, 1], [0, 1, 1, 1]]) == [(0, 1)]
+
+
+def _custom_grid(ed):
+    """Part 1 down the left of a 2 x 2 grid, parts 2 and 3 above each other on its right."""
+    ed.rows.value, ed.cols.value = 1, 1
+    ed._add_part()
+    ed._add_part()
+    ed.from_soundings()
+    ed.part_arr.value = "grid"
+    ed._switch_part(0)
+    ed.pg_rs.value = 2
+
+
+def test_parts_on_a_custom_grid(ed):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from cm1view.figures import draw as figdraw
+    _custom_grid(ed)
+    assert ed.part_grid_box.visible and not ed.part_share.visible
+    assert (ed.pg_rows.value, ed.pg_cols.value) == (2, 2)
+    spec = ed.collect_all()
+    assert spec["arrange"] == "grid" and spec["part_grid"]["rows"] == 2
+    assert [p["place"] for p in spec["parts"]] == [[0, 0, 2, 1], [0, 1, 1, 1], [1, 0, 1, 1]]
+    ed._switch_part(2)  # part 3 into the free cell
+    ed.pg_col.value = 2
+    spec = ed.collect_all()
+    assert spec["parts"][2]["place"] == [1, 1, 1, 1] and "overlap" not in ed.pg_map.object
+    assert spec["size"][0] == pytest.approx(
+        spec["parts"][0]["size"][0] + max(p["size"][0] for p in spec["parts"][1:]))
+    fig = figdraw.draw(spec, ed.panel_data(spec))
+    FigureCanvasAgg(fig).draw()
+    box = {i: a.get_window_extent() for i, a in fig._cv_axes.items()}  # (of the whole figure)
+    assert box[0].x1 <= box[1000].x0 and box[0].x1 <= box[2000].x0
+    assert fig.subfigs[0].bbox.height > 0.95 * fig.bbox.height  # (spans both rows)
+    assert fig.subfigs[1].bbox.height < 0.7 * fig.bbox.height
+    assert box[1000].y0 > box[2000].y1
+    ed.pg_ws.value = "3, 1"  # relative widths
+    assert ed.collect_all()["part_grid"]["widths"] == [3.0, 1.0]
+    ed.pg_row.value = 1  # onto part 2
+    assert "overlap" in ed.pg_map.object
+
+
+def test_custom_grid_comes_back_when_reopened(ed):
+    from cm1view.figures import draw as figdraw
+    _custom_grid(ed)
+    ed.pg_hs.value = "2, 1"
+    ed.part_cb.value = True  # (one colorbar: the grid goes beside its strip)
+    spec = ed.collect_all()
+    figdraw.draw(spec, ed.panel_data(spec))
+    ed.set_parts(json.loads(json.dumps(spec)), 1)
+    again = ed.collect_all()
+    assert again["arrange"] == "grid" and again["part_grid"] == spec["part_grid"]
+    assert [p["place"] for p in again["parts"]] == [p["place"] for p in spec["parts"]]
+    assert (ed.pg_row.value, ed.pg_col.value) == (1, 2) and ed.pg_hs.value == "2, 1"
+    ed.part_arr.value = "row"  # back to a row, and the places wait
+    assert not ed.part_grid_box.visible and ed.part_share.visible
+    assert [p["place"] for p in ed.collect_all()["parts"]] == [p["place"] for p in spec["parts"]]
+
+
+def test_part_added_to_a_full_custom_grid_gets_a_new_row(ed):
+    ed.rows.value, ed.cols.value = 1, 1
+    ed._add_part()
+    ed.part_arr.value = "grid"
+    assert (ed.pg_rows.value, ed.pg_cols.value) == (1, 2)
+    ed._add_part()
+    assert (ed.pg_rows.value, ed.pg_cols.value) == (2, 2)
+    assert (ed.pg_row.value, ed.pg_col.value) == (2, 1)
+    ed.part_note.object = ""
+    ed._remove_part()  # (the last one out: the rest as they were)
+    assert [p["place"] for p in ed.collect_all()["parts"]] == [[0, 0, 1, 1], [0, 1, 1, 1]]
+
+
 def test_panels_at_model_levels_with_height_labels(ed):
     from cm1view.figures import draw as figdraw
     ed.g_rows.value, ed.g_cols.value = "none", "heights"
