@@ -521,6 +521,8 @@ class FigureSources:
         with held(self):
             self.width.value, self.height.value = round(min(16.0, w), 2), round(min(16.0, h), 2)
             self.size_preset.value = ""
+        if kind == "table":
+            self._follow_size()
 
     def _size_by_hand(self):
         if not self._hold:
@@ -921,10 +923,10 @@ class FigureSources:
         s["axes"] = dict(s["axes"], xlabel="temperature (°C)", ylabel="pressure (hPa)",
                          ticklabels="all", equal=False)
         s["colorbar"] = dict(s["colorbar"], mode="none")
-        # one sounding figure: no letters; a part of a figure: letters above, clear of
-        # the time and the legend
-        s["letters"] = dict(s["letters"], on=self._multi_part(), loc="above left")
-        s["time_label"] = dict(s["time_label"], loc="lower left")
+        # one sounding figure: no letters; a part of a figure: letters above
+        k = KINDS["sounding"]
+        s["letters"] = dict(s["letters"], on=self._multi_part(), loc=k.letter_at)
+        s["time_label"] = dict(s["time_label"], loc=k.time_at)
         self.set_spec(s)
 
     def from_dists(self):

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from conftest import txt, wait, render, difference_layer, swath_layer, edited_v1
+from cm1view.figures.cards import set_folded
 
 
 # ------------------------------------------------------------------ distributions
@@ -578,6 +579,108 @@ def test_style_presets_and_matplotlib_styles(ed, tmp_path):
     assert (ed.collect()["mplstyle"], ed.collect()["font"]["size"]) == ("", 10.0)
 
 
+def test_the_style_menu_applies_a_preset_once_and_undo_takes_it_back(ed):
+    ed._last = None
+    ed._remember(ed.collect_all())
+    w0 = ed.collect()["size"][0]
+    ed._apply_style("ams")
+    s = ed.collect()
+    assert (s["font"]["size"], s["letters"]["fmt"], s["export"]["format"]) == \
+        (8.0, "({a})", "pdf")
+    assert s["size"][0] == 6.5 and "6.5 in" in ed.style_note.object
+    assert "PDF at 600 DPI" in ed.style_note.object
+    ed._remember(ed.collect_all())
+    ed.fsize.value = 9.0  # (once: what you change after stays)
+    assert ed.collect()["font"]["size"] == 9.0
+    ed._remember(ed.collect_all())
+    ed.undo()
+    assert ed.collect()["font"]["size"] == 8.0 and not ed.style_note.object
+    ed.undo()
+    s = ed.collect()
+    assert s["font"]["size"] == 10.0 and s["size"][0] == w0 and s["letters"]["fmt"] == "{a}"
+
+
+def test_a_style_after_a_style_leaves_nothing_of_it(ed):
+    ed._apply_style("ams")
+    ed._apply_style("default")
+    s = ed.collect()
+    assert s["letters"]["fmt"] == "{a}" and s["letters"]["bold"] is True
+    assert s["letters"]["size"] is None and s["font"]["size"] == 10.0
+    ed._apply_style("ams")
+    ed._apply_style("talk")
+    assert ed.collect()["letters"]["fmt"] == "{a}"
+
+
+def test_a_style_goes_on_every_part_and_the_whole_figures_width(ed):
+    ed._add_part()
+    ed._apply_style("dark")
+    s = ed.collect_all()
+    assert s["kind"] == "combo" and s["size"][0] == 10.0 and s["size_set"][0] == 10.0
+    assert ed.part_w.value == 10.0
+    assert [p["mplstyle"] for p in s["parts"]] == ["dark_background"] * 2
+    assert [p["font"]["size"] for p in s["parts"]] == [14.0, 14.0]
+    assert s["background"] == "black" and s["export"]["dpi"] == 200
+    assert "letters" not in s or s["letters"] == s["parts"][0]["letters"]
+
+
+def test_blank_label_sizes_follow_the_base_font(ed):
+    ed.rows.value, ed.cols.value = 1, 2
+    s = ed.collect()
+    assert all(s[k]["size"] is None for k in ("letters", "time_label", "run_label", "z_label"))
+    assert ed.let_size.value is None
+    ed.label_fit.value = False
+
+    def size():
+        from cm1view.figures import draw as figdraw
+        fig = figdraw.draw(ed.collect(), ed.panel_data(ed.collect()))
+        return next(t.get_fontsize() for t in fig.axes[0].findobj(
+            lambda a: getattr(a, "get_text", None) and a.get_text() == "a"))
+    assert size() == pytest.approx(12.0)
+    ed.fsize.value = 8.0
+    assert size() == pytest.approx(9.6)
+    ed.let_size.value = 11.0  # (set by hand: it stays, and the spec has it)
+    assert ed.collect()["letters"]["size"] == 11.0
+
+
+def test_a_saved_figure_keeps_its_label_size(ed):
+    s = ed.collect()
+    s["letters"] = dict(s["letters"], size=12.0)
+    ed.set_spec(s)
+    ed.fsize.value = 8.0
+    assert ed.let_size.value == 12.0 and ed.collect()["letters"]["size"] == 12.0
+
+
+def test_dark_draws_black_in_white_but_keeps_the_hodograph(ed):
+    from matplotlib.colors import to_rgba
+    from matplotlib.lines import Line2D
+    ed.from_soundings()
+    ed._apply_style("dark")
+    fig = render(ed)[2]
+    skew = next(a for a in fig.axes if a.child_axes)
+    hodo = skew.child_axes[0]
+    black = to_rgba("k")
+    assert to_rgba(hodo.get_facecolor()) != to_rgba("k")  # (its light card)
+    assert any(to_rgba(ln.get_color()) == black for ln in hodo.get_lines())
+    assert not any(to_rgba(ln.get_color()) == black for ln in skew.get_lines())
+    assert not any(to_rgba(c) == black for coll in skew.collections
+                   if coll.get_array() is None for c in coll.get_facecolor())
+    ed._apply_style("default")  # (off again: the parcel trace is black)
+    fig = render(ed)[2]
+    skew = next(a for a in fig.axes if a.child_axes)
+    assert any(isinstance(ln, Line2D) and to_rgba(ln.get_color()) == black
+               for ln in skew.get_lines())
+
+
+def test_dark_puts_a_labels_white_box_in_black(ed):
+    from matplotlib.colors import to_rgb
+    from matplotlib.offsetbox import AnchoredText
+    ed._apply_style("dark")
+    ed.tl_box.value = True
+    fig = render(ed)[2]
+    boxes = [b for b in fig.axes[0].findobj(AnchoredText) if b.patch.get_visible()]
+    assert boxes and all(to_rgb(b.patch.get_facecolor()) == (0.0, 0.0, 0.0) for b in boxes)
+
+
 def test_copy_a_layers_look(ed):
     ed._add_layer("contour")
     src, dst = [c for c in ed.cards if c.type == "contour"][:2]
@@ -841,3 +944,140 @@ def test_table_runs_follow_the_figure(ed, demo_root):
     a.set_runs([1])
     ed._remove_run(ed.run_rows[1])
     assert ed.table_cards == [b] and b.run_list() is None
+
+
+def test_table_height_follows_its_rows(ed):
+    """No blank height under a short table, more rows a taller figure, a size set by hand
+    stays, and the type is not shrunk at the height it was given."""
+    from cm1view.figures import draw as figdraw, spec as fg
+    ed.kind.value = "table"
+    ed._follow_size()
+    one = float(ed.height.value)
+    assert one < 2.0
+    ed.table_cards[0].w["times"].value = fg.times_text(ed.run.times[2:7])
+    ed._follow_size()
+    five = float(ed.height.value)
+    assert five > one + 0.5
+    spec, data, fig = render(ed)
+    ax = fig.axes[0]
+    assert {t.get_fontsize() for t in ax.texts} == {figdraw.font_size(spec, "label")}
+    fig.canvas.draw()
+    assert min(t.get_window_extent().y0 for t in ax.texts) > ax.bbox.y0
+    ed.height.value = 4.0
+    ed._follow_size()
+    assert float(ed.height.value) == 4.0
+
+
+def test_table_estimate_matches_what_is_drawn(ed, demo_root):
+    """fg.tbl_points, from the cards alone, is the height the rows take."""
+    from cm1view.figures import draw as figdraw, spec as fg
+    _table_two_runs(ed, demo_root)
+    for layout in ("rows", "values", "values_run", "values_time"):
+        ed.to["layout"].value = layout
+        ed.height.value = 12.0  # (room for it all at full size)
+        spec, data, fig = render(ed)
+        heads, rows, spans = figdraw.tbl_grid(data[0], spec["table"])
+        size = figdraw.font_size(spec, "label")
+        lines = max(h.count("\n") + 1 for h in heads) + len(rows) + bool(spans)
+        tall = (lines * figdraw.TBL_LINE + (1 + len(rows) + bool(spans)) * figdraw.TBL_GAP) * size
+        assert fg.tbl_points(spec) == pytest.approx(tall, abs=0.01), layout
+
+
+def test_a_layer_card_duplicates_just_after_itself(ed):
+    ed._add_layer("contour")
+    ed._add_layer("fill")
+    n = len(ed.cards)
+    c = ed.cards[-2]
+    c.w["lw"].value = 2.5
+    ed.ck_layer.value = n - 2  # (the contour key's layer)
+    ed.edits = {"0": {"layers": {str(n - 2 + ed._pf_count()): {"lw": 4.0}}}}
+    c.dup.clicks += 1
+    assert len(ed.cards) == n + 1 and ed.cards[n - 2] is c
+    new = ed.cards[n - 1]
+    assert new is not c and new.body.visible and new.collect() == c.collect()
+    assert ed.ck_layer.value == n - 2  # (the key stays on the original)
+    pf = ed._pf_count()
+    assert ed.edits["0"]["layers"] == {str(n - 2 + pf): {"lw": 4.0}, str(n - 1 + pf): {"lw": 4.0}}
+    new.w["lw"].value = 1.0
+    assert c.collect()["lw"] == 2.5  # (nothing shared)
+    assert [lay["type"] for lay in ed.collect()["layers"]].count("contour") >= 2
+
+
+def test_undo_keeps_cards_and_folding(ed):
+    for _ in range(4):
+        ed._add_layer("contour")
+    ed._last = None
+    ed._remember(ed.collect_all())
+    cards = list(ed.cards)
+    set_folded(cards[-3], True)
+    set_folded(cards[-2], False)
+    cards[-1].w["lw"].value = 2.5
+    ed._remember(ed.collect_all())
+    ed.undo()
+    assert ed.cards == cards and cards[-1].collect()["lw"] != 2.5
+    assert not cards[-3].body.visible and cards[-2].body.visible
+    ed._remember(ed.collect_all())
+    ed.redo()
+    assert ed.cards == cards and cards[-1].collect()["lw"] == 2.5
+    assert not cards[-3].body.visible and cards[-2].body.visible
+
+
+def test_undoing_a_remove_or_move_leaves_the_other_cards(ed):
+    for _ in range(3):
+        ed._add_layer("contour")
+    for j, c in enumerate(ed.cards):
+        if c.type == "contour":
+            c.w["lw"].value = 1.0 + j
+    ed._last = None
+    ed._remember(ed.collect_all())
+    cards = list(ed.cards)
+    set_folded(cards[0], True)
+    ed._remove(cards[1])
+    ed._remember(ed.collect_all())
+    ed.undo()
+    assert ed.cards[0] is cards[0] and ed.cards[2:] == cards[2:]
+    assert ed.cards[1].collect() == cards[1].collect()
+    assert not ed.cards[0].body.visible
+    ed._remember(ed.collect_all())
+    kept = list(ed.cards)
+    ed._move(kept[2], -1)
+    ed._remember(ed.collect_all())
+    ed.undo()
+    assert ed.cards == kept
+
+
+def test_undo_keeps_the_open_sections_of_a_changed_fill(ed):
+    ed._add_layer("fill")
+    c = ed.cards[-1]
+    ed._last = None
+    ed._remember(ed.collect_all())
+    c.minus_sec.collapsed = False
+    c.w["alpha"].value = 0.5
+    ed._remember(ed.collect_all())
+    ed.undo()
+    assert ed.cards[-1] is c and c.collect()["alpha"] != 0.5 and not c.minus_sec.collapsed
+
+
+def test_undo_keeps_entry_cards_it_did_not_change(ed):
+    ed.from_soundings()
+    ed.snd_new.clicks += 1
+    ed.snd_new.clicks += 1
+    ed._last = None
+    ed._remember(ed.collect_all())
+    a, b = ed.snd_cards[:2]
+    set_folded(a, True)
+    set_folded(b, True)
+    b.w["label"].value = "changed"
+    ed._remember(ed.collect_all())
+    ed.undo()
+    assert ed.snd_cards[0] is a and not a.body.visible
+    assert ed.snd_cards[1] is not b and not ed.snd_cards[1].body.visible  # (built again, folded)
+    assert ed.snd_cards[1].w["label"].value != "changed"
+
+
+def test_new_figure_still_builds_its_cards_afresh(ed):
+    for _ in range(3):
+        ed._add_layer("contour")
+    set_folded(ed.cards[2], False)
+    ed.set_spec(ed.collect())
+    assert ed.cards[0].body.visible and not ed.cards[2].body.visible

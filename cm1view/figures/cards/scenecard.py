@@ -15,7 +15,7 @@ SCENE_PROJ = {"Perspective": "perspective", "Orthographic (no foreshortening)": 
 SCENE_RES = {"Auto": 0, "Full": 1, "1/2": 2, "1/3": 3, "1/4": 4}
 SCENE_LIGHTS = {"Light kit (soft, from several sides)": "kit", "Three lights": "three",
                 "Headlight (from the camera)": "head"}
-SCENE_BG = {"The figure's (File tab)": "", "White": "white", "Black": "black",
+SCENE_BG = {"The figure's (Export)": "", "White": "white", "Black": "black",
             "Transparent": "transparent"}
 SCENE_ARROWS = {"3D arrows (scaled by length)": "glyph", "Lines (as the 3D view)": "lines"}
 SCENE_BARS = {"Below": "bottom", "Right": "right", "Left": "left", "Above": "top",

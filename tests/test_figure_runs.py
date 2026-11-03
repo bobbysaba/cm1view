@@ -510,6 +510,25 @@ def test_templates_apply_to_another_run(ed, coarse_run):
     ed.tpl_name.value = "two by three"
     ed._save_template()
     path = ed.tpl_sel.value
+    ed.tpl_sel.value = None  # as a page starts: the list picks one, as the browser shows
+    ed._list_templates()
+    assert ed.tpl_sel.value in ed.tpl_sel.options.values()
+    ed.tpl_sel.value = path
+    ed.open_quick()  # the quick start applies it too
+    ed.qs_tpl.value = path
+    assert not ed.qs_tpl_go.disabled
+    ed.qs_tpl_go.clicks += 1
+    assert not ed.quick.open and "two by three" in ed.msg.object
+    ed.open_quick()
+    with open(path) as f:
+        kept = f.read()
+    with open(path, "w") as f:
+        f.write("[]")
+    ed.qs_tpl_go.clicks += 1  # (it can't be: says why, in the dialog)
+    assert ed.quick.open and ed.qs_load_note.visible and "Could not" in ed.qs_load_note.object
+    ed.quick.hide()
+    with open(path, "w") as f:
+        f.write(kept)
     assert "Saved" in txt(ed.msg.object), ed.msg.object
     assert os.path.dirname(path) == fg.templates_dir() and not ed.tpl_go.disabled
     tpl = fg.load_template(path)
@@ -1048,3 +1067,30 @@ def test_a_saved_figure_pairs_runs_by_their_outputs_now():
     fg.fill_outputs(s, lambda p: (_Run([0.0, 60.0]), None))
     assert s["parts"][0]["runs"][1]["outputs_s"] == [0.0, 60.0]
     assert "outputs_s" not in s["parts"][1]["runs"][0]
+
+
+def test_a_run_added_again_gets_its_settings_back(ed, demo_root):
+    import os
+    weak = os.path.join(demo_root, "demo", "supercell_weak")
+    own = ed.run_rows[0]["path"]
+    ed._prune_runs()  # (notes that the viewer's run is used)
+    r = ed.run_rows[0]
+    r["label"].value, r["t0"].value, r["color"].value = "main", 30.0, "#123456"
+    ed.run_sel.value = weak
+    ed._prune_runs()  # (the viewer's run is dropped)
+    assert [x["path"] for x in ed.run_rows] == [weak]
+    ed.run_sel.value = own
+    r = next(x for x in ed.run_rows if x["path"] == own)
+    assert (r["label"].value, r["t0"].value, r["color"].value) == ("main", 30.0, "#123456")
+
+
+def test_a_new_figure_forgets_the_runs_taken_out(ed, demo_root):
+    import os
+    weak = os.path.join(demo_root, "demo", "supercell_weak")
+    ed.add_path.value = weak
+    k = ed._add_run()
+    ed.run_rows[k]["label"].value = "mine"
+    ed._remove_run(ed.run_rows[k])
+    ed.set_spec(ed.collect())
+    k = ed._add_run(weak)
+    assert ed.run_rows[k]["label"].value == "supercell_weak"

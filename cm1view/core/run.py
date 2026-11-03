@@ -43,6 +43,12 @@ def _destagger(a, stag):
     return a
 
 
+def temp_name(path, suffix=".tmp"):
+    """A name beside `path` for one write, to os.replace into place: its own for every
+    write, so two threads writing one cache file cannot share it."""
+    return f"{path}.{os.getpid()}.{uuid.uuid4().hex[:8]}{suffix}"
+
+
 def _read_volume_worker(path, name, stag, outdir):
     """Process-pool worker: read one full 3D field, write it to tmpfs as .npy."""
     with netCDF4.Dataset(path) as d:

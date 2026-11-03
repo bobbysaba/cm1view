@@ -321,7 +321,7 @@ for STP and SCP, and about three significant figures for statistics.
 A value that cannot be read (no output at that time in that run, or no track position) shows
 as `–`, with the reason under the table. The type shrinks to fit the panel: widen the figure
 if it gets small. Tables stay as they are in an animation. The table's values are saved with
-*+ script & data* (`Q0_v`, `Q1_v`… in `_src/<name>_data.npz`).
+*Also the script and data* (`Q0_v`, `Q1_v`… in `_src/<name>_data.npz`).
 
 ### 3D scenes
 
@@ -484,7 +484,9 @@ The plan-view and cross-section parts share the list of sections: a section chan
 one part is the others' too (the section part's cards keep their runs, times and
 panels).
 
-- Each part has its own panels, runs, layers and style, and keeps its own size.
+- Each part has its own panels, runs, layers and style, and keeps its own size. *Format*, *DPI*,
+  *Image size*, *Background* and the spacing are the whole figure's: set in any part,
+  they apply to all of them.
 - The parts are side by side, stacked or on a custom grid (below), and the panel letters
   run on from part to part.
 - Edit one part at a time (*Figure parts* picks it; *New figure from* then makes the part

@@ -22,8 +22,8 @@ code + the spec as a Python dict), the plotted arrays (.npz) and the spec (.json
 figure can be redrawn or restyled later without the viewer.
 """
 
-from . import sections, base, arrays, panels, tables, bundle, templates
+from . import sections, base, arrays, panels, tables, bundle, templates, doc
 
-MODULES = (sections, base, arrays, panels, tables, bundle, templates)  # (each uses only those before it)
+MODULES = (sections, base, arrays, panels, tables, bundle, templates, doc)  # (each uses only those before it)
 for _m in MODULES:  # one namespace: fg.<name> for any of them
     globals().update({k: v for k, v in vars(_m).items() if not k.startswith("__")})

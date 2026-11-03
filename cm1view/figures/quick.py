@@ -1,21 +1,46 @@
 """Figure editor: the quick start.  Opening the Figure workspace the first time (with no
 figure made from the viewer yet), and the new-figure button, ask for the few settings a
 figure starts from: what the panels show, how they differ, the grid, the main field
-and the width.  Everything else is the editor's tabs.
+and the width.  Everything else is the editor's tabs.  Or it starts from a template, or
+from a saved figure, shown as a gallery of thumbnails, newest first.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
+import base64
+import time
+from functools import partial
+
 import panel as pn
 
+from .. import config
 from . import spec as fg
 from ..theme import DIALOG_DARK
 from .cards import QUICK_VARY, SIZE_PRESETS, _grid, _hint
+from .export import make_thumb, saved_list, saved_thumb
 from .kinds import KINDS, MAPS
+
+ALL_FOLDERS = "Newest first, all folders"
+GALLERY_STEP = 12  # thumbnails shown at a time
+NO_TEMPLATES = "No templates yet"
+_THUMB_BOX = 104  # px of a gallery button given to the picture; the name is below it
+
+
+def _thumb_css(png=None):
+    """The stylesheet of a gallery button: its picture is its background, so a click
+    anywhere on the picture opens the figure."""
+    pic = "none" if png is None else \
+        f"url(data:image/png;base64,{base64.b64encode(png).decode()})"
+    return (f":host .bk-btn {{ background: #fff {pic} center 4px / calc(100% - 8px) "
+            f"{_THUMB_BOX}px no-repeat !important; color: #1f2937 !important; "
+            f"padding: {_THUMB_BOX + 6}px 6px 0 6px !important; height: 100% !important; "
+            "font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; "
+            "border: 1px solid #94a3b8 !important; }")
 
 
 class FigureQuick:
     _started = False  # a figure has been made (here, from the viewer, or loaded)
     _quick_xsec = False  # (making sections: no cards from the plan views' grid)
+    _gallery_gen = 0  # (a thumbnail still being made for a closed dialog is dropped)
 
     def _build_quick(self):
         self.qs_kind = pn.widgets.Select(name="Panels show", options=dict(self.kind.options),
@@ -33,35 +58,59 @@ class FigureQuick:
         self.qs_skip = pn.widgets.Button(
             name="Keep the example", button_type="light", button_style="outline", width=150,
             description="Close: the figure stays as it is")
-        self.qs_saved = pn.widgets.Select(name="Or open a saved figure")
-        self.qs_open = pn.widgets.Button(name="Open", button_type="primary",
-                                         button_style="outline", disabled=True)
+        self.qs_tpl = pn.widgets.Select(name="Or start from a template")
+        self.qs_tpl_go = pn.widgets.Button(name="Apply to this run", button_type="primary",
+                                           button_style="outline", disabled=True)
+        self.qs_where = pn.widgets.Select(name="Or open a saved figure", width=300,
+                                          options={ALL_FOLDERS: ""})
+        self.qs_none = _hint("No saved figures yet: they appear here once you save one.")
+        self.qs_gallery = pn.FlexBox(margin=0, styles={  # (the dialog stays in the window)
+            "max-height": "clamp(140px, calc(100vh - 630px), 292px)", "overflow-y": "auto",
+            "gap": "4px"})
+        self.qs_more = pn.widgets.Button(name="Show more", button_type="light",
+                                         button_style="outline", width=120, visible=False)
         self.qs_load_note = _hint("")
         self.qs_load_note.visible = False
+        self.qs_earlier = pn.widgets.Button(
+            name="Reopen the last figure", icon="history", button_type="primary",
+            button_style="outline", width=210,
+            description="The figure you were last working on in this run, saved or not")
+        self.qs_earlier_note = _hint("")
+        self.qs_earlier_note.align = "center"
+        self.qs_earlier_row = pn.Row(self.qs_earlier, self.qs_earlier_note, visible=False,
+                                     margin=0)
         self.quick = pn.Modal(
             pn.pane.HTML('<div class="cv-maptitle" style="font-size:16px"><b>New figure'
                          '</b></div>', margin=(0, 4)),
+            self.qs_earlier_row,
             _grid(self.qs_kind, self.qs_vary, self.qs_field),
             _grid(self.qs_rows, self.qs_cols, self.qs_size), self.qs_note,
             _hint("Everything else (times, layers, style, labels) is in the editor's tabs; "
                   "the new-figure button above the preview shows this again."),
             pn.Row(self.qs_go, self.qs_skip),
             pn.layout.Divider(margin=(6, 4)),
-            _grid((self.qs_saved, 2), self.qs_open), self.qs_load_note,
-            _hint("Figures saved with <b>+ script & data</b> in the Figures folder "
-                  "(⚙ Settings); the File tab opens any other."), width=640, margin=10,
+            _grid((self.qs_tpl, 2), self.qs_tpl_go),
+            _hint("Saved in File → Templates: its panels and look on this run, its times "
+                  "moved to the map's time."),
+            pn.layout.Divider(margin=(6, 4)),
+            self.qs_where, self.qs_none, self.qs_load_note, self.qs_gallery, self.qs_more,
+            _hint("Figures saved in the Figures folder (⚙ Settings); the File tab opens "
+                  "any other."), width=680, margin=10,
             stylesheets=[DIALOG_DARK])
         self.qs_kind.param.watch(lambda e: self._quick_show(), "value")
         self.qs_vary.param.watch(lambda e: self._quick_show(), "value")
         self.qs_go.on_click(lambda e: self._quick_make())
         self.qs_skip.on_click(lambda e: self.quick.hide())
-        self.qs_saved.param.watch(
-            lambda e: setattr(self.qs_open, "disabled", not e.new), "value")
-        self.qs_open.on_click(lambda e: self._quick_open())
+        self.qs_tpl_go.on_click(lambda e: self._quick_template())
+        self.qs_where.param.watch(lambda e: self._gallery_show(), "value")
+        self.qs_more.on_click(lambda e: self._gallery_more())
+        # (closed: the thumbnails leave the page)
+        self.quick.param.watch(lambda e: None if e.new else self._gallery_clear(), "open")
+        self.qs_earlier.on_click(lambda e: self._quick_earlier())
 
     def opened(self):
         """The Figure workspace is shown: the quick start, the first time."""
-        if not self._started:
+        if not self._started and not self._in_shell():
             self._started = True
             self.open_quick()
 
@@ -79,8 +128,18 @@ class FigureQuick:
         vary = dims[0] if len(dims) == 1 else "times"
         self.qs_vary.value = vary if vary in self.qs_vary.options.values() else "times"
         self.qs_rows.value, self.qs_cols.value = int(self.rows.value), int(self.cols.value)
-        self._refresh_saved()
+        self._list_templates()
+        tpls, keep = dict(self.tpl_sel.options), self.qs_tpl.value
+        self.qs_tpl.options = tpls or {NO_TEMPLATES: ""}
+        self.qs_tpl.value = keep if keep in tpls.values() else next(iter(tpls.values()), "")
+        self.qs_tpl.disabled = self.qs_tpl_go.disabled = not tpls
         self.qs_load_note.visible = False
+        self._gallery_open()
+        self._earlier = self._auto_earlier()
+        self.qs_earlier_row.visible = self._earlier is not None
+        if self._earlier:
+            when = time.strftime("%b %d, %H:%M", time.localtime(self._earlier[1]))
+            self.qs_earlier_note.object = f'<div class="cv-hint">Last changed {when}</div>'
         self.quick.show()
 
     def _quick_show(self):
@@ -102,12 +161,89 @@ class FigureQuick:
         self.qs_note.object = f'<div class="cv-hint">{note}</div>'
         self.qs_note.visible = bool(note)
 
-    def _quick_open(self):
-        """Open the saved figure picked in the quick start (it closes the dialog); if
-        it cannot be opened, say why in the dialog."""
-        if not self._load_spec(self.qs_saved.value):
-            self.qs_load_note.object = self.msg.object
-            self.qs_load_note.visible = True
+    # ------------------------------------------------------------ gallery of saved figures
+    def _gallery_open(self):
+        """List the saved figures anew and show the newest."""
+        self._qs_figures = saved_list(self._fig_dir, config.expand(config.get("figures_dir")),
+                                      config.expand(config.state("last_multi_run_dir")))
+        heads = list(dict.fromkeys(f[0] for f in self._qs_figures))
+        self.qs_where.options = {ALL_FOLDERS: "", **{h: h for h in heads}}
+        self.qs_where.visible = bool(heads)
+        self.qs_none.visible = not heads
+        if self.qs_where.value:  # (its watcher shows the gallery)
+            self.qs_where.value = ""
+        else:
+            self._gallery_show()
+
+    def _gallery_figures(self):
+        """The saved figures of the folder picked; of them all, newest first."""
+        where = self.qs_where.value
+        if where:
+            return [f for f in self._qs_figures if f[0] == where]
+        return sorted(self._qs_figures, key=lambda f: -f[3])
+
+    def _gallery_show(self):
+        self._gallery_clear()
+        self._gallery_more()
+
+    def _gallery_clear(self):
+        self._gallery_gen += 1
+        self.qs_gallery.objects = []
+        self.qs_more.visible = False
+
+    def _gallery_more(self):
+        """The next thumbnails.  Those not made yet come from the pool, each in its turn:
+        an image can be large."""
+        figs = self._gallery_figures()
+        n = len(self.qs_gallery.objects)
+        add = [self._gallery_button(f) for f in figs[n:n + GALLERY_STEP]]
+        self.qs_gallery.objects = list(self.qs_gallery.objects) + add
+        self.qs_more.visible = n + len(add) < len(figs)
+
+    def _gallery_button(self, fig):
+        head, name, path, when = fig
+        png = saved_thumb(path)
+        b = pn.widgets.Button(
+            name=name, width=200, height=134, margin=2, stylesheets=[_thumb_css(png)],
+            description=f"{name} · {head} · saved "
+                        f"{time.strftime('%b %d %Y, %H:%M', time.localtime(when))}")
+        b.on_click(lambda e: self._quick_open(path))
+        if png is None:
+            self.v.pools["fig"].submit(self._thumb_job, b, path, self._gallery_gen)
+        return b
+
+    def _thumb_job(self, button, path, gen):
+        if gen != self._gallery_gen:
+            return
+        png = make_thumb(path)
+        if png is not None:
+            self.v._schedule(partial(self._thumb_show, button, png, gen))
+
+    def _thumb_show(self, button, png, gen):
+        if gen == self._gallery_gen:
+            button.stylesheets = [_thumb_css(png)]
+
+    def _quick_note(self, html):
+        self.qs_load_note.object = html
+        self.qs_load_note.visible = True
+
+    def _quick_open(self, path):
+        """Open a saved figure (it closes the dialog); if it cannot be opened, say why in
+        the dialog."""
+        if not self._load_spec(path):
+            self._quick_note(self.msg.object)
+
+    def _quick_template(self):
+        """Apply the template picked (it closes the dialog); if it cannot be applied, say
+        why in the dialog."""
+        if not self._apply_template(self.qs_tpl.value):
+            self._quick_note(self.msg.object)
+
+    def _quick_earlier(self):
+        """Open the figure an earlier page left; if it cannot be, say why in the dialog."""
+        why = self.open_state(self._earlier[0], "Reopened the last figure")
+        if why:
+            self._quick_note(f'<div class="cv-status">{why}</div>')
 
     def _quick_make(self):
         """A new figure (Undo takes it back) with the quick start's settings."""

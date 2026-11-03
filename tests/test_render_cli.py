@@ -20,7 +20,7 @@ def _demo_spec(demo_root, t=2):
 
 
 def _saved(demo_root, tmp_path):
-    """A figure saved with "+ script & data": (spec path, data path)."""
+    """A figure saved with its script and data: (spec path, data path)."""
     from cm1view.figures import spec as fg
     spec, fd = _demo_spec(demo_root)
     out = fg.save_bundle(spec, fd.panel_data(spec), str(tmp_path / "saved" / "refl"))

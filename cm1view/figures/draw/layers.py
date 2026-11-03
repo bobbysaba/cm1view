@@ -8,8 +8,8 @@ from matplotlib.patches import Circle, Rectangle
 from matplotlib.ticker import MultipleLocator
 from matplotlib.transforms import Bbox
 
-from .base import ENTRIES, colormap, _bounds, _steps, _norm, _levels, _cell
-from .v2 import block_view, _panel_layers, _key_layer
+from .base import ENTRIES, colormap, _bounds, _steps, _norm, _levels, _cell, _key_layer
+from .v2 import block_view, _panel_layers
 
 def _fill(ax, x, y, a, lay):
     a = np.array(a, dtype=float)
@@ -220,6 +220,7 @@ def _extends(spec, data):
     share a colorbar (the block's colorbar mode: shared, row, col; "figure": all
     blocks') united."""
     fig_mode = (spec.get("colorbar") or {}).get("mode")
+    own = spec.get("groups") or {}
     modes = [(block_view(spec, k).get("colorbar") or {}).get("mode", "shared")
              for k in range(len(spec["blocks"]))]
     groups, first = {}, {}
@@ -235,9 +236,12 @@ def _extends(spec, data):
             continue
         k = int(p.get("block", 0))
         r, c = _cell(p)[:2]
-        mode = modes[k]
+        name = p.get("group")
+        mode = (own.get(name, {}).get("colorbar") or {}).get("mode", "shared") \
+            if modes[k] == "groups" else modes[k]
         g = ("figure",) if fig_mode == "figure" else \
-            (k, {"shared": "", "row": ("r", r), "col": ("c", c)}.get(mode, ("p", p["id"])))
+            (k, name if modes[k] == "groups" else "",
+             {"shared": "", "row": ("r", r), "col": ("c", c)}.get(mode, ("p", p["id"])))
         groups.setdefault(g, []).append(ends)
         first[p["id"]] = g
     return {i: union_extend(groups[g]) for i, g in first.items()}

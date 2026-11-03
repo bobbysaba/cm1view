@@ -25,6 +25,8 @@ class Kind:
     quick_grid: bool = True  # the quick start sets its rows and columns
     spread: bool = False  # the quick start puts its cards one per panel
     style: tuple = ("axes", "y_step", "time_label")  # the Style settings it draws (below)
+    letter_at: str = "lower left"  # where a new figure's panel letters go
+    time_at: str = "lower right"  # ... and its time label
 
 
 def _wide(first, each, extra=0.0):
@@ -82,6 +84,7 @@ KINDS = {
         labels=("temperature (°C)", "pressure (hPa)"), one="sounding", head="Sounding",
         cards="snd_cards", card="_snd_card", show="_show_soundings", add="_add_sounding",
         from_tool="tab_soundings", one_run=True, spread=True, style=("axes", "time_label"),
+        letter_at="above left", time_at="above right",  # (clear of the barbs and the inset)
         note="The Sounding tab's soundings go one per panel (more soundings "
              "than panels: they wrap and share panels); panels left over start "
              "as a copy of the last, to change in Layers → Soundings."),

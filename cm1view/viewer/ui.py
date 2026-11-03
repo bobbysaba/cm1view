@@ -191,6 +191,12 @@ DRAWER = {"position": "absolute", "top": "100%", "left": "8px", "width": "calc(1
 FILL = {"flex": "1 1 0", "min-height": "0"}  # the rest of a column's height
 
 
+def out_of_flow(modal):
+    """A dialog beside a workspace: closed, its margins would still take 20 px of height."""
+    modal.styles = dict(modal.styles, position="absolute")
+    return modal
+
+
 # controls inside the floating pills: no borders of their own (the pill is the frame),
 # a light hover, and a cyan tint for the active / open one
 GHOST = """

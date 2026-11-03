@@ -4,8 +4,8 @@ image, a stand-alone script, the data and the spec.
 
 The editor has six tabs: Panels (what the grid shows: kind, size, times, titles,
 area), Layers (what each panel draws, and the runs), Tree (each panel alone), Style (fonts,
-axes, labels, colorbar, legend, spacing), Annotate and File (image options, animated GIFs,
-opening saved figures, templates).  Saving sits above the preview.
+axes, labels, colorbar, legend, spacing), Annotate and File (animated GIFs, opening saved
+figures, templates).  Export, above the preview, opens the dialog that saves the image.
 
 The FigureEditor is here (putting the widgets together, wiring them, the layer cards
 and rendering the preview); the rest are mixins, one module each: the widgets
@@ -14,13 +14,16 @@ the Panels tab's reactions (panelopts), runs (runs), sources and lists (sources)
 export (export), animations (anim), figures of several parts (combo), placing by
 clicking the preview (click), the panel tree (tree), style (style), the quick start
 (quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package;
-what differs between the kinds of panel is in the table in kinds.
+what differs between the kinds of panel is in the table in kinds, and the figure-level
+settings in the table in settings.
 The data behind a figure (reading the runs, the caches) is FigureData's (render), which
 works without the editor."""
 
 import base64
 import html
 import io
+import json
+import os
 import struct
 import time as _time
 import traceback
@@ -30,7 +33,7 @@ import panel as pn
 
 from . import draw as figdraw, spec as fg
 from ..theme import GRID
-from .cards import LayerCard
+from .cards import LayerCard, kept_cards
 from .anim import FigureAnimation
 from .click import ClickImage, FigureClick, place_map, watch_tight
 from .combo import FigureCombo
@@ -43,11 +46,20 @@ from .panelopts import FigurePanelOpts
 from .render import FigureData, panel_name
 from .quick import FigureQuick
 from .scene import FigureScene
+from .shell import FigureShell
 from .specio import FigureSpecIO
 from .times import FigureTimes
-from .tree import FigureTree
+from .tree import FigureTree, layer_copied, layers_moved
 from .widgets import FigureWidgets
-from ..viewer.ui import held
+from ..viewer.ui import held, out_of_flow
+
+
+def _load_layer(card, lay, folded):
+    """kept_cards: layer lay shown in the card of its place, if of its type."""
+    if card.type != lay["type"]:
+        return False
+    card.load(lay, folded, keep_open=True)
+    return True
 
 
 class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, FigureRuns,
@@ -71,7 +83,11 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         # undo / redo: (figure JSON with all its parts, part in the widgets) before each
         # change, and the ones undone
         self._hist, self._future, self._last, self._restoring = [], [], None, False
+        self._undoing, self._same_runs = False, False  # (_restore: the cards stay as they are)
         self._png = None  # (width, height) px and dpi of the shown preview
+        self._save_gen = 0  # (a save waiting for series goes on only if still the last)
+        self._made, self._example = False, None  # (own_figure)
+        self._auto_wrote = self._auto_failed = False  # (this page's autosave: _autosave)
         self._lims = {}  # panel -> (xlim, ylim) of the last preview, to place annotations
         from concurrent.futures import ThreadPoolExecutor
         viewer.pools["figser"] = ThreadPoolExecutor(1, thread_name_prefix="cm1view-figser")
@@ -87,7 +103,12 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._build()
         self.set_spec(self._default())
         self._started = False  # (the example: the quick start opens over it)
+        self._made = False  # (nor is it a figure of the user's, to keep: own_figure)
+        self._example = json.dumps(self.collect_all(), sort_keys=True, default=float)
         self._scan_roots()
+        # the new layout, while it is being built: only when asked for
+        self.shell = FigureShell(self) if os.environ.get("CM1VIEW_FIGURE_SHELL") else None
+        self.shell_btn.visible = self.shell is not None
 
     # ------------------------------------------------------------ widgets
     def _build(self):
@@ -98,18 +119,23 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                                           "field and width (Undo takes it back)", **ib)
         self.undo_btn = pn.widgets.Button(icon="arrow-back-up", description="Undo", **ib)
         self.redo_btn = pn.widgets.Button(icon="arrow-forward-up", description="Redo", **ib)
+        self.shell_btn = pn.widgets.Button(  # (CM1VIEW_FIGURE_SHELL: __init__)
+            name="Three panes", icon="layout-columns", height=32, button_type="light",
+            button_style="outline", margin=(4, 4), visible=False,
+            description="Try this figure in the new layout: tree, preview, inspector")
         self._build_panel_widgets()
         self._build_layer_widgets()
         self._build_scene()
         with self._redraws():
             self._build_text()
         self._build_more()
+        self._build_export()
         self._build_anim()
         self._build_style()
         self._build_quick()
         self.plan_layers.append(self.look_row)
         # ---- preview
-        self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(12, 8, 0, 8))
+        self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(4, 8))
         self.update = pn.widgets.Button(name="Redraw", icon="refresh", height=32,
                                         button_type="primary", button_style="outline",
                                         margin=(4, 4))
@@ -147,20 +173,24 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             self.tabs, scroll="y-auto", sizing_mode="stretch_height", width=580,
             styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
                     "overflow-x": "hidden"})
-        self.path.styles = {"flex": "1 1 300px"}
-        save_bar = pn.FlexBox(self.path, self.fmt, self.dpi, self.save_img, self.save_all,
-                              self.dl, flex_wrap="wrap", align_items="flex-end", gap="0 2px",
+        self.status.styles = {"flex": "1 1 230px"}  # (narrow: on a line of its own)
+        view_bar = pn.FlexBox(self.exp_btn, self.update, self.auto, self.new_btn, self.undo_btn,
+                              self.redo_btn, self.zoom, self.place_mode, self.shell_btn,
+                              self.status,
+                              flex_wrap="wrap", align_items="center",
                               sizing_mode="stretch_width")
-        view_bar = pn.Row(self.update, self.auto, self.new_btn, self.undo_btn, self.redo_btn,
-                          self.zoom, self.place_mode, self.status, margin=0,
-                          sizing_mode="stretch_width")
         self.preview = pn.Column(
-            save_bar, self.msg, view_bar, self.place_hint, self.image, self.quick,
+            view_bar, self.msg, self.place_hint, self.image, out_of_flow(self.quick),
+            out_of_flow(self.exp_dlg),
             scroll="y-auto",
             sizing_mode="stretch_both", styles={"min-width": "0"})
         self.panel = pn.Row(self.preview, self.editor, sizing_mode="stretch_both", margin=0)
         self._keep_tabs()
         self._wire()
+
+    def _letters_by_hand(self, ev):
+        if not self._hold:
+            self._let_auto = False
 
     def _open_tab(self, i):
         """Tab i's widgets into the tabs (the first time it is opened)."""
@@ -172,6 +202,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         rq = lambda *e: self.request()  # noqa: E731
         for w in self._live_ws:
             w.param.watch(rq, "value")
+        self.let_on.param.watch(self._letters_by_hand, "value")
         self.run_sel.param.watch(self._on_run_sel, "value")
         self.cb_mode.param.watch(lambda e: self._show_cbar(), "value")
         self.lg_where.param.watch(lambda e: self._show_legend(), "value")
@@ -232,13 +263,13 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                   *self.ao.values(), *self.to.values(), self.code):
             w.param.watch(rq, "value")
         self.update.on_click(lambda e: self.request(force=True, delay=False))
+        self.shell_btn.on_click(lambda e: self.shell.open())
         self.undo_btn.on_click(lambda e: self.undo())
         self.redo_btn.on_click(lambda e: self.redo())
         self.zoom.param.watch(lambda e: self._show_image(), "value")
         self.image.param.watch(self._on_click, "click")
         self.image.param.watch(self._on_drag, "drag")
-        self.save_img.on_click(lambda e: self._save(False))
-        self.save_all.on_click(lambda e: self._save(True))
+        self.save_img.on_click(lambda e: self._save())
         self.load_btn.on_click(lambda e: self._load_spec())
         self.saved_pick.param.watch(
             lambda e: setattr(self.spec_path, "value", e.new) if e.new else None, "value")
@@ -252,6 +283,10 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         # a long list starts folded: the first layer open, the rest by their titles; a
         # card of the same type in the same place is kept (the browser has its widgets)
         old, self.cards = self.cards, []
+        if self._undoing:
+            self.cards = kept_cards(old, layers, self._card, self._same_runs, _load_layer)
+            self._show_cards()
+            return
         for j, lay in enumerate(layers):
             fold = len(layers) > 2 and j > 0
             if j < len(old) and old[j].type == lay["type"]:
@@ -265,10 +300,14 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         c = LayerCard(self, lay, collapsed)
         c.up.on_click(lambda e: self._move(c, -1))
         c.down.on_click(lambda e: self._move(c, 1))
+        c.dup.on_click(lambda e: self._dup_layer(c))
         c.rm.on_click(lambda e: self._remove(c))
         return c
 
-    def _show_cards(self):
+    def _show_cards(self, moved=None):
+        """The cards and the lists of them.  moved: the cards just moved, (old spec layer
+        -> new, panel fills before): the contour key and Maximum / minimum stay on their
+        layers."""
         self.layer_box.objects = [c.panel for c in self.cards] or [pn.pane.HTML(
             '<div class="cv-empty">No layers: add one above.</div>')]
         self._show_region()
@@ -282,8 +321,20 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         with held(self):
             for w, o in ((self.ck_layer, opts), (self.ex_layer, ex_opts)):
                 v = w.value
+                if moved is not None and v >= 0:
+                    v = moved[0].get(v + moved[1], -1) - self._pf_count()
                 w.options = o
                 w.value = v if v in o.values() else -1
+
+    def _pf_count(self):
+        """How many spec layers come before the cards: a 'field' figure's fill."""
+        return 0 if self._pf_base is None else 1
+
+    def _layers_moved(self, new_of, pf=None):
+        """The layers have moved (new_of: {old spec layer: new}; missing: gone; pf: panel
+        fills before, default as now): what names a layer by its number follows it."""
+        layers_moved(self.edits, new_of)
+        self._show_cards((new_of, self._pf_count() if pf is None else pf))
 
     def _add_layer(self, kind, ev=None):
         F = self.fields
@@ -307,17 +358,35 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         i = self.cards.index(c)
         j = min(max(i + d, 0), len(self.cards) - 1)
         self.cards[i], self.cards[j] = self.cards[j], self.cards[i]
-        self._show_cards()
+        pf = self._pf_count()
+        new_of = {k: k for k in range(len(self.cards) + pf)}
+        new_of[i + pf], new_of[j + pf] = j + pf, i + pf
+        self._layers_moved(new_of)
+        self.request()
+
+    def _dup_layer(self, c):
+        """A copy of layer card c just after it, open, with c's changes in single panels."""
+        i = self.cards.index(c)
+        pf = self._pf_count()
+        n = len(self.cards) + pf
+        self.cards.insert(i + 1, self._card(json.loads(json.dumps(c.collect(), default=float))))
+        self._layers_moved({k: k + (k > i + pf) for k in range(n)})
+        layer_copied(self.edits, i + pf, i + pf + 1)
         self.request()
 
     def _remove(self, c):
+        i, pf = self.cards.index(c) + self._pf_count(), self._pf_count()
+        n = len(self.cards) + pf
         self.cards.remove(c)
-        self._show_cards()
+        self._layers_moved({k: k - (k > i) for k in range(n) if k != i})
         self.request()
 
     # ------------------------------------------------------------ rendering
     def request(self, force=False, delay=True):
         """Re-render the preview (shortly: several quick changes give one render)."""
+        if self._in_shell():  # (a series coming in, the workspace opened)
+            self.shell.request(force, delay)
+            return
         if self._hold or not (force or self.auto.value):
             return
         self._req += 1
@@ -328,8 +397,12 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         else:
             self._fire(n)
 
+    def _in_shell(self):
+        """Whether the new layout is what is showing (self.shell)."""
+        return getattr(self, "shell", None) is not None and self.shell.showing
+
     def _fire(self, n):
-        if n != self._req:
+        if n != self._req or self._in_shell():
             return
         try:
             self._prune_runs()
@@ -338,7 +411,10 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         except Exception as e:  # noqa: BLE001
             self._status(f"Incomplete settings: {e}", True)
             return
-        self._tree_sync()
+        try:
+            self._tree_sync()
+        except Exception as e:  # noqa: BLE001  (the panel list must not stop the figure)
+            self._msg(f"The panel tree could not show this figure: {e}", True)
         self._remember(spec)
         self._anim_refresh(spec)  # (the frames follow the panels' times)
         self.v.gen["fig"] += 1
@@ -469,6 +545,9 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                                     "box-shadow:0 4px 18px rgba(0,0,0,.5)")
 
     def _status(self, html, err=False):
+        if self._in_shell():
+            self.shell.say(html, err)
+            return
         col = ' style="color:#f87171"' if err else ""
         self.status.object = f'<div class="cv-status"{col}>{html}</div>'
 

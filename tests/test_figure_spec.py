@@ -684,3 +684,379 @@ def test_your_data_card(ed):
     ed.set_spec(s)
     assert isinstance(ed.ser_cards[-1], DataCard)
     assert ed.ser_cards[-1].collect()["table"]["t"] == [1.0, 3.0]
+
+
+# ------------------------------------------------------------------ panel letters
+def test_letters_follow_the_panels_until_set_by_hand(ed):
+    def letters():
+        return ed.collect()["letters"]["on"]
+    ed.rows.value, ed.cols.value = 1, 1
+    assert letters() is False and ed.let_on.value is False
+    ed.rows.value, ed.cols.value = 1, 2
+    assert letters() is True and ed.let_on.value is True
+    ed.rows.value, ed.cols.value = 1, 1
+    assert letters() is False
+    ed.let_on.value = True  # (by hand: it stays)
+    assert letters() is True and ed.collect()["letters"]["auto"] is False
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.let_on.value = False
+    assert letters() is False
+
+
+def test_letters_saved_without_auto_stay_as_saved(ed):
+    """A figure saved before letters followed the panels keeps its letter."""
+    s = ed.collect()
+    s["letters"].pop("auto")
+    s["letters"]["on"] = True
+    s.update(rows=1, cols=1, times_s=s["times_s"][:1], times=s["times"][:1])
+    ed.set_spec(s)
+    assert ed.collect()["letters"]["on"] is True
+
+
+def test_every_part_has_letters_in_a_figure_of_parts(ed):
+    ed.rows.value, ed.cols.value = 1, 1
+    assert ed.collect()["letters"]["on"] is False
+    ed._add_part()
+    assert [p["letters"]["on"] for p in ed.collect_all()["parts"]] == [True, True]
+    ed._remove_part()
+    assert ed.collect()["letters"]["on"] is False
+
+
+# ------------------------------------------------------------------ 3D scenes
+def test_a_scene_is_one_picture_whatever_grid_was_set(ed):
+    from cm1view.figures import draw as figdraw
+    ed.rows.value, ed.cols.value = 2, 3
+    ed.kind.value = "scene"
+    s = ed.collect()
+    assert (s["rows"], s["cols"]) == (1, 1) and figdraw.npanels(s) == 1
+    assert s["letters"]["on"] is False
+    ed.kind.value = "plan"  # (the grid stays for the other kinds)
+    assert (int(ed.rows.value), int(ed.cols.value)) == (2, 3)
+
+
+def test_an_older_scene_with_a_grid_draws_one_picture():
+    from cm1view.figures import draw as figdraw
+    s = dict(version=1, kind="scene", rows=2, cols=3, run=0, time_s=600.0, layers=[],
+             size=[4.0, 3.0], runs=[dict(path="a")])
+    v2, _ = figdraw.upgrade(s)
+    assert [(b["rows"], b["cols"]) for b in v2["blocks"]] == [(1, 1)]
+    assert [p["cell"] for p in v2["panels"]] == [[0, 0, 1, 1]]
+
+
+def test_tree_shows_a_scene(ed):
+    ed.kind.value = "scene"
+    ed.tabs.active = 2
+    assert ed.tree_list.objects[0].name.startswith("a  3D scene")
+    assert ed.tree_detail.objects
+    ed.tabs.active = 0
+
+
+def test_a_tree_failure_does_not_stop_the_redraw(ed, monkeypatch):
+    def broken(*a, **k):
+        raise KeyError("x")
+    jobs = []
+    monkeypatch.setattr(ed, "_tree_sync", broken)
+    monkeypatch.setattr(ed.v.pools["fig"], "submit", lambda *a, **k: jobs.append(a))
+    ed._fire(ed._req)
+    assert jobs and "panel tree" in ed.msg.object
+
+
+# ------------------------------------------------------------------ figure parts' note
+def test_new_part_note_names_what_exists_and_goes_away(ed):
+    ed._add_part()
+    assert "Panels show" in ed.part_note.object and "This part from" not in ed.part_note.object
+    ed._switch_part(0)
+    assert ed.part_note.object == ""
+
+
+# ------------------------------------------------------------------ what follows a move
+def test_step_moves_follow_the_item_or_keep_the_place():
+    from cm1view.figures.tree import step_moves
+    assert step_moves(["a", "b", "c"], ["b", "c"]) == {1: 0, 2: 1}  # (one gone)
+    assert step_moves(["a", "b"], ["b", "a"]) == {0: 1, 1: 0}  # (swapped)
+    assert step_moves([1.0, 3.0, 6.0], [1.0, 3.0, 7.0]) == {0: 0, 1: 1, 2: 2}  # (retyped)
+    assert step_moves([1.0, 1.0], [1.0]) == {0: 0}  # (the same height twice)
+
+
+def _grid(rows, cols, rd="none", cd="none", r=(), c=()):
+    return dict(rows=rows, cols=cols, axes=(rd, cd), steps=(list(r), list(c)))
+
+
+def test_panel_moves_of_each_kind_of_grid():
+    from cm1view.figures.tree import panel_moves
+    # runs × times, a time added: the cell's run and time stay
+    was = _grid(2, 2, "runs", "times", "ab", range(2))
+    panels, rows = panel_moves(was, _grid(2, 3, "runs", "times", "ab", range(3)))
+    assert panels == {0: 0, 1: 1, 2: 3, 3: 4} and rows == {0: 0, 1: 1}
+    # the first run taken out: the other run's panels move up
+    panels, rows = panel_moves(was, _grid(1, 2, "runs", "times", "b", range(2)))
+    assert panels == {2: 0, 3: 1} and rows == {1: 0}
+    # one list of runs: at its run, wherever the grid puts it
+    panels, _ = panel_moves(_grid(1, 3, "none", "runs", (), "abc"),
+                            _grid(1, 2, "none", "runs", (), "ac"))
+    assert panels == {0: 0, 2: 1}
+    # no list, one more column: each panel keeps its cell
+    panels, _ = panel_moves(_grid(2, 2), _grid(2, 3))
+    assert panels == {0: 0, 1: 1, 2: 3, 3: 4}
+
+
+def test_panel_moves_leave_numbers_that_still_hold():
+    from cm1view.figures.tree import panel_moves
+    assert panel_moves(None, _grid(2, 2)) == (None, None)
+    assert panel_moves(_grid(2, 2), None) == (None, None)
+    assert panel_moves(_grid(1, 4), _grid(2, 2)) == (None, None)  # (reshaped: reading order)
+    assert panel_moves(_grid(2, 2), _grid(1, 2)) == (None, None)  # (off the grid: it waits)
+    assert panel_moves(_grid(1, 3, "none", "times", (), range(3)),  # (a list by its place)
+                       _grid(3, 1, "none", "times", (), range(3))) == (None, None)
+    assert panel_moves(_grid(1, 2, "none", "times", (), range(2)),  # (another list)
+                       _grid(1, 2, "none", "heights", (), [1.0, 3.0])) == (None, None)
+
+
+def _two_contours(ed):
+    """Layers: the fill, then two contour cards (card numbers 1 and 2)."""
+    ed.cards[:] = ed.cards[:1]
+    ed._show_cards()
+    ed._add_layer("contour")
+    ed._add_layer("contour")
+    assert [c.type for c in ed.cards] == ["fill", "contour", "contour"]
+
+
+def test_moving_a_layer_takes_its_tree_edits_and_the_choices_of_it(ed):
+    _two_contours(ed)
+    first, second = ed.cards[1], ed.cards[2]
+    ed.edits = {"0": {"layers": {"1": {"lw": 3.0}}}}
+    ed.ck_layer.value = ed.ex_layer.value = 1
+    ed._move(first, 1)
+    assert ed.cards[2] is first
+    assert ed.collect()["edits"] == {"0": {"layers": {"2": {"lw": 3.0}}}}
+    assert ed.ck_layer.value == ed.ex_layer.value == 2
+    s = ed.collect()
+    assert s["contour_key"]["layer"] == s["extremes"]["layer"] == 2
+    assert s["layers"][2]["type"] == "contour"
+    ed._move(second, -1)  # (the fill and the other contours swap: this one stays)
+    assert ed.cards[0] is second and ed.ck_layer.value == 2
+
+
+def test_removing_a_layer_drops_its_edits_and_renumbers_the_rest(ed):
+    _two_contours(ed)
+    ed.edits = {"0": {"layers": {"1": {"lw": 3.0}, "2": {"lw": 4.0}}}}
+    ed.ck_layer.value = 2
+    ed.ex_layer.value = 1
+    ed._remove(ed.cards[1])
+    assert ed.collect()["edits"] == {"0": {"layers": {"1": {"lw": 4.0}}}}
+    assert ed.ck_layer.value == 1 and ed.ex_layer.value == -1
+
+
+def test_a_layer_becoming_the_panels_fill_keeps_its_edits(ed):
+    """Going to a figure of fields takes the first fill out of the cards, to be the first
+    spec layer; going back puts it first."""
+    ed.cards[:] = ed.cards[:1]
+    ed._show_cards()
+    ed._add_layer("contour")
+    ed._add_layer("fill")
+    ed._move(ed.cards[0], 1)  # (contours, fill, fill)
+    assert [c.type for c in ed.cards] == ["contour", "fill", "fill"]
+    ed.edits = {"0": {"layers": {"0": {"lw": 3.0}, "1": {"alpha": 0.5}}}}
+    ed.ck_layer.value = 0
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"
+    s = ed.collect()
+    assert s["edits"]["0"]["layers"] == {"1": {"lw": 3.0}, "0": {"alpha": 0.5}}
+    assert s["layers"][1]["type"] == "contour" and s["contour_key"]["layer"] == 1
+    assert ed.ck_layer.value == 0
+    ed.g_cols.value = "times"
+    s = ed.collect()
+    assert s["edits"]["0"]["layers"] == {"1": {"lw": 3.0}, "0": {"alpha": 0.5}}
+    assert s["layers"][1]["type"] == "contour" and s["contour_key"]["layer"] == 1
+    assert ed.ck_layer.value == 1
+
+
+def test_a_new_column_leaves_what_names_a_panel_with_that_panel(ed):
+    """A grid without lists, one more column: panel c at the start of row 2 becomes d."""
+    ed.g_rows.value, ed.g_cols.value = "none", "none"
+    ed.rows.value, ed.cols.value = 2, 2
+    ed.edits = {"2": {"title": "edited"}}
+    ed.title_ws[3].value = "last"
+    ed.cards[0].w["panels"].value = "c"
+    ed._add_annotation()
+    ed.ann_rows[-1].w["panel"].value = "d"
+    ed.lg_panel.value = 4
+    ed.lg_from.value = "a, c"
+    ed.cols.value = 3
+    s = ed.collect()
+    assert s["edits"] == {"3": {"title": "edited"}}
+    assert s["titles"][4] == "last" and not any(s["titles"][:4])
+    assert s["layers"][0]["panels"] == [3]
+    assert s["annotations"][-1]["panel"] == 4
+    assert s["legend"]["panel"] == 4 and s["legend"]["panels"] == [0, 3]
+
+
+def test_a_panel_that_goes_keeps_only_its_own_references(ed):
+    """An annotation in a panel no longer there keeps its letter: blank would mean all."""
+    ed.g_rows.value, ed.g_cols.value = "none", "none"
+    ed.rows.value, ed.cols.value = 2, 3
+    ed.edits = {"2": {"title": "gone"}, "3": {"title": "stays"}}
+    ed._add_annotation()
+    ed.ann_rows[-1].w["panel"].value = "c"
+    ed.cols.value = 2
+    s = ed.collect()
+    assert s["edits"] == {"2": {"title": "stays"}}
+    assert s["annotations"][-1]["panel"] == 2
+
+
+def test_taking_a_run_out_of_a_grid_of_runs_leaves_the_edits_on_their_run(ed, demo_root):
+    import os
+    weak = os.path.join(demo_root, "demo", "supercell_weak")
+    ed.add_path.value = weak
+    ed._add_run()
+    ed.g_rows.value, ed.g_cols.value = "runs", "times"
+    ed.gg_runs.value = [0, 1]
+    ed.cols.value = 2
+    assert [ed.rows.value, ed.cols.value] == [2, 2]
+    ed.edits = {"3": {"title": "weak, later"}, "0": {"title": "main, first"}}
+    ed.row_ws[1].value = "weak"
+    ed.gg_runs.value = [1]
+    s = ed.collect()
+    assert s["edits"] == {"1": {"title": "weak, later"}}
+    assert s["row_titles"] == ["weak"]
+
+
+def test_a_panel_edit_stays_when_the_kind_comes_back_on_another_grid(ed):
+    ed.g_rows.value, ed.g_cols.value = "none", "none"
+    ed.rows.value, ed.cols.value = 2, 2
+    ed.edits = {"2": {"title": "edited"}}
+    ed.kind.value = "line"
+    ed.cols.value = 3
+    ed.kind.value = "plan"
+    assert ed.collect()["edits"] == {"2": {"title": "edited"}}
+
+
+# ---------------------------------------------------------------- B3: parts, label defaults
+def _label_sizes(fig):
+    return {t.get_fontsize() for ax in fig.axes for _, t in getattr(ax, "_cv_labels", [])}
+
+
+def _label_boxes(fig):
+    """[(panel extent, [label extents])] of the laid-out figure."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    FigureCanvasAgg(fig).draw()
+    r = fig.canvas.get_renderer()
+    return [(ax.get_window_extent(r), [t.get_window_extent(r) for _, t in ax._cv_labels])
+            for ax in fig.axes if getattr(ax, "_cv_labels", None)]
+
+
+def test_whole_figure_settings_do_not_follow_the_part_shown(ed):
+    ed.fmt.value, ed.dpi.value, ed.bg.value = "png", 300, "white"
+    ed.sp_w.value = 0.2
+    ed._add_part()
+    ed.dpi.value, ed.fmt.value = 600, "pdf"
+    ed.bg.value = "none"
+    ed.sp_w.value = 0.3
+    ed.part_sel.value = 0
+    assert (ed.dpi.value, ed.fmt.value, ed.bg.value, ed.sp_w.value) == (600, "pdf", "none", 0.3)
+    spec = ed.collect_all()
+    assert spec["export"]["dpi"] == 600 and spec["export"]["format"] == "pdf"
+    assert spec["background"] == "none" and spec["spacing"]["wspace"] == 0.3
+    ed.dpi.value = 150  # (set in the first part: in the other, and in the figure)
+    ed.part_sel.value = 1
+    assert ed.dpi.value == 150 and ed.collect_all()["export"]["dpi"] == 150
+
+
+def test_a_saved_figure_of_parts_opens_with_its_own_export(ed):
+    ed._add_part()
+    spec = json.loads(json.dumps(ed.collect_all(), default=float))
+    spec["export"] = dict(spec["export"], dpi=450)
+    spec["background"] = "none"
+    spec["parts"][0]["export"] = dict(spec["parts"][0]["export"], dpi=100)  # (an older file)
+    ed.set_parts(spec, 0)
+    assert ed.dpi.value == 450 and ed.bg.value == "none"
+    assert ed.collect_all()["export"]["dpi"] == 450
+
+
+def test_the_figure_look_of_parts_does_not_follow_the_part_shown(ed):
+    ed._add_part()
+    ed.fsize.value = 14.0
+    second = ed.collect_all()
+    ed.part_sel.value = 0
+    first = ed.collect_all()
+    assert second["font"]["size"] == first["font"]["size"] != 14.0
+
+
+def test_labels_shrink_to_fit_a_narrow_panel(ed):
+    ed.g_rows.value, ed.g_cols.value = "none", "times"
+    ed.rows.value, ed.cols.value = 2, 3
+    ed.size_preset.value = "3.25"
+    spec, data, fig = render(ed)
+    assert spec["label_fit"]
+    sizes = _label_sizes(fig)
+    assert len(sizes) == 1 and 6.0 <= sizes.pop() < 12.0  # (one size, across the figure)
+    for panel, labels in _label_boxes(fig):
+        labels.sort(key=lambda b: b.x0)
+        assert panel.x0 <= labels[0].x0 and labels[-1].x1 <= panel.x1
+        assert all(a.x1 <= b.x0 for a, b in zip(labels, labels[1:]))
+
+
+def test_labels_keep_their_size_with_room_or_when_told(ed):
+    ed.rows.value, ed.cols.value = 1, 2
+    fig = render(ed)[2]
+    assert _label_sizes(fig) == {12.0}
+    ed.size_preset.value = "3.25"
+    assert _label_sizes(render(ed)[2]) != {12.0}
+    ed.label_fit.value = False
+    spec, data, fig = render(ed)
+    assert not spec["label_fit"] and not _label_sizes(fig)
+    assert {t.get_fontsize() for t in fig.axes[0].findobj(
+        lambda a: getattr(a, "get_text", None) and a.get_text() == "a")} == {12.0}
+
+
+def test_a_fit_that_shrinks_nothing_leaves_the_layout_alone(ed):
+    """The layout it measures with must not shift the panels of the figure as saved."""
+    from cm1view.figures import draw as figdraw
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    ed.rows.value, ed.cols.value = 1, 3
+    ed.size_preset.value = "6.5"
+    spec, data, fig = render(ed)
+    assert _label_sizes(fig) == {12.0}
+    fig2 = figdraw.draw(dict(spec, label_fit=False), data)
+    FigureCanvasAgg(fig).draw()
+    FigureCanvasAgg(fig2).draw()
+    assert np.allclose([a.get_position().bounds for a in fig.axes],
+                       [a.get_position().bounds for a in fig2.axes], atol=1e-9)
+
+
+def test_a_saved_figure_keeps_its_label_sizes(ed):
+    from cm1view.figures import spec as fg
+    s = json.loads(json.dumps(ed.collect(), default=float))
+    s.pop("label_fit")
+    assert fg.with_defaults(s, ed.run, ed.fields, 0)["label_fit"] is False
+    assert fg.with_defaults(dict(s, label_fit=True), ed.run, ed.fields, 0)["label_fit"] is True
+    ed.set_parts(s)
+    assert ed.label_fit.value is False
+
+
+def test_a_sounding_starts_with_its_labels_clear_of_the_barbs(ed):
+    ed.kind.value = "sounding"
+    assert (ed.let_loc.value, ed.tl_loc.value) == ("above left", "above right")
+    ed.kind.value = "plan"
+    assert (ed.let_loc.value, ed.tl_loc.value) == ("lower left", "lower right")
+    ed.tl_loc.value = "upper center"  # (moved by hand: it stays)
+    ed.kind.value = "sounding"
+    assert (ed.let_loc.value, ed.tl_loc.value) == ("above left", "upper center")
+
+
+def test_the_inset_takes_the_corner_clear_of_the_traces(ed):
+    from cm1view.figures import draw as figdraw
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    ed.kind.value = "sounding"
+    assert ed.sk["inset_loc"].value == "clear"
+    spec, data, fig = render(ed)
+    FigureCanvasAgg(fig).draw()
+    skew = next(a for a in fig.axes if a.child_axes)
+    hx, sx = skew.child_axes[0].get_window_extent(), skew.get_window_extent()
+    assert hx.y1 < 0.5 * (sx.y0 + sx.y1) and hx.x1 < 0.5 * (sx.x0 + sx.x1)  # (the demo: lower left)
+    # an older figure's "auto" keeps to the top corners
+    old = dict(spec, skewt=dict(spec["skewt"], inset_loc="auto"))
+    fig = figdraw.draw(old, data)
+    FigureCanvasAgg(fig).draw()
+    skew = next(a for a in fig.axes if a.child_axes)
+    hx, sx = skew.child_axes[0].get_window_extent(), skew.get_window_extent()
+    assert hx.y0 > 0.5 * (sx.y0 + sx.y1)

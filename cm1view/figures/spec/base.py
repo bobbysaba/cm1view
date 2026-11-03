@@ -114,12 +114,12 @@ def default_spec(run, F, t=0):
         sections=[section_defaults()],
         axes=dict(xlabel="x (km)", ylabel="y (km)", ticks=True, ticklabels="outer",
                   equal=True, minor=False, title_bold=True),
-        letters=dict(on=True, fmt="{a}", loc="lower left", size=12, bold=True),
-        time_label=dict(on=True, fmt="t = {min:g} min", loc="lower right", size=12,
+        letters=dict(on=True, auto=True, fmt="{a}", loc="lower left", size=None, bold=True),
+        time_label=dict(on=True, fmt="t = {min:g} min", loc="lower right", size=None,
                         bold=True, t0_min=0.0),
-        run_label=dict(on=True, loc="upper left", size=12, bold=True, run_color=True),
-        z_label=dict(on=False, fmt="", loc="upper right", size=12, bold=True),
-        titles=[], suptitle="",
+        run_label=dict(on=True, loc="upper left", size=None, bold=True, run_color=True),
+        z_label=dict(on=False, fmt="", loc="upper right", size=None, bold=True),
+        label_fit=True, titles=[], suptitle="",
         colorbar=dict(mode="shared", orientation="horizontal", label="", shrink=0.7,
                       fraction=0.05, pad=0.02, ticks=""),
         legend=dict(where="panel", panel=0, panels=[], loc="upper right", anchor=None,
@@ -137,7 +137,7 @@ def default_spec(run, F, t=0):
                                  hodo_lm=True, hodo_mean=True, hodo_labels=True,
                                  hodo_heights="1, 3, 6, 9, 12", hodo_key=True, srh="", table=[],
                                  storm="rm", storm_u=0.0, storm_v=0.0, hodo_storm=True,
-                                 inset_loc="auto", inset_size=0.37, inset_x=0.62,
+                                 inset_loc="clear", inset_size=0.37, inset_x=0.62,
                                  inset_y=0.6, hodo_center="origin", hodo_cu=0.0,
                                  hodo_cv=0.0),
         dists=[], dist=dict(plot="hist", norm="count", bins=50, width=None, xmin=None,
@@ -168,7 +168,7 @@ def default_spec(run, F, t=0):
         annotations=[], code=dict(on=False, text=""),
         font=dict(family="sans-serif", size=10), background="white",
         spacing=dict(w_pad=0.04, h_pad=0.04, wspace=0.02, hspace=0.02),
-        export=dict(format="png", dpi=250, tight=True),
+        export=dict(format="png", dpi=250, tight=True, exact_width=False),
     )
 
 
@@ -364,6 +364,12 @@ def normalize(spec, run, track="viewer"):
         spec["time_s"] = float(run.times[min(int(spec["time"]), nt - 1)])
     if not spec.get("runs"):
         spec["runs"] = [run_entry(run, track)]
+    return renewed(spec)
+
+
+def renewed(spec):
+    """An older spec's sections, grid, series and cards as a new figure has them, in place
+    (what normalize does without needing a run)."""
     upgrade_sections(spec)  # (one section before: spec["xsec"])
     for s in [spec] + list(spec.get("parts") or []):
         upgrade_grid(s)

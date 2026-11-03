@@ -38,8 +38,9 @@ Short walkthroughs that combine the tools. Each uses only what the other pages d
    *Plan-view area* to *Centred on tracked storm*.
 4. Put a reflectivity fill and a w contour in *Layers*, and set *Colorbars* to *One for
    the figure* in *Style*.
-5. **Save as** a name, choose the format and DPI, and press **+ script & data** to keep the
-   data and a script that redraws the figure ([Figures](figures.md)).
+5. Press **Export**, give **Save as** a name, choose the format and DPI, tick **Also the script
+   and data** to keep the data and a script that redraws the figure, and **Save**
+   ([Figures](figures.md)).
 
 ## A swath of the strongest updraft
 

@@ -100,6 +100,29 @@ def _columns(ent, F, many):
             for k in ent.get("stats") or [] if k in TBL_STATS]
 
 
+def tbl_points(spec):
+    """The height (pt) of the tallest table of `spec`, without reading its values: as many
+    rows as figdraw's tbl_grid will lay out."""
+    layout = (spec.get("table") or {}).get("layout") or "rows"
+    size = figdraw.font_size(spec, "label")
+    ents, nruns, out = spec.get("tables") or [], len(spec.get("runs") or []), 0.0
+    for i in range(figdraw.npanels(spec)):
+        mine = [x for x in ents if int(x.get("panel", 0)) == i]
+        cells = {(k, float(ts)) for x in mine for k in profile_runs(x, nruns)
+                 for ts in x.get("times_s") or []}
+        nq = sum(len(x.get("params" if x.get("what") == "sounding" else "stats") or [])
+                 for x in mine)
+        runs, times = len({k for k, _ in cells}), len({ts for _, ts in cells})
+        if layout == "rows":  # (heading: its source, a name, its units)
+            many = sum(x.get("what") == "sounding" for x in mine) > 1
+            spans = any(x.get("what") != "sounding" or x.get("label") or many for x in mine)
+            head, rows = 2, len(cells) + bool(spans)
+        else:
+            head, rows = 1, nq * {"values": 1, "values_run": runs, "values_time": times}[layout]
+        out = max(out, ((head + rows) * figdraw.TBL_LINE + (1 + rows) * figdraw.TBL_GAP) * size)
+    return out
+
+
 def tbl_panel(spec, i, get, fields=None):
     """Arrays of table panel i (figdraw.draw's notes).  get(entry index, run, model time s)
     -> a thermo result or dist summary, or a string (why there is none); fields(run index)

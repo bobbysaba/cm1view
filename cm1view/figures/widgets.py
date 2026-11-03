@@ -1,4 +1,4 @@
-"""Figure editor: the widgets of the Panels, Layers, Annotate and File tabs.
+"""Figure editor: the widgets of the Panels, Layers, Annotate and File tabs, and Export.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
@@ -9,6 +9,7 @@ import panel as pn
 
 from .. import config
 from . import draw as figdraw
+from ..theme import DIALOG_DARK
 from ..viewer.picker import RunPicker
 from .cards import (
     ANN_KINDS, DIST_BAR_LABELS, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS,
@@ -234,7 +235,8 @@ class FigureWidgets:
             storm_v=_f("Storm v (m/s)", 0.0, step=1.0),
             hodo_storm=_chk("Ring at the storm motion", True),
             inset_loc=pn.widgets.Select(name="Inset at", options={
-                "Auto (clear of the traces)": "auto", "Upper right": "upper right",
+                "Auto (clear of the traces)": "clear",
+                "Auto, top corners only (older figures)": "auto", "Upper right": "upper right",
                 "Upper left": "upper left", "Lower right": "lower right",
                 "Lower left": "lower left", "Custom (x, y below)": "custom"}),
             inset_size=_f("Inset size", 0.37, step=0.01,
@@ -524,38 +526,44 @@ class FigureWidgets:
                          " font-size: 12px; }"])
         self.code_box = _chk("Plain text box (if the highlighted editor stays blank, e.g. "
                              "without internet)", config.state("figure_code_plain") == "1")
-        # ---- Saving (the bar above the preview, and the File tab)
+        # ---- Saving (the Export dialog) and reopening (the File tab)
         self._fig_dir = config.figures_dir(run.path)  # followed while the box is in it
         self.path = pn.widgets.TextInput(
             name="Save as (folder/name on the server, no extension)",
-            value=os.path.join(self._fig_dir, "figure"), min_width=240)
+            value=os.path.join(self._fig_dir, "figure"), sizing_mode="stretch_width")
         self.fmt = pn.widgets.Select(name="Format", options={
             "PNG": "png", "PDF": "pdf", "SVG": "svg", "EPS": "eps", "TIFF": "tiff"},
             width=90, description="PDF, SVG and EPS keep text and lines as vectors (fields "
                                   "are embedded as images at the DPI)")
         self.dpi = pn.widgets.IntInput(name="DPI", start=50, end=1200, step=50, width=80)
+        self.exp_btn = pn.widgets.Button(name="Export", icon="device-floppy",
+                                         button_type="primary", height=32, margin=(4, 4),
+                                         description="Save or download the image")
         self.save_img = pn.widgets.Button(name="Save", icon="device-floppy",
                                           button_type="primary", height=32, margin=(5, 3),
-                                          description="Save the image")
-        self.save_all = pn.widgets.Button(
-            name="+ script & data", button_type="primary", button_style="outline",
-            height=32, margin=(5, 3),
-            description="Also writes scripts/<name>.py (redraws the figure without the viewer) "
-                        "and, in _src/, <name>_data.npz and <name>_spec.json")
+                                          description="Save the image, and the figure's "
+                                                      "settings to reopen it")
+        self.save_more = pn.widgets.Checkbox(name="Also the script and data")
         self.dl = pn.widgets.FileDownload(callback=self._download, filename="figure.png",
                                           label="Download", icon="download",
                                           button_type="primary", button_style="outline",
                                           height=32, margin=(5, 3))
         with self._redraws():
-            self.tight = pn.widgets.Checkbox(name="Trim white space")
+            self.fit = pn.widgets.Select(
+                name="Image size", options={"Trim white space": "trim",
+                                            "Exact width, trim the height": "width",
+                                            "Exact width and height": "full"},
+                description="Trimming adds the margin around what is drawn, so the image can be "
+                            "a little wider than the figure's width. Exact width is for a "
+                            "journal column; exact width and height keeps all the white space.")
             self.pad = _f("Margin when trimmed (in)", 0.05, step=0.01, start=0.0)
             self.bg = pn.widgets.Select(name="Background", options={"White": "white",
                                                                     "Black": "black",
                                                                     "Transparent": "none"})
         self.saved_pick = pn.widgets.Select(
             name="Saved figures (in the Figures folder, ⚙ Settings)",
-            description="Figures saved with + script & data: this run's first, then the "
-                        "other folders of the Figures setting. Picking one fills in the "
+            description="This run's saved figures first, then the other folders of the "
+                        "Figures setting. Picking one fills in the "
                         "path below.")
         self.spec_path = pn.widgets.TextInput(name="A saved figure (_spec.json)",
                                               placeholder="…/_src/figure_spec.json")
@@ -607,6 +615,21 @@ class FigureWidgets:
         self.panels_tab = pn.Column(*self.panels_all, sizing_mode="stretch_width")
         return self.panels_tab
 
+    def _build_export(self):
+        """The Export dialog: where and how the image is saved."""
+        self.exp_dlg = pn.Modal(
+            pn.pane.HTML('<div class="cv-maptitle" style="font-size:16px"><b>Export the figure'
+                         '</b></div>', margin=(0, 4)),
+            self.path, _grid(self.fmt, self.dpi, self.bg), _grid(self.fit, self.pad),
+            _hint("Publishers usually ask for 300–600 DPI, or PDF / EPS for line art."),
+            self.save_more,
+            _hint("The script (<code>scripts/&lt;name&gt;.py</code>) redraws the figure without "
+                  "the viewer, from the data and drawing code it adds to <code>_src/</code>."),
+            pn.Row(self.save_img, self.dl), width=640, margin=10,
+            stylesheets=[DIALOG_DARK])
+        self.exp_btn.on_click(lambda e: self.exp_dlg.show())
+        self.fit.param.watch(lambda e: setattr(self.pad, "visible", e.new != "full"), "value")
+
     def _more_tabs(self):
         """The Annotate and File tabs."""
         annotate_tab = pn.Column(
@@ -625,15 +648,11 @@ class FigureWidgets:
                 self.code_box),
             sizing_mode="stretch_width")
         file_tab = pn.Column(
-            _section("Image", _grid(self.tight, self.pad, self.bg),
-                     _hint("Save, the format and the DPI are above the preview. Publishers "
-                           "usually ask for 300–600 DPI, or PDF / EPS for line art.")),
             self.anim_sec,
             _section("Open a saved figure", _hint(
-                "<b>+ script & data</b> also writes a Python script that redraws the figure "
-                "without the viewer, and the figure's spec: open the spec here to keep "
-                "editing: pick it from the list, or give the path of its _spec.json "
-                "(or its image or script)."), self.saved_pick,
+                "Saving keeps the figure's settings in <code>_src/&lt;name&gt;_spec.json</code>, "
+                "so you can keep editing it: pick it from the list, or give the path of its "
+                "_spec.json (or its image or script)."), self.saved_pick,
                 _grid((self.spec_path, 2), self.load_btn)),
             self.tpl_sec,
             sizing_mode="stretch_width")

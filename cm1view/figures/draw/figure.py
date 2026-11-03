@@ -1,9 +1,16 @@
 """The figure: blocks of panels, each panel's layers, labels and annotations."""
 
+from contextlib import nullcontext
+
 import numpy as np
 import matplotlib
+from matplotlib.collections import Collection
+from matplotlib.colors import to_rgba
+from matplotlib.contour import ContourSet
 from matplotlib.lines import Line2D
+from matplotlib.offsetbox import AnchoredOffsetbox
 from matplotlib.patches import Circle, Patch, Rectangle
+from matplotlib.text import Text
 
 from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_letter,
                    time_text, _new_fig, _fs, _cell, grid_layout, rc, anchor_kw, font_size,
@@ -17,9 +24,10 @@ from .layers import (_fill, _contour, _shade, _vectors, _parcels, parcel_label,
 from .lines import (_lines, _dists, _profiles, _joints, _azims, azim_range, dist_edges,
                     dist_hist, dist_of, joint_edges, joint_hist, joint_of)
 from .sounding import _sounding, _hodo_view, shared_hodo_half, sounding_layout
-from .tables import _table
+from .tables import _table, _tbl_width, finish_tables
 from .scene3d import scene_panel, finish_scenes, scene_dpi
 
+MIN_LABEL_PT = 6.0  # (fit_labels)
 SCALE_OPTS = {"dist": "dist", "profile": "prof", "joint": "joint", "azim": "azim",
               "sounding": "skewt"}  # (a kind whose scales follow its data -> its options)
 
@@ -186,6 +194,8 @@ def _draw2(spec, data):
             if spec.get("suptitle"):
                 fig.suptitle(spec["suptitle"], weight="bold",
                              fontsize=font_size(spec, "suptitle"))
+            fit_labels(fig)
+            _on_dark(fig, spec)
             code = spec.get("code") or {}
             if code.get("on") and str(code.get("text") or "").strip():
                 run_code(fig, fig._cv_grid, data, spec, code["text"])
@@ -246,6 +256,9 @@ def _draw2(spec, data):
             _cbar_style(c, dict(cb, **words), bar_layer([ml[1] for _, _, ml in mappables]), loc)
     if spec.get("suptitle"):
         fig.suptitle(spec["suptitle"], weight="bold", fontsize=font_size(spec, "suptitle"))
+    with matplotlib.rc_context(rc(spec)):
+        fit_labels(fig)
+    _on_dark(fig, spec)
     code = spec.get("code") or {}
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, [fig._cv_axes[i] for i in sorted(fig._cv_axes)], data, spec,
@@ -278,10 +291,18 @@ def _block(fig, spec, k, bv, data, fs, ext):
                                                gridspec_kw=gkw or None)).ravel())
     order = {id(p): n for n, p in enumerate(spec["panels"])}
     used, placed, mappables, entries = [], [], [], {}
-    share = bv.get("axes", {}).get("share", "none")
-    half = share != "none" and shared_hodo_half(
-        [(data[p["id"]], panel_view(spec, p, bv).get("skewt", {}))
-         for p in pans if p["kind"] == "sounding" and p["id"] in data])
+    own = spec.get("groups") or {}
+    names = list(dict.fromkeys(p.get("group") for p in pans)) or [None]
+
+    def gview(name):  # (a group's settings apart from the others')
+        return dict(bv, **own[name]) if name in own else bv
+
+    half = {}
+    for name in names:
+        half[name] = gview(name).get("axes", {}).get("share", "none") != "none" and \
+            shared_hodo_half([(data[p["id"]], panel_view(spec, p, bv).get("skewt", {}))
+                              for p in pans if p["kind"] == "sounding" and p["id"] in data
+                              and p.get("group") == name])
     for p in pans:
         r, c, rs, cs = _cell(p)
         d = data.get(p["id"]) if data is not None else None
@@ -290,14 +311,19 @@ def _block(fig, spec, k, bv, data, fs, ext):
         ax = grid[r * cols + c] if grid is not None else \
             fig.add_subplot(gs[r:r + rs, c:c + cs])
         V = panel_view(spec, p, bv)
-        if half and p["kind"] == "sounding":
-            V = dict(V, skewt=dict(V.get("skewt", {}), _hodo_half=half))
+        if half[p.get("group")] and p["kind"] == "sounding":
+            V = dict(V, skewt=dict(V.get("skewt", {}), _hodo_half=half[p.get("group")]))
         used.append(ax)
         extra = legend_handles(V.get("annotations", []), p["id"])
         if p["kind"] in LEGEND_OPTS:  # (into the panel's own legend)
             V = dict(V, _legend_extra=extra)
-        ax, m = _panel(fig, ax, d, V, _panel_layers(p), fs, entries.setdefault(p["id"], {}),
-                       ext.get(p["id"]))
+        font = "font" in (p.get("opts") or {})  # (fonts of its own: a part's, converted)
+        pfs = _fs(V) if font else fs
+        with matplotlib.rc_context(rc(V)) if font else nullcontext():
+            if font:
+                ax.tick_params(labelsize=font_size(V, "tick"))
+            ax, m = _panel(fig, ax, d, V, _panel_layers(p), pfs, entries.setdefault(p["id"], {}),
+                           ext.get(p["id"]))
         if p["kind"] not in LEGEND_OPTS:  # (after its layers' entries, in the block's legend)
             entries[p["id"]].update(extra)
         used[-1] = ax
@@ -306,10 +332,11 @@ def _block(fig, spec, k, bv, data, fs, ext):
         if m is not None and (p.get("colorbar") or {}).get("show", True):
             mappables.append((p["id"], ax, m))
         letter = p.get("letter")
-        _decorate(ax, d, V, fs, p.get("title") or "",
-                  order[id(p)] if letter is None else int(letter), _z_text(V, p), p["id"])
-        if p.get("rowlabel"):
-            _row_label(ax, p["rowlabel"], V, fs)
+        with matplotlib.rc_context(rc(V)) if font else nullcontext():
+            _decorate(ax, d, V, pfs, p.get("title") or "",
+                      order[id(p)] if letter is None else int(letter), _z_text(V, p), p["id"])
+            if p.get("rowlabel"):
+                _row_label(ax, p["rowlabel"], V, pfs)
         placed.append((p, ax, V))
         if getattr(ax, "_cv_hodo", False) and cols > 1:
             # equal axes are squares in the middle of a wider cell: pack the outer columns
@@ -319,28 +346,41 @@ def _block(fig, spec, k, bv, data, fs, ext):
         for ax in grid:
             if ax not in used:
                 ax.set_visible(False)
-    occ = {(r + a, c + e) for p, _, _ in placed for r, c, rs, cs in [_cell(p)]
-           for a in range(rs) for e in range(cs)}
-    cells = []
-    for p, ax, V in placed:
-        r, c, rs, cs = _cell(p)
-        cells.append((ax, c, r + rs >= rows or (r + rs, c) not in occ, p["kind"],
-                      V.get("axes", {})))
-    _share_limits(placed, data, share)
-    _ticks(cells, used, bv.get("axes", {}))
-    _legends(fig, bv, placed, entries)
+    for name in names:  # (tick labels, limits and legend within the group)
+        gv, mine = gview(name), [x for x in placed if x[0].get("group") == name]
+        occ = {(r + a, c + e) for p, _, _ in mine for r, c, rs, cs in [_cell(p)]
+               for a in range(rs) for e in range(cs)}
+        first = min((_cell(p)[1] for p, _, _ in mine), default=0) if name in own else 0
+        cells = []
+        for p, ax, V in mine:
+            r, c, rs, cs = _cell(p)
+            cells.append((ax, c - first, r + rs >= rows or (r + rs, c) not in occ, p["kind"],
+                          V.get("axes", {})))
+        _share_limits(mine, data, gv.get("axes", {}).get("share", "none"))
+        _ticks(cells, [ax for _, ax, _ in mine], gv.get("axes", {}))
+        _legends(fig, gv, mine, entries)
     fig._cv_mappables = mappables
     where = {p["id"]: _cell(p)[:2] for p in pans}
-    _colorbars(fig, bv.get("colorbar", {}), mappables, used, lambda i: where[i])
-    ck = bv.get("contour_key", {})
-    keyp = next((p for p in pans if p["id"] == ck.get("panel")), pans[0] if pans else None)
-    _contour_key(fig, bv, fs, keyp.get("layers", []) if keyp else [])
+    if bv.get("colorbar", {}).get("mode") == "groups":
+        for name in names:
+            mine = [p["id"] for p in pans if p.get("group") == name]
+            _colorbars(fig, gview(name).get("colorbar") or {},
+                       [m for m in mappables if m[0] in mine],
+                       [ax for p, ax, _ in placed if p["id"] in mine], lambda i: where[i])
+    else:
+        _colorbars(fig, bv.get("colorbar", {}), mappables, used, lambda i: where[i])
+    for name in names:
+        gv, mine = gview(name), [p for p in pans if p.get("group") == name]
+        ck = gv.get("contour_key", {})
+        keyp = next((p for p in mine if p["id"] == ck.get("panel")), mine[0] if mine else None)
+        _contour_key(fig, gv, _fs(gv), keyp.get("layers", []) if keyp else [])
     finish_scenes(fig, scene_dpi(spec))
     fig._cv_axes = {p["id"]: ax for p, ax, _ in placed}  # (panel -> axes)
     fig._cv_grid = grid if grid is not None else [ax for _, ax, _ in placed]
     opts = b.get("opts") or {}
     if opts.get("suptitle"):
         fig.suptitle(opts["suptitle"], weight="bold", fontsize=font_size(bv, "suptitle"))
+    finish_tables(fig)
     code = opts.get("code") or {}
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
@@ -470,7 +510,7 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
     elif kind == "azim":
         _azims(ax, d, spec, fs)
     elif kind == "table":
-        _table(fig, ax, d, spec, fs)
+        _table(ax, d, spec)  # (its rows: finish_tables, once the figure is laid out)
     elif kind == "scene":  # (its picture: finish_scenes, once the figure is laid out)
         scene_panel(fig, ax, d, spec, fs, legend)
     else:
@@ -660,18 +700,113 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
     labels, tlab, rlab = (spec.get(k, {}) for k in ("letters", "time_label", "run_label"))
     if kind == "table":  # (the table fills the panel from its top)
         labels = dict(labels, loc="above left")
+
+    def label(text, opts, color=None):
+        t = _anchored(ax, text, opts, fs * 1.2, color)
+        if spec.get("label_fit"):  # (fit_labels, once the figure is laid out)
+            edge = str(opts.get("loc", "upper left")).split()[0]
+            ax.__dict__.setdefault("_cv_labels", []).append((edge, t))
+
     if labels.get("on", True):
-        _anchored(ax, panel_letter(letter, labels.get("fmt", "{a}")), labels, fs * 1.2)
+        label(panel_letter(letter, labels.get("fmt", "{a}")), labels)
     if tlab.get("on", True) and "time_s" in d:
-        _anchored(ax, time_text(d["time_s"], run_time_opts(spec, int(d.get("run", 0)), d["time_s"])),
-                  tlab, fs * 1.2)
+        label(time_text(d["time_s"], run_time_opts(spec, int(d.get("run", 0)), d["time_s"])), tlab)
     zlab = spec.get("z_label", {})
     if zlab.get("on") and ztxt:
-        _anchored(ax, ztxt, zlab, fs * 1.2)
+        label(ztxt, zlab)
     if rlab.get("on", True) and d.get("run_label"):
-        _anchored(ax, str(d["run_label"]), rlab, fs * 1.2,
-                  run_color(spec, int(d.get("run", 0))) if rlab.get("run_color") else None)
+        label(str(d["run_label"]), rlab,
+              run_color(spec, int(d.get("run", 0))) if rlab.get("run_color") else None)
     _annotate(ax, key, spec.get("annotations", []), fs)
+
+
+def _on_dark(fig, spec):
+    """On the matplotlib style dark_background: what is drawn in black (lines, barbs,
+    contours, text, the first run's colour) in white, and white boxes behind text in
+    black.  A hodograph keeps its own look: a light card, with its dark lines."""
+    if spec.get("mplstyle") != "dark_background":
+        return
+
+    def like(c, v):  # (colour c is black or white, not see-through)
+        r, g, b, a = to_rgba(c)
+        return a > 0 and max(abs(r - v), abs(g - v), abs(b - v)) < 0.01
+
+    def swap(colors, v=0.0, to="white"):  # (a Collection's array of colours)
+        return [to if like(c, v) else c for c in colors]
+
+    keep = {id(a) for hodo in fig.findobj(lambda a: getattr(a, "_cv_hodo", False))
+            for a in hodo.findobj()}
+    for a in fig.findobj():
+        if id(a) in keep:
+            continue
+        if isinstance(a, Text):
+            if like(a.get_color(), 0.0):
+                a.set_color("white")
+        elif isinstance(a, Line2D):
+            if like(a.get_color(), 0.0):
+                a.set_color("white")
+            if like(a.get_markeredgecolor(), 0.0):
+                a.set_markeredgecolor("white")
+            if like(a.get_markerfacecolor(), 0.0):
+                a.set_markerfacecolor("white")
+        elif isinstance(a, ContourSet):
+            if not a.filled and all(like(c, 0.0) for c in a.get_edgecolor()):
+                a.set_array(None)
+                a.set_edgecolor("white")
+        elif isinstance(a, Collection):
+            if a.get_array() is None:
+                a.set_edgecolor(swap(a.get_edgecolor()))
+                a.set_facecolor(swap(a.get_facecolor()))
+        else:  # (a label's box is not among the label's children)
+            p = a.patch if isinstance(a, AnchoredOffsetbox) else a
+            if isinstance(p, Patch):
+                if like(p.get_edgecolor(), 0.0):
+                    p.set_edgecolor("white")
+                if like(p.get_facecolor(), 1.0):
+                    p.set_facecolor("black")
+
+
+def _labels_width(labels):
+    """The width (pt) the panel labels [(edge, Text)] need: those on one edge side by
+    side, with a font size of room around each."""
+    edges = {}
+    for edge, t in labels:
+        size = t.get_fontsize()
+        edges[edge] = edges.get(edge, size) + size + _tbl_width(t.get_text(),
+                                                                t.get_fontproperties())
+    return max(edges.values())
+
+
+def _cell_width(ax):
+    """The width (pt) of the grid cells of panel ax: what it gets at most."""
+    w = ax.get_figure().bbox.width * 72.0 / ax.get_figure(root=True).dpi
+    ss = ax.get_subplotspec().get_topmost_subplotspec()
+    gs = ss.get_gridspec()
+    ratios = gs.get_width_ratios() or [1.0] * gs.ncols
+    return w * sum(ratios[c] for c in ss.colspan) / sum(ratios)
+
+
+def fit_labels(fig):
+    """Shrink the panel labels of the panels with "label_fit" until those on one edge of
+    a panel fit it side by side: all by one factor, so they stay the same size across
+    the figure, in half points and to 6 pt at least.  Most figures have room to spare,
+    and only the others cost a layout here."""
+    panels = [(ax, ax._cv_labels) for ax in fig.axes if getattr(ax, "_cv_labels", None)]
+    if all(_labels_width(labs) <= 0.7 * _cell_width(ax) for ax, labs in panels):
+        return
+    where = [(ax, ax.get_position(original=True), ax.get_in_layout()) for ax in fig.axes]
+    fig.draw_without_rendering()  # (the layout: how big the panels are)
+    f = min(ax.get_window_extent().width * 72.0 / fig.dpi / _labels_width(labs)
+            for ax, labs in panels)
+    for ax, pos, in_layout in where:  # (a second layout from the first's moves them a little)
+        ax.set_position(pos)
+        ax.set_in_layout(in_layout)  # (set_position takes it out)
+    if f >= 1.0:
+        return
+    for _, labs in panels:
+        for _, t in labs:
+            size = t.get_fontsize()
+            t.set_fontsize(max(min(size, MIN_LABEL_PT), np.floor(2.0 * size * f) / 2.0))
 
 
 def _annotate(ax, i, anns, fs):

@@ -14,7 +14,7 @@ from .base import (
     PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _deriv_opts, _hex, _f, _grid, _hint, _checks, _fold,
     _near, _nice, _panels_parse, _panels_text, _chk, _load_widgets, _section, _take_new_runs,
     cmap_select,
-    color_widgets, known_cmap, _BTN,
+    color_widgets, known_cmap, set_folded, _BTN,
 )
 from ...viewer.ui import held
 
@@ -72,6 +72,8 @@ class LayerCard:
         w["on"] = pn.widgets.Checkbox(value=lay.get("on", True), width=20, margin=(8, 2, 0, 4))
         self.up = pn.widgets.Button(name="↑", description="Draw earlier (below)", **_BTN)
         self.down = pn.widgets.Button(name="↓", description="Draw later (on top)", **_BTN)
+        self.dup = pn.widgets.Button(name="", icon="copy", **_BTN,
+                                     description="A copy of this layer, drawn just above it")
         self.rm = pn.widgets.Button(name="✕", description="Remove the layer", **_BTN)
         t = self.type
         if t in ("fill", "contour", "shade"):
@@ -270,12 +272,13 @@ class LayerCard:
             self.reduce_sec = _section("Time window", self._reduce_row(),
                                        collapsed=not w["reduce_op"].value)
         self.panel, self.body = _fold([w["on"], self.title, pn.Spacer(), self.up, self.down,
-                                       self.rm], self._layout(), collapsed)
+                                       self.dup, self.rm], self._layout(), collapsed)
         self.show(ed.kind.value)
 
-    def load(self, lay, collapsed=False):
+    def load(self, lay, collapsed=False, keep_open=False):
         """Show layer lay (of this card's type) in these widgets: a new figure keeps its
-        cards, which the browser already has, instead of building new ones."""
+        cards, which the browser already has, instead of building new ones.  keep_open
+        (undo): folded sections left open stay open."""
         new = LayerCard(self.ed, lay, collapsed)  # (never shown: its settings)
         self._loading = True
         try:
@@ -283,22 +286,23 @@ class LayerCard:
         finally:
             self._loading = False
         self.lay = new.lay
-        self._open_used()
-        if self.body.visible == collapsed:
-            self.panel.objects[0].objects[0].clicks += 1  # (the chevron: fold / unfold)
+        self._open_used(keep_open)
+        set_folded(self, collapsed)
         self.show(self.ed.kind.value)
         self._set_title()
 
     def _layout(self):
         return [_grid(self.w["run"], (self.w["panels"], 2))] + self._rows()
 
-    def _open_used(self):
-        """A fill's folded sections: open when they are in use, else shut."""
+    def _open_used(self, keep_open=False):
+        """A fill's folded sections: open when they are in use, else shut (keep_open:
+        those open stay so)."""
         if self.type == "fill":
             w = self.w
-            self.minus_sec.collapsed = not w["minus_on"].value
-            self.ens_sec.collapsed = not w["ens_on"].value
-            self.reduce_sec.collapsed = not w["reduce_op"].value
+            for sec, used in ((self.minus_sec, w["minus_on"].value),
+                              (self.ens_sec, w["ens_on"].value),
+                              (self.reduce_sec, w["reduce_op"].value)):
+                sec.collapsed = not used and (sec.collapsed or not keep_open)
 
     def field_name(self):
         """The layer's field: the Field, or its Derivative (fields.deriv_name)."""

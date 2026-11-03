@@ -177,8 +177,9 @@ def _param_table(tx, d, n, cols, keys, spec):
 def _skewt(ax, d, spec, fs, cols, inset=True):
     """Skew-T log-p panel (plain axes: x = T + skew * ln(p_bottom / p)), with wind
     barbs at the right and an optional hodograph inset (skewt "inset_loc": a corner,
-    auto: the top corner the traces cross least, or custom: its lower left at inset_x,
-    inset_y; inset_size: its width; all fractions of the axes)."""
+    clear: the corner the traces cross least, auto (older figures): the top corner they
+    cross least, or custom: its lower left at inset_x, inset_y; inset_size: its width;
+    all fractions of the axes)."""
     o = spec.get("skewt", {})
     pb, pt = float(o.get("pmax", 1000.0)), float(o.get("pmin", 100.0))
     skew = float(o.get("skew", 35.0))
@@ -246,14 +247,14 @@ def _skewt(ax, d, spec, fs, cols, inset=True):
             corners = {"upper right": [right - w, 0.99 - h, w, h],
                        "upper left": [0.01, 0.99 - h, w, h]}
             lower = {"lower right": [right - w, 0.01, w, h], "lower left": [0.01, 0.01, w, h]}
-            if where in lower:
-                rect = lower[where]
-            else:  # auto: the top corner the traces cross least
-                if where not in corners:
-                    legend = _shows_legend(o, many) and o.get("legend_loc", "upper left")
-                    where = min(corners, key=lambda c: _crossed(
-                        d, n, X, pb, pt, ax.get_xlim(), corners[c], legend == c))
-                rect = corners[where]
+            if where not in corners and where not in lower:  # (those the traces cross least)
+                legend = _shows_legend(o, many) and o.get("legend_loc", "upper left")
+                spots = dict(corners, **lower) if where == "clear" else corners
+                keys = ("T", "Td", "Tp") if where == "clear" and o.get("parcel", "ml") != "none" \
+                    else ("T", "Td")
+                where = min(spots, key=lambda c: _crossed(
+                    d, n, X, pb, pt, ax.get_xlim(), spots[c], legend == c, keys))
+            rect = dict(corners, **lower)[where]
         hx = ax.inset_axes([float(v) for v in rect])
         _hodo(hx, d, n, cols, o, fs, full=bool(o.get("hodo_full_inset", False)),
               styles=hodo_styles(spec, d))
@@ -270,7 +271,7 @@ def _shows_legend(o, many):
     return not o.get("legend_off") and (many or o.get("legend", False))
 
 
-def _crossed(d, n, X, pb, pt, xlim, rect, legend):
+def _crossed(d, n, X, pb, pt, xlim, rect, legend, keys=("T", "Td")):
     """How much of the panel's traces (T, Td) an inset at rect (axes fractions) would
     hide, plus a forfeit for the corner of the legend."""
     x0, y0, w, h = rect
@@ -279,7 +280,9 @@ def _crossed(d, n, X, pb, pt, xlim, rect, legend):
         p = np.asarray(d[f"N{j}_p"], dtype=float)
         ok = (p > 0) & (p <= pb) & (p >= pt)
         fy = np.log(pb / p[ok]) / np.log(pb / pt)
-        for key in ("T", "Td"):
+        for key in keys:
+            if d.get(f"N{j}_{key}") is None:
+                continue
             fx = (X(np.asarray(d[f"N{j}_{key}"], dtype=float)[ok], p[ok]) - xlim[0]) / \
                 (xlim[1] - xlim[0])
             hit += int(np.sum((fx >= x0) & (fx <= x0 + w) & (fy >= y0) & (fy <= y0 + h)))

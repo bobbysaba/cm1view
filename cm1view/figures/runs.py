@@ -83,6 +83,7 @@ class FigureRuns:
     def _build_runs(self, runs):
         self.run_rows = [self._run_row(e, k) for k, e in enumerate(runs)]
         self._ref_paths = set()  # (the runs something used; see _prune_runs)
+        self._gone_runs = {}  # (path -> settings of a run taken out: back if it is added again)
         self._show_runs()
 
     def _run_row(self, e, k=0):
@@ -333,9 +334,10 @@ class FigureRuns:
                 out.append(p)
         self._cands = out
 
-    def _other_runs(self):
-        """{label: path} of the runs not in the figure (for the run lists)."""
-        have = {r["path"] for r in self.run_rows}
+    def _other_runs(self, have=None):
+        """{label: path} of the runs not in the figure (for the run lists; have: the paths
+        of the runs in it, if not the run rows')."""
+        have = {r["path"] for r in self.run_rows} if have is None else have
         roots = [config.expand(r).rstrip("/") + "/" for r in config.get("runs_root") or []]
         out = {}
         for p in self._cands:
@@ -464,7 +466,8 @@ class FigureRuns:
         except Exception as e:  # noqa: BLE001
             self._runs_msg(f"Could not open <code>{path}</code>: {e}", True)
             return None
-        self.run_rows.append(self._run_row(fg.run_entry(run), len(self.run_rows)))
+        entry = self._gone_runs.pop(os.path.abspath(path), None) or fg.run_entry(run)
+        self.run_rows.append(self._run_row(entry, len(self.run_rows)))
         self._show_runs()
         self.add_pick.clear()
         self._runs_msg(f"Added <code>{path}</code>")
@@ -532,6 +535,7 @@ class FigureRuns:
         azimuthal means and series of it go, and those of the runs after it follow their run to its new
         number."""
         k = self.run_rows.index(r)
+        self._gone_runs[r["path"]] = self._run_entry(r)  # (its label, time zero, colour, track)
         self.run_rows.remove(r)
         names = self._run_names()  # (the new numbering)
         gone = []

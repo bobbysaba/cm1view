@@ -60,7 +60,7 @@ from collections import OrderedDict
 import numpy as np
 import netCDF4
 
-from .run import IO_LOCK
+from .run import IO_LOCK, temp_name
 
 CACHE_DIR = None  # None: <cache_dir setting>/parcels (tests point this elsewhere)
 GAP = 1 << 20  # parcels: read through gaps between wanted IDs shorter than this
@@ -380,7 +380,7 @@ class ParcelFile:
         self._lattice = _detect_lattice(*self.positions(0)) if self.nt else None
         try:
             os.makedirs(cache_dir(), exist_ok=True)
-            tmp = f"{path}.{os.getpid()}.tmp"
+            tmp = temp_name(path)
             with open(tmp, "w") as f:
                 json.dump({"lattice": self._lattice}, f)
             os.replace(tmp, path)
@@ -425,7 +425,7 @@ class ParcelFile:
                     a = self._sample(pset, f, progress) if f else self.read(name, pset.ids)
                     try:
                         os.makedirs(cache_dir(), exist_ok=True)
-                        tmp = f"{path}.{os.getpid()}.tmp.npy"
+                        tmp = temp_name(path, ".tmp.npy")
                         np.save(tmp, a)
                         os.replace(tmp, path)
                     except OSError:
@@ -580,7 +580,7 @@ class ParcelSet:
 
     def save(self, path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.tmp.npz"
+        tmp = temp_name(path, ".tmp.npz")
         np.savez_compressed(tmp, ids=self.ids, meta=json.dumps(
             dict(name=self.name, rule=self.rule, matched=self.matched)))
         os.replace(tmp, path)

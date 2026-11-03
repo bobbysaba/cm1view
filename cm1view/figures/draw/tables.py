@@ -10,6 +10,9 @@ from matplotlib.transforms import Affine2D, ScaledTranslation
 
 from .base import font_size
 
+TBL_FILL = 0.92  # (of the panel's height, at most)
+TBL_LINE, TBL_GAP = 1.3, 0.45  # (a line of text, the space a row adds: in font sizes)
+
 
 def tbl_decimals(v):
     """Decimals that show values v to about three significant figures."""
@@ -120,10 +123,28 @@ def _tbl_width(s, fp):
     return w
 
 
-def _table(fig, ax, d, spec, fs):
-    """A table panel (tbl_grid; the type shrinks to fit the panel, from the base font size)."""
-    heads, rows, spans = tbl_grid(d, spec.get("table") or {})
+def _table(ax, d, spec):
+    """A table panel: finish_tables draws it, once the panel has its final size."""
     ax.axis("off")
+    ax._cv_table = (d, spec)
+
+
+def finish_tables(fig):
+    """Draw fig's table panels (_table) in the panels of the laid-out figure."""
+    axs = [ax for ax in fig.axes if getattr(ax, "_cv_table", None)]
+    if not axs:
+        return
+    fig.get_figure(root=True).draw_without_rendering()  # (the layout: how big they are)
+    for ax in axs:
+        d, spec = ax._cv_table
+        ax._cv_table = None
+        _table_rows(fig, ax, d, spec)
+
+
+def _table_rows(fig, ax, d, spec):
+    """A table in panel ax (tbl_grid; the type shrinks to fit the panel, from the base font
+    size)."""
+    heads, rows, spans = tbl_grid(d, spec.get("table") or {})
     size = font_size(spec, "label")
     table = [[""] + heads] + [[r] + cells for r, cells in rows]
     plain, bold = FontProperties(size=size), FontProperties(size=size, weight="bold")
@@ -135,11 +156,11 @@ def _table(fig, ax, d, spec, fs):
         if short > 0:
             widths[j + 1:j + 1 + n] += short / n
     nl = [max(str(x).count("\n") + 1 for x in row) for row in table]
-    line, gap = 1.3 * size, 0.45 * size
+    line, gap = TBL_LINE * size, TBL_GAP * size
     tall = sum(nl) * line + len(nl) * gap + (line + gap if spans else 0.0)
     room_w, room_h = ax.bbox.width * 72.0 / fig.dpi, ax.bbox.height * 72.0 / fig.dpi
     k = min(1.0, 0.98 * room_w / max(widths.sum() + pad * len(widths), 1.0),
-            0.92 * room_h / max(tall, 1.0))
+            TBL_FILL * room_h / max(tall, 1.0))
     size, widths, pad, line, gap = size * k, widths * k, pad * k, line * k, gap * k
     cols = widths + pad
     if cols.sum() < room_w:  # (spread out, within reason)

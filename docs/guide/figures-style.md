@@ -17,6 +17,22 @@ for every kind:
 - **Run name**: plan views, cross-sections, time–height panels and 3D scenes. Other panels
   name their runs in the legend.
 
+### Style preset
+
+**Apply a style** at the top of the tab sets the look of the whole figure, every part of it, in one
+go. It applies once: anything you change afterwards stays changed, and ↶ takes it back.
+
+| Preset | Fonts and labels | Frame lines | Export and width |
+|---|---|---|---|
+| **Default** | 10 pt sans-serif; labels bold, 1.2 × the base size | 0.8 pt | Left as they are |
+| **AMS journal** | 8 pt sans-serif; letters `(a)` at 9 pt, other labels 8 pt, none bold | 0.6 pt | PDF at 600 DPI; 3.2 in for one column, otherwise 6.5 in |
+| **Talk** | 14 pt sans-serif; labels 15 pt bold | 1.2 pt | PNG at 200 DPI; 10 in |
+| **Dark** | As Talk, on black with light text and axes | 1.2 pt | As Talk |
+
+The tab says what changed when a preset changes the width or the export. On *Dark*, whatever
+is drawn in black (contours, wind barbs, the first run's line, text) is drawn in white, and a
+hodograph stays a light card.
+
 ### Text
 
 | Setting | Meaning |
@@ -44,9 +60,10 @@ label* or *y label* (blank: the labels here; a single space: no label).
 
 **Panel titles** have *Where* (centre, left or right) and *Bold*. Each other label has one
 row: its checkbox first, then its own *Where* (the corners and edges of the panel,
-or above its left or right corner), *Size*, *Bold* and *White box*:
+or above its left or right corner), *Size* (blank: 1.2 × the base size), *Bold* and *White box*:
 
-- **Panel letters**: *Style* `a`, `(a)`, `a)`, `A` or `(A)`.
+- **Panel letters**: *Style* `a`, `(a)`, `a)`, `A` or `(A)`. They come on with a second panel
+  (a figure of one panel starts without one) until you tick or untick them yourself.
 - **Time label**: *Text* with `{min}` (minutes from time zero), `{model}` (model minutes),
   `{s}` (seconds) or `{hms}` (h:mm:ss), e.g. `t = {min:g} min`. Time zero is set for each
   run, in [*Layers → Runs used*](figures-panels.md#runs). A figure saved with a *Minutes
@@ -54,6 +71,14 @@ or above its left or right corner), *Size*, *Bold* and *White box*:
 - **Height label** (for panels at several heights): *Text* with `{z}` (the height, km)
   or `{k}` (the model level), e.g. `{z:g} km AGL`; blank gives `z = … km` or `k = …`.
 - **Run name** (for figures of several runs), optionally *In the run's colour*.
+
+**Shrink these labels to fit narrow panels** (on in new figures): when the labels on one edge
+of a panel would run into each other or out of it, they all shrink together, to 6 pt at the
+least, so they stay one size across the figure. *Size* is then the largest they get. Figures
+saved before this option keep their sizes until you tick it.
+
+A new figure of soundings has its letters and time label above the panel, clear of the wind
+barbs and the hodograph.
 
 ### Colorbar
 
@@ -120,7 +145,7 @@ Extra space *between columns* and *between rows* (a fraction of a panel), and th
 
 A matplotlib style name (e.g. `dark_background`) or a `.mplstyle` file on the server, for
 colours and lines. The fonts and sizes stay the editor's. For a dark figure also set the
-*Background* to black (File tab).
+*Background* to black (*Export* dialog).
 
 ## Annotate
 

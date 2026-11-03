@@ -10,6 +10,7 @@ from matplotlib.figure import Figure
 from matplotlib.colors import (BoundaryNorm, LinearSegmentedColormap, ListedColormap,
                                LogNorm, Normalize)
 from matplotlib.offsetbox import AnchoredText
+from matplotlib.transforms import Bbox
 
 # NWS-style reflectivity steps (every 5 dBZ from 5 dBZ)
 NWS_REF = ["#04e9e7", "#019ff4", "#0300f4", "#02fd02", "#01c501", "#008e00", "#fdf802",
@@ -135,16 +136,16 @@ def _levels_list(text):
 
 def _anchored(ax, text, opts, size, color=None):
     """A panel label in a corner of the panel (on a white box with opts["box"]), or
-    above it (loc "above left" / "above right")."""
+    above it (loc "above left" / "above right").  Returns its Text."""
     loc = opts.get("loc", "upper left")
     prop = {"weight": "bold" if opts.get("bold", True) else "normal",
             "size": float(opts.get("size") or size)}
     if color is not None:
         prop["color"] = color
     if loc.startswith("above"):
-        ax.set_title(text, loc=loc.split()[-1], fontsize=prop["size"], fontweight=prop["weight"],
-                     **({} if color is None else {"color": color}))
-        return
+        return ax.set_title(text, loc=loc.split()[-1], fontsize=prop["size"],
+                            fontweight=prop["weight"],
+                            **({} if color is None else {"color": color}))
     box = bool(opts.get("box"))
     at = AnchoredText(text, loc=loc, frameon=box, prop=prop, pad=0.25 if box else 0.4,
                       borderpad=0.5)
@@ -153,6 +154,7 @@ def _anchored(ax, text, opts, size, color=None):
                      alpha=0.85)
     at.set_in_layout(False)  # it sits in the panel: small panels must not shrink for it
     ax.add_artist(at)
+    return at.txt._text
 
 
 def ann_on(a, i):
@@ -292,6 +294,14 @@ def _fs(spec):
     return float(spec.get("font", {}).get("size", 10))
 
 
+def _key_layer(ck, layers):
+    """The contour layer of a contour key: layer ck["layer"], else the first contour
+    layer that is on (None: none)."""
+    k = int(ck.get("layer", -1))
+    return layers[k] if 0 <= k < len(layers) and layers[k]["type"] == "contour" else next(
+        (l for l in layers if l["type"] == "contour" and l.get("on", True)), None)
+
+
 def _cell(p):
     """(row, col, rowspan, colspan) of panel p."""
     c = [int(v) for v in p.get("cell", [0, 0])] + [1, 1]
@@ -368,9 +378,26 @@ def grid_overlaps(places):
 
 
 def save(spec, fig, fname, **kw):
-    """fig.savefig(fname, **kw) with the spec's fonts and ticks in effect."""
+    """fig.savefig(fname, **kw) with the spec's fonts and ticks in effect; trimmed
+    (bbox_inches="tight") with export's exact_width, only the height is trimmed."""
     with RC_LOCK, matplotlib.rc_context(rc(spec)):
+        if kw.get("bbox_inches") == "tight" and spec.get("export", {}).get("exact_width"):
+            kw["bbox_inches"] = _exact_width_box(fig, kw.get("dpi"), kw.get("pad_inches", 0.1))
         fig.savefig(fname, **kw)
+
+
+def _exact_width_box(fig, dpi, pad):
+    """The box (inches) to save: the figure's whole width, the height of what is drawn
+    and `pad` above and below it."""
+    was = fig.dpi
+    if dpi:
+        fig.set_dpi(dpi)  # (text is measured at the DPI it is saved at)
+    try:
+        fig.draw_without_rendering()
+        tb = fig.get_tightbbox()
+    finally:
+        fig.set_dpi(was)
+    return Bbox.from_extents(0.0, tb.y0 - pad, fig.get_size_inches()[0], tb.y1 + pad)
 
 
 def rc(spec):

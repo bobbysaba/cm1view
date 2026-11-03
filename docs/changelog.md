@@ -7,6 +7,55 @@ has a matching git tag.
 
 ### Figures
 
+- **Copy a layer**: a layer's card has a copy button, for a second contour field or a fill with
+  another range ([What a layer is](guide/figures-layers.md#what-a-layer-is)).
+- **Undo keeps the cards**: undo and redo leave cards folded or open as they were, and cards the
+  step did not change are left alone instead of being built again.
+- **A gallery of saved figures**: the new-figure dialog shows saved figures as thumbnails, newest
+  first, in place of a list, and a click opens one. It can also apply a template
+  ([The quick start](guide/figures.md#the-quick-start)). Saving writes the thumbnail to
+  `_src/<name>_thumb.png`.
+- **Apply to this run** works straight away: it failed on a template listed when the page opened
+  until you picked one from the list.
+- **A figure survives a closed page**: the editor keeps the figure as you work, and the new-figure
+  dialog offers *Reopen the last figure* ([Reopening](guide/figures-export.md#reopening-a-saved-figure)). Session files now hold
+  the figure too.
+- **One Export dialog**: *Export* above the preview holds where and how a figure is saved (save as,
+  format, DPI, background, image size, script and data, download), and the preview has the room
+  the bar took. The *File* tab's *Image* settings moved there.
+- **Every saved figure can be reopened**: *Save* now also writes `_src/<name>_spec.json`, so a figure
+  saved as an image alone appears under *Saved figures*.
+- **Exact image size**: *Image size* adds *Exact width, trim the height*, so a 3.25 in figure saves
+  at 3.25 in, not 3.27 in ([Image size](guide/figures-export.md#image-size)).
+- **Saving waits for series**: a figure whose series are still being computed saves when they are
+  done, instead of asking you to save again.
+- **Style presets**: *Style → Apply a style* gives the figure the Default, AMS journal, Talk or Dark
+  look in one go ([Style preset](guide/figures-style.md#style-preset)).
+- **Label sizes follow the base font**: in new figures, a blank *Size* on the panel letters, time,
+  height and run labels is 1.2 × the base size. Saved figures keep their sizes.
+- **A figure of parts saves the same whichever part you are editing**: format, DPI, trimming,
+  background and spacing now belong to the whole figure, and set in any part apply to all of
+  them. Its fonts, matplotlib style and one colorbar's look come from the first part.
+- **Labels fit narrow panels**: at one journal column the panel letter and time label ran into
+  each other. In new figures they now shrink together to fit (*Style → Panel labels*); figures
+  with room look as before, and saved figures keep their sizes.
+- **Soundings keep their labels and hodograph clear**: a new sounding has its letter and time
+  above the panel rather than over the barbs, and *Inset at → Auto* looks at all four corners and
+  the parcel trace too, so a typical hodograph goes to the empty lower left. Saved figures keep
+  their place (*Auto, top corners only*).
+- **Moving things keeps what goes with them**: moving or removing a layer takes its *Tree* changes
+  with it, and the contour key and *Maximum / minimum* stay on their layer. A new grid of plan views
+  (another column, a run taken out of a grid of runs, ...) leaves each panel's *Tree* changes, title,
+  row label, annotations, layer *In panels* and legend panels with that panel.
+- **A run added again comes back as it was**: its label, time zero, colour and track, after it was
+  removed or dropped for not being used.
+- **The workspaces use the whole window**: every workspace stopped 100 px short of the bottom,
+  which also cut off the preview's colorbar labels.
+- **A table figure is as tall as its rows**, without blank height under a short table, and its
+  type shrinks only when the panel it finally gets is too small.
+- **One panel, no letter**: a new figure of one panel starts without a panel letter; letters
+  come on with a second panel, until you set them yourself.
+- **A 3D scene fills its figure**, and the *Tree* tab shows it, where it used to stop the preview.
 - **Tables**: a new kind of figure, *Tables*, sets out sounding parameters and field statistics
   you pick across runs and times: rows and columns either way round, the values or their
   differences from the first run or first time. Several cards make one table

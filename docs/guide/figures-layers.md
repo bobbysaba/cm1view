@@ -22,6 +22,9 @@ Time–height and time-series figures have **Series** layers; sounding figures h
 **Soundings** layers and distribution figures **Distributions** ([Figure
 panels](figures-panels.md)). *Layers* also has *Runs used* ([Runs](figures-panels.md#runs)).
 
+The buttons on a layer's card move it, remove it, or **copy** it: the copy is drawn just above
+it, with any changes the layer has in single panels.
+
 A figure made from the map keeps the map's fill, more fills, contours and vectors as
 layers, with their colormaps and ranges.
 

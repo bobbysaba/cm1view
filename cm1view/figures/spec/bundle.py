@@ -5,6 +5,7 @@ import json
 import os
 import pprint
 import time as _time
+import traceback
 
 import numpy as np
 
@@ -30,12 +31,33 @@ def unflatten(npz):
     return data
 
 
-def save_image(spec, data, path, dpi=None):
+def save_image(spec, data, path, dpi=None, thumb=None):
+    """The figure's image at `path`; thumb: a small copy there too, for the gallery of
+    saved figures (it can be of a format no gallery could show, such as PDF)."""
     path = _abs(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig = figdraw.draw(spec, data)
     figdraw.save(spec, fig, path, **save_kw(spec, dpi))
+    if thumb:
+        _save_thumb(spec, fig, thumb)
     return path
+
+
+THUMB_PX = 360  # longest side of a saved figure's thumbnail
+
+
+def thumb_path(spec_path):
+    """The thumbnail kept beside a saved figure's _spec.json."""
+    return spec_path[:-len("_spec.json")] + "_thumb.png"
+
+
+def _save_thumb(spec, fig, path):
+    """A figure whose image is saved goes on being saved if its thumbnail cannot be."""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        figdraw.save(spec, fig, path, **save_kw(spec, THUMB_PX / max(fig.get_size_inches())))
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 
 
 def save_kw(spec, dpi=None):
@@ -154,7 +176,7 @@ def save_bundle(spec, data, base, run=None, note=""):
     v2, data = figdraw.upgrade(form, data)
     for d in (out["data"], out["script"]):
         os.makedirs(os.path.dirname(d), exist_ok=True)
-    out["image"] = save_image(v2, data, out["image"])
+    out["image"] = save_image(v2, data, out["image"], thumb=thumb_path(out["spec"]))
     np.savez_compressed(out["data"], **flatten(data))
     write_spec(form, v2, out["spec"])
     with open(out["draw"], "w") as f:
@@ -298,6 +320,7 @@ def with_defaults(spec, run, F, t, track=None):
     for k, was in OLDER.items():  # ... but what would change how it looked
         if isinstance(spec.get(k), dict):
             base[k].update({kk: v for kk, v in was.items() if kk not in spec[k]})
+    base["label_fit"] = bool(spec.get("label_fit"))  # (likewise: its labels as they were)
     if "runs" not in spec:  # a figure of one run: this run
         base["runs"] = [run_entry(run, track)]
     nt = len(run.times)
@@ -320,7 +343,13 @@ def load_spec(path):
         spec = spec["form"]
     if spec.get("version") != 1:
         raise ValueError("not a cm1view figure spec (version 1 or 2)")
-    for r in spec.get("runs") or []:
-        if not os.path.isdir(r["path"]):
-            raise ValueError(f"run folder {r['path']} not found")
+    check_runs(spec)
     return spec
+
+
+def check_runs(spec):
+    """ValueError when a run of the figure (or of one of its parts) is not on disk."""
+    for part in spec.get("parts") or [spec]:
+        for r in part.get("runs") or []:
+            if not os.path.isdir(r["path"]):
+                raise ValueError(f"run folder {r['path']} not found")

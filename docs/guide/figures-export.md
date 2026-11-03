@@ -1,33 +1,44 @@
 # Export, animations and the script
 
-The **File** tab holds the settings that apply when a figure is written, the animation,
-templates and reopening a saved figure. Saving itself (folder, format, DPI) is above the
-preview ([Figures](figures.md#saving)).
+**Export**, above the preview, saves the figure ([Figures](figures.md#saving)). The **File**
+tab holds the animation, templates and reopening a saved figure.
 
-## Image settings
+## Image size
 
-- **Trim white space**, with the margin it leaves (inches).
-- **Background**: white, black or transparent.
-- PDF, SVG and EPS keep text and lines as vectors; the fields are embedded as images at
-  the chosen DPI.
+The **Export** dialog's *Image size*:
+
+- **Trim white space**: what is drawn plus the margin you set (inches). The image can be a
+  little wider than the figure: 3.27 in for a width of 3.25 in with the 0.05 in margin.
+- **Exact width, trim the height**: exactly the figure's width, for a journal column. The
+  margin applies above and below only.
+- **Exact width and height**: exactly the figure's size, with any white space in it.
+
+PDF, SVG and EPS keep text and lines as vectors; the fields are embedded as images at the
+chosen DPI.
 
 ## Reopening a saved figure
 
-Pick the figure from *Saved figures* and press **Open**. The list holds the figures
-saved with **+ script & data** in the *Figures* folder (⚙ Settings): this run's folder
+Pick the figure from *Saved figures* and press **Open**. Saving always keeps the figure's
+settings, so the list holds every figure saved in the *Figures* folder (⚙ Settings): this run's folder
 first, then the other runs' folders and the last folder used for a figure of several
 runs, newest first in each. A figure saved elsewhere: give the path of its `_spec.json`
 (in the `_src/` folder next to the image) under *A saved figure*; its image or script
 path works too. The editor then shows the figure with all its settings, ready to keep
-editing, and *Save as* is where it was saved, so saving again replaces it. The quick start has the same list ([Figures](figures.md#the-quick-start)).
+editing, and *Save as* is where it was saved, so saving again replaces it. The quick start shows the same figures as thumbnails ([Figures](figures.md#the-quick-start)).
 If a run's `namelist.input` changed since the figure was saved (its hash, below), the
 message says so: the figure is drawn from the run's data as it is now.
+
+A figure you have not saved is not lost if the page closes. Each change you see drawn is kept
+for that run, and the next time you open the Figure workspace the new-figure dialog offers
+**Reopen the last figure**. With *Live* off, it is kept when you press *Redraw*. This copy lives in the
+Cache folder (⚙ Settings) and holds one figure per run, plus the one before it, so it is a safety net: use
+**Export** to keep a figure.
 
 ## Templates
 
 *Save as template* keeps a figure's panels, layers and look **without its runs**, in
-`templates/` next to the settings file. *Apply to this run* opens the template on the run
-shown:
+`templates/` next to the settings file. *Apply to this run*, here or in the
+[quick start](figures.md#the-quick-start), opens the template on the run shown:
 
 - its times are moved to the map's time and kept as far apart as they were (each at the
   nearest output; panels past the run's end stay empty);
@@ -68,7 +79,7 @@ the legend names each entry's time.
 | **Also save the frames (PNG)** | Saves each frame as `<name>_frames/<name>_000.png`, …. |
 
 An animation also saves the figure's settings as `_src/<name>_spec.json`, the same spec
-**+ script & data** writes and under the same name, so saving both as one name keeps the
+**Save** writes and under the same name, so saving both as one name keeps the
 later one's settings (you're asked first). Reopen it from the saved-figure list, or give the
 path of the spec or the GIF. *Step*, *Frames per second* and the other settings above are not
 kept in it, and neither is a script or data: an animation has no one set of arrays.
@@ -121,7 +132,7 @@ with it), a template's file, or a template's name (as in *Templates*).
 |---|---|
 | `--out PATH` | Where to save. Its extension, if an image format's, sets the format. It may hold `{run}` (the run's folder name), `{parent}` (the folder above it) and `{name}` (the figure's or template's name); several runs need `{run}` or `{parent}`. Default: where the figure was saved; with `--run`, `<Figures folder>/<parent>_<run>/<name>`. |
 | `--format`, `--dpi` | The image's format and resolution (default: the figure's export settings). |
-| `--bundle` | Also the script, data and spec, as **+ script & data**. |
+| `--bundle` | Also the script, data and spec, as **Also the script and data** in the *Export* dialog. |
 | `--gif` | An animation, as **File → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
 | `--overwrite` | Replace files that are already there. Without it, nothing is drawn if any is. |
 | `--code` | Run the figure's own code (*Annotate → Your own code*). The editor asks before running code from a file; `render` leaves it off unless told. |
@@ -135,7 +146,8 @@ status 1. For batch-job scripts, see [Running on a cluster](../hpc.md#figures-in
 
 ## The script and data
 
-**+ script & data** saves, next to the image:
+**Save** always writes the image and the spec. With **Also the script and data** ticked, the
+folder holds:
 
 | File | Contents |
 |---|---|
@@ -155,14 +167,15 @@ commit, and a hash (sha256) of each run's `namelist.input`. The spec also record
 settings that change what a figure shows (`output_glob`, `track_dirs`, `track_patterns`,
 `pdecomp_script`), so you can tell later exactly what made it.
 
-To redraw: `python name.py`. To reopen it in the viewer, open its `_spec.json`
+Saving again without the tick replaces the image and the spec but leaves the script and data
+as they were. To redraw: `python name.py`. To reopen it in the viewer, open its `_spec.json`
 (above).
 
 ## Style presets (in scripts)
 
-The editor has no preset menu, but `cm1view.figures.spec.apply_style(spec, name)` returns a
-copy of a figure's spec with a preset applied. It is meant for Python scripts that use
-cm1view, e.g. to restyle a saved figure's `_spec.json` for a journal or a talk (an
+In the editor, the presets are in [*Style → Apply a style*](figures-style.md#style-preset). In a
+script, `cm1view.figures.spec.apply_style(spec, name)` returns a copy of a figure's spec with
+a preset applied, e.g. to restyle a saved figure's `_spec.json` for a journal or a talk (an
 exported figure script does not import cm1view):
 
 | Preset | What it sets |

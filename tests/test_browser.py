@@ -129,6 +129,19 @@ def test_map_and_a_sounding(ff, server, shots):
     ff.shot(f"{shots}/c_expanded.png")
 
 
+def test_workspaces_fill_a_short_window(ff, server):
+    """Closed dialogs take no height, and the columns stop at the window's bottom."""
+    ff.cmd("browsingContext.setViewport", {"context": ff.ctx,
+                                           "viewport": {"width": 1366, "height": 600}})
+    ff.go(server)
+    map_canvas(ff)
+    click_text(ff, "Figure")
+    assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
+    time.sleep(5)
+    cols = [r for r in rects(ff, ".scrollable") if r[3] > 300]  # (the preview, the tabs)
+    assert len(cols) == 2 and all(abs(r[1] + r[3] - 600) < 2 for r in cols), cols
+
+
 def test_figure_workspace(ff, server, shots):
     ff.go(server)
     map_canvas(ff)
@@ -187,6 +200,8 @@ def test_figure_clicks_download_and_scanned_runs(ff, server, shots, scanned_run)
         raise AssertionError("no click landed in a panel")
     ff.shot(f"{shots}/h_figure_click.png")
     # the download is drawn in the background, then saved by the browser
+    click_text(ff, "Export")
+    assert until(lambda: find(ff, "Download"), 30), "no Export dialog"
     click_text(ff, "Download")
     png = until(lambda: [f for f in os.listdir(ff.downloads) if f.endswith(".png")], 120)
     assert png, "no download"

@@ -12,9 +12,11 @@ import panel as pn
 from .. import config
 from . import draw as figdraw, spec as fg
 from .cards import (FIG_LOCS, GRID_DIMS, LOCS, LayerCard, SectionCard, _grid, _hint,
-                    _keep_shown)
+                    _keep_shown, _panels_loose, _panels_parse, _panels_text, panels_text,
+                    parse_panels, set_folded)
 from .kinds import CARD_SHOWS, KINDS, LAYER_COLS, MAPS
 from .times import _heights
+from .tree import panel_moves
 from ..viewer.ui import held
 
 
@@ -144,18 +146,19 @@ class FigurePanelOpts:
         takes the first fill card out of Layers, going back puts it back first, as
         panel a had it."""
         field = self._uses("fields")
+        n = len(self.cards)
         if field and self._pf_base is None:
             c = next((c for c in self.cards if c.type == "fill"), None)
+            m = n if c is None else self.cards.index(c)  # (it becomes the first layer)
             if c is not None:
                 self.cards.remove(c)
             self._pf_base = c.collect() if c is not None else self._pf_fill()
+            self._layers_moved({k: 0 if k == m else k + (k < m) for k in range(n)}, pf=0)
         elif not field and self._pf_base is not None:
             pf = self._pf_collect(self.pf_cards[0]) if self.pf_cards else {}
             self.cards.insert(0, self._card(dict(self._pf_base, **pf)))
             self._pf_base = None
-        else:
-            return
-        self._show_cards()
+            self._layers_moved({k: k for k in range(n + 1)}, pf=1)  # (still the first layer)
 
     def _build_pf(self, fills=None):
         """A folded fill card per step of the panels' fields, as a Layers card's.  fills:
@@ -164,6 +167,7 @@ class FigurePanelOpts:
         n = self._dim_count("fields")
         base = self._pf_base or self._pf_fill()
         cards = [] if fills is not None else self.pf_cards[:n]
+        was = list(self.pf_cards) if self._undoing else []
         fills = fills or []
         for i in range(len(cards), n):
             f = fills[i] if i < len(fills) else {}
@@ -173,7 +177,9 @@ class FigurePanelOpts:
                 lay["z_fixed"] = True
             c = LayerCard(self, lay, collapsed=True)
             c.w["on"].visible = c.w["panels"].visible = False
-            c.up.visible = c.down.visible = c.rm.visible = False
+            c.up.visible = c.down.visible = c.dup.visible = c.rm.visible = False
+            if i < len(was):  # (undo: folded as it was)
+                set_folded(c, not was[i].body.visible)
             cards.append(c)
         for i, c in enumerate(cards):
             c.head = self._step_name("fields", i)
@@ -262,6 +268,7 @@ class FigurePanelOpts:
             return
         self._fit_axes()
         self._pf_sync()
+        self._follow_panels()
         self._show_vary()
         self._build_times()
         self._build_pf()
@@ -272,6 +279,77 @@ class FigurePanelOpts:
                 "col" if cd == "fields" and rd != "none" else "each"
         self._fit_size()
         self.request()
+
+    _panel_was = None  # (the grid the panels' numbers are of: _panel_layout)
+    _kind_was = "plan"  # (the kind whose places the labels are at: _on_kind)
+
+    def _panel_layout(self):
+        """A plan view's grid, for panel_moves (None: another kind, or heights that
+        cannot be read yet).  Runs and heights are told apart by what they are; times and
+        fields by their place, where their pickers stay."""
+        if self.kind.value != "plan":
+            return None
+
+        def steps(d):
+            if d == "none":
+                return []
+            if d == "runs":
+                return [self.run_rows[k]["path"] for k in self._grid_runs()]
+            hs = _heights(self.pz.value) if d == "heights" else None
+            return hs or list(range(self._dim_count(d)))
+
+        try:
+            rd, cd = self._axes()
+            return dict(rows=int(self.rows.value or 1), cols=int(self.cols.value or 1),
+                        axes=(rd, cd), steps=(steps(rd), steps(cd)))
+        except ValueError:
+            return None
+
+    def _follow_panels(self):
+        """A new grid of plan views: what names a panel by its number follows the panel:
+        its tree edits, title and row label, layers shown in some panels, annotations,
+        and the legend's panels.  What names only panels no longer there is left as it
+        is (blank would mean every panel)."""
+        now = self._panel_layout()
+        if now is None and self.kind.value == "plan":
+            return
+        moves, rows = panel_moves(self._panel_was, now)
+        self._panel_was = now
+        if not moves:
+            return
+
+        def moved(ps):
+            return sorted(moves[p] for p in ps if p in moves) or ps
+
+        self.edits = {str(moves[int(i)]): e for i, e in self.edits.items() if int(i) in moves}
+        self._tree_sel = moves.get(self._tree_sel, 0)
+        titles = [""] * (1 + max(moves.values()))
+        for i, w in enumerate(self.title_ws):
+            if i in moves:
+                titles[moves[i]] = w.value
+        labels = [w.value for w in self.row_ws]
+        if rows:
+            old, labels = labels, [""] * (1 + max(rows.values()))
+            for k, text in enumerate(old):
+                if k in rows:
+                    labels[rows[k]] = text
+        with held(self):
+            self._build_titles(titles, labels)
+            for c in self.cards:
+                try:
+                    ps = _panels_parse(c.w["panels"].value)
+                except ValueError:  # (collect() reports it)
+                    continue
+                if ps:
+                    c.w["panels"].value = _panels_text(moved(ps))
+                    c._set_title()
+            for r in self.ann_rows:
+                p = parse_panels(r.w["panel"].value)
+                if p != -1:
+                    r.w["panel"].value = panels_text(moved([p] if isinstance(p, int) else p))
+            at = int(self.lg_panel.value or 1) - 1
+            self.lg_panel.value = moves.get(at, at) + 1
+            self.lg_from.value = _panels_text(moved(_panels_loose(self.lg_from.value)))
 
     def _show_vary(self):
         """The Panels tab's lists for what the rows and columns step through."""
@@ -438,8 +516,9 @@ class FigurePanelOpts:
         self.request()
 
     def _follow_size(self):
-        """Plan views and sections with an automatic size: the height for the width."""
-        if not self._auto_size or self.kind.value not in MAPS:
+        """Plan views, sections and tables with an automatic size: the height for the
+        width (a table's for its rows)."""
+        if not self._auto_size or self.kind.value not in (*MAPS, "table"):
             return
         h = self.fit_height()
         if abs(h - float(self.height.value or 0)) > 0.02:
@@ -470,12 +549,17 @@ class FigurePanelOpts:
         outer = s["axes"].get("ticklabels", "all") != "all"
         left, right, bottom, top = 4.5 * line, 0.15, 3.6 * line, 0.15
         gx, gy = (0.15, 0.15) if outer else (4.2 * line, 3.6 * line)
-        if s.get("titles") or (s["letters"].get("on") and
-                               str(s["letters"].get("loc", "")).startswith("above")):
+        above = any(s[k].get("on") and str(s[k].get("loc", "")).startswith("above")
+                    for k in ("letters", "time_label"))
+        if s.get("titles") or above or (s["letters"].get("on") and s["kind"] == "table"):  # (always)
             top += 1.6 * line
             gy += 1.6 * line
         if s.get("suptitle"):
             top += 2.2 * line
+        if s["kind"] == "table":
+            gap = 1.6 * line if top > 0.15 else 0.15  # (no tick labels: only what is above it)
+            tall = fg.tbl_points(s) / 72.0 / figdraw.TBL_FILL
+            return round(max(1.0, top + 0.05 + r * tall + (r - 1) * gap), 2)
         if s.get("row_titles"):
             left += 1.6 * line
         cb = s["colorbar"]
@@ -507,6 +591,11 @@ class FigurePanelOpts:
                     self.cb_mode.value = k.colorbar[0]
                 if k.colorbar[1:]:
                     self.cb_loc.value = k.colorbar[1]
+                was = KINDS[self._kind_was]  # (labels not moved by hand: to this kind's places)
+                if self.let_loc.value == was.letter_at:
+                    self.let_loc.value = k.letter_at
+                if self.tl_loc.value == was.time_at:
+                    self.tl_loc.value = k.time_at
             if k.add and not getattr(self, k.cards):  # (a start: the viewer's tool's, or new)
                 ents = getattr(self, k.from_tool)() if k.from_tool else []
                 setattr(self, k.cards, [getattr(self, k.card)(e) for e in ents])
@@ -532,6 +621,8 @@ class FigurePanelOpts:
             self._build_titles()
             self._show_cbar()
             self.request()
+        self._panel_was = self._panel_layout()  # (another kind: its numbers from here)
+        self._kind_was = kind
         self._show_vary()
         if self._multi_part():
             self._show_parts()  # (the part's kind in its name)

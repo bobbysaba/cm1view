@@ -19,7 +19,7 @@ import os
 
 import numpy as np
 
-from .run import FileBusy, MissingAtTime
+from .run import FileBusy, MissingAtTime, temp_name
 
 OPS = ("max", "min", "mean", "sum", "composite")
 CACHE_DIR = None  # None: <cache_dir setting>/swath (tests point this elsewhere)
@@ -152,7 +152,7 @@ def reduce(run, F, lay, tp, centers=None, storm=None, progress=None):
     out = acc.astype(np.float32)
     try:
         os.makedirs(cache_dir(), exist_ok=True)
-        tmp = path + f".{os.getpid()}.tmp.npz"
+        tmp = temp_name(path, ".tmp.npz")
         np.savez(tmp, a=out, n=n)
         os.replace(tmp, path)
     except OSError:

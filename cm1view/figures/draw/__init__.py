@@ -103,14 +103,20 @@ Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts
            A layer's run, time_s and z: None (or missing) for the panel's
            (resolved()); L<j>_cx, L<j>_cy: the layer's own coordinates (another run's)
            L<j>_ens: a fill layer's number of ensemble members (its "ens")
+  groups   {name: {colorbar, legend, contour_key, axes}} with a panel's "group": those
+           settings apart for those panels (their tick labels too), in one block; the
+           colorbar's mode "groups": a colorbar for each group, as its settings say
   Colorbar ends (a fill's "extend"): neither, min, max, both, or auto (from the data:
   where it passes vmin / vmax); panels sharing a colorbar share the ends of all of
   them.
+
+Specs of version 3 (the editor's document, spec.doc): resolve() makes the version-2 spec
+that is drawn.
 """
 
-from . import base, v2, layers, lines, sounding, tables, scene3d, figure
+from . import base, v3, v2, layers, lines, sounding, tables, scene3d, figure
 
-MODULES = (base, v2, layers, lines, sounding, tables, scene3d, figure)  # (each uses only those before it)
+MODULES = (base, v3, v2, layers, lines, sounding, tables, scene3d, figure)  # (each uses only those before it)
 for _m in MODULES:  # one namespace, as in an exported script
     globals().update({k: v for k, v in vars(_m).items() if not k.startswith("__")})
 

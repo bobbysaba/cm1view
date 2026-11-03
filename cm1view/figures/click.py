@@ -35,6 +35,10 @@ class ClickImage(ReactiveHTML):
     """An image that reports where it is clicked or dragged, as fractions of its width
     and height from the upper left: click = [x, y, n], drag = [x0, y0, x1, y1, n] (n: a
     count, so the same spot twice is a new event).  band: show the box being dragged.
+    marks: outlines drawn over it in the browser, {name: [left, right, top, bottom]
+    fractions}, so showing what is selected redraws nothing (a dict: Panel 1.7.5 can't
+    empty a list parameter that holds lists).  fit: the image's own box takes the height it
+    is given, so a css of max-height:100% keeps the whole image in view.
     src and css are set on the image by scripts, not in the template: a template that
     changes is rendered again, which could leave a second image (a stale preview)."""
 
@@ -43,6 +47,8 @@ class ClickImage(ReactiveHTML):
     band = param.Boolean(default=False)
     click = param.List(default=[])
     drag = param.List(default=[])
+    marks = param.Dict(default={})
+    fit = param.Boolean(default=False)
 
     _template = (
         '<div id="wrap" style="position:relative;line-height:0">'
@@ -50,11 +56,30 @@ class ClickImage(ReactiveHTML):
         'onmousedown="${script(\'down\')}" onmousemove="${script(\'move\')}" '
         'onmouseup="${script(\'up\')}" onmouseleave="${script(\'leave\')}"/>'
         '<div id="box" style="position:absolute;display:none;pointer-events:none;'
-        'border:1px dashed #f59e0b;background:rgba(245,158,11,0.12)"></div></div>')
+        'border:1px dashed #f59e0b;background:rgba(245,158,11,0.12)"></div>'
+        '<div id="over" style="position:absolute;left:0;top:0;pointer-events:none"></div></div>')
     _scripts = {
-        "render": "if (data.src) img.src = data.src; img.style.cssText = data.css;",
+        "render": """
+            if (data.src) img.src = data.src;
+            img.style.cssText = data.css;
+            wrap.style.height = data.fit ? '100%' : '';
+            new ResizeObserver(() => self.marks()).observe(img);
+        """,
+        "fit": "wrap.style.height = data.fit ? '100%' : '';",
         "src": "if (data.src) img.src = data.src;",
         "css": "img.style.cssText = data.css;",
+        "marks": """
+            over.replaceChildren(...Object.values(data.marks).map(([l, r, t, b]) => {
+                const d = document.createElement('div');
+                d.style.cssText = 'position:absolute;box-sizing:border-box;'
+                    + 'border:2px solid #22d3ee;box-shadow:0 0 0 1px rgba(0,0,0,.45);'
+                    + 'left:' + (img.offsetLeft + l * img.offsetWidth) + 'px;'
+                    + 'top:' + (img.offsetTop + t * img.offsetHeight) + 'px;'
+                    + 'width:' + ((r - l) * img.offsetWidth) + 'px;'
+                    + 'height:' + ((b - t) * img.offsetHeight) + 'px';
+                return d;
+            }));
+        """,
         "down": """
             const e = state.event;
             if (e.button !== 0) return;
@@ -91,6 +116,29 @@ class ClickImage(ReactiveHTML):
         """}
 
 
+def _saved_box(fig, spec, size_px, dpi):
+    """(left, top, width, height), inches in fig, of the image just saved from it."""
+    tb = getattr(fig, "_cv_tight", None)
+    W, H = size_px[0] / dpi, size_px[1] / dpi
+    if tb is None:
+        return 0.0, float(fig.get_size_inches()[1]), W, H
+    pad = float(spec.get("export", {}).get("pad", 0.05))
+    # (exact width: only the height is trimmed)
+    return 0.0 if spec.get("export", {}).get("exact_width") else tb.x0 - pad, tb.y1 + pad, W, H
+
+
+def panel_boxes(fig, spec, size_px, dpi):
+    """{panel: [left, right, top, bottom]}, fractions of the image just saved from fig, of
+    every panel drawn, whatever its axes."""
+    x0, y1, W, H = _saved_box(fig, spec, size_px, dpi)
+    out = {}
+    for i, ax in (getattr(fig, "_cv_axes", None) or {}).items():
+        e, f = ax.get_window_extent(), fig.dpi
+        out[i] = [(e.x0 / f - x0) / W, (e.x1 / f - x0) / W, (y1 - e.y1 / f) / H,
+                  (y1 - e.y0 / f) / H]
+    return out
+
+
 def place_map(fig, spec, size_px, dpi):
     """{data key: (left, right, top, bottom) as fractions of the saved image, xlim,
     ylim, skew} of the panels whose axes clicks map onto (plain linear axes, and
@@ -99,13 +147,7 @@ def place_map(fig, spec, size_px, dpi):
     kinds = {}
     for k, part in enumerate(spec.get("parts") or [spec]):
         kinds[k] = part["kind"]
-    tb = getattr(fig, "_cv_tight", None)  # inches
-    W, H = size_px[0] / dpi, size_px[1] / dpi
-    if tb is not None:
-        pad = float(spec.get("export", {}).get("pad", 0.05))
-        x0, y1 = tb.x0 - pad, tb.y1 + pad
-    else:
-        x0, y1 = 0.0, float(fig.get_size_inches()[1])
+    x0, y1, W, H = _saved_box(fig, spec, size_px, dpi)
     out = {}
     for i, ax in (getattr(fig, "_cv_axes", None) or {}).items():
         if kinds.get(int(i) // 1000 if spec.get("kind") == "combo" else 0) not in LINEAR:

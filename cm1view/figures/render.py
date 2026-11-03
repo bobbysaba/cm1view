@@ -114,7 +114,10 @@ class FigureData:
     # ------------------------------------------------------------ panels
     def panel_data(self, spec, progress=None, cancelled=None):
         """{panel: arrays} of the spec, from the cache where possible.  progress(i, n):
-        reading panel (sounding, ...) i of n; cancelled(): stop (returns None)."""
+        reading panel (sounding, ...) i of n; cancelled(): stop (returns None).  A document
+        (version 3): each panel read through its one-panel spec, keyed by panel id."""
+        if fg.is_doc(spec):
+            return self._doc_data(spec, progress, cancelled)
         if spec["kind"] == "combo":
             return self._combo_data(spec, progress, cancelled)
         if spec["kind"] in ("th", "line"):
@@ -217,6 +220,18 @@ class FigureData:
             data[i] = dict(d, run=k, **({"run_label": entry.get("label", "")} if multi
                                          else {}))
         return data
+
+    def _doc_data(self, doc, progress=None, cancelled=None):
+        res, data = figdraw.resolve(doc), {}
+        n = len(res["panels"])
+        for at, q in enumerate(res["panels"]):
+            d = self.panel_data(fg.one_panel(doc, q["id"], res),
+                                progress and (lambda *_, at=at: progress(at, n)), cancelled)
+            if d is None:
+                return None
+            if 0 in d:
+                data[q["id"]] = d[0]
+        return fg.share_series_range(res, data)
 
     def _combo_data(self, spec, progress=None, cancelled=None):
         data = {}

@@ -460,18 +460,104 @@ def test_saved_figures_listed(ed, tmp_path):
         assert ed.saved_pick.groups["This run (parent_run)"] == {"fig": spec}
         ed.saved_pick.value = spec  # the File tab: picking fills in the path
         assert ed.spec_path.value == spec
-        ed.open_quick()  # the quick start lists it too
-        assert ed.qs_saved.value == "" and ed.qs_open.disabled
-        ed.qs_saved.value = spec
+        ed.open_quick()  # the quick start shows it too
+        assert ed.qs_where.visible and not ed.qs_none.visible
+        b = ed.qs_gallery.objects[0]
+        assert b.name == "fig" and "base64" in b.stylesheets[0]  # (the save made its thumbnail)
         ed.let_box.value = False
-        ed.qs_open.clicks += 1
+        b.clicks += 1
         assert not ed.quick.open and ed.let_box.value
         assert "Loaded" in txt(ed.msg.object)
+        assert ed.qs_gallery.objects == []  # (closed: the thumbnails leave the page)
         ed.path.value = ""
         assert ed._load_spec(spec)  # Save as: where it was saved
         assert ed.path.value == os.path.join(ed._fig_dir, "fig")
     finally:
         ed._fig_dir = own
+
+
+def _a_saved_figure(folder, name, when):
+    """A figure saved before there were thumbnails: a spec and a PNG."""
+    import os
+    from PIL import Image
+    os.makedirs(os.path.join(folder, "_src"), exist_ok=True)
+    spec = os.path.join(folder, "_src", f"{name}_spec.json")
+    with open(spec, "w") as f:
+        f.write("{}")
+    os.utime(spec, (when, when))
+    Image.new("RGB", (900, 600), "red").save(os.path.join(folder, f"{name}.png"))
+    return spec
+
+
+def test_gallery_newest_first_by_folder_and_more(ed, tmp_path, monkeypatch):
+    from cm1view.figures import quick
+    monkeypatch.setattr(quick, "GALLERY_STEP", 2)
+    monkeypatch.setattr(ed, "_fig_dir", str(tmp_path / "root" / "own"))
+    listed = quick.saved_list
+    monkeypatch.setattr(quick, "saved_list",
+                        lambda own, root, extra="": listed(own, str(tmp_path / "root")))
+    _a_saved_figure(ed._fig_dir, "old", 1000)
+    _a_saved_figure(ed._fig_dir, "older", 500)
+    _a_saved_figure(str(tmp_path / "root" / "other"), "new", 2000)
+    ed.open_quick()
+    names = lambda: [b.name for b in ed.qs_gallery.objects]  # noqa: E731
+    assert names() == ["new", "old"] and ed.qs_more.visible
+    assert list(ed.qs_where.options)[0] == quick.ALL_FOLDERS
+    ed.qs_more.clicks += 1
+    assert names() == ["new", "old", "older"] and not ed.qs_more.visible
+    ed.qs_where.value = "other"
+    assert names() == ["new"] and not ed.qs_more.visible
+    ed.qs_where.value = "This run (own)"
+    assert names() == ["old", "older"]
+    ed.open_quick()  # (opens on them all again)
+    assert ed.qs_where.value == "" and names() == ["new", "old"]
+    ed.quick.hide()
+    assert names() == []
+
+
+def test_gallery_with_nothing_saved(ed, tmp_path, monkeypatch):
+    from cm1view.figures import quick
+    monkeypatch.setattr(ed, "_fig_dir", str(tmp_path / "own"))
+    listed = quick.saved_list
+    monkeypatch.setattr(quick, "saved_list",
+                        lambda own, root, extra="": listed(own, str(tmp_path / "none")))
+    ed.open_quick()
+    assert ed.qs_none.visible and not ed.qs_where.visible and ed.qs_gallery.objects == []
+    ed.quick.hide()
+
+
+def test_thumbnails_of_older_figures_and_redrawn_images(tmp_path):
+    import os
+    from PIL import Image
+    from cm1view.figures import spec as fg
+    from cm1view.figures.export import make_thumb, saved_thumb
+    spec = _a_saved_figure(str(tmp_path), "a", 1000)
+    assert saved_thumb(spec) is None  # none yet: made from the image, and kept
+    assert make_thumb(spec) == saved_thumb(spec)
+    with Image.open(fg.thumb_path(spec)) as im:
+        assert max(im.size) == fg.THUMB_PX
+    png = str(tmp_path / "a.png")
+    later = os.path.getmtime(fg.thumb_path(spec)) + 10
+    os.utime(png, (later, later))
+    assert saved_thumb(spec) is None  # a newer image (a script redrew it): made anew
+    os.remove(png)
+    os.remove(fg.thumb_path(spec))
+    assert make_thumb(spec) is None and saved_thumb(spec) is None  # e.g. only a PDF
+    with open(png, "w") as f:
+        f.write("not an image")
+    assert make_thumb(spec) is None
+
+
+def test_a_thumbnail_for_a_closed_dialog_is_dropped(ed, tmp_path):
+    import panel as pn
+    from cm1view.figures import quick
+    spec = _a_saved_figure(str(tmp_path), "a", 1000)
+    b = pn.widgets.Button(name="a", stylesheets=[quick._thumb_css()])
+    gen = ed._gallery_gen
+    ed._gallery_clear()
+    ed._thumb_job(b, spec, gen)
+    ed._thumb_show(b, b"png", gen)
+    assert "base64" not in b.stylesheets[0]
 
 
 def test_a_series_no_longer_shown_stops(ed, monkeypatch):

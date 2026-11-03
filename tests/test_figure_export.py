@@ -1,6 +1,7 @@
 """Figure workspace output: the exported script, animations, own code, provenance, and
 figures of parts."""
 import json
+import os
 
 import numpy as np
 import pytest
@@ -427,3 +428,121 @@ def test_figure_of_parts_with_a_series_part(ed, tmp_path):
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
     assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
+
+
+def test_saving_the_image_also_writes_a_spec_that_reopens(ed, tmp_path):
+    from cm1view.figures import spec as fg
+    base = str(tmp_path / "fig")
+    ed.let_box.value = True
+    ed._save_job(ed.collect_all(), False, base)
+    out = fg.bundle_paths({}, base)
+    assert os.path.exists(out["image"]) and os.path.exists(out["spec"]), ed.msg.object
+    assert not os.path.exists(out["script"]) and not os.path.exists(out["data"])
+    ed.let_box.value = False
+    assert ed._load_spec(out["spec"]) and ed.let_box.value and ed.path.value == base
+
+
+def test_save_asks_before_replacing_the_image_or_the_spec(ed, tmp_path, monkeypatch):
+    from cm1view.figures import spec as fg
+    base, asked = str(tmp_path / "fig"), []
+    monkeypatch.setattr(ed.v.confirm, "ask", lambda paths, then: asked.append(paths))
+    ed.path.value = base
+    ed.save_more.value = False
+    ed._save()
+    out = fg.bundle_paths({}, base)
+    assert asked.pop() == [out["image"], out["spec"]]
+    ed.save_more.value = True  # (the tick in the dialog: all of them)
+    ed._save()
+    assert set(asked.pop()) == set(out.values())
+    ed.save_more.value = False
+
+
+@pytest.mark.parametrize("fit, height", [("width", False), ("full", True)])
+def test_exact_size(ed, tmp_path, fit, height):
+    """At the figure's width (trimming alone gives 3.27 in for 3.25 in), in the script too."""
+    import subprocess
+    import sys
+    from PIL import Image
+    from cm1view.figures import spec as fg
+    ed.width.value, ed.dpi.value = 3.25, 200
+    ed.fit.value = "trim"
+    base = str(tmp_path / f"{fit}_trim")
+    ed._save_job(ed.collect_all(), False, base)
+    trim = Image.open(base + ".png").size
+    assert trim[0] != 650  # (what the option is for)
+    ed.fit.value = fit
+    spec = ed.collect_all()
+    base = str(tmp_path / fit)
+    ed._save_job(spec, True, base)
+    saved = Image.open(base + ".png")
+    size = saved.size
+    assert size[0] == 650, size
+    if height:
+        assert size[1] == round(spec["size"][1] * 200), size
+    else:
+        assert abs(size[1] - trim[1]) <= 1, size  # (the height is trimmed as before)
+    before = np.asarray(saved.convert("RGB"))
+    os.remove(base + ".png")
+    subprocess.run([sys.executable, fg.bundle_paths({}, base)["script"]], check=True,
+                   capture_output=True)
+    assert np.array_equal(np.asarray(Image.open(base + ".png").convert("RGB")), before)
+    assert ed._load_spec(fg.bundle_paths({}, base)["spec"]) and ed.fit.value == fit
+    ed.fit.value = "trim"
+
+
+def test_a_figure_saved_before_exact_size_opens_as_it_was(ed):
+    for old, fit in ((dict(tight=True), "trim"), (dict(tight=False), "full")):
+        spec = ed.collect_all()
+        spec["export"] = dict(format="png", dpi=250, pad=0.05, **old)
+        ed.set_spec(spec)
+        assert ed.fit.value == fit
+    ed.fit.value = "trim"
+
+
+def test_exact_width_preview_clicks_land_on_the_panels(ed):
+    from cm1view.figures.click import place_map, watch_tight
+    from cm1view.figures import draw as figdraw, spec as fg
+    import io
+    from PIL import Image
+    ed.fit.value = "width"
+    spec = ed.collect_all()
+    fig = figdraw.draw(spec, ed.panel_data(spec))
+    watch_tight(fig)
+    buf = io.BytesIO()
+    figdraw.save(spec, fig, buf, format="png", **fg.save_kw(spec, 100))
+    buf.seek(0)
+    wh = Image.open(buf).size
+    place = place_map(fig, spec, wh, 100)
+    assert wh[0] == round(spec["size"][0] * 100)
+    assert abs(place[0][0] - fig._cv_axes[0].get_position().x0) < 0.01  # (from the image's edge)
+    ed.fit.value = "trim"
+
+
+def test_save_waits_for_the_series(ed, tmp_path, monkeypatch):
+    from cm1view.figures import export as X
+    monkeypatch.setattr(X, "SERIES_RECHECK", 0.05)
+    spec = ed.collect_all()
+    spec = dict(spec, kind="line")
+    saved, jobs, busy = [], [], [["run: w 3/9"], ["run: w 3/9"], []]
+    monkeypatch.setattr(ed, "panel_data", lambda s: {})
+    monkeypatch.setattr(ed, "series_pending", lambda: busy[0])
+    monkeypatch.setattr(X.fg, "save_image", lambda s, d, p: saved.append(p) or p)
+    monkeypatch.setattr(X.fg, "save_spec", lambda s, b: "spec")
+    monkeypatch.setattr(ed.v.pools["fig"], "submit", lambda f, *a: jobs.append((f, a)))
+    ed._save_gen = 7
+    ed._save_job(spec, False, str(tmp_path / "fig"), 7)
+    assert not saved
+    wait(lambda: jobs, 10, "the second look")
+    busy[0] = []
+    f, a = jobs.pop()
+    f(*a)
+    assert saved == [str(tmp_path / "fig.png")]
+
+
+def test_a_later_save_replaces_the_one_waiting(ed, tmp_path, monkeypatch):
+    from cm1view.figures import export as X
+    saved = []
+    monkeypatch.setattr(X.fg, "save_image", lambda s, d, p: saved.append(p) or p)
+    ed._save_gen = 3
+    ed._save_job(ed.collect_all(), False, str(tmp_path / "old"), 2)
+    assert not saved

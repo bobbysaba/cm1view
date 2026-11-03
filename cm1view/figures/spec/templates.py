@@ -137,7 +137,8 @@ _SIZES = dict(tick=None, label=None, title=None, suptitle=None, legend=None)
 STYLES = {
     "default": dict(font=dict(family="sans-serif", size=10.0, math="dejavusans", **_SIZES),
                     axes=dict(frame_lw=0.8, title_bold=True), background="white",
-                    mplstyle="", **{k: dict(size=12.0, bold=True) for k in _TEXT}),
+                    mplstyle="", letters=dict(fmt="{a}", size=None, bold=True),
+                    **{k: dict(size=None, bold=True) for k in _TEXT[1:]}),
     # AMS journals: one column 3.2 in (19 pc) or two 6.5 in (39 pc); 8–9 pt lettering
     # in a sans-serif font; vector PDF or 600 DPI
     "ams": dict(font=dict(family="sans-serif", size=8.0, math="dejavusans", **_SIZES),
@@ -149,19 +150,32 @@ STYLES = {
     "talk": dict(font=dict(family="sans-serif", size=14.0, math="dejavusans", **_SIZES),
                  axes=dict(frame_lw=1.2, title_bold=True), background="white", mplstyle="",
                  export=dict(format="png", dpi=200), width=10.0,
-                 **{k: dict(size=15.0, bold=True) for k in _TEXT}),
+                 letters=dict(fmt="{a}", size=15.0, bold=True),
+                 **{k: dict(size=15.0, bold=True) for k in _TEXT[1:]}),
 }
 STYLES["dark"] = dict(STYLES["talk"], background="black", mplstyle="dark_background")
 
 
-def apply_style(spec, name):
-    """A copy of `spec` with style preset `name` (STYLES)."""
+def apply_style(spec, name, width=True):
+    """A copy of `spec` with style preset `name` (STYLES), but for its figure width with
+    width False.  A figure of parts: in every part, the width being the whole figure's."""
     s = _plain(spec)
+    combo = s.get("kind") == "combo"
+    if combo:
+        s["parts"] = [apply_style(p, name, width=False) for p in s["parts"]]
     for k, v in STYLES[name].items():
         if k == "width":
+            if not width:
+                continue
             w0, h0 = (float(x) for x in s["size"])
-            w = (3.2 if int(s.get("cols", 1)) == 1 else 6.5) if v == "ams" else float(v)
+            one = not combo and int(s.get("cols", 1)) == 1
+            w = (3.2 if one else 6.5) if v == "ams" else float(v)
             s["size"], s["size_auto"] = [w, round(h0 * w / w0, 2)], False
+            if combo:  # (a height of its own keeps the shape; blank stays blank)
+                own = (s.get("size_set") or [None, None])[1]
+                s["size_set"] = [w, round(float(own) * w / w0, 2) if own else None]
+        elif combo and k not in s:  # (each part's alone: its labels, its axes)
+            continue
         elif isinstance(v, dict):
             s[k] = dict(s.get(k) or {}, **v)
         else:

@@ -65,6 +65,68 @@ def clean_edits(edits):
     return out
 
 
+def layers_moved(edits, new_of):
+    """Panel edits (in place) after the shared layers moved: each layer's changes go with
+    it (new_of: {old layer number: new}; a layer not in it is gone, and its changes)."""
+    for e in edits.values():
+        if e.get("layers"):
+            e["layers"] = {str(new_of[int(j)]): o for j, o in e["layers"].items()
+                           if int(j) in new_of}
+
+
+def layer_copied(edits, j, k):
+    """Panel edits (in place) after layer k became a copy of layer j: it has j's changes."""
+    for e in edits.values():
+        o = (e.get("layers") or {}).get(str(j))
+        if o is not None:
+            e["layers"][str(k)] = json.loads(json.dumps(o))
+
+
+def step_moves(old, new):
+    """{old step: new step} of a list a grid steps through: a step goes where its item
+    (a run's path, a height) still is; those whose item changed take the free places in
+    order (a height retyped keeps its place); with no place left, it is gone."""
+    free, out = list(range(len(new))), {}
+    for j, item in enumerate(old):
+        k = next((k for k in free if new[k] == item), None)
+        if k is not None:
+            out[j] = k
+            free.remove(k)
+    for j in range(len(old)):
+        if j not in out and free:
+            out[j] = free.pop(0)
+    return out
+
+
+def panel_moves(was, now):
+    """Where a plan view's panels went on a new grid: ({old panel: new}, {old row: new};
+    a panel not in it is gone), or (None, None) when every panel stays as it is numbered.
+    was, now: {"rows", "cols", "axes" (rows', columns' dimension), "steps" (their items)}.
+    A grid of two lists: a panel stays at its row's and column's items.  One list filling
+    the grid: at its item.  No list: in its cell, but for a grid of as many panels
+    reshaped (they keep their reading order).  Other dimensions: nothing to follow."""
+    if was is None or now is None or was["axes"] != now["axes"]:
+        return None, None
+    rd, cd = now["axes"]
+    c0, c1, r1 = was["cols"], now["cols"], now["rows"]
+    rows = None
+    if rd != "none" and cd != "none":
+        rows = step_moves(was["steps"][0], now["steps"][0])
+        cols = step_moves(was["steps"][1], now["steps"][1])
+        panels = {r * c0 + c: rows[r] * c1 + cols[c] for r in rows for c in cols}
+    elif rd != "none" or cd != "none":
+        d = 0 if rd != "none" else 1
+        panels = step_moves(was["steps"][d], now["steps"][d])
+    elif was["rows"] * c0 == r1 * c1:
+        return None, None
+    else:
+        panels = {r * c0 + c: r * c1 + c for r in range(min(was["rows"], r1))
+                  for c in range(min(c0, c1))}
+    if all(k == v for k, v in panels.items()):  # (a smaller grid: what is off it waits)
+        return None, None
+    return panels, rows
+
+
 class FigureTree:
     # ------------------------------------------------------------ widgets
     def _build_tree(self):
@@ -165,6 +227,9 @@ class FigureTree:
             e = s["series"][ref[1]]
             return f"{letter}  Time-height · {rn.get(ref[0], ref[0] + 1)} · " \
                    f"{e.get('label', '')}{tail}{mark}", True
+        if kind == "scene":
+            return f"{letter}  3D scene · {rn.get(int(s.get('run', 0)), '')} · " \
+                   f"{float(s['time_s']) / 60:g} min{tail}{mark}", True
         ents = s.get(figdraw.ENTRIES[kind]) or []
         mine = [e for e in ents if int(e.get("panel", 0)) == i]
         what = "; ".join(str(e.get("label") or "") or self._entry_name(e, n) for n, e in
@@ -249,6 +314,9 @@ class FigureTree:
         objs = [head]
         if s["kind"] in ("plan", "xsec"):
             objs += self._tree_map_panel(s, i, e, title, labels)
+        elif s["kind"] == "scene":
+            objs += [_grid((title, 2)), _hint("What the scene draws, its time and its look are "
+                                              "in <b>Layers</b>.")]
         else:
             objs += [_grid((title, 2)), _grid(*labels)]
             if s["kind"] == "line":
@@ -390,7 +458,7 @@ class FigureTree:
         card.w["panels"].visible = False
         if "z_fixed" in card.w:
             card.w["z_fixed"].visible = False
-        card.up.visible = card.down.visible = False
+        card.up.visible = card.down.visible = card.dup.visible = False
         if extra:
             def remove(ev):
                 del e["extra"][j]

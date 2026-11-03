@@ -260,3 +260,32 @@ def test_plot_settings(tracked):
     th, m = v.ser_thfig, v.ser_th_map
     assert (th.y_range.start, th.y_range.end) == (0.0, 2.0) and (m.low, m.high) == (0.0, 25.0)
     assert m.palette[0] == palette("turbo")[0]
+
+
+def test_store_from_threads_leaves_one_file(viewer, tmp_path, monkeypatch, capfd):
+    """Each write has its own temporary name, and HDF5 prints nothing off the main thread."""
+    import threading
+    import xarray as xr
+    from cm1view.core.run import temp_name
+    assert temp_name("x") != temp_name("x") and temp_name("x", ".npz").endswith(".npz")
+    monkeypatch.setattr(S, "CACHE_DIR", str(tmp_path))
+    ds = xr.Dataset({"a": ("t", np.arange(3.0))})
+    S.store(viewer.run, dict(field="w"), ds)  # (netCDF set up on this thread first)
+    capfd.readouterr()
+    ts = [threading.Thread(target=S.store, args=(viewer.run, dict(field="w"), ds))
+          for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(os.listdir(tmp_path)) == 1
+    assert "HDF5-DIAG" not in capfd.readouterr().err
+
+
+def test_store_failure_leaves_no_temporary_file(viewer, tmp_path, monkeypatch):
+    class Bad:
+        def to_netcdf(self, path):
+            raise RuntimeError("NetCDF: HDF error")
+    monkeypatch.setattr(S, "CACHE_DIR", str(tmp_path))
+    S.store(viewer.run, dict(field="w"), Bad())
+    assert os.listdir(tmp_path) == []

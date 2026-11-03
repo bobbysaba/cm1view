@@ -274,7 +274,7 @@ def parser():
     ap.add_argument("--dpi", type=int, default=None,
                     help="resolution (default: the figure's; 110 for --gif)")
     ap.add_argument("--bundle", action="store_true",
-                    help="also save the script, data and spec (as “+ script & data”)")
+                    help="also save the script, data and spec (as “Also the script and data” in the Export dialog)")
     ap.add_argument("--gif", action="store_true",
                     help="an animated GIF from the figure's times on (plan views, "
                          "sections and 3D scenes step in time)")

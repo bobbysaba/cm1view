@@ -125,6 +125,8 @@ what the viewer shows to a JSON file and puts it back later:
   camera (a scene is rendered again when the session opens on the 3D workspace),
 - the series: each one shown, which is chosen, the plot settings and the Series form,
 - the distributions (computed again at their times), how they are drawn and the form,
+- the figure being made (all its settings, drawn when you open the Figure workspace; its
+  own code stays off until you tick *Run the code*),
 - the active tool, whether its panel is open, and the workspace (Map, 3D, Figure).
 
 Series come back from the series cache (or the file you loaded them from) without a
@@ -137,7 +139,8 @@ the page on that run. Values the open run cannot take (a field it lacks, a time 
 not have) are left as they are, and the dialog lists them. The default file is
 `session.json` under `<exports_dir>/<parent>_<run>/sessions`.
 
-Figures are not in sessions: save a figure's spec from the Figure workspace.
+A session keeps a figure's settings, not its image: use **Export** in the Figure workspace
+for that. A session saved while the editor held only its example leaves the figure alone.
 
 ### Exporting data
 

@@ -210,3 +210,99 @@ def test_session_of_the_map_only_keeps_the_rest(viewer):
     before = {k: v.session_state()[k] for k in PARTS}
     assert v.apply_session(s) == []
     assert {k: v.session_state()[k] for k in PARTS} == before
+
+
+def test_session_keeps_the_figure(viewer, reg, tmp_path):
+    """A figure of the user's goes in the session and comes back, with its save path and
+    without running its code; only the example stays out."""
+    from cm1view.viewer import app as A
+    v = viewer
+    assert "figure" not in v.session_state()  # the example alone
+    ed = v.figed
+    ed.auto.value = False
+    ed.suptitle.value = "kept"
+    ed.code_on.value, ed.code.value = True, "x = 1"
+    ed.path.value = str(tmp_path / "mine")
+    s = json.loads(json.dumps(v.session_state()))
+    assert s["figure"]["spec"]["suptitle"] == "kept"
+
+    run, F = reg.get()
+    v2 = A.Viewer(run, F, reg=reg)
+    v2.main()
+    try:
+        before = v2.gen["fig"]
+        assert v2.apply_session(s) == []
+        e2 = v2.figed
+        assert e2.suptitle.value == "kept" and e2.path.value == str(tmp_path / "mine")
+        assert e2.code.value == "x = 1" and not e2.code_on.value
+        assert e2.auto.value and v2.gen["fig"] == before  # drawn when the workspace opens
+        again = json.loads(json.dumps(v2.session_state()))["figure"]
+        assert again["spec"]["suptitle"] == "kept"
+    finally:
+        v2.close()
+
+
+def test_session_figure_of_a_missing_run_is_named(viewer):
+    v = viewer
+    v.figed.suptitle.value = "kept"
+    s = json.loads(json.dumps(v.session_state()))
+    s["figure"]["spec"]["runs"][0]["path"] = "/no/such/run"
+    skipped = v.apply_session(s)
+    assert any("figure" in x and "/no/such/run" in x for x in skipped)
+    assert v.figed.suptitle.value == "kept"  # left as it was
+
+
+def _autosaved(ed):
+    with open(ed._auto_path()) as f:
+        return json.load(f)
+
+
+def test_autosave_keeps_changes_and_the_earlier_figure(viewer, reg):
+    """Nothing is written for the example; a changed figure is; a new page offers it and
+    its first write keeps it to one side."""
+    from cm1view.viewer import app as A
+    ed = viewer.figed
+    for name in (ed._auto_path(), ed._auto_path("figure_earlier.json")):
+        if os.path.exists(name):
+            os.remove(name)
+    ed.auto.value = True
+    ed.request(delay=False)
+    assert not os.path.exists(ed._auto_path())  # the example alone
+
+    ed.suptitle.value = "first"
+    ed.request(delay=False)
+    assert _autosaved(ed)["spec"]["suptitle"] == "first"
+    assert ed._auto_earlier() is None  # this page's own is not offered back
+
+    run, F = reg.get()
+    v2 = A.Viewer(run, F, reg=reg)
+    v2.main()
+    try:
+        e2 = v2.figed
+        assert e2._auto_earlier()[0]["spec"]["suptitle"] == "first"
+        e2.open_quick()
+        assert e2.qs_earlier_row.visible
+        e2.quick.hide()
+        e2.suptitle.value = "second"  # the example, changed: a figure of this page's
+        e2.request(delay=False)
+        assert _autosaved(e2)["spec"]["suptitle"] == "second"
+        assert e2._auto_earlier()[0]["spec"]["suptitle"] == "first"
+        e2._earlier = e2._auto_earlier()
+        e2._quick_earlier()
+        assert e2.suptitle.value == "first" and not e2.quick.open
+    finally:
+        v2.close()
+
+
+def test_autosave_failure_is_said_once(viewer, monkeypatch):
+    ed = viewer.figed
+
+    def fail(*a, **k):
+        raise OSError("no room")
+    monkeypatch.setattr(os, "replace", fail)
+    ed._autosave(ed.collect_all())
+    assert "no room" in ed.msg.object
+    ed.msg.object = ""
+    ed._autosave(ed.collect_all())
+    assert ed.msg.object == "" and ed._auto_failed
+    assert not [n for n in os.listdir(os.path.dirname(ed._auto_path())) if n.endswith(".tmp")]

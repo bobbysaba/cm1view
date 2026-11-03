@@ -1,6 +1,7 @@
 """Minimal WebDriver BiDi client for headless Firefox: open a URL, run JS, click, drag,
 take screenshots.  Used by test_browser.py (pytest -m browser).  Firefox is found on
-PATH, or set $FIREFOX to its executable."""
+PATH, or set $FIREFOX to its executable (conda-forge's: bin/FirefoxApp/firefox; ending its
+bin/firefox wrapper leaves Firefox running)."""
 import base64
 import json
 import os
@@ -34,10 +35,15 @@ class FF:
             self.p.terminate()
             raise RuntimeError("headless Firefox did not start")
         self.n = 0
-        self.cmd("session.new", {"capabilities": {}})
-        self.ctx = self.cmd("browsingContext.getTree", {})["contexts"][0]["context"]
-        self.cmd("browsingContext.setViewport", {"context": self.ctx,
-                                                 "viewport": {"width": w, "height": h}})
+        try:
+            self.cmd("session.new", {"capabilities": {}})
+            # (a tab of its own: on newer Firefox the first context listed is not a page)
+            self.ctx = self.cmd("browsingContext.create", {"type": "tab"})["context"]
+            self.cmd("browsingContext.setViewport", {"context": self.ctx,
+                                                     "viewport": {"width": w, "height": h}})
+        except Exception:
+            self.p.terminate()
+            raise
 
     def cmd(self, method, params):
         self.n += 1

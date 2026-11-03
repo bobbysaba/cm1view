@@ -5,7 +5,7 @@
 | **AGL** | Above ground level. All heights in cm1view are km AGL unless a label says otherwise. |
 | **Base state** | The horizontally uniform initial state of the run (`th0`, `prs0`, `qv0`, `u0`, `v0`, `rho0`). Perturbations such as θ′ and p′ are the departure from it. |
 | **Bunkers right / left mover (RM, LM)** | The storm motions of the Bunkers et al. (2000) method, from the 0–6 km mean wind and shear. The right mover is the default storm motion. |
-| **Bundle** | What *+ script & data* saves: the image, a script, the plotted arrays, the spec and the drawing code. |
+| **Bundle** | What *Also the script and data* saves: the image, a script, the plotted arrays, the spec and the drawing code. |
 | **Cache** | The 3D fields held in memory (`--cache-gb`), and the computed series, swaths and distributions kept in the cache folder (`cache_dir`). |
 | **CAPE, CIN** | Convective available potential energy; convective inhibition. |
 | **Column max / min** | The largest / smallest value in each vertical column. |

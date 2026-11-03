@@ -52,6 +52,7 @@ processes and renders figures.
 | `test_series.py`, `test_dist.py` | Series (cache, time–height, files) and distributions |
 | `test_parcels.py` | Parcel output: reads, lattice, selections, sets, trajectory cache, heads, wraps, split files; the Parcels panel |
 | `test_pdecomp.py` | The pressure decomposition, on copies of demo files |
+| `test_figure_shell.py` | The figure editor's new layout: its tree, picking, edits and undo, the switch |
 | `test_figure.py`, `test_figure_layers.py`, `test_figure_runs.py`, `test_figure_export.py`, `test_figure_spec.py` | The figure editor: widgets ↔ spec, layers, several runs, export and animation, spec upgrades |
 | `test_legend.py` | Legends of blocks and panels |
 | `test_images.py` | Image baselines and save–load–draw |
@@ -125,10 +126,13 @@ figures/                  the Figure workspace
     panels.py             time-series, time-height, sounding and distribution panels
     bundle.py             export: image, arrays, stand-alone script, spec
     templates.py          templates, style presets (scripting only), copying a layer's look
+    doc.py                the figure document (version 3): to_doc from older figures,
+                          one_panel to read a panel's arrays
   draw/                   matplotlib drawing of a figure; source() stitches its modules
                           into exported scripts, so they import each other only with
                           "from .<module> import ..." lines
     base.py               colours, levels, fonts, text, saving
+    v3.py                 resolve() of the document (version 3) to version 2
     v2.py                 upgrade() to version 2, views of blocks and panels
     layers.py             map layers and colorbars
     lines.py              time-series and distribution panels
@@ -139,6 +143,12 @@ figures/                  the Figure workspace
   batch.py                `cm1view render`: saved figures and templates drawn
                           without the viewer (images, bundles, GIFs); the GIF frame
                           helpers anim.py uses
+  shell/                  the editor's new layout on the document, shown only with
+                          CM1VIEW_FIGURE_SHELL set until every kind has moved there
+    nodes.py              what the tree holds, what a node reaches (no widgets)
+    treeview.py           the tree: one widget, rows drawn in the browser
+    inspector.py          the settings of what is picked
+    frame.py              FigureShell: panes, document, undo, preview
   editor.py               the Figure workspace editor (FigureEditor): putting the
                           widgets together, wiring, layer cards, rendering the preview
   cards/                  its constants, widget helpers and cards (cards.<name> for any
@@ -148,8 +158,10 @@ figures/                  the Figure workspace
     seriescard.py         SeriesCard, SoundingCard
     distcard.py           DistCard, AnnotationRow
   widgets.py              editor mixin: the widgets of the Panels, Layers, Annotate and
-                          File tabs
+                          File tabs, and the Export dialog
   specio.py               editor mixin: spec <-> widgets (set_spec, collect), undo / redo
+  settings.py             table of figure-level settings (spec key, widget, section, kinds,
+                          default) that set_spec and collect go through
   times.py                editor mixin: the panels' times and titles
   panelopts.py            editor mixin: the Panels tab's reactions (fields, heights,
                           layout, size, kind, area, automatic titles)

@@ -1,7 +1,7 @@
 """Session files: what the viewer shows (run, time, map view, the map's fill, more
 fills, contours and vectors, the storm track, soundings, the cross-section, the 3D
-setup, series, distributions, parcel sets, the active tool and workspace) saved to JSON and put
-back, from the Session dialog or with ?session=/path/to/file.json.
+setup, series, distributions, parcel sets, the figure being made, the active tool and workspace)
+saved to JSON and put back, from the Session dialog or with ?session=/path/to/file.json.
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
@@ -131,7 +131,7 @@ class Sessions:
             name="Session file", value=self._ses_default(), width=520,
             description="A JSON file: the run, time, map view, fills, contours, vectors, "
                         "storm track, soundings, section, 3D setup, series, "
-                        "distributions and tool.  Open it later with Load, or with "
+                        "distributions, figure and tool.  Open it later with Load, or with "
                         "?session=<file> in the address")
         self.ses_save = pn.widgets.Button(name="Save", icon="device-floppy",
                                           button_type="primary", width=90, margin=(5, 4))
@@ -155,7 +155,7 @@ class Sessions:
             _html('<div class="cv-maptitle" style="font-size:16px"><b>Session</b></div>'
                   '<div class="cv-hint">Save what the viewer shows (time, map view, '
                   'fills, contours, vectors, storm track, soundings, section, 3D setup, '
-                  'series, distributions, tool) and come back to it.  Series come back '
+                  'series, distributions, figure, tool) and come back to it.  Series come back '
                   'from their cache and distributions are computed again.  A session of '
                   'another run opens that run.</div>'),
             self.ses_path, pn.Row(self.ses_save, self.ses_load, self.ses_dl, margin=0),
@@ -205,7 +205,19 @@ class Sessions:
             series=self._ser_state(), distributions=self._dist_state(),
             parcels=self._par_state(),
         )
+        figure = self._figure_state()
+        if figure is not None:
+            s["figure"] = figure
         return _plain(s)
+
+    def _figure_state(self):
+        """The figure being made (None: only the example; settings it cannot read must
+        not stop the session being saved)."""
+        try:
+            return self.figed.figure_state() if self.figed.own_figure() else None
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            return None
 
     def _time_s(self, t):
         return None if t is None else float(self.run.times[t])
@@ -339,6 +351,11 @@ class Sessions:
             self._put_series(s.get("series"), put, skipped)
             dists = self._put_dists(s.get("distributions"), put, skipped)
             self._put_parcels(s.get("parcels"), put)
+            if s.get("figure"):  # (before the workspace: it may be what is shown)
+                why = self.figed.open_state(s["figure"], "Figure from the session",
+                                            render=False)
+                if why:
+                    skipped.append(f"figure ({why})")
             if s.get("view"):
                 self._put_view(s["view"])
             if s.get("workspace") in self.workspace.options:
@@ -354,6 +371,8 @@ class Sessions:
         if dists:
             self._dist_restore(*dists)
         self._update_items()
+        if s.get("figure") and self.workspace.value == "Figure":
+            self.figed.request(delay=False)
         return skipped
 
     @staticmethod

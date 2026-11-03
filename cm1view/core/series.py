@@ -20,6 +20,7 @@ Results are xarray Datasets; save() writes them as netCDF (default, keeps the
 per-level data), CSV / aligned text (the series only) or pickle.
 """
 
+import contextlib
 import hashlib
 import io
 import json
@@ -27,6 +28,8 @@ import os
 import time as _time
 
 import numpy as np
+
+from .run import temp_name
 
 REDUCE_LABEL = {"min": "min", "max": "max", "mean": "mean", "pct": "percentile"}
 FORMATS = {".nc": "netCDF", ".csv": "CSV", ".txt": "text", ".pkl": "pickle"}
@@ -466,14 +469,20 @@ def invalidate_moved(ds, recipe, centers):
 
 def store(run, recipe, ds):
     """Write the dataset to the cache (best effort)."""
+    tmp = None
     try:
         os.makedirs(cache_dir(), exist_ok=True)
         path = _cache_path(run, recipe)
-        tmp = path + f".{os.getpid()}.tmp"
+        tmp = temp_name(path)
+        # (the file there first: netCDF asks HDF5 about it, and off the main thread HDF5
+        # prints a page of errors for a file not there yet, though the write is fine)
+        open(tmp, "x").close()
         ds.to_netcdf(tmp)
         os.replace(tmp, path)
-    except (OSError, ValueError):
-        pass
+    except (OSError, ValueError, RuntimeError):
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
 
 
 # ------------------------------------------------------------------ compute

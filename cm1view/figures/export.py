@@ -1,26 +1,35 @@
-"""Figure editor: saving (image, script and data), the download, and reopening a
-saved figure.
+"""Figure editor: saving (image and spec, script and data if asked), the download, and
+reopening a saved figure.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
 import asyncio
+import html as _html
 import io
+import json
 import os
+import threading
 import traceback
 from functools import partial
 
 from .. import config
+from ..core.run import temp_name
 from . import draw as figdraw, spec as fg
 
 PICK = "Pick a saved figure…"
-NONE_SAVED = "No saved figures yet (+ script & data saves one)"
+NONE_SAVED = "No saved figures yet"
+SERIES_RECHECK = 2.0  # seconds between looks at the series a save is waiting for
+AUTOSAVE, AUTOSAVE_LAST = "figure.json", "figure_earlier.json"  # (in the cache, by run)
 
 
-def saved_figures(own, root, extra=""):
-    """The figures saved with "+ script & data" (their _src/<name>_spec.json), as Select
-    groups {folder: {name: spec path}}: this run's folder `own` first, then the other
-    folders in `root` (the Figures setting) and `extra` (the last folder of a figure of
-    several runs); newest first in each.  One level of folders: no deep search."""
+RASTERS = (".png", ".jpg", ".tif", ".tiff", ".gif")  # (what a thumbnail can be made from)
+
+
+def saved_list(own, root, extra=""):
+    """The saved figures (their _src/<name>_spec.json), as (folder, name, spec path, when
+    saved): this run's folder `own` first, then the other folders in `root` (the Figures
+    setting) and `extra` (the last folder of a figure of several runs); newest first in
+    each.  One level of folders: no deep search."""
     dirs = [own]
     try:
         dirs += sorted(e.path for e in os.scandir(root) if e.is_dir() and e.path != own)
@@ -28,17 +37,25 @@ def saved_figures(own, root, extra=""):
         pass
     if extra and extra not in dirs:
         dirs.append(extra)
-    out = {}
+    out = []
     for d in dirs:
         try:
             specs = [e for e in os.scandir(os.path.join(d, "_src"))
                      if e.is_file() and e.name.endswith("_spec.json")]
         except OSError:
             continue
-        specs.sort(key=lambda e: e.stat().st_mtime, reverse=True)
+        specs = sorted(((e.stat().st_mtime, e) for e in specs), key=lambda x: -x[0])
         head = f"This run ({os.path.basename(d)})" if d == own else os.path.basename(d)
-        out[head] = {e.name[:-len("_spec.json")]: e.path for e in specs}
-    return {k: v for k, v in out.items() if v}
+        out += [(head, e.name[:-len("_spec.json")], e.path, when) for when, e in specs]
+    return out
+
+
+def saved_figures(own, root, extra=""):
+    """saved_list as Select groups {folder: {name: spec path}}."""
+    out = {}
+    for head, name, path, _ in saved_list(own, root, extra):
+        out.setdefault(head, {})[name] = path
+    return out
 
 
 def saved_base(spec_path):
@@ -52,12 +69,61 @@ def saved_base(spec_path):
     return os.path.join(d, name)
 
 
+def _newest_raster(spec_path):
+    """(mtime, path) of the newest image of a saved figure a thumbnail can be made from,
+    or None."""
+    base, found = saved_base(spec_path), []
+    for ext in RASTERS:
+        try:
+            found.append((os.path.getmtime(base + ext), base + ext))
+        except OSError:
+            pass
+    return max(found) if found else None
+
+
+def saved_thumb(spec_path):
+    """The bytes of a saved figure's thumbnail, if it has one and no image newer (a script
+    may have redrawn it)."""
+    path = fg.thumb_path(spec_path)
+    try:
+        image = _newest_raster(spec_path)
+        if image and image[0] > os.path.getmtime(path):
+            return None
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def make_thumb(spec_path):
+    """The bytes of a thumbnail made from a saved figure's image (a figure saved before
+    there were thumbnails, an animation), kept if its folder can be written to; None
+    without an image that can be read."""
+    from PIL import Image
+    image = _newest_raster(spec_path)
+    if not image:
+        return None
+    buf = io.BytesIO()
+    try:
+        with Image.open(image[1]) as im:
+            im.thumbnail((fg.THUMB_PX, fg.THUMB_PX))
+            im.convert("RGBA").save(buf, "png")
+    except Exception:  # noqa: BLE001  (a damaged or huge image has no thumbnail)
+        traceback.print_exc()
+        return None
+    try:
+        with open(fg.thumb_path(spec_path), "wb") as f:
+            f.write(buf.getvalue())
+    except OSError:
+        pass
+    return buf.getvalue()
+
+
 class FigureExport:
     # ------------------------------------------------------------ export
     def _set_dl_name(self):
         self.dl.filename = f"{os.path.basename(self.path.value) or 'figure'}.{self.fmt.value}"
-        for b in (self.save_img, self.save_all):
-            b.disabled = not self.path.value.strip()
+        self.save_img.disabled = not self.path.value.strip()
 
     def _sync_save_path(self):
         """One run: <figures_dir>/<parent>_<run>/.  Several runs have no folder of their
@@ -78,7 +144,7 @@ class FigureExport:
                                  "~/figures/tor_vs_ntor/refl" if multi else "")
         if multi and not self.path.value:
             self._msg("This figure shows several runs: choose a folder for it in "
-                      "“Save as”.", True)
+                      "<b>Export</b> → “Save as”.", True)
 
     def config_changed(self):
         new = config.figures_dir(self.run.path)
@@ -90,65 +156,78 @@ class FigureExport:
         self._refresh_saved()
 
     def _refresh_saved(self):
-        """The saved-figure lists (File tab and quick start), keeping their picks."""
+        """The File tab's list of saved figures, keeping its pick."""
         g = saved_figures(self._fig_dir, config.expand(config.get("figures_dir")),
                           config.expand(config.state("last_multi_run_dir")))
         ch = dict(options={}, groups={"": {PICK: ""}} | g) if g else \
             dict(groups=None, options={NONE_SAVED: ""})
         paths = {p for grp in g.values() for p in grp.values()}
-        for w in (self.saved_pick, self.qs_saved):
-            keep = w.value
-            w.param.update(**ch)
-            w.value = keep if keep in paths else ""
-            w.disabled = not g
-        self.qs_open.disabled = not self.qs_saved.value
+        w, keep = self.saved_pick, self.saved_pick.value
+        w.param.update(**ch)
+        w.value = keep if keep in paths else ""
+        w.disabled = not g
 
-    def _save(self, bundle):
+    def _save(self, bundle=None):
+        """Save what the Export dialog says; bundle (default: its tick): script and data
+        too.  The image and the spec are always written, so it can be reopened."""
+        bundle = self.save_more.value if bundle is None else bundle
         spec = self.collect_all()
         base = config.expand(self.path.value.strip())
         if not base:
-            self._msg("Choose where to save the figure (“Save as”).", True)
+            self._msg("Choose where to save the figure (<b>Export</b> → “Save as”).", True)
             return
-        fmt = spec["export"]["format"]
-        if bundle:
-            paths = list(fg.bundle_paths(spec, base).values())
-        else:
-            base = os.path.splitext(base)[0] if base.lower().endswith("." + fmt) else base
-            paths = [f"{base}.{fmt}"]
+        self.exp_dlg.hide()  # (progress is above the preview; "replace?" is a dialog too)
+        out = fg.bundle_paths(spec, base)
+        paths = list(out.values()) if bundle else [out["image"], out["spec"]]
 
         def go():
             if len(spec.get("runs") or []) > 1:
                 config.set_state("last_multi_run_dir", os.path.dirname(base))
             self._msg('<span class="busy">● Saving…</span>')
-            self.v.pools["fig"].submit(self._save_job, spec, bundle, base)
+            self._save_gen += 1
+            self.v.pools["fig"].submit(self._save_job, spec, bundle, base, self._save_gen)
         self.v.confirm.ask(paths, go)
 
-    def _save_job(self, spec, bundle, base=None):
+    def _save_job(self, spec, bundle, base=None, gen=None):
+        """Save the figure as it was asked for; while its series are being computed, look
+        again in a moment (the fig pool stays free for the preview, a later save replaces
+        this one).  Edits made meanwhile are not in it."""
+        if gen is not None and gen != self._save_gen:
+            return
         if {p["kind"] for p in spec.get("parts", [spec])} & {"th", "line"}:
             self.panel_data(spec)  # (starts computing what is missing)
-            if self.series_pending():
-                self.v._schedule(partial(self._msg, "The series are still being computed "
-                                                    "(see the preview's status line): save "
-                                                    "when they are done.", True))
+            wait = self.series_pending()
+            if wait:
+                what = f" ({_html.escape(wait[0])})" if wait[0] else ""
+                self.v._schedule(partial(self._msg, '<span class="busy">● Will save when the '
+                                                    f'series are done{what}…</span>'))
+                timer = threading.Timer(SERIES_RECHECK, self._save_later,
+                                        (spec, bundle, base, gen))
+                timer.daemon = True
+                timer.start()
                 return
         try:
             data = self.panel_data(spec)
             base = base or config.expand(self.path.value.strip())
-            fmt = spec["export"]["format"]
-            if not bundle and base.lower().endswith("." + fmt):
-                base = os.path.splitext(base)[0]
             if bundle:
                 out = fg.save_bundle(spec, data, base, self.run)
-                html = "Saved " + ", ".join(f"<code>{p}</code>" for p in out.values())
             else:
-                p = fg.save_image(spec, data, f"{base}.{spec['export']['format']}")
-                html = f"Saved <code>{p}</code>"
+                out = fg.bundle_paths(spec, base)
+                out = dict(image=fg.save_image(spec, data, out["image"],
+                                               thumb=fg.thumb_path(out["spec"])),
+                           spec=fg.save_spec(spec, base))
+            html = "Saved " + ", ".join(f"<code>{p}</code>" for p in out.values())
             self.v._schedule(partial(self._msg, html))
-            if bundle:
-                self.v._schedule(self._refresh_saved)
+            self.v._schedule(self._refresh_saved)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             self.v._schedule(partial(self._msg, f"Could not save: {e}", True))
+
+    def _save_later(self, spec, bundle, base, gen):
+        try:
+            self.v.pools["fig"].submit(self._save_job, spec, bundle, base, gen)
+        except RuntimeError:  # (the viewer has closed)
+            pass
 
     async def _download(self):
         """The image for the browser's download, drawn in the background (reading a
@@ -196,9 +275,9 @@ class FigureExport:
         self.path.value = saved_base(path)  # (after the runs' sync of the save path)
         return True
 
-    def _open_spec(self, spec, note):
-        """Show a saved figure (or an applied template) in the editor.  True when
-        shown."""
+    def _open_spec(self, spec, note, part=0):
+        """Show a saved figure (or an applied template) in the editor, `part` of a figure
+        of parts in the widgets.  True when shown."""
         parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
         bases, ran = [], False
         for part in parts:
@@ -213,8 +292,83 @@ class FigureExport:
                 base["code"] = dict(code, on=False)  # (code from a file runs once read)
                 ran = True
             bases.append(base)
-        self.set_parts(dict(spec, parts=bases) if spec.get("kind") == "combo" else bases[0])
+        self.set_parts(dict(spec, parts=bases) if spec.get("kind") == "combo" else bases[0],
+                       part)
         self._msg(note + (
             ". It has code of its own (<b>Annotate → Your own code</b>): read it, then tick "
             "<b>Run the code</b>." if ran else ""))
         return True
+
+    # ------------------------------------------------------------ session and autosave
+    def own_figure(self, j=None):
+        """Is the figure in the editor more than the example it starts with?  j: its
+        JSON (_remember's), when already made."""
+        if self._made or self._example is None:
+            return self._made
+        if j is None:
+            j = json.dumps(self.collect_all(), sort_keys=True, default=float)
+        return j != self._example
+
+    def figure_state(self, spec=None):
+        """The figure as a session or the autosave keeps it: its settings, the part in
+        the widgets and where it would be saved."""
+        return dict(spec=self.collect_all() if spec is None else spec, part=self.part_i,
+                    save_as=self.path.value)
+
+    def open_state(self, state, note, render=True):
+        """Show a figure_state (its code stays off until ticked, as with any figure
+        read from a file).  render=False: no preview until the workspace asks for one.
+        The reason when it cannot be shown, else None."""
+        spec = state["spec"]
+        try:
+            fg.check_runs(spec)
+        except (KeyError, TypeError, ValueError) as e:
+            return str(e)
+        live = self.auto.value
+        if not render:
+            self.auto.value = False
+        try:
+            if not self._open_spec(spec, note, int(state.get("part") or 0)):
+                return self.msg.object
+        finally:
+            self.auto.value = live
+        if state.get("save_as"):
+            self.path.value = state["save_as"]
+        return None
+
+    def _auto_path(self, name=AUTOSAVE):
+        return config.cache_dir("autosave", config.run_key(self.run.path), name)
+
+    def _autosave(self, spec):
+        """Keep the figure for the next page on this run.  This page's first write moves
+        the last page's to one side, so making a new figure does not lose it."""
+        path = self._auto_path()
+        tmp = temp_name(path)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, "w") as f:
+                json.dump(self.figure_state(spec), f, default=float)
+            if not self._auto_wrote and os.path.exists(path):
+                os.replace(path, self._auto_path(AUTOSAVE_LAST))
+            os.replace(tmp, path)
+            self._auto_wrote = True
+        except OSError as e:
+            if not self._auto_failed:  # (once: it would be tried at every change)
+                self._auto_failed = True
+                self._msg(f"Could not autosave this figure: {_html.escape(str(e))}", True)
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+    def _auto_earlier(self):
+        """(figure_state, when it was written) of the figure an earlier page left, or
+        None."""
+        path = self._auto_path(AUTOSAVE_LAST if self._auto_wrote else AUTOSAVE)
+        try:
+            with open(path) as f:
+                state = json.load(f)
+            return (state, os.path.getmtime(path)) if isinstance(state.get("spec"), dict) \
+                else None
+        except (OSError, ValueError, AttributeError):
+            return None

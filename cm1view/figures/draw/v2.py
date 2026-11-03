@@ -2,7 +2,8 @@
 
 import copy
 
-from .base import FILL_KEYS, ENTRIES, part_shares, moved_time
+from .base import FILL_KEYS, ENTRIES, part_shares, moved_time, _key_layer
+from .v3 import resolve
 
 GRID_DIMS = ("runs", "sections", "times", "fields", "heights")  # (or "none")
 LEGACY_VARY = {"time": "times", "field": "fields", "height": "heights", "custom": "custom"}
@@ -292,7 +293,7 @@ V1_PANEL_KEYS = ("version", "kind", "rows", "cols", "vary", "times", "time", "ti
                  "form")
 FIG_ONLY = ("version", "kind", "arrange", "parts", "blocks", "panels", "size", "size_set",
             "size_auto", "share", "place", "part_grid", "suptitle", "export", "made_with",
-            "code")
+            "code", "groups")
 EXTENDS = ("auto", "neither", "min", "max", "both")
 
 
@@ -309,7 +310,10 @@ def upgrade(spec, data=None):
     spec comes back as it is): each panel written out with its own layers (the
     shared layers as the panel had them, its height, fill, title and letter), each
     part a block with its settings, and in `data` (a copy; None: none) each line's and
-    sounding's entry counted within its panel."""
+    sounding's entry counted within its panel.  A version-3 document: resolve(), its data
+    as it is."""
+    if int(spec.get("version", 1)) == 3:
+        return resolve(spec), data
     if int(spec.get("version", 1)) >= 2:
         return spec, data
     combo = spec.get("kind") == "combo"
@@ -319,7 +323,9 @@ def upgrade(spec, data=None):
     data = None if data is None else dict(data)
     blocks, panels, start = [], [], 0
     for k, part in enumerate(parts):
-        b = dict(rows=int(part["rows"]), cols=int(part["cols"]))
+        # (a 3D scene is one picture, whatever grid an older figure kept for it)
+        b = dict(rows=1, cols=1) if part.get("kind") == "scene" else \
+            dict(rows=int(part["rows"]), cols=int(part["cols"]))
         ck = None
         if combo:
             opts = {key: copy.deepcopy(v) for key, v in part.items() if key not in V1_PANEL_KEYS}
@@ -509,11 +515,3 @@ def _z_text(spec, p):
     level = p.get("zmode", "height") == "level"
     fmt = spec.get("z_label", {}).get("fmt") or ("k = {k}" if level else "z = {z:g} km")
     return fmt.format(z=float(p["z"]), k=int(round(float(p["z"]))))
-
-
-def _key_layer(ck, layers):
-    """The contour layer of a contour key: layer ck["layer"], else the first contour
-    layer that is on (None: none)."""
-    k = int(ck.get("layer", -1))
-    return layers[k] if 0 <= k < len(layers) and layers[k]["type"] == "contour" else next(
-        (l for l in layers if l["type"] == "contour" and l.get("on", True)), None)

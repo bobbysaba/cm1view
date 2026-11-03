@@ -18,6 +18,9 @@ from .cards import _auto, _chk, _grid, _hint, _num, _section
 from .kinds import KIND_NAMES
 from ..viewer.ui import held
 
+# settings a figure of parts has one of (each part keeps a copy, to show when it is edited)
+WHOLE_FIGURE = ("export", "background", "spacing")
+
 
 class FigureCombo:
     parts = []  # the parts' specs (the shown one: as when it was last shown); [] or one
@@ -45,7 +48,7 @@ class FigureCombo:
             description="Of the figure's width (side by side) or height (stacked). Blank: "
                         "by its size, from what the other parts leave")
         self.part_cb = _chk("One colorbar for the whole figure (the first fill's, styled "
-                            "as this part's)", False)
+                            "as the first part's)", False)
         self.part_note = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 4))
         self.part_size = _grid(self.part_w, self.part_h, self.part_share, (self.part_cb, 3))
         self._build_part_grid()
@@ -64,7 +67,9 @@ class FigureCombo:
                 "size (the parts then keep their shares of it). Parts are → Custom grid "
                 "puts each part in cells of its own, e.g. a plan view on the left with a "
                 "section above a sounding on its right. Panel letters run on from part "
-                "to part on the figure; on a part's cards they count from a in that part."),
+                "to part on the figure; on a part's cards they count from a in that part. "
+                "Format, DPI, background and spacing are the whole figure's, whichever "
+                "part you set them in."),
             self.part_sel, _grid(self.part_add, self.part_rm, self.part_arr),
             self.part_grid_box, self.part_title, self.part_size, self.part_note)
         self._show_parts()
@@ -175,9 +180,11 @@ class FigureCombo:
             return
         self.parts[self.part_i] = self.collect()
         share_sections(self.parts, self.parts[self.part_i])
+        share_figure(self.parts, self.parts[self.part_i])
         self.part_i = int(k)
         self.set_spec(json.loads(json.dumps(self.parts[self.part_i], default=float)))
         self._show_parts()
+        self.part_note.object = ""
 
     def _add_part(self):
         cur = self.collect()
@@ -192,8 +199,8 @@ class FigureCombo:
         self._show_parts()
         self.part_note.object = ('<div class="cv-status">Part '
                                  f'{self.part_i + 1} starts as a copy of the part you were '
-                                 'editing: change its panels here, or make it anew with '
-                                 '“This part from …” above.</div>')
+                                 'editing: change its panels here, or pick another kind '
+                                 'in <b>Panels show</b>.</div>')
 
     def _remove_part(self):
         if not self._multi_part():
@@ -216,6 +223,7 @@ class FigureCombo:
             self._show_parts()
             return
         self.parts = list(spec["parts"])
+        share_figure(self.parts, spec)  # (as saved: a part may have kept others)
         self.part_i = min(max(int(part), 0), len(self.parts) - 1)
         with held(self):
             self.part_arr.value = spec.get("arrange", "row")
@@ -240,7 +248,11 @@ class FigureCombo:
             return cur
         parts = [cur if k == self.part_i else p for k, p in enumerate(self.parts)]
         share_sections(parts, cur)
-        return combine(parts, self.part_arr.value, self.part_title.value, cur,
+        share_figure(parts, cur)
+        for p in parts:  # (letters run on from part to part)
+            if p["letters"].get("auto"):
+                p["letters"]["on"] = True
+        return combine(parts, self.part_arr.value, self.part_title.value, parts[0],
                        size=[_num(self.part_w.value), _num(self.part_h.value)],
                        one_colorbar=bool(self.part_cb.value), grid=self._grid_size())
 
@@ -306,6 +318,15 @@ def share_sections(parts, src):
             out.append(dict(fg.card_section(sec), **keys))
         p["sections"] = out
     return parts
+
+
+def share_figure(parts, src):
+    """The parts take the whole figure's settings from src (a part, or the figure), in
+    place."""
+    for p in parts:
+        if p is not src:
+            p.update({k: json.loads(json.dumps(src[k], default=float))
+                      for k in WHOLE_FIGURE if k in src})
 
 
 def combine(parts, arrange="row", title="", like=None, size=None, one_colorbar=False,

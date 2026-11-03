@@ -19,7 +19,27 @@ from .cards import (
 from .kinds import KINDS
 from ..viewer.ui import held
 
+STYLE_LABELS = {"default": "Default", "ams": "AMS journal", "talk": "Talk", "dark": "Dark"}
+
+
 class FigureStyle:
+    def _apply_style(self, name):
+        """Style preset `name` on the whole figure, saying what it did beyond the look
+        (Undo takes it all back)."""
+        old = self.collect_all()
+        new = fg.apply_style(old, name)
+        self.set_parts(new, self.part_i)
+        said = []
+        if new["size"][0] != old["size"][0]:
+            said.append(f"width {old['size'][0]:g} → {new['size'][0]:g} in")
+        e0, e1 = old.get("export") or {}, new.get("export") or {}
+        if (e0.get("format"), e0.get("dpi")) != (e1.get("format"), e1.get("dpi")):
+            said.append(f"saves as {str(e1.get('format')).upper()} at {e1.get('dpi')} DPI")
+        said = f": {', '.join(said)}" if said else ""
+        self.style_note.object = (f'<div class="cv-status">{STYLE_LABELS[name]} applied'
+                                  f'{said}. ↶ takes it back.</div>')
+        self.request()
+
     def _build_text(self):
         """Style tab: text, axes and ticks, panel labels, colorbar, legend, spacing (each
         widget here redraws the preview: _build wraps this in _redraws)."""
@@ -54,17 +74,19 @@ class FigureStyle:
         self.title_loc = pn.widgets.Select(name="Where", options={
             "Center": "center", "Left": "left", "Right": "right"})
         self.title_bold = pn.widgets.Checkbox(name="Bold")
+        self.label_fit = pn.widgets.Checkbox(
+            name="Shrink these labels to fit narrow panels", value=True)
         self.let_on = pn.widgets.Checkbox(name="Panel letters")
         self.let_fmt = pn.widgets.Select(name="Style", options=LETTERS)
         self.let_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
-        self.let_size = _f("Size (pt)", 12.0, step=1)
+        self.let_size = _auto("Size (pt)", step=1)
         self.let_bold = pn.widgets.Checkbox(name="Bold")
         self.let_box = pn.widgets.Checkbox(name="White box")
         self.tl_on = pn.widgets.Checkbox(name="Time label")
         self.tl_fmt = pn.widgets.TextInput(name="Text", description="{min}: minutes (from time zero), {model}: model minutes, {s}: "
                                            "seconds, {hms}: h:mm:ss; e.g. t = {min:g} min")
         self.tl_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
-        self.tl_size = _f("Size (pt)", 12.0, step=1)
+        self.tl_size = _auto("Size (pt)", step=1)
         self.tl_bold = pn.widgets.Checkbox(name="Bold")
         self.tl_box = pn.widgets.Checkbox(name="White box")
         self.tl_t0 = _retired(_f(
@@ -76,13 +98,13 @@ class FigureStyle:
                                            description="{z}: the height (km), {k}: the "
                                                        "model level; e.g. {z:g} km AGL")
         self.zl_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
-        self.zl_size = _f("Size (pt)", 12.0, step=1)
+        self.zl_size = _auto("Size (pt)", step=1)
         self.zl_bold = pn.widgets.Checkbox(name="Bold")
         self.zl_box = pn.widgets.Checkbox(name="White box")
         self.rl_on = pn.widgets.Checkbox(name="Run name")
         self.rl_color = pn.widgets.Checkbox(name="In the run's colour")
         self.rl_loc = pn.widgets.Select(name="Where", options=LABEL_LOCS)
-        self.rl_size = _f("Size (pt)", 12.0, step=1)
+        self.rl_size = _auto("Size (pt)", step=1)
         self.rl_bold = pn.widgets.Checkbox(name="Bold")
         self.rl_box = pn.widgets.Checkbox(name="White box")
         # colorbar
@@ -188,6 +210,9 @@ class FigureStyle:
                   "A legend on the figure, or <i>Panels' own legends</i> off, hides the "
                   "panels' own, except a panel whose Tree <i>Legend</i> is Yes."))
         style_tab = pn.Column(
+            _section("Style preset", _grid(self.style_menu), self.style_note, _hint(
+                "Sets the fonts, labels and frame lines at once; AMS journal and Talk also "
+                "set the width and the export. Change anything afterwards here.")),
             _section("Text", _grid(self.font, self.math, self.fsize, self.fs_tick,
                                    self.fs_label, self.fs_title, self.fs_sup, self.fs_legend),
                      _hint("Blank sizes follow the base size.")),
@@ -197,7 +222,10 @@ class FigureStyle:
                 _checks(self.ticks, self.minor, self.equal),
                 self.axes_hint),
             _section("Panel labels", titles, let, tl, _grid(self.tl_t0), zl, rl,
-                     _hint("Run name: for figures of several runs.")),
+                     _grid((self.label_fit, 3)),
+                     _hint("Run name: for figures of several runs. A blank size is 1.2 × the "
+                           "base size. Shrinking stops at 6 pt; off, each label keeps its "
+                           "size.")),
             self.cb_sec,
             self.lg_sec,
             self.ck_sec,
@@ -233,6 +261,12 @@ class FigureStyle:
                 name="matplotlib style (blank: none)", placeholder="e.g. dark_background",
                 description="A matplotlib style name or a .mplstyle file on the server: its "
                             "colours and lines (fonts and sizes stay those above)")
+        # ---- style presets (Style tab; applied once, so no redraw of their own)
+        self.style_menu = pn.widgets.MenuButton(
+            name="Apply a style", button_type="light", button_style="outline", height=32,
+            items=[(label, key) for key, label in STYLE_LABELS.items()])
+        self.style_menu.on_click(lambda e: self._apply_style(e.new))
+        self.style_note = pn.pane.HTML("", sizing_mode="stretch_width", margin=(0, 4))
         # ---- copy look (Layers tab)
         self.look_from = pn.widgets.Select(name="Copy the look of", options={})
         self.look_to = pn.widgets.MultiChoice(name="To layers", options={})
@@ -294,10 +328,13 @@ class FigureStyle:
     # ------------------------------------------------------------ templates
     def _list_templates(self):
         try:
-            self.tpl_sel.options = fg.list_templates()
+            tpls = fg.list_templates()
         except OSError:
-            self.tpl_sel.options = {}
-        self.tpl_go.disabled = not self.tpl_sel.options
+            tpls = {}
+        keep = self.tpl_sel.value
+        self.tpl_sel.options = tpls  # (a Select does not take a value from new options)
+        self.tpl_sel.value = keep if keep in tpls.values() else next(iter(tpls.values()), None)
+        self.tpl_go.disabled = not tpls
 
     def _save_template(self):
         try:
@@ -309,13 +346,15 @@ class FigureStyle:
         self.tpl_sel.value = path
         self._msg(f"Saved the template <code>{html.escape(path)}</code>")
 
-    def _apply_template(self):
-        path = self.tpl_sel.value
+    def _apply_template(self, path=None):
+        """Open a template (default: the one picked in the File tab) on this run.  True
+        when it opened."""
+        path = path or self.tpl_sel.value
         try:
             spec = fg.from_template(fg.load_template(path), self.run, self.v.t)
         except (OSError, ValueError) as e:
             self._msg(f"Could not apply <code>{html.escape(str(path))}</code>: "
                       f"{html.escape(str(e))}", True)
-            return
-        self._open_spec(spec, "Applied the template <b>"
-                        f"{html.escape(os.path.basename(path)[:-5])}</b> to this run")
+            return False
+        return self._open_spec(spec, "Applied the template <b>"
+                               f"{html.escape(os.path.basename(path)[:-5])}</b> to this run")

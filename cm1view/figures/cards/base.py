@@ -1,6 +1,7 @@
 """Figure editor cards: the choices and constants, small widget helpers, and the parts that
 several cards share (buttons, region, heights, look, colours, ensemble)."""
 
+import json
 import math
 import re
 
@@ -305,6 +306,64 @@ def _fold(head, body, collapsed=False):
                      styles=CARD, sizing_mode="stretch_width", margin=(2, 0))
     _follow_shown(card, card.objects)
     return card, col
+
+
+def set_folded(card, folded):
+    """Fold or unfold a _fold card, as its chevron does."""
+    if card.body.visible == folded:
+        card.panel.objects[0].objects[0].clicks += 1
+
+
+def _plain(x):
+    """x as JSON would give it back (lists for tuples; 1 and 1.0 compare equal)."""
+    return json.loads(json.dumps(x, default=float))
+
+
+def _read_card(card):
+    """What card collects, plainly; None when its settings are incomplete."""
+    try:
+        return _plain(card.collect())
+    except Exception:  # noqa: BLE001  (undo must not stop at a half-typed card)
+        return None
+
+
+def kept_cards(old, ents, make, same=True, load=None):
+    """Undo's cards for entries ents, from the cards shown (old).  A card already showing
+    its entry stays as it is, wherever it was (with same: nothing else it lists has
+    changed, such as the runs).  The others take the folding of the card that was in
+    their place; load(card, entry, folded), if given, reuses a card of that place and says
+    whether it could, else make(entry) builds one."""
+    free = set(range(len(old)))
+    out = [None] * len(ents)
+    if same:
+        read = [_read_card(c) for c in old]
+        wanted = [_plain(e) for e in ents]
+        if len(old) == len(ents):  # (nothing added or removed: each in its place first)
+            for j, p in enumerate(wanted):
+                if read[j] == p:
+                    out[j] = old[j]
+                    free.discard(j)
+        at = 0  # (then the next card in order: alike cards keep their order)
+        for j, p in enumerate(wanted):
+            if out[j] is None:
+                k = next((k for k in sorted(free, key=lambda k: (k < at, k))
+                          if read[k] == p), None)
+                if k is not None:
+                    out[j] = old[k]
+                    free.discard(k)
+                    at = k + 1
+    for j, e in enumerate(ents):
+        if out[j] is not None:
+            continue
+        near = old[j] if j < len(old) else None
+        folded = near is not None and not near.body.visible
+        if load is not None and j in free and load(near, e, folded):
+            out[j] = near
+            free.discard(j)
+        else:
+            out[j] = make(e)
+            set_folded(out[j], folded)
+    return out
 
 
 def _near(opts, ts):

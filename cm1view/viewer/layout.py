@@ -12,7 +12,7 @@ from ..theme import BG, CSS, GRID, PANEL
 from .numinput import FloatInput
 from .ui import (
     BAR, DRAWER, FILL, FRAMES, PANEL_TITLES, PANELS, RAIL_BTN, TAB_MODE, Drawer, Plotly3D,
-    _bar, _bokeh, _group, _html, _pill, _settings_toggle,
+    _bar, _bokeh, _group, _html, _pill, _settings_toggle, out_of_flow,
 )
 
 
@@ -411,13 +411,15 @@ class Layout:
         err = _html(f'<div class="cv-status" style="color:#f87171;padding:4px 8px">'
                     f'{self.error}</div>') if self.error else None
         objs = [o for o in (err,) if o is not None]
-        self.fig_ws = pn.Column(self.figed.panel, sizing_mode="stretch_width", visible=False,
+        shell = self.figed.shell  # (the figure's new layout, when asked for)
+        self.fig_ws = pn.Column(self.figed.panel, *([shell.panel] if shell else []),
+                                sizing_mode="stretch_width", visible=False,
                                 margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,
-                         self.rp_modal, self.ses_modal, self.exp_modal,
-                         self.settings.modal, self.confirm.modal,
+                         *map(out_of_flow, (self.rp_modal, self.ses_modal, self.exp_modal,
+                                            self.settings.modal, self.confirm.modal)),
                          margin=0, styles={"position": "fixed", "top": "0", "left": "0",
-                                           "width": "100vw", "height": "100vh",
+                                           "width": "100vw", "height": "100vh", "min-height": "0",
                                            "display": "flex", "flex-direction": "column"})
 
     def _set_full(self, on):
