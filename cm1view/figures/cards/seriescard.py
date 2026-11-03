@@ -1,6 +1,7 @@
 """The cards of one series of a time-height / time-series figure and of one
 sounding of a sounding figure."""
 
+import html
 import os
 
 import panel as pn
@@ -9,15 +10,16 @@ from ...core import series as ser
 from ...core.fields import deriv_name
 from .. import spec as fg
 from .base import (
-    FIG_CMAPS, _hex, _f, _grid, _hint, _fold, SER_REGIONS, SER_REDUCE, SER_OPS,
-    MARKERS, SND_WHERE, _BTN, _chk, _deriv_pair, TimeCard, _take_new_runs,
+    _auto, _chk, _f, _grid, _hex, _hint, _fold, _retired, SER_OPS, SND_WHERE, _deriv_pair, TimeCard,
+    _take_new_runs, LINE_STYLES, card_buttons, color_widgets, ens_values, ens_widgets, keep_box, known_cmap,
+    label_widget, look_values, look_widgets, panel_index, panel_tag, panel_widget, reduce_recipe,
+    reduce_widgets, region_recipe, region_widgets, show_ens, show_region, vertical_recipe,
+    vertical_widgets, where_grid,
 )
 from .seriesvals import SeriesValues
 from ...viewer.ui import held
 
-ENS_BANDS = {"Off": "", "Min to max": "minmax", "10–90th percentile": "p10p90",
-             "25–75th percentile": "p25p75", "Mean ± 1 sd": "sd"}
-SER_STYLES = {"Solid": "-", "Dashed": "--", "Dotted": ":", "Dash-dot": "-."}
+SER_VMODES = {"Layer (every level)": "layer", "At a height": "height"}
 ALL_RUNS, SOME_RUNS = -1, -2  # (a time series' Run list: every run / the runs picked)
 
 
@@ -38,7 +40,7 @@ class SeveralRuns:
     """The Run list of a card that may show one run, every run or the runs picked (Runs
     box): a series card (but a time-height one: one run) and a profile card.  After a
     change: _run_picked() (the Run list), _runs_picked() (the Runs box), _reshow()."""
-    _EDITS = "series before its recipe or Plot changed"  # (what edits_changed says)
+    _EDITS = "series before its recipe or Then apply changed"  # (what edits_changed says)
 
     def _several(self):
         return True
@@ -130,19 +132,11 @@ class SeriesCard(SeveralRuns):
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         F, r = ed.fields, ent["recipe"]
-        self.box = r.get("box")
         self.w = w = {}
-        self.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
-        self.down = pn.widgets.Button(name="↓", description="Later in the list", **_BTN)
-        self.rm = pn.widgets.Button(name="✕", description="Remove the series", **_BTN)
-        self.dup = pn.widgets.Button(name="Duplicate", height=32, button_type="light",
-                                     button_style="outline",
-                                     description="A copy of this card in a new panel")
-        self.per_run = pn.widgets.Button(
-            name="One per run", height=32, button_type="light", button_style="outline",
-            description="Time series: a card for each run (this card's runs, or each "
-                        "other run of the figure) in this panel; time-height: a copy for "
-                        "each other run, down this card's column (a row per run)")
+        card_buttons(self, "Remove the series", moves=True, dup=True, per_run=(
+            "Time series: a card for each run (this card's runs, or each "
+            "other run of the figure) in this panel; time-height: a copy for "
+            "each other run, down this card's column (a row per run)"))
         self._kind = ed.kind.value
         runs = ent.get("runs")
         k = (ALL_RUNS if self._kind != "th" else 0) if runs is None else \
@@ -150,78 +144,25 @@ class SeriesCard(SeveralRuns):
         w["run"] = pn.widgets.Select(name="Run", width=170, **self._run_choices())
         w["run"].value = k if k in self._run_values() else 0
         w["field"], w["deriv"] = _deriv_pair(F, r["field"])
-        w["vmode"] = pn.widgets.Select(name="Vertical", options={
-            "Layer (every level)": "layer", "At a height": "height"},
-            value="height" if r["vmode"] == "height" else "layer", width=150)
-        w["z"] = _f("Height (km)", float(r.get("z", 1.0)), 90, step=0.25)
-        w["z0"] = _f("Bottom (km)", float(r.get("z0", 0.0)), 90, step=0.5)
-        w["z1"] = _f("Top (km)", float(r.get("z1", 10.0)), 80, step=0.5)
-        w["region"] = pn.widgets.Select(name="Region", options=SER_REGIONS, value=r["region"],
-                                        width=180)
-        w["radius"] = _f("Radius (km)", float(r.get("radius", 5.0)), 90, step=0.5)
-        off = r.get("offset", (0.0, 0.0))
-        w["offx"] = _f("Offset x (km)", float(off[0]), 100, step=1.0)
-        w["offy"] = _f("Offset y (km)", float(off[1]), 100, step=1.0)
-        w["reduce"] = pn.widgets.Select(name="Reduce", options=SER_REDUCE, value=r["reduce"],
-                                        width=120)
-        w["pct"] = _f("Percentile", float(r.get("pct", 99.0)), 90, step=0.5)
-        w["op"] = pn.widgets.Select(name="Plot", options=SER_OPS, value=ent.get("op", ""),
-                                    width=130)
-        w["label"] = pn.widgets.TextInput(name="Label (titles, legend)",
-                                          value=ent.get("label", ""), width=300)
-        # time-height look
-        w["cmap"] = pn.widgets.Select(name="Colormap", options=FIG_CMAPS, width=150,
-                                      value=ent["cmap"] if ent["cmap"] in FIG_CMAPS
-                                      else "viridis")
-        w["reverse"] = _chk("Reverse", ent.get("reverse", False))
-        w["white_first"] = _chk("White first", ent.get("white_first", False))
-        w["vmin"] = _f("Min", float(ent["vmin"]))
-        w["vmax"] = _f("Max", float(ent["vmax"]))
-        w["nlevels"] = pn.widgets.IntInput(name="Steps (0 = smooth)", start=0, end=60,
-                                           value=int(ent.get("nlevels") or 0), width=120)
-        w["extend"] = pn.widgets.Select(name="Colorbar ends", options=[
-            "auto", "neither", "max", "min", "both"], value=ent.get("extend", "neither"),
-            width=110)
-        w["cbar_label"] = pn.widgets.TextInput(
-            name="Colorbar label (blank: units)", value=ent.get("cbar_label", "") or "",
-            placeholder=ent.get("units", ""), width=240)
-        w["cbar_ticks"] = pn.widgets.TextInput(
-            name="Colorbar ticks (blank: auto)", value=ent.get("cbar_ticks", "") or "",
-            placeholder="0:60:10", width=150)
-        # time-series look
-        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color", "k")),
-                                            width=70)
-        w["lw"] = _f("Line width", float(ent.get("lw", 1.5)), 90, step=0.25)
-        w["ls"] = pn.widgets.Select(name="Line", options=SER_STYLES, width=100,
-                                    value=ent.get("ls") if ent.get("ls") in
-                                    SER_STYLES.values() else "-")
-        w["t0"] = _f("Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
-                     description="This series' times are shown from here, e.g. its run's "
-                                 "initiation, so runs line up (0: model time; adds to "
-                                 "its run's time zero in Runs used and to Style → Panel "
-                                 "labels → Minutes counted from)")
-        w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS,
-                                        value=ent.get("marker", ""), width=100)
-        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
-                                         value=int(ent.get("panel", 0)) + 1)
-        w["axis"] = pn.widgets.Select(name="y axis", options={"By units": "auto",
-                                                              "Own axis (right)": "right"},
-                                      value=ent.get("axis", "auto"), width=140)
+        vertical_widgets(w, r, SER_VMODES, "layer")
+        region_widgets(self, r)
+        reduce_widgets(w, r)
+        w["op"] = pn.widgets.Select(
+            name="Then apply", options=SER_OPS, value=ent.get("op", ""), width=130,
+            description="Applied to this series once computed (a Derivative is taken of "
+                        "the field before the reduction)")
+        w["label"] = label_widget(ent)
+        color_widgets(w, ent)  # (time-height)
+        look_widgets(w, ent, ls=LINE_STYLES, lw=1.5, marker=True, axis=True)  # (time series)
+        w["t0"] = _retired(_f(
+            "Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
+            description="From an older figure: adds to its run's time zero (Layers → Runs "
+                        "used), which is the place to set it. At 0 this box goes away"))
+        w["panel"] = panel_widget(ent)
         w["runs"] = pn.widgets.MultiChoice(name="Runs", options=ed._series_run_opts(),
                                            value=[int(k) for k in (runs or [])]
                                            if k == SOME_RUNS else [], width=260)
-        w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)",
-                                           value=ent.get("ylabel", ""), width=180)
-        w["ens"] = pn.widgets.Select(name="Ensemble of its runs", options=ENS_BANDS,
-                                     value=ent.get("ens", ""), width=170)
-        w["ens_mid"] = pn.widgets.Select(name="Centre line", options={
-            "Mean": "mean", "Median": "median", "None": ""},
-            value=ent.get("ens_mid", "mean"), width=100)
-        w["ens_members"] = pn.widgets.Select(name="Runs' own lines", options={
-            "Faint": "faint", "Hidden": "hidden", "As other lines": "full"},
-            value=ent.get("ens_members", "faint"), width=130)
-        w["ens_alpha"] = _f("Band opacity", float(ent.get("ens_alpha", 0.25)), 100, step=0.05,
-                            start=0.0, end=1.0)
+        ens_widgets(w, ent)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.info = pn.pane.HTML(margin=(0, 4))
         recipe_keys = ("vmode", "z", "z0", "z1", "region", "radius", "offx", "offy", "reduce",
@@ -242,16 +183,15 @@ class SeriesCard(SeveralRuns):
                             w["nlevels"], w["extend"], (w["cbar_label"], 2), w["cbar_ticks"])
         self.line_row = _grid(w["color"], w["ls"], w["lw"], w["marker"], w["axis"], w["ylabel"],
                               w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"])
-        self.trk_box = pn.Column(margin=0, sizing_mode="stretch_width")  # (refresh_tracks)
+        self.trk_note = pn.pane.HTML(margin=(0, 4), sizing_mode="stretch_width")
         self.vals = SeriesValues(self)  # (time series: its values, and your edits of them)
-        self.where = _grid(w["run"], (w["runs"], 2), w["panel"], w["t0"], self.dup,
-                           self.per_run)
+        self.where = where_grid(self, w["run"], (w["runs"], 2), w["t0"])
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.up, self.down, self.rm],
             [self.where,
              _grid((w["field"], 2), w["deriv"], w["vmode"], w["z"], w["z0"], w["z1"],
                    w["region"], w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"],
-                   w["op"], (w["label"], 3)), self.trk_box, self.th_row, self.line_row,
+                   w["op"], (w["label"], 3)), self.trk_note, self.th_row, self.line_row,
              self.vals.section, self.info])
         self._set_title()
         self.show(ed.kind.value)
@@ -266,49 +206,29 @@ class SeriesCard(SeveralRuns):
         w["vmode"].visible = not two and not th
         w["z"].visible = not two and not lay
         w["z0"].visible = w["z1"].visible = not two and lay
-        trkr = w["region"].value == "track"
-        w["radius"].visible = w["offx"].visible = w["offy"].visible = trkr
+        show_region(w)
         w["pct"].visible = w["reduce"].value == "pct"
         self.th_row.visible = kind == "th"
         self.line_row.visible = self.vals.section.visible = kind == "line"
         w["runs"].visible = kind == "line" and w["run"].value == SOME_RUNS
-        several = kind == "line" and w["run"].value in (ALL_RUNS, SOME_RUNS)
-        w["ens"].visible = several
-        for k in ("ens_mid", "ens_members", "ens_alpha"):
-            w[k].visible = several and bool(w["ens"].value)
+        show_ens(w, kind == "line" and w["run"].value in (ALL_RUNS, SOME_RUNS))
         self.refresh_tracks()
         self._set_title()
 
     def refresh_tracks(self):
-        """Around the tracked storm: the storm track of each of the card's runs (the
-        figure's, shared by every card of that run: the viewer's Track tab for the
-        viewer's run, or a track file), as the run rows have them."""
-        ed, rows = self.ed, getattr(self.ed, "run_rows", [])
-        if self.w["region"].value != "track" or not rows:
-            self.trk_box.objects, self.trk_box.visible, self.trk_w = [], False, {}
+        """Around the tracked storm: what the track of each of the card's runs gives (they
+        are set in Layers → Runs used)."""
+        rows = getattr(self.ed, "run_rows", [])
+        self.trk_note.visible = self.w["region"].value == "track" and bool(rows)
+        if not self.trk_note.visible:
+            self.trk_note.object = ""
             return
         ks = self.run_list()
         ks = [k for k in (range(len(rows)) if ks is None else ks) if k < len(rows)]
-        out, self.trk_w = [], {}  # (run index: its viewer's-track box and track file)
-        for k in ks:
-            r = rows[k]
-            name = os.path.basename(r["path"].rstrip("/"))
-            own = r["path"] == ed.run.path
-            tab = _chk("Viewer's track", r["tab"].value)
-            tab.visible = own
-            txt = pn.widgets.TextInput(
-                name=f"Storm track of {name} (blank: none)", value=r["track"].value,
-                disabled=own and r["tab"].value, placeholder="storm_tracks/<run>.csv",
-                sizing_mode="stretch_width", min_width=240)
-            tab.param.watch(lambda ev, r=r: r["tab"].param.update(value=ev.new), "value")
-            txt.param.watch(lambda ev, r=r: r["track"].param.update(value=ev.new), "value")
-            self.trk_w[k] = (tab, txt)
-            out.append(_grid((txt, 2), tab))
-            out.append(pn.pane.HTML(f'<div class="cv-hint">{ed._track_note(r)}</div>',
-                                    margin=(0, 4)))
-        out.append(_hint("A run's track is shared by every card of that run "
-                         "(storm_tracks/*.csv next to a run is found automatically)."))
-        self.trk_box.objects, self.trk_box.visible = out, True
+        notes = [f"{html.escape(os.path.basename(rows[k]['path'].rstrip('/')))}: "
+                 f"{self.ed._track_note(rows[k])}" for k in ks]
+        self.trk_note.object = (f'<div class="cv-hint">{"; ".join(notes)}. Set a run\'s track '
+                                'in <b>Layers → Runs used</b>.</div>')
 
     # ---- run
     def _several(self):  # (a time-height card: one run)
@@ -344,11 +264,10 @@ class SeriesCard(SeveralRuns):
         run = "every run" if runs is None else names.get(runs[0], "") if len(runs) == 1 \
             else f"{len(runs)} runs"
         self.title.object = (f"<b>Series</b> · {d.label}{op} · {run} · "
-                             f"panel {w['panel'].value}")
+                             f"panel {panel_tag(w)}")
 
     def _changed(self):
-        if self.w["region"].value == "box" and self.box is None:
-            self.box = [float(v) for v in self.ed.v.view]
+        keep_box(self)
         self.show(self.ed.kind.value)
         self._auto_label()
         self._edits_stale()
@@ -374,7 +293,7 @@ class SeriesCard(SeveralRuns):
         with held(self.ed):
             for k in ("vmin", "vmax", "extend", "white_first"):
                 self.w[k].value = e[k]
-            self.w["cmap"].value = e["cmap"] if e["cmap"] in FIG_CMAPS else "viridis"
+            self.w["cmap"].value = known_cmap(e["cmap"])
         self._set_title()
         self._changed()
 
@@ -385,29 +304,21 @@ class SeriesCard(SeveralRuns):
     def recipe(self):
         w, d = self.w, self.ed.fields[self.field_name()]
         vm = "layer" if self._kind == "th" else w["vmode"].value  # (see show)
-        r = dict(field=d.name, vmode="2d" if d.ndim == 2 else vm,
-                 z=w["z"].value or 0.0, z0=w["z0"].value or 0.0, z1=w["z1"].value or 0.0,
-                 region=w["region"].value, radius=w["radius"].value or 5.0,
-                 offset=(w["offx"].value or 0.0, w["offy"].value or 0.0),
-                 reduce=w["reduce"].value,
-                 pct=w["pct"].value if w["pct"].value is not None else 99.0,
-                 box=self.box or [float(v) for v in self.ed.v.view])
-        return ser.normalize(r)
+        return ser.normalize(dict(
+            field=d.name, vmode="2d" if d.ndim == 2 else vm, **vertical_recipe(w),
+            **region_recipe(self), **reduce_recipe(w)))
 
     def collect(self):
         w, e = self.w, dict(self.ent)
         e.pop("_auto", None)
         e["recipe"] = self.recipe()
         for k in ("op", "label", "cmap", "reverse", "white_first", "nlevels", "extend",
-                  "color", "ls", "marker", "axis", "ylabel", "cbar_label", "cbar_ticks", "ens",
-                  "ens_mid", "ens_members"):
+                  "cbar_label", "cbar_ticks"):
             e[k] = w[k].value
+        e.update(look_values(w), **ens_values(w))
         e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
-        e["lw"] = float(w["lw"].value or 1.5)
         e["t0_min"] = float(w["t0"].value or 0.0)
-        e["ens_alpha"] = float(w["ens_alpha"].value if w["ens_alpha"].value is not None
-                               else 0.25)
-        e["panel"] = max(0, int(w["panel"].value or 1) - 1)
+        e["panel"] = panel_index(w)
         e["runs"] = self.run_list()
         if e.get("edits"):  # (a copy: the card goes on editing its own)
             e["edits"] = {k: dict(v) for k, v in e["edits"].items() if v}
@@ -418,18 +329,18 @@ class SeriesCard(SeveralRuns):
         return e
 
 
+SND_LINES = (("T", "Temperature", "#d62728", "-"), ("Td", "Dewpoint", "#2ca02c", "-"),
+             ("Tp", "Parcel", "#000000", "--"))  # (what Own line looks starts from)
+
+
 class SoundingCard(TimeCard):
     """One sounding of a sounding figure: run, time, where, look and panel."""
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         self.w = w = {}
-        self.rm = pn.widgets.Button(name="✕", description="Remove the sounding", **_BTN)
-        names = ed._run_names()
-        k = int(ent.get("run", 0)) if int(ent.get("run", 0)) in names.values() else 0
-        w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
-        opts = ed._time_opts(k)
-        self._time_widgets(opts)
+        card_buttons(self, "Remove the sounding", dup=True)
+        self._run_time_widgets()
         wh = ent.get("where", {})
         w["kind"] = pn.widgets.Select(name="Where", options=SND_WHERE,
                                       value=wh.get("kind", "trk"), width=180)
@@ -437,13 +348,18 @@ class SoundingCard(TimeCard):
         w["y"] = _f("y (km)", float(wh.get("y", 0.0)), 80, step=1.0)
         w["avg"] = _f("Box width (km, 0: column)", float(wh.get("avg", 0.0)), 170, step=0.5,
                       start=0.0)
-        w["label"] = pn.widgets.TextInput(name="Legend text (blank: automatic)",
-                                          value=ent.get("label", ""), width=220)
-        w["auto_color"] = _chk("Automatic colour", not ent.get("color"))
-        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(ent.get("color") or "k"),
-                                            width=70)
-        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
-                                         value=int(ent.get("panel", 0)) + 1)
+        w["label"] = label_widget(ent)
+        look_widgets(w, ent, auto=True)
+        w["own_looks"] = _chk("Own line looks", any(
+            ent.get(f"{k}_{x}") for k, *_ in SND_LINES for x in ("color", "ls", "lw")))
+        for k, name, col, ls in SND_LINES:
+            w[f"{k}_color"] = pn.widgets.ColorPicker(name=f"{name} colour",
+                                                     value=_hex(ent.get(f"{k}_color") or col))
+            w[f"{k}_ls"] = pn.widgets.Select(
+                name="Line style", options=LINE_STYLES,
+                value=ent.get(f"{k}_ls") if ent.get(f"{k}_ls") in LINE_STYLES.values() else ls)
+            w[f"{k}_lw"] = _auto("Line width", ent.get(f"{k}_lw"), step=0.25)
+        w["panel"] = panel_widget(ent)
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
             if k != "run":
@@ -452,22 +368,37 @@ class SoundingCard(TimeCard):
         self.title = pn.pane.HTML("<b>Sounding</b>", margin=(6, 4, 0, 4))
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.rm],
-            [_grid(w["run"], (w["time"], 2), w["kind"], w["x"], w["y"], w["avg"],
-                   w["auto_color"], w["color"], w["panel"], (w["label"], 3)),
+            [where_grid(self, w["run"], (w["time"], 2), w["hold"]),
+             _grid(w["kind"], w["x"], w["y"], w["avg"], w["auto_color"], w["color"],
+                   (w["label"], 3), w["own_looks"]),
+             _grid(*[w[f"{k}_{x}"] for k, *_ in SND_LINES for x in ("color", "ls", "lw")]),
              _hint("Automatic colour: the run's colour (<b>Layers → Runs used</b>) when each "
-                   "sounding of the panel is from another run, else the next colour.")])
+                   "sounding of the panel is from another run, else the next colour. Own line "
+                   "looks set the temperature, dewpoint and parcel lines (a blank width: "
+                   "automatic); the colour above stays on the barbs and hodograph marks. Keep "
+                   "this time holds the sounding still under the ones that step in an "
+                   "animation.")])
         self._show()
 
     def _show(self):
         w = self.w
         w["x"].visible = w["y"].visible = w["avg"].visible = w["kind"].value != "mean"
         w["color"].visible = not w["auto_color"].value
+        for k, *_ in SND_LINES:
+            for x in ("color", "ls", "lw"):
+                w[f"{k}_{x}"].visible = w["own_looks"].value
         where = {"trk": "storm", "pt": "point", "mean": "domain mean"}[w["kind"].value]
         self.title.object = (f"<b>Sounding</b> · {where} · {self._when()} "
-                             f"· panel {w['panel'].value}")
+                             f"· panel {panel_tag(w)}")
 
     def collect(self):
         w = self.w
-        return dict(self._entry(), where=dict(
+        looks = {}
+        if w["own_looks"].value:
+            for k, *_ in SND_LINES:
+                looks.update({f"{k}_color": w[f"{k}_color"].value, f"{k}_ls": w[f"{k}_ls"].value})
+                if w[f"{k}_lw"].value:
+                    looks[f"{k}_lw"] = float(w[f"{k}_lw"].value)
+        return dict(self._entry(), **looks, where=dict(
             kind=w["kind"].value, x=float(w["x"].value or 0.0), y=float(w["y"].value or 0.0),
             avg=float(w["avg"].value or 0.0)))

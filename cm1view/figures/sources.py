@@ -13,8 +13,9 @@ from . import draw as figdraw, spec as fg
 from ..core import parcels as P, render, series as ser, vectors
 from .cards import (AnnotationRow, AzimCard, DistCard, JointCard, LEVEL_MODES, ProfileCard,
                     ProfileDataCard,
-                    DataCard, ParcelSeriesCard, SeriesCard, SoundingCard, _dark,
+                    DataCard, ParcelSeriesCard, SeriesCard, SoundingCard, TableCard, _dark,
                     parcel_source)
+from .kinds import KINDS, MAPS
 from ..viewer.ui import held
 
 
@@ -230,10 +231,26 @@ class FigureSources:
         self._fit_grid()
         self.request()
 
-    def _free_ser_panel(self):
-        """The first panel number no series card is in."""
-        used = {int(c.w["panel"].value or 1) - 1 for c in self.ser_cards}
+    _grid_grown = None  # (see _fit_grid)
+
+    @staticmethod
+    def _unused_panel(cards):
+        """The first panel none of the cards is in."""
+        used = {int(c.w["panel"].value or 1) - 1 for c in cards}
         return next(p for p in range(len(used) + 1) if p not in used)
+
+    def _free_ser_panel(self):
+        return self._unused_panel(self.ser_cards)
+
+    def _open_panel(self, cards):
+        """The panel of a new entry, within the rows and columns set: the first of the
+        grid none of the cards is in; a full grid: the last card's."""
+        used = {int(c.w["panel"].value or 1) - 1 for c in cards}
+        n = int(self.rows.value or 1) * int(self.cols.value or 1)
+        free = next((p for p in range(n) if p not in used), None)
+        if free is not None:
+            return free
+        return int(cards[-1].w["panel"].value or 1) - 1 if cards else 0
 
     def _new_series(self, ents, at=None, wide=True):
         """Cards for series entries ents (after card `at`, else after the others; wide:
@@ -370,7 +387,7 @@ class FigureSources:
             return
         e = self._tab_series(key)
         if self.kind.value == "th":  # (a panel of its own, of the figure's own run)
-            e.update(panel=self._free_ser_panel(), runs=[self._own_index()])
+            e.update(panel=self._open_panel(self.ser_cards), runs=[self._own_index()])
         self.ser_cards.append(self._ser_card(e))
         self._series_changed()
 
@@ -385,7 +402,7 @@ class FigureSources:
 
     def _add_series(self):
         e = fg.series_defaults(self.F, self._new_recipe(), len(self.ser_cards))
-        e["panel"] = self._free_ser_panel()
+        e["panel"] = self._open_panel(self.ser_cards)
         if self.kind.value == "th":  # (the last card's run, else the figure's own)
             last = self.ser_cards[-1].run_list() if self.ser_cards else None
             e["runs"] = [last[0] if last else self._own_index()]
@@ -453,20 +470,19 @@ class FigureSources:
         """Time-series / sounding / distribution / section figures: enough grid cells
         for the highest panel number of the cards (reset: a column of up to 3, else 2
         columns; sections of several runs, as many alike: a row per run; else the grid
-        only grows, keeping the rows and columns the user set; wide: a grid of one row
-        widens, up to 3 columns)."""
+        grows to fit, and goes back to the rows and columns set when the cards no longer
+        need the extra panels; wide: a grid of one row widens, up to 3 columns)."""
         kind = self.kind.value
-        if kind not in ("line", "th", "sounding", "dist", "profile", "joint", "azim",
-                        "xsec"):
+        if not KINDS[kind].cards:
             return
-        cards = {"line": self.ser_cards, "th": self.ser_cards, "sounding": self.snd_cards,
-                 "dist": self.dist_cards, "profile": self.prof_cards,
-                 "joint": self.joint_cards, "azim": self.azim_cards,
-                 "xsec": self.sec_cards}[kind]
+        cards = getattr(self, KINDS[kind].cards)
         if kind == "th":  # (your own data: time series only)
             cards = [c for c in cards if isinstance(c, SeriesCard)]
         n = 1 + max([max(0, int(c.w["panel"].value or 1) - 1) for c in cards] or [0])
-        r, c = int(self.rows.value or 1), int(self.cols.value or 1)
+        now = int(self.rows.value or 1), int(self.cols.value or 1)
+        was = self._grid_grown  # ((rows, columns) set, what they grew to): still grown?
+        r, c = was[0] if was and was[1] == now else now
+        base = r, c
         runs = len({c.w["run"].value for c in cards}) if kind in ("xsec", "th") else 1
         if reset and runs > 1 and n % runs == 0:
             r, c = runs, n // runs
@@ -474,9 +490,11 @@ class FigureSources:
             r, c = (n, 1) if n <= 3 else ((n + 1) // 2, 2)
         elif wide and r == 1 and n <= 3:
             c = max(c, n)
-        elif r * c < n:
+        elif r * c < n:  # (from the columns it grew to: "wide" or panels added by hand)
+            c = min(now[1], n)
             r = -(-n // c)
-        if (r, c) != (self.rows.value, self.cols.value):
+        self._grid_grown = None if reset or (r, c) == base else (base, (r, c))
+        if (r, c) != now:
             with held(self):
                 self.rows.value, self.cols.value = r, c
             self._fit_size()
@@ -487,12 +505,10 @@ class FigureSources:
         kind, r, c = self.kind.value, int(self.rows.value or 1), int(self.cols.value or 1)
         if not self._auto_size:
             return
-        if kind in ("plan", "xsec"):
+        if kind in MAPS:
             self._follow_size()
             return
-        if kind == "th":
-            w, h = 4.5 * c + 1.0, 2.8 * r + 0.6
-        elif kind == "sounding":
+        if kind == "sounding":
             lay = self.sk["layout"].value
             w = {"side": 8.2, "hodo": 4.5}.get(lay, 5.0) * c + 0.5
             h = (4.5 if lay == "hodo" else 5.0) * r
@@ -500,18 +516,8 @@ class FigureSources:
                 per = max([sum(int(c.w["panel"].value or 1) == p + 1 for c in self.snd_cards)
                            for p in range(r * c)] or [1])
                 h += r * (0.45 + 0.25 * per)
-        elif kind == "dist":
-            w, h = (5.5 if c == 1 else 4.2 * c), 3.6 * r + 0.3
-        elif kind == "profile":
-            w, h = (4.0 if c == 1 else 3.4 * c) + 0.4, 4.6 * r + 0.3
-        elif kind == "joint":  # (with its colorbar)
-            w, h = (5.2 if c == 1 else 4.4 * c) + 0.3, 4.0 * r + 0.3
-        elif kind == "azim":  # (with its colorbar)
-            w, h = (5.6 if c == 1 else 4.6 * c) + 0.3, 3.8 * r + 0.3
-        elif kind == "scene":  # (one picture, its colorbars beside it)
-            w, h = 6.5, 5.2
         else:
-            w, h = (7.0 if c == 1 else 6.0 * c), 3.0 * r + 0.5
+            w, h = KINDS[kind].size(r, c)
         with held(self):
             self.width.value, self.height.value = round(min(16.0, w), 2), round(min(16.0, h), 2)
             self.size_preset.value = ""
@@ -537,10 +543,21 @@ class FigureSources:
             self._fit_grid()
         self.request()
 
-    def _entry_card(self, cls, e, remove):
+    def _entry_card(self, cls, e, remove, cards, make, show):
+        """A card of cards (make(entry) makes one, show() lists them)."""
         c = cls(self, e)
         c.rm.on_click(lambda ev: remove(c))
+        c.dup.on_click(lambda ev: self._dup_entry(c, cards(), make, show))
         return c
+
+    def _dup_entry(self, c, cards, make, show):
+        """A copy of card c after it, in a new panel."""
+        cards.insert(cards.index(c) + 1,
+                     make(dict(c.collect(), panel=self._unused_panel(cards))))
+        show()
+        self._fit_grid()
+        self._build_titles()
+        self.request()
 
     def _from_tool(self, cards, new, make, show, none):
         """Cards (make(entry)) for entries `new` of a viewer tool; none: what to say
@@ -553,14 +570,15 @@ class FigureSources:
 
     # ------------------------------------------------------------ sounding cards
     def _snd_card(self, e):
-        return self._entry_card(SoundingCard, e, self._remove_snd)
+        return self._entry_card(SoundingCard, e, self._remove_snd, lambda: self.snd_cards,
+                                self._snd_card, self._show_soundings)
 
     def _show_soundings(self):
         self._listed(self.snd_box, self.snd_cards, "No soundings: add the map's, or a new one.")
 
     def _remove_snd(self, c):
         self.snd_cards.remove(c)
-        self._cards_changed(self._show_soundings, fit=False)
+        self._cards_changed(self._show_soundings)
 
     def _own_index(self):
         paths = [r["path"] for r in self.run_rows]
@@ -589,13 +607,14 @@ class FigureSources:
     def _add_sounding(self):
         e = fg.sounding_defaults(self._own_index(), float(self.run.times[self.v.t]),
                                  dict(kind="trk", x=0.0, y=0.0, avg=0.0), len(self.snd_cards))
-        e["panel"] = len(self.snd_cards)
+        e["panel"] = self._open_panel(self.snd_cards)
         self.snd_cards.append(self._snd_card(e))
         self._cards_changed(self._show_soundings)
 
     # ------------------------------------------------------------ distribution cards
     def _dist_card(self, e):
-        return self._entry_card(DistCard, e, self._remove_dist)
+        return self._entry_card(DistCard, e, self._remove_dist, lambda: self.dist_cards,
+                                self._dist_card, self._show_dists)
 
     def _show_dists(self):
         self._listed(self.dist_box, self.dist_cards, "No distributions: add the map's "
@@ -628,7 +647,7 @@ class FigureSources:
     def _add_dist(self):
         e = fg.dist_defaults(self._new_dist_recipe(), self._own_index(),
                              float(self.run.times[self.v.t]), len(self.dist_cards))
-        e["panel"] = 0
+        e["panel"] = self._open_panel(self.dist_cards)
         self.dist_cards.append(self._dist_card(e))
         self._cards_changed(self._show_dists)
 
@@ -661,9 +680,7 @@ class FigureSources:
 
     def _dup_prof(self, c):
         """A copy of card c in a new panel (the first no profile card is in)."""
-        used = {int(x.w["panel"].value or 1) - 1 for x in self.prof_cards}
-        free = next(p for p in range(len(used) + 1) if p not in used)
-        self._new_profs([dict(c.collect(), panel=free)], at=c)
+        self._new_profs([dict(c.collect(), panel=self._unused_panel(self.prof_cards))], at=c)
 
     def _per_run_prof(self, c):
         """Card c of several runs (or every run) becomes a card per run in its panel,
@@ -731,12 +748,14 @@ class FigureSources:
     def _add_profile(self):
         e = fg.profile_defaults(self._new_recipe(), self._own_index(),
                                 float(self.run.times[self.v.t]), len(self.prof_cards))
+        e["panel"] = self._open_panel(self.prof_cards)
         self.prof_cards.append(self._prof_card(e))
         self._cards_changed(self._show_profiles)
 
     # ------------------------------------------------------------ joint distribution cards
     def _joint_card(self, e):
-        return self._entry_card(JointCard, e, self._remove_joint)
+        return self._entry_card(JointCard, e, self._remove_joint, lambda: self.joint_cards,
+                                self._joint_card, self._show_joints)
 
     def _show_joints(self):
         self._listed(self.joint_box, self.joint_cards, "No joint distributions: add one.")
@@ -757,12 +776,14 @@ class FigureSources:
     def _add_joint(self):
         e = fg.joint_defaults(self._new_joint_recipe(), self._own_index(),
                               float(self.run.times[self.v.t]), len(self.joint_cards))
+        e["panel"] = self._open_panel(self.joint_cards)
         self.joint_cards.append(self._joint_card(e))
         self._cards_changed(self._show_joints)
 
     # ------------------------------------------------------------ azimuthal mean cards
     def _azim_card(self, e):
-        return self._entry_card(AzimCard, e, self._remove_azim)
+        return self._entry_card(AzimCard, e, self._remove_azim, lambda: self.azim_cards,
+                                self._azim_card, self._show_azims)
 
     def _show_azims(self):
         self._listed(self.azim_box, self.azim_cards, "No azimuthal means: add one.")
@@ -787,8 +808,34 @@ class FigureSources:
     def _add_azim(self):
         e = fg.azim_defaults(self._new_azim_recipe(), self._own_index(),
                              float(self.run.times[self.v.t]), len(self.azim_cards))
+        e["panel"] = self._open_panel(self.azim_cards)
         self.azim_cards.append(self._azim_card(e))
         self._cards_changed(self._show_azims)
+
+    # ------------------------------------------------------------ table cards
+    def _table_card(self, e):
+        return self._entry_card(TableCard, e, self._remove_table, lambda: self.table_cards,
+                                self._table_card, self._show_tables)
+
+    def _show_tables(self):
+        self._listed(self.table_box, self.table_cards, "No values: add some.")
+
+    def _remove_table(self, c):
+        self.table_cards.remove(c)
+        self._cards_changed(self._show_tables)
+
+    def _add_table(self):
+        """Values for a table: the last card's, or sounding parameters at the tracked storm
+        (no track: the domain mean), both at the shown time."""
+        if self.table_cards:
+            e = self.table_cards[-1].collect()
+        else:
+            track = bool(self.v.fixes) or any(r.get("track") for r in self._runs_collect())
+            e = fg.tbl_defaults(self._new_dist_recipe(), self._own_index(), self._shown_s(),
+                                dict(kind="trk" if track else "mean", x=0.0, y=0.0, avg=0.0))
+        e["panel"] = self._open_panel(self.table_cards)
+        self.table_cards.append(self._table_card(e))
+        self._cards_changed(self._show_tables)
 
     # ------------------------------------------------------------ annotations
     def _ann_row(self, a):
@@ -798,6 +845,7 @@ class FigureSources:
 
     def _show_anns(self):
         self.ann_box.objects = [r.panel for r in self.ann_rows]
+        self._show_legend()  # (a time-height panel's lists only these)
 
     def _add_annotation(self):
         kind = self.ann_kind.value

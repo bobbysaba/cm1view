@@ -12,10 +12,12 @@ from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _
                  LEGEND_OPTS)
 from .layers import (_fill, _contour, _shade, _vectors, _parcels, parcel_label,
                      sector_outline, extend_of,
-                     union_extend, _extends, _ticks, _colorbars, _cbar_style, _contour_key)
+                     union_extend, _extends, _ticks, _colorbars, _cbar_style, bar_layer,
+                     _contour_key)
 from .lines import (_lines, _dists, _profiles, _joints, _azims, azim_range, dist_edges,
                     dist_hist, dist_of, joint_edges, joint_hist, joint_of)
 from .sounding import _sounding, _hodo_view, shared_hodo_half, sounding_layout
+from .tables import _table
 from .scene3d import scene_panel, finish_scenes, scene_dpi
 
 SCALE_OPTS = {"dist": "dist", "profile": "prof", "joint": "joint", "azim": "azim",
@@ -237,8 +239,11 @@ def _draw2(spec, data):
         if loc in ("left", "top"):
             (c.ax.yaxis if side else c.ax.xaxis).set_ticks_position(loc)
             (c.ax.yaxis if side else c.ax.xaxis).set_label_position(loc)
+        own = [block_view(spec, k).get("colorbar") or {} for k in range(len(blocks))]
+        words = {k: cb.get(k) or next((o[k] for o in own if o.get(k)), "")
+                 for k in ("label", "ticks")}  # (the Style tab's of any part)
         with matplotlib.rc_context(rc(block_view(spec, 0))):
-            _cbar_style(c, cb, lay, loc)
+            _cbar_style(c, dict(cb, **words), bar_layer([ml[1] for _, _, ml in mappables]), loc)
     if spec.get("suptitle"):
         fig.suptitle(spec["suptitle"], weight="bold", fontsize=font_size(spec, "suptitle"))
     code = spec.get("code") or {}
@@ -464,6 +469,8 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
         _joints(ax, d, spec, fs)
     elif kind == "azim":
         _azims(ax, d, spec, fs)
+    elif kind == "table":
+        _table(fig, ax, d, spec, fs)
     elif kind == "scene":  # (its picture: finish_scenes, once the figure is laid out)
         scene_panel(fig, ax, d, spec, fs, legend)
     else:
@@ -651,6 +658,8 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
         ax.set_title(title, weight="bold" if ax_opts.get("title_bold", True)
                      else "normal", loc=ax_opts.get("title_loc", "center"))
     labels, tlab, rlab = (spec.get(k, {}) for k in ("letters", "time_label", "run_label"))
+    if kind == "table":  # (the table fills the panel from its top)
+        labels = dict(labels, loc="above left")
     if labels.get("on", True):
         _anchored(ax, panel_letter(letter, labels.get("fmt", "{a}")), labels, fs * 1.2)
     if tlab.get("on", True) and "time_s" in d:

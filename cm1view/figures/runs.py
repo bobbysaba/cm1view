@@ -14,7 +14,28 @@ from . import draw as figdraw, spec as fg
 from ..core.fields import GROUP_ORDER, deriv_def, split_deriv
 from .cards import CARD, _hex, _row
 from .cards.base import _f
+from .kinds import ONE_RUN_CARDS, SEVERAL_RUN_CARDS, TIME_CARDS
 from ..viewer.ui import held
+
+
+TYPE_PATH = "type a path"  # (the track list's "Type a path…": never a full path)
+
+
+def _track_path(value):
+    """A track box's text as a full path ("" when blank)."""
+    value = (value or "").strip()
+    return os.path.abspath(os.path.expanduser(os.path.expandvars(value))) if value else ""
+
+
+def _track_options(found):
+    """The track list's choices {label: value}: files by name, with their folder when
+    two folders have the same name."""
+    names = [os.path.basename(p) for p in found]
+    labels = {(n if names.count(n) == 1 else
+               os.path.join(os.path.basename(os.path.dirname(p)), n)
+               + f" ({os.path.dirname(os.path.dirname(p))})"): p
+              for n, p in zip(names, found)}
+    return {"None": ""} | labels | {"Type a path…": TYPE_PATH}
 
 
 class AllFields:
@@ -70,8 +91,13 @@ class FigureRuns:
         r["label"] = pn.widgets.TextInput(name="Label", value=e.get("label", ""), width=130)
         r["tab"] = pn.widgets.Checkbox(name="Viewer's track", value=e.get("track") == "viewer",
                                        visible=own, margin=(5, 6, 12, 6))
+        r["track_pick"] = pn.widgets.Select(
+            name="Track file", sizing_mode="stretch_width", min_width=200,
+            options={"None": ""}, value="", disabled=e.get("track") == "viewer",
+            description="The track files in your track folders (Settings → Track folders), "
+                        "this run's first; or type the path of another")
         r["track"] = pn.widgets.TextInput(
-            name="Track file (blank: none)", sizing_mode="stretch_width", min_width=200,
+            name="Track file path (blank: none)", sizing_mode="stretch_width", min_width=200,
             value="" if e.get("track") == "viewer" else e.get("track", ""),
             disabled=e.get("track") == "viewer", placeholder="storm_tracks/<run>.csv")
         r["color"] = pn.widgets.ColorPicker(
@@ -93,7 +119,8 @@ class FigureRuns:
             self.request()
 
         def on_track(ev):
-            r["track"].disabled = r["tab"].value
+            r["track"].disabled = r["track_pick"].disabled = r["tab"].value
+            self._show_track_pick(r)
             self._run_info(r)
             self._show_sections()  # (through the storm: needs a track)
             for c in getattr(self, "ser_cards", []):  # (their track rows)
@@ -107,6 +134,15 @@ class FigureRuns:
                 self._t0_moved_cards(r, ev.old, ev.new)
             self._times_changed()
 
+        def on_pick(ev):
+            if r["track_syncing"]:
+                return
+            if ev.new != TYPE_PATH:
+                r["track"].value = ev.new
+            r["track"].visible = ev.new == TYPE_PATH  # (the path stays, to edit)
+
+        r["track_syncing"] = False
+        r["track_pick"].param.watch(on_pick, "value")
         r["label"].param.watch(on_label, "value")
         r["t0"].param.watch(on_t0, "value")
         r["tab"].param.watch(on_track, "value")
@@ -115,17 +151,38 @@ class FigureRuns:
         r["rm"].on_click(lambda ev: self._remove_run(r))
         r["panel"] = pn.Column(
             pn.Row(r["head"], pn.Spacer(), r["rm"], margin=0, sizing_mode="stretch_width"),
-            _row(r["label"], r["color"], r["t0"], r["tab"], r["track"]), r["info"],
+            _row(r["label"], r["color"], r["t0"], r["tab"], r["track_pick"], r["track"]),
+            r["info"],
             styles=CARD,
             sizing_mode="stretch_width", margin=(2, 0))
+        self._show_track_pick(r, look=True)
         self._run_info(r)
         return r
+
+    def _show_track_pick(self, r, look=False):
+        """Run row r's track list follows its path (`look`: looks for the files again).
+        Its path box shows for a path that isn't listed, or when no files were found."""
+        pick, box = r["track_pick"], r["track"]
+        if look:
+            r["track_found"] = config.track_files(r["path"])
+        found = r["track_found"]
+        path = _track_path(box.value)
+        typing = pick.value == TYPE_PATH  # (stays so while the path is edited)
+        r["track_syncing"] = True
+        try:
+            if look:
+                pick.options = _track_options(found)
+            pick.value = TYPE_PATH if typing or (path and path not in found) else path
+        finally:
+            r["track_syncing"] = False
+        pick.visible = bool(found)
+        box.visible = not found or pick.value == TYPE_PATH
 
     def _times_changed(self):
         """How the runs line up changed: what shows the times it moved."""
         if self._uses("runs"):  # (which times every run has)
             self._build_times()
-        for c in getattr(self, "ser_cards", []) + getattr(self, "prof_cards", []):
+        for c in self._several_run_cards():
             if hasattr(c, "vals"):  # (their Values: at the times moved)
                 c.vals.refresh()
             if hasattr(c, "time_note"):
@@ -168,8 +225,7 @@ class FigureRuns:
             return
         k = self.run_rows.index(r)
         dt = 60.0 * (float(new or 0.0) - float(old or 0.0))
-        for key in ("sec_cards", "snd_cards", "dist_cards", "prof_cards", "joint_cards",
-                    "azim_cards"):
+        for key in TIME_CARDS:
             cards = [c for c in getattr(self, key, []) if hasattr(c, "move_time")
                      and isinstance(c._time_run(), int) and c.w["time"].value is not None]
             first = cards[0]._time_run() if cards else None
@@ -210,8 +266,7 @@ class FigureRuns:
         e = self._run_entry(r)
         fx = self.run_fixes(e, run)
         tr = e["track"]
-        path = os.path.abspath(os.path.expanduser(os.path.expandvars(tr))) \
-            if tr and tr != "viewer" else ""
+        path = _track_path(tr) if tr != "viewer" else ""
         if path in self.data.track_err:
             return f'<span style="color:#f87171">track: {self.data.track_err[path]}</span>'
         if not tr:
@@ -225,6 +280,7 @@ class FigureRuns:
     def _show_runs(self):
         for r in self.run_rows:
             r["rm"].visible = len(self.run_rows) > 1
+            self._show_track_pick(r, look=True)
             self._run_info(r)
         self.runs_box.objects = [r["panel"] for r in self.run_rows]
         self._show_time_match()
@@ -337,25 +393,32 @@ class FigureRuns:
         return {f"{k + 1}. {r['label'].value or os.path.basename(r['path'])}": k
                 for k, r in enumerate(self.run_rows)}
 
+    def _several_run_cards(self):
+        """The cards that may show several runs (run_list): series, profiles and tables."""
+        return [c for key in SEVERAL_RUN_CARDS for c in getattr(self, key, [])]
+
+    def _one_run_cards(self):
+        """The cards of one run each (w["run"]): soundings, distributions, and so on."""
+        return [c for _, key in ONE_RUN_CARDS for c in getattr(self, key)]
+
     def _refresh_run_names(self):
         names = self._run_names()
         with held(self):
             for w in [self.run_sel] + \
-                    [c.w["run"] for c in self.snd_cards + self.dist_cards
-                     + self.joint_cards + self.azim_cards + self.sec_cards]:
+                    [c.w["run"] for c in self._one_run_cards() + self.sec_cards]:
                 self._set_runs_of(w, w.value)
             opts = self._series_run_opts(names)
             v = [k for k in self.gg_runs.value if k in names.values()] or [0]
             self.gg_runs.options = opts
             self.gg_runs.value = v
-            for c in self.ser_cards + self.prof_cards:
+            for c in self._several_run_cards():
                 c.refresh_runs(names)
-            for c in self.cards:  # (a layer's run)
+            for c in self.cards + self.pf_cards:  # (a layer's run)
                 if "run" in c.w:
                     v = c.w["run"].value
                     c.w["run"].param.update(**self._layer_run_choices(names))
                     c.w["run"].value = v if v in names.values() else -1
-            for c in self.cards:  # (a difference's Minus run)
+            for c in self.cards + self.pf_cards:  # (a difference's Minus run)
                 if "minus_run" in c.w:
                     v = c.w["minus_run"].value
                     c.w["minus_run"].options = {"the layer's": -1} | names
@@ -378,8 +441,7 @@ class FigureRuns:
         self.fields = AllFields(fields)
         g = self.fields.groups()
         with held(self):
-            for w in ([c.w["field"] for c in self.cards if "field" in c.w]
-                      + [r["field"] for r in self.pf_rows]
+            for w in ([c.w["field"] for c in self.cards + self.pf_cards if "field" in c.w]
                       + [c.w["field"] for c in self.ser_cards if "field" in c.w]):
                 v = w.value
                 w.groups = g
@@ -430,7 +492,7 @@ class FigureRuns:
             used |= {c.w["run"].value or 0 for c in self.sec_cards}
         elif maps or self.kind.value == "scene":
             used.add(self.run_sel.value or 0)
-        for c in self.cards:
+        for c in self.cards + self.pf_cards:
             for key in ("run", "minus_run"):
                 v = c.w[key].value if key in c.w else None
                 if isinstance(v, int) and v >= 0:
@@ -438,9 +500,9 @@ class FigureRuns:
             if "ens_on" in c.w and c.w["ens_on"].value and c.w["on"].value:
                 ks = [int(k) for k in c.w["ens_runs"].value if not isinstance(k, str)]
                 used |= set(ks) if ks else set(range(n))
-        for c in self.snd_cards + self.dist_cards + self.joint_cards + self.azim_cards:
+        for c in self._one_run_cards():
             used.add(c.w["run"].value or 0)
-        for c in self.ser_cards + self.prof_cards:
+        for c in self._several_run_cards():
             ks = c.run_list()
             used |= set(range(n)) if ks is None else set(ks)
         used |= {int(e["run"]) for e in self._edit_runs()}
@@ -478,7 +540,7 @@ class FigureRuns:
                 self.run_sel.value = max(0, self.run_sel.value - (self.run_sel.value > k))
             self.gg_runs.value = [j - (j > k) for j in self.gg_runs.value  # (a grid of runs)
                                   if isinstance(j, int) and j != k]
-            for c in self.cards:  # (layers: the removed run's go back to the panel's)
+            for c in self.cards + self.pf_cards:  # (layers: the removed run's go back to the panel's)
                 for key in ("run", "minus_run"):
                     if key in c.w and c.w[key].value is not None and c.w[key].value >= k:
                         c.w[key].value = -1 if c.w[key].value == k else c.w[key].value - 1
@@ -492,10 +554,8 @@ class FigureRuns:
                         del e["run"]
                     else:
                         e["run"] = int(e["run"]) - 1
-            for what, cards in (("sounding", self.snd_cards), ("distribution", self.dist_cards),
-                                ("joint distribution", self.joint_cards),
-                                ("azimuthal mean", self.azim_cards)):
-                keep = []
+            for what, key in ONE_RUN_CARDS:
+                cards, keep = getattr(self, key), []
                 for c in cards:
                     j = int(c.w["run"].value or 0)
                     if j == k:
@@ -515,7 +575,8 @@ class FigureRuns:
                     c.set_run(max(0, j - 1))
                 keep.append(c)
             self.sec_cards = keep
-            for what, cards in (("series", self.ser_cards), ("profile", self.prof_cards)):
+            for what, cards in (("series", self.ser_cards), ("profile", self.prof_cards),
+                                ("table value", self.table_cards)):
                 keep = []
                 for c in cards:
                     old = c.run_list()
@@ -533,13 +594,14 @@ class FigureRuns:
         self._show_profiles()
         self._show_joints()
         self._show_azims()
+        self._show_tables()
         self._show_series()
         self._show_sections()
         if gone:
             n = {w: gone.count(w) for w in dict.fromkeys(gone)}
             self._runs_msg("Removed the run and its " + " and ".join(
                 f"{c} {w}{'s' if c > 1 and w != 'series' else ''}" for w, c in n.items()) + ".")
-        self._on_vary()
+        self._on_layout()
 
     def _runs_msg(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""

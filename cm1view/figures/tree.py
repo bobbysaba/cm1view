@@ -15,7 +15,9 @@ from types import SimpleNamespace
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from .cards import LOCS, TYPE_LABEL, LayerCard, _chk, _grid, _hint, _xy, _xy_text
+from .cards import (LOCS, TYPE_LABEL, LayerCard, _auto, _chk, _grid, _hint, _near, _num, _xy,
+                    _xy_text)
+from .kinds import KINDS
 from ..viewer.ui import held
 
 PANELS = "the panel's"  # (a layer's run / time: the panel's)
@@ -61,15 +63,6 @@ def clean_edits(edits):
         if e:
             out[str(i)] = e
     return out
-
-
-def _pick(opts, ts):
-    """A time list's value for model time ts (s): its nearest time, or "" (the
-    panel's / layout's) for None or a run without times."""
-    vals = [v for v in opts.values() if v != ""]
-    if ts is None or not vals:
-        return ""
-    return min(vals, key=lambda v: abs(v - float(ts)))
 
 
 class FigureTree:
@@ -176,15 +169,16 @@ class FigureTree:
         mine = [e for e in ents if int(e.get("panel", 0)) == i]
         what = "; ".join(str(e.get("label") or "") or self._entry_name(e, n) for n, e in
                          enumerate(mine[:3])) + (f" +{len(mine) - 3}" if len(mine) > 3 else "")
-        head = {"line": "Time series", "sounding": "Sounding", "dist": "Distribution",
-                "profile": "Profile", "joint": "Joint", "azim": "Azimuthal"}[kind]
+        head = KINDS[kind].head
         return f"{letter}  {head} — {what or 'nothing yet'}{tail}{mark}", True
 
     def _entry_name(self, e, n):
         """A line, sounding, distribution, profile or joint distribution without a
         label of its own: its field (distributions, profiles; joint distributions: y vs
         x), else its number."""
-        r = (e.get("recipe") or {}) if "where" not in e else {}
+        if e.get("what") == "sounding":  # (a table's)
+            return "sounding parameters"
+        r = (e.get("recipe") or {}) if "where" not in e or "what" in e else {}
         f, F = r.get("field"), self.fields
         if f in F and r.get("yfield") in F:
             return f"{F[r['yfield']].label} vs {F[f].label}"
@@ -257,6 +251,8 @@ class FigureTree:
             objs += self._tree_map_panel(s, i, e, title, labels)
         else:
             objs += [_grid((title, 2)), _grid(*labels)]
+            if s["kind"] == "line":
+                objs.append(_grid(*self._tree_y_range(i, e, s.get("ts") or {})))
             objs += self._tree_entries(s, i)
             if s["kind"] in figdraw.LEGEND_OPTS:
                 objs += self._tree_legend(s, i, e)
@@ -272,7 +268,7 @@ class FigureTree:
         k = ref[0] if run.value == -1 else run.value
         topts = {LAYOUT: ""} | self._time_opts(k)
         time = pn.widgets.Select(name="Time", options=topts,
-                                 value=_pick(topts, e.get("time_s")))
+                                 value=_near(topts, e.get("time_s")))
         z = pn.widgets.TextInput(name="Height (km; blank: as laid out)",
                                  value="" if e.get("z") is None else f"{float(e['z']):g}",
                                  placeholder="e.g. 1")
@@ -297,7 +293,7 @@ class FigureTree:
             cur = time.value
             with held(self):
                 time.options = o
-                time.value = _pick(o, None if cur == "" else cur)
+                time.value = _near(o, None if cur == "" else cur)
             if time.value != cur:
                 self._tree_edit(i)["time_s"] = None if time.value == "" else float(time.value)
             self._tree_changed()
@@ -417,7 +413,7 @@ class FigureTree:
         k = ref[0] if run.value == -1 else run.value
         topts = {PANELS: ""} | self._time_opts(k)
         time = pn.widgets.Select(name="Time", options=topts,
-                                 value=_pick(topts, src.get("time_s")))
+                                 value=_near(topts, src.get("time_s")))
         lock = _chk("Keep this time in animations", bool(src.get("time_lock")))
         lock.visible = time.value != ""
 
@@ -436,7 +432,7 @@ class FigureTree:
             cur = time.value
             with held(self):
                 time.options = o
-                time.value = _pick(o, None if cur == "" else cur)
+                time.value = _near(o, None if cur == "" else cur)
             if time.value != cur:
                 own()["time_s"] = None if time.value == "" else float(time.value)
             set_own("run", None if ev.new == -1 else int(ev.new))
@@ -468,10 +464,26 @@ class FigureTree:
         w.param.watch(on_label, "value")
         return w
 
+    def _tree_y_range(self, i, e, ts):
+        """A time-series panel's own left y axis range (blank: Layers → Plot's, ts)."""
+        def box(k, name):
+            w = _auto(name, description="This panel's alone; blank: as in Layers → Plot")
+            w.value = _num(e.get(k))
+            w.placeholder = "as laid out" if ts.get(k) is None else f"{ts[k]:g}"
+
+            def on_limit(ev):
+                self._tree_edit(i)[k] = _num(ev.new)
+                self._tree_changed()
+
+            w.param.watch(on_limit, "value")
+            return w
+
+        return box("ymin", "y from (left axis)"), box("ymax", "y to (left axis)")
+
     def _tree_legend(self, s, i, e):
         """A time-series, sounding or distribution panel's own legend: shown or not
         (yes: also kept beside a figure legend), where (and at which anchor), its columns
-        and frame (blank: as laid out in Layers; a sounding's are both its skew-T
+        and frame (blank: as set in Style → Legend; a sounding's are both its skew-T
         legend's and its hodograph key's)."""
         lg = e.get("legend") or {}
         yes_no = {LAYOUT: "", "Yes": "yes", "No": "no"}
@@ -521,12 +533,10 @@ class FigureTree:
         kind = s["kind"]
         if kind == "th":
             return [_hint("A time-height panel draws its series card (<b>Layers</b>): "
-                          "the card picks its run and panel number.")]
+                          "the card picks its run and panel.")]
         ents = s.get(figdraw.ENTRIES[kind]) or []
         mine = [(n, e) for n, e in enumerate(ents) if int(e.get("panel", 0)) == i]
-        what = {"line": "line", "sounding": "sounding", "dist": "distribution",
-                "profile": "profile", "joint": "joint distribution",
-                "azim": "azimuthal mean"}[kind]
+        what = KINDS[kind].one
         names = {k: n for n, k in self._run_names().items()}
         rows = []
         for n, ent in mine:
@@ -542,6 +552,12 @@ class FigureTree:
                     "every run" if runs is None else ", ".join(
                         names.get(int(k), str(k)) for k in runs)) + \
                     f" · {fg.profile_when(ent)}"
+            elif kind == "table":
+                runs = fg.profile_runs(ent)
+                n_t = len(ent.get("times_s") or [])
+                src = ("every run" if runs is None else ", ".join(
+                    names.get(int(k), str(k)) for k in runs)) + \
+                    f" · {n_t} time{'s' * (n_t != 1)}"
             elif kind in ("joint", "azim"):  # (joint: the window's pairs, no mean)
                 when = fg.profile_when(ent)
                 src = f"{names.get(int(ent.get('run', 0)), '')} · " + \
@@ -550,7 +566,7 @@ class FigureTree:
                 src = (f"{names.get(int(ent.get('run', 0)), '')} · "
                        f"{float(ent.get('time_s', 0)) / 60:g} min")
             name = ent.get("label") or (self._entry_name(ent, n)
-                                        if kind in ("dist", "profile", "joint", "azim")
+                                        if kind in ("dist", "profile", "joint", "azim", "table")
                                         else what)
             rows.append(f"<li><b>{n + 1}.</b> {name} — {src}</li>")
         go = pn.widgets.Button(name=f"Edit the {what}s (Layers)", button_type="default",
@@ -559,10 +575,12 @@ class FigureTree:
         return [pn.pane.HTML(f"<ul style='margin:4px 0 4px 18px;padding:0'>"
                              f"{''.join(rows)}</ul>" if rows else
                              f'<div class="cv-empty">No {what}s in this panel: give one '
-                             f'this panel number in <b>Layers</b>.</div>',
+                             f'this panel in <b>Layers</b>.</div>',
                              sizing_mode="stretch_width"),
-                _hint(f"Each {what} has its own run{'' if kind == 'line' else ' and time'} "
-                      "and panel number; several in one panel share its axes (e.g. two "
+                _hint("Each card has its own runs and times; those in one panel make one "
+                      "table." if kind == "table" else
+                      f"Each {what} has its own run{'' if kind == 'line' else ' and time'} "
+                      "and panel; several in one panel share its axes (e.g. two "
                       "runs' soundings on one skew-T, or one field at two times)."), go]
 
     def _tree_collect(self):

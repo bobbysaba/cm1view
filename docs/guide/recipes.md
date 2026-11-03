@@ -53,14 +53,14 @@ Short walkthroughs that combine the tools. Each uses only what the other pages d
 ## An animation
 
 1. Build a 1 × 1 plan-view figure centred on the storm.
-2. In *Export → Animation (GIF)* set the *End time*, a *Step (outputs)* that gives under
+2. In *File → Animation (GIF)* set the *End time*, a *Step (outputs)* that gives under
    300 frames, a low DPI (about 100) and the frames per second.
 3. Press **Save animation**. Tick *Also save the frames (PNG)* if you want a video made
    with `ffmpeg` ([Export, animations and the script](figures-export.md#animations)).
 
 ## The same figure for another run
 
-1. Make the figure for the first run and, in *Export → Templates*, **Save as template**.
+1. Make the figure for the first run and, in *File → Templates*, **Save as template**.
 2. Open the other run (click its name in the top bar), go to the Figure workspace, choose
    the template and press **Apply to this run**. The times move to the shown time of the
    new run, keeping their spacing.

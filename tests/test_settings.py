@@ -91,12 +91,18 @@ def test_runs_tracks_and_save_folders(fresh, demo_root):
     assert C.find_track(tor) == os.path.join(demo_root, "storm_tracks", "demo_supercell.csv")
     # new tracks go where they would be found
     assert C.track_save_path(tor) == C.find_track(tor)
+    found = C.track_files(tor)  # (this run's first, then the folder's others)
+    assert found[0] == C.find_track(tor)
+    assert os.path.join(demo_root, "storm_tracks", "demo_supercell_weak.csv") in found
     tracks = fresh / "tracks"
     C.save(dict(track_dirs=[str(tracks)], track_patterns=["{name}_*.csv"]))
     tracks.mkdir()
     (tracks / "supercell_v2.csv").write_text("")
     assert C.find_track(tor) == str(tracks / "supercell_v2.csv")
     assert C.find_track(weak) is None
+    (tracks / "notes.md").write_text("")
+    (tracks / "other.txt").write_text("")
+    assert C.track_files(tor) == [str(tracks / "supercell_v2.csv"), str(tracks / "other.txt")]
     C.save(dict(track_dirs=["nowhere"], track_patterns=["{name}.csv"]))
     assert C.track_save_path(tor) == os.path.join(C.exports_dir(tor, "tracks"),
                                                   "supercell.csv")

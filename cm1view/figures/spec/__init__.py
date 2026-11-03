@@ -10,7 +10,8 @@ time series of reduced fields (the Series tab's recipes, spec["series"]), soundi
 one time (histogram, box, violin or cumulative, spec["dists"]), vertical profiles
 of a field reduced over a region at each level (spec["profiles"]), joint
 distributions of two fields at the same points (spec["joints"]), and azimuthal means
-of a field in radius and height around the storm or a point (spec["azims"]).  Panels can come from
+of a field in radius and height around the storm or a point (spec["azims"]), and tables of
+sounding parameters and field statistics across runs and times (spec["tables"]).  Panels can come from
 different runs (e.g. tornadic vs non-tornadic): spec["runs"] lists the runs with a
 label and a storm track each, and panels refer to them by index, with times in model
 seconds so they match across runs.  Each section panel has a section card
@@ -21,8 +22,8 @@ code + the spec as a Python dict), the plotted arrays (.npz) and the spec (.json
 figure can be redrawn or restyled later without the viewer.
 """
 
-from . import sections, base, arrays, panels, bundle, templates
+from . import sections, base, arrays, panels, tables, bundle, templates
 
-MODULES = (sections, base, arrays, panels, bundle, templates)  # (each uses only those before it)
+MODULES = (sections, base, arrays, panels, tables, bundle, templates)  # (each uses only those before it)
 for _m in MODULES:  # one namespace: fg.<name> for any of them
     globals().update({k: v for k, v in vars(_m).items() if not k.startswith("__")})

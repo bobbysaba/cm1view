@@ -31,7 +31,7 @@ contours of ∂w/∂z over a fill of w, say.
 
 ## Differences
 
-A fill can be a **difference**. *Difference: minus another run or time* subtracts the same
+A fill can be a **difference**. In the card's folded *Difference* section (open when in use), *Difference: minus another run or time* subtracts the same
 field at another run and/or time (blank: the layer's own) and switches to a red–blue
 colormap centred on 0. When the two grids differ the panel says so; pick *Interpolate
 onto this layer's grid* or *Refuse* under *If the grids differ*. A fixed *Minus time* stays
@@ -39,7 +39,7 @@ put in animations.
 
 ## Ensembles
 
-A fill can be an **ensemble** of several runs. *Ensemble: a statistic over several runs*
+A fill can be an **ensemble** of several runs. In the card's folded *Ensemble* section (open when in use), *Ensemble: a statistic over several runs*
 reads the same field from each run in its *Runs* list (blank: every run of the figure) at
 the layer's time and combines them cell by cell: the **mean**, **median**, **spread**
 (standard deviation), **min**, **max**, **range** (max − min) or the **probability of
@@ -53,7 +53,7 @@ interpolated onto the panel's run's grid with *Interpolate* under *If the grids 
 ## Time windows
 
 A fill, contour or shading layer on a plan panel can cover a **time window** (*Over a time
-window*):
+window*; on a fill, in its folded *Time window* section):
 
 - the **maximum** (a swath, e.g. of updraft helicity), **minimum**, **mean** or **sum**
   over the outputs *From*–*To* (blank: the run's first output, and the panel's time),
@@ -79,7 +79,7 @@ plan views, cross-sections and time–height panels.
 ## Series layers
 
 Under *Layers → Series* (time–height and time-series figures): each card starts with its
-run and panel number (as the sounding and section cards), then the series' field, height
+run and panel (as the sounding and section cards), then the series' field, height
 or layer, region and reduction; *Duplicate* and *One per run* copy it (time–height: one
 card per panel). **A series from the
 Series tool** copies one of the viewer's computed series (the shown one is picked), and
@@ -97,12 +97,12 @@ ticked, **Reset all edits** on every run of the card; **Download CSV** saves the
 drawn, **Refresh** reads the values again (e.g. after more output was written).
 
 Edits are kept in the figure, per run, at the model time of the point, so they stay put
-when the card's, the run's or the figure's time zero changes. They are on the plotted values (after
+when the run's time zero changes. They are on the plotted values (after
 *d/dt*); changing the card's field or reduction keeps them, with a warning in the card.
 Everything drawn from the line uses them: ensemble bands, maxima and minima, axis
 ranges. An edit at a time the run no longer has is not drawn; the section lists those,
 and **Drop those** forgets them. An edited line's legend label ends in "(edited)" unless
-*Panels → Time and value axes → Mark edited lines* is off.
+*Layers → Plot → Mark edited lines* is off.
 
 Edits belong to a run by its place in the card's *Run* list: reordering or removing the
 card's runs moves them to another run, so reset them first.
@@ -130,7 +130,7 @@ model level: *Height (km)*, *Computed*, *Yours*. It lists the values the preview
 (it computes nothing: **Refresh** once the preview has them), per run of the card. Edits
 are on the plotted values (after the time window's mean and *d/dz*) and kept in the
 figure at the level's height; changing the card's field, layer, region, reduction, time
-or *Plot* keeps them, with a warning in the card. An ensemble band is made from the
+or *Then apply* keeps them, with a warning in the card. An ensemble band is made from the
 edited lines. **Download CSV** saves `z_km,computed,plotted`. An edited line's legend
 label ends in "(edited)" unless *Plot → Mark edited lines* is off.
 

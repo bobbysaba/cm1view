@@ -3,6 +3,7 @@ from the panels' run, run colours, and templates applied to another run."""
 import json
 
 import numpy as np
+import panel as pn
 
 from conftest import txt, wait, render
 
@@ -185,6 +186,38 @@ def test_run_lists_offer_runs_to_add(ed, demo_root):
     assert not any(d.get("missing") for d in data.values())
 
 
+def test_track_file_list_and_typed_path(ed, demo_root, tmp_path):
+    import os
+    from cm1view.figures.runs import TYPE_PATH
+    weak = os.path.join(demo_root, "demo", "supercell_weak")
+    ed.run_sel.value = weak
+    r = ed.run_rows[1]
+    pick, box = r["track_pick"], r["track"]
+    own = os.path.join(demo_root, "storm_tracks", "demo_supercell_weak.csv")
+    other = os.path.join(demo_root, "storm_tracks", "demo_supercell.csv")
+    assert pick.value == own and list(pick.options.values())[1] == own and not box.visible
+    pick.value = other  # picked: it is the run's track
+    assert box.value == other and ed.collect()["runs"][1]["track"] == other
+    pick.value = ""
+    assert box.value == "" and ed.collect()["runs"][1]["track"] == ""
+    pick.value = other
+    pick.value = TYPE_PATH  # (the path stays, to edit)
+    assert box.visible and box.value == other
+    typed = str(tmp_path / "mine.csv")
+    box.value = typed
+    assert pick.value == TYPE_PATH and ed.collect()["runs"][1]["track"] == typed
+    ed._show_runs()  # (looked for again: a typed path isn't lost)
+    assert pick.value == TYPE_PATH and box.value == typed and box.visible
+
+
+def test_track_box_alone_when_no_files_are_found(ed, monkeypatch):
+    from cm1view import config
+    r = ed.run_rows[0]
+    monkeypatch.setattr(config, "track_files", lambda path: [])
+    ed._show_track_pick(r, look=True)
+    assert not r["track_pick"].visible and r["track"].visible
+
+
 def test_run_picker_adds_a_run(ed, demo_root):
     import os
     weak = os.path.join(demo_root, "demo", "supercell_weak")
@@ -259,6 +292,45 @@ def test_series_card_settings_follow_the_panel_kind(ed):
     assert c.recipe()["vmode"] == "layer" and ed.cb_sec.visible
 
 
+def test_style_shows_what_the_kind_draws(ed):
+    def shown(*names):
+        return [getattr(ed, n).visible for n in names]
+    # kind: colorbar, contour key, time label, run name, axis labels, y tick step
+    want = dict(plan=(1, 1, 1, 1, 1, 1), xsec=(1, 1, 1, 1, 1, 1), th=(1, 0, 0, 1, 1, 1),
+                line=(0, 0, 0, 0, 1, 1), sounding=(0, 0, 1, 0, 1, 0), dist=(0, 0, 1, 0, 1, 1),
+                profile=(0, 0, 1, 0, 1, 1), joint=(0, 0, 1, 0, 1, 1), azim=(0, 0, 1, 0, 1, 1),
+                scene=(0, 0, 1, 1, 0, 0))
+    for kind, row in want.items():
+        ed.kind.value = kind
+        assert shown("cb_sec", "ck_sec", "tl_on", "rl_on", "xlabel", "ystep") == \
+            [bool(v) for v in row], kind
+        assert ed.tickdir.visible and ed.title_bold.visible, kind
+    assert not ed.grid.visible and not ed.axes_hint.visible  # (the last: a 3D scene)
+
+
+def test_style_keeps_what_a_kind_hides_and_its_values(ed):
+    ed.kind.value = "plan"
+    ed.grid.value = True
+    ed.rl_on.value = True
+    assert ed.grid_ls.visible
+    ed.kind.value = "scene"  # (no grid to style)
+    assert not ed.grid_ls.visible
+    ed.kind.value = "dist"  # (no run name: its settings go with the switch)
+    assert ed.grid_ls.visible and not ed.rl_on.visible and ed.rl_on.value
+    assert ed.collect()["run_label"]["on"] is True
+
+
+def test_contour_key_stays_shown_while_on(ed):
+    ed.kind.value = "plan"
+    ed.ck_on.value = True
+    ed.kind.value = "line"  # (it still draws, from the plan layers: it must be turned off)
+    assert ed.ck_sec.visible
+    ed.ck_on.value = False
+    assert not ed.ck_sec.visible
+    ed.kind.value = "plan"
+    assert ed.ck_sec.visible
+
+
 def test_series_card_picks_its_run_like_a_sounding(ed, demo_root):
     import os
     from cm1view.figures.cards.seriescard import ALL_RUNS, SOME_RUNS
@@ -278,29 +350,79 @@ def test_series_card_picks_its_run_like_a_sounding(ed, demo_root):
     assert ALL_RUNS not in ed.ser_cards[0]._run_values()
 
 
-def test_series_cards_hold_the_runs_tracks(ed, demo_root):
-    """Time series hide Runs used; a card around the tracked storm shows a track row
-    per run, which edits the run's (shared) track."""
+def test_series_cards_say_what_the_runs_tracks_give(ed, demo_root):
+    """A card around the tracked storm says what each of its runs' tracks gives, and where
+    to set them; it has no boxes of its own for them."""
     import os
     ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
     ed._add_run()
     ed.from_series()
     ed.kind.value = "line"
-    assert ed.runs_sec.visible  # (a run's name, colour and time zero; its track is shared)
+    assert ed.runs_sec.visible  # (a run's name, colour, time zero and track)
     c = ed.ser_cards[0]
     c.w["region"].value = "domain"
-    assert not c.trk_box.visible
+    assert not c.trk_note.visible
     c.w["region"].value = "track"
-    assert c.trk_box.visible
+    assert c.trk_note.visible and "Runs used" in c.trk_note.object
     c.w["run"].value = 1
-    assert list(c.trk_w) == [1] and not c.trk_w[1][0].visible  # (not the viewer's run)
-    c.trk_w[1][1].value = "no_such_track.csv"
-    assert ed.run_rows[1]["track"].value == "no_such_track.csv"
-    assert ed.collect()["runs"][1]["track"] == "no_such_track.csv"
-    ed.run_rows[1]["track"].value = "other.csv"  # (and from the run's row to the card)
-    assert c.trk_w[1][1].value == "other.csv"
+    assert "supercell_weak" in c.trk_note.object
+    assert not any(isinstance(x, pn.widgets.TextInput) and "track" in x.name.lower()
+                   for x in c.w.values())
+    ed.run_rows[1]["track"].value = ""  # (the run's row: the card's note follows)
+    assert "no track" in c.trk_note.object
     ed.kind.value = "plan"
     assert ed.runs_sec.visible
+
+
+def test_retired_time_zeros_show_only_when_set(ed):
+    """The figure's and a run-based series card's time zero: only in figures that use them,
+    which keep them; the run's and your own data's are always there."""
+    assert not ed.tl_t0.visible
+    ed.from_series()
+    ed.kind.value = "line"
+    c = ed.ser_cards[0]
+    assert not c.w["t0"].visible and ed.run_rows[0]["t0"].visible
+    s = ed.collect()
+    s["time_label"]["t0_min"] = 10.0
+    s["series"][0]["t0_min"] = 5.0
+    ed.set_spec(s)
+    c = ed.ser_cards[0]
+    assert ed.tl_t0.visible and c.w["t0"].visible
+    back = ed.collect()
+    assert back["time_label"]["t0_min"] == 10.0 and back["series"][0]["t0_min"] == 5.0
+    ed.tl_t0.value = 0.0  # (taken back to 0: gone, as in a new figure)
+    c.w["t0"].value = 0.0
+    assert not ed.tl_t0.visible and not c.w["t0"].visible
+    ed._add_data()
+    assert ed.ser_cards[-1].w["t0"].visible
+
+
+def test_each_setting_has_one_home(ed):
+    """A series figure's axes are in Layers → Plot, a section figure's top and x axis over
+    its cards; a plan view's section line keeps them in Panels → Area."""
+    def holds(col, *ws):  # (a section's contents arrive when it is opened)
+        for o in col.objects:
+            if isinstance(o, pn.Card):
+                o.collapsed = False
+        found = [x for o in col.objects for x in o.select(pn.widgets.Widget)]
+        return all(any(x is w for x in found) for w in ws)
+    for kind, own in (("line", ed.ts_mark), ("th", ed.ts_zmin)):  # (each kind's own axis or mark)
+        ed.kind.value = kind
+        assert holds(ed.series_col, ed.ts_tmin, ed.ts_tmax, own)
+        assert any(o is ed.series_col for o in ed.layers_tab.objects)
+    assert not any(c.title.endswith("axes") for c in ed.panels_tab.objects
+                   if isinstance(c, pn.Card))
+    ed.kind.value = "xsec"
+    assert not ed.area_sec.visible and not any(o is ed.area_sec for o in ed.panels_tab.objects)
+    assert list(ed.xs_axes_layers.objects) == [ed.xs_axes] and not ed.xs_axes_area.objects
+    order = [id(o) for o in ed.xsec_col.objects]
+    assert order.index(id(ed.xs_axes_layers)) < order.index(id(ed.xsec_box))
+    ed.kind.value = "plan"
+    assert list(ed.xs_axes_area.objects) == [ed.xs_axes] and not ed.xs_axes_layers.objects
+    ed._add_layer("line")
+    assert ed.area_sec.visible and ed.area_xs.visible and ed.area_sec.title.endswith("line")
+    assert [n for n, _ in ed.tab_list] == ["Panels", "Layers", "Tree", "Style", "Annotate",
+                                           "File"]
 
 
 def test_one_per_run_splits_a_time_series_card(ed, demo_root):
@@ -505,7 +627,8 @@ def test_time_height_cards_one_per_panel(ed, demo_root):
     assert [(e["runs"], e["panel"]) for e in s["series"]] == [([0], 0), ([1], 1)]
     assert (ed.rows.value, ed.cols.value) == (2, 1)
     assert [figdraw.series_ref(s, i) for i in range(2)] == [(0, 0), (1, 1)]
-    ed._add_series()  # a new card: a panel of its own, of the last card's run
+    ed.rows.value = 3
+    ed._add_series()  # a new card: the grid's free panel, of the last card's run
     s = ed.collect()
     assert (s["series"][-1]["runs"], s["series"][-1]["panel"]) == ([1], 2)
     assert ed.rows.value * ed.cols.value >= 3

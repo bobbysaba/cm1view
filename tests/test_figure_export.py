@@ -103,10 +103,12 @@ def test_animation_saves_at_gif_path_or_save_as(ed, tmp_path, monkeypatch):
     ed.an_path.value = str(tmp_path / "loops" / "storm.gif")
     ed._on_anim()
     assert asked[-1] == [str(tmp_path / "loops" / "storm.gif"),
-                         str(tmp_path / "loops" / "storm_frames")]
+                         str(tmp_path / "loops" / "storm_frames"),
+                         str(tmp_path / "loops" / "_src" / "storm_spec.json")]
     ed.an_path.value = ""  # blank: next to Save as
     ed._on_anim()
-    assert asked[-1] == [str(tmp_path / "fig.gif"), str(tmp_path / "fig_frames")]
+    assert asked[-1] == [str(tmp_path / "fig.gif"), str(tmp_path / "fig_frames"),
+                         str(tmp_path / "_src" / "fig_spec.json")]
 
 
 def test_animation_needs_panels_that_step(ed):
@@ -192,6 +194,32 @@ def test_animation_frames_stop_where_a_panel_runs_out():
     assert fg.time_refs(table) == [] and fg.frame_offsets(table, long_run) == []
 
 
+def test_held_entries_stay_while_the_others_step():
+    """An entry with time_lock keeps its times in the frames and does not end them."""
+    from cm1view.figures import spec as fg
+
+    class Run:
+        def __init__(self, n):
+            self.times = np.arange(n) * 60.0
+
+    held = dict(fg.sounding_defaults(0, 0.0), time_lock=True, time_s1=60.0)
+    moving = dict(fg.sounding_defaults(1, 0.0))
+    s = dict(kind="sounding", runs=[dict(path="/short"), dict(path="/long")],
+             soundings=[held, moving])
+    f = fg.shift_times(s, 120.0)
+    assert [e["time_s"] for e in f["soundings"]] == [0.0, 120.0]
+    assert f["soundings"][0]["time_s1"] == 60.0
+    assert fg.time_refs(s) == [("/long", 0.0)]
+    runs = {"/short": Run(2), "/long": Run(6)}
+    assert fg.frame_offsets(s, runs)[-1] == 300.0  # (only the moving one's outputs count)
+    both = dict(s, soundings=[held, dict(moving, time_lock=True)])
+    assert fg.time_refs(both) == [] and fg.frame_offsets(both, runs) == []
+    out = fg.panels._one_time(s, {}, s["soundings"])  # (the time label follows the frames)
+    assert out == dict(time_s=0.0, run=1)
+    f = fg.shift_times(s, 120.0)
+    assert fg.panels._one_time(f, {}, f["soundings"]) == dict(time_s=120.0, run=1)
+
+
 @pytest.mark.parametrize("layout", ["inset", "hodo"])
 def test_animation_of_soundings(ed, tmp_path, layout):
     from PIL import Image
@@ -216,6 +244,24 @@ def test_stopped_animation_saves_nothing(ed, tmp_path):
                  dict(fps=5.0, dpi=40, loop=True, frames=False))
     assert "Stopped" in txt(ed.an_msg.object)
     assert not (tmp_path / "stopped.gif").exists()
+    assert not (tmp_path / "_src").exists()
+
+
+def test_animation_saves_a_spec_that_reopens(ed, tmp_path):
+    ed.rows.value, ed.cols.value = 1, 2
+    t = float(ed.run.times[1])
+    ed.tm_rows[0].value = t
+    spec = ed.collect()
+    base = str(tmp_path / "loop")
+    ed._anim_job(ed._anim_gen, spec, [0.0, 300.0], base,
+                 dict(fps=5.0, dpi=40, loop=True, frames=False))
+    assert "loop_spec.json" in ed.an_msg.object, ed.an_msg.object
+    assert (tmp_path / "_src" / "loop_spec.json").exists()
+    assert not (tmp_path / "_src" / "loop_data.npz").exists()
+    ed.tm_rows[0].value = float(ed.run.times[2])
+    assert ed._load_spec(base + ".gif"), ed.msg.object  # (the GIF's path opens it)
+    assert ed.tm_rows[0].value == t and ed.cols.value == 2
+    assert ed.path.value == base
 
 
 def test_own_code_runs_saves_and_reports_errors(ed, tmp_path):

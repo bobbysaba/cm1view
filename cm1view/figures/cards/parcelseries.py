@@ -8,9 +8,12 @@ import panel as pn
 
 from .. import spec as fg
 from ...core import parcels as P
-from .base import _hex, _f, _grid, _hint, _fold, MARKERS, _BTN
+from .base import (
+    _hex, _f, _grid, _hint, _fold, _retired, ENS_BANDS, ENS_MIDS, LINE_STYLES, band_opacity, card_buttons,
+    label_widget, look_values, look_widgets, panel_index, panel_tag, panel_widget, run_widget,
+    where_grid,
+)
 from .layercard import parcel_pick, parcel_sets
-from .seriescard import ENS_BANDS, SER_STYLES
 from ...viewer.ui import held
 
 PAR_OPS = {"Value": "", "d/dt along the parcel": "ddt",
@@ -30,16 +33,8 @@ class ParcelSeriesCard:
         self._kind = ed.kind.value
         pf = ed.v.pf
         self.w = w = {}
-        self.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
-        self.down = pn.widgets.Button(name="↓", description="Later in the list", **_BTN)
-        self.rm = pn.widgets.Button(name="✕", description="Remove the parcel series", **_BTN)
-        self.dup = pn.widgets.Button(name="Duplicate", height=32, button_type="light",
-                                     button_style="outline",
-                                     description="A copy of this card in a new panel")
-        names = ed._run_names()
-        k = int((ent.get("runs") or [0])[0])
-        w["run"] = pn.widgets.Select(name="Run", width=170, **ed._run_choices(names))
-        w["run"].value = k if k in names.values() else 0
+        card_buttons(self, "Remove the parcel series", moves=True, dup=True)
+        w["run"] = run_widget(ed, dict(run=(ent.get("runs") or [0])[0]))
         w["pset"] = pn.widgets.Select(name="Parcels", value="", width=220,
                                       options=parcel_sets(ed.v, self.ent, "this card's"),
                                       description="The parcel set: pick another set of the "
@@ -50,13 +45,11 @@ class ParcelSeriesCard:
         w["op"] = pn.widgets.Select(name="Plot", options=PAR_OPS, width=170,
                                     value=ent.get("op", "") if ent.get("op") in
                                     PAR_OPS.values() else "")
-        w["mid"] = pn.widgets.Select(name="Centre line", options={
-            "Mean": "mean", "Median": "median", "None": ""},
-            value=ent.get("ens_mid", "mean"), width=100)
+        w["mid"] = pn.widgets.Select(name="Centre line", options=ENS_MIDS,
+                                     value=ent.get("ens_mid", "mean"), width=100)
         w["ens"] = pn.widgets.Select(name="Band over the parcels", options=ENS_BANDS,
                                      value=ent.get("ens", ""), width=170)
-        w["alpha"] = _f("Band opacity", float(ent.get("ens_alpha", 0.25)), 100, step=0.05,
-                        start=0.0, end=1.0)
+        w["alpha"] = band_opacity(ent)
         w["each"] = pn.widgets.IntInput(
             name="Parcels' own lines", start=0, end=fg.PARCEL_EACH_MAX, width=130,
             value=int(ent.get("each") or 0),
@@ -66,27 +59,13 @@ class ParcelSeriesCard:
                                          value=ent.get("ens_members") if
                                          ent.get("ens_members") in PAR_EACH_LOOK.values()
                                          else "faint")
-        w["label"] = pn.widgets.TextInput(name="Label (legend)", width=260,
-                                          value=ent.get("label", ""))
-        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
-                                         value=int(ent.get("panel", 0)) + 1)
-        w["t0"] = _f("Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
-                     description="This series' times are shown from here (adds to its run's "
-                                 "time zero in Runs used and to Style → Panel labels → "
-                                 "Minutes counted from)")
-        w["color"] = pn.widgets.ColorPicker(name="Color", width=70,
-                                            value=_hex(ent.get("color", "k")))
-        w["ls"] = pn.widgets.Select(name="Line", options=SER_STYLES, width=100,
-                                    value=ent.get("ls") if ent.get("ls") in
-                                    SER_STYLES.values() else "-")
-        w["lw"] = _f("Line width", float(ent.get("lw", 1.5)), 90, step=0.25)
-        w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS, width=100,
-                                        value=ent.get("marker", ""))
-        w["axis"] = pn.widgets.Select(name="y axis", options={"By units": "auto",
-                                                              "Own axis (right)": "right"},
-                                      value=ent.get("axis", "auto"), width=140)
-        w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)", width=180,
-                                           value=ent.get("ylabel", ""))
+        w["label"] = label_widget(ent, "Legend text")
+        w["panel"] = panel_widget(ent)
+        w["t0"] = _retired(_f(
+            "Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
+            description="From an older figure: adds to its run's time zero (Layers → Runs "
+                        "used), which is the place to set it. At 0 this box goes away"))
+        look_widgets(w, ent, ls=LINE_STYLES, lw=1.5, marker=True, axis=True)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.th_note = _hint("Parcel series are drawn in time-series figures only.")
         w["run"].param.watch(self._on_run, "value")
@@ -98,7 +77,7 @@ class ParcelSeriesCard:
                   "alpha", "marker", "axis", "ylabel"):
             w[k].param.watch(lambda e: self._changed(), "value")
         self.body_col = pn.Column(
-            _grid(w["run"], (w["pset"], 2), w["panel"], w["t0"], self.dup),
+            where_grid(self, w["run"], (w["pset"], 2), w["t0"]),
             _grid(w["var"], w["op"], w["mid"], w["ens"], w["alpha"], w["each"],
                   w["members"], (w["label"], 2)),
             _hint("Over the parcel times (often finer than the 3D output): the centre and "
@@ -148,7 +127,7 @@ class ParcelSeriesCard:
         op = OP_TAGS.get(w["op"].value, "").replace(" ", " · ", 1)
         self.title.object = (f"<b>Parcels</b> · {html.escape(self.ent.get('name') or '')}"
                              f" · {html.escape(w['var'].value or '')}{op} · panel "
-                             f"{w['panel'].value}")
+                             f"{panel_tag(w)}")
 
     # ---- changes
     def _on_run(self, ev):
@@ -206,11 +185,9 @@ class ParcelSeriesCard:
                  op=w["op"].value, ens=w["ens"].value, ens_mid=w["mid"].value,
                  ens_members=w["members"].value, each=int(w["each"].value or 0))
         e["units"] = fg.op_units(e.get("base_units", ""), e["op"])
-        for k in ("label", "color", "ls", "marker", "axis", "ylabel"):
-            e[k] = w[k].value
-        e["lw"] = float(w["lw"].value or 1.5)
+        e.update(look_values(w), label=w["label"].value)
         e["ens_alpha"] = float(w["alpha"].value if w["alpha"].value is not None else 0.25)
         e["t0_min"] = float(w["t0"].value or 0.0)
-        e["panel"] = max(0, int(w["panel"].value or 1) - 1)
+        e["panel"] = panel_index(w)
         e.pop("edits", None)
         return e

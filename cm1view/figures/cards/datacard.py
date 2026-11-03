@@ -9,8 +9,10 @@ import re
 import panel as pn
 
 from .. import spec as fg
-from .base import _hex, _f, _grid, _hint, _fold, MARKERS, _BTN
-from .seriescard import SER_STYLES
+from .base import (
+    _f, _grid, _hint, _fold, LINE_STYLES, card_buttons, label_widget, look_values, look_widgets,
+    panel_index, panel_tag, panel_widget, where_grid,
+)
 from ...viewer.ui import held
 
 UPLOAD_MAX = 2_000_000  # (bytes of a file loaded)
@@ -94,7 +96,7 @@ class _TableCard:
         n = len(self.table.get("t", []))
         self.title.object = (f"<b>Your data</b> · {html.escape(self.w['label'].value)} · "
                              f"{n} point{'s' if n != 1 else ''} · panel "
-                             f"{self.w['panel'].value}")
+                             f"{panel_tag(self.w)}")
 
 
 class DataCard(_TableCard):
@@ -107,12 +109,7 @@ class DataCard(_TableCard):
         self.table = dict(self.ent.get("table") or dict(t=[], v=[]))
         self._kind = ed.kind.value
         self.w = w = {}
-        self.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
-        self.down = pn.widgets.Button(name="↓", description="Later in the list", **_BTN)
-        self.rm = pn.widgets.Button(name="✕", description="Remove your data", **_BTN)
-        self.dup = pn.widgets.Button(name="Duplicate", height=32, button_type="light",
-                                     button_style="outline",
-                                     description="A copy of this card in a new panel")
+        card_buttons(self, "Remove your data", moves=True, dup=True)
         w["text"] = pn.widgets.TextAreaInput(
             name="Your data: time (min), value (paste; read when you click away)",
             value=fg.table_text(self.table) if self.table.get("t") else "",
@@ -120,29 +117,15 @@ class DataCard(_TableCard):
             rows=8, sizing_mode="stretch_width", min_width=300)
         w["file"] = pn.widgets.FileInput(accept=".csv,.txt,.dat,.tsv", multiple=False,
                                          width=240)
-        w["label"] = pn.widgets.TextInput(name="Label (legend)", width=220,
-                                          value=self.ent.get("label", DEFAULT_LABEL))
+        w["label"] = label_widget(self.ent, "Legend text", DEFAULT_LABEL)
         w["units"] = pn.widgets.TextInput(name="Units (axis sharing)", width=130,
                                           value=self.ent.get("units", ""),
                                           placeholder="e.g. m/s")
-        w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)", width=180,
-                                           value=self.ent.get("ylabel", ""))
-        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
-                                         value=int(self.ent.get("panel", 0)) + 1)
+        w["panel"] = panel_widget(self.ent)
         w["t0"] = _f("Time zero (min)", float(self.ent.get("t0_min") or 0.0), 110, step=1.0,
-                     description="Your times are shown from here (adds to Style → Panel "
-                                 "labels → Minutes counted from)")
-        w["color"] = pn.widgets.ColorPicker(name="Color", width=70,
-                                            value=_hex(self.ent.get("color", "k")))
-        w["ls"] = pn.widgets.Select(name="Line", options=SER_STYLES, width=100,
-                                    value=self.ent.get("ls") if self.ent.get("ls") in
-                                    SER_STYLES.values() else "-")
-        w["lw"] = _f("Line width", float(self.ent.get("lw", 1.5)), 90, step=0.25)
-        w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS, width=100,
-                                        value=self.ent.get("marker", ""))
-        w["axis"] = pn.widgets.Select(name="y axis", options={"By units": "auto",
-                                                              "Own axis (right)": "right"},
-                                      value=self.ent.get("axis", "auto"), width=140)
+                     description="Your times are counted from here, as a run's are from its "
+                                 "time zero (your data has no run)")
+        look_widgets(w, self.ent, ls=LINE_STYLES, lw=1.5, marker=True, axis=True)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.note = pn.pane.HTML(margin=(0, 4), sizing_mode="stretch_width")
         self.th_note = _hint("Your own data is drawn in time-series figures only.")
@@ -152,9 +135,9 @@ class DataCard(_TableCard):
         for k in ("label", "units", "ylabel", "t0", "color", "ls", "lw", "marker", "axis"):
             w[k].param.watch(lambda e: self._changed(), "value")
         self.body_col = pn.Column(
-            w["text"], _grid(pn.Column(pn.pane.HTML("<small>Or load a file</small>",
-                                                    margin=(0, 4)), w["file"], margin=0),
-                             w["panel"], w["t0"], self.dup),
+            where_grid(self, w["t0"]), w["text"],
+            pn.Column(pn.pane.HTML("<small>Or load a file</small>", margin=(0, 4)), w["file"],
+                      margin=0),
             self.note,
             _hint("Two columns, time (min) and value, split by commas, tabs or spaces; a "
                   "header line is optional (<i>time, rain (mm)</i> gives the label and "
@@ -189,12 +172,10 @@ class DataCard(_TableCard):
         w, e = self.w, dict(self.ent)
         e.update(source="table", recipe={}, runs=[], op="", ens="",
                  table={k: list(v) for k, v in self.table.items()})
-        for k in ("label", "color", "ls", "marker", "axis", "ylabel"):
-            e[k] = w[k].value
+        e.update(look_values(w), label=w["label"].value)
         e["units"] = e["base_units"] = w["units"].value.strip()
-        e["lw"] = float(w["lw"].value or 1.5)
         e["t0_min"] = float(w["t0"].value or 0.0)
-        e["panel"] = max(0, int(w["panel"].value or 1) - 1)
+        e["panel"] = panel_index(w)
         e.pop("edits", None)
         return e
 
@@ -210,10 +191,7 @@ class ProfileDataCard(_TableCard):
         self.ed, self.ent = ed, dict(ent)
         self.table = dict(self.ent.get("table") or dict(t=[], v=[]))
         self.w = w = {}
-        self.rm = pn.widgets.Button(name="✕", description="Remove your data", **_BTN)
-        self.dup = pn.widgets.Button(name="Duplicate", height=32, button_type="light",
-                                     button_style="outline",
-                                     description="A copy of this card in a new panel")
+        card_buttons(self, "Remove your data", dup=True)
         w["text"] = pn.widgets.TextAreaInput(
             name="Your data: height (km), value (paste; read when you click away)",
             value=fg.table_text(self.table, "height") if self.table.get("t") else "",
@@ -221,24 +199,15 @@ class ProfileDataCard(_TableCard):
             rows=8, sizing_mode="stretch_width", min_width=300)
         w["file"] = pn.widgets.FileInput(accept=".csv,.txt,.dat,.tsv", multiple=False,
                                          width=240)
-        w["label"] = pn.widgets.TextInput(name="Label (legend)", width=220,
-                                          value=self.ent.get("label", DEFAULT_LABEL))
+        w["label"] = label_widget(self.ent, "Legend text", DEFAULT_LABEL)
         w["units"] = pn.widgets.TextInput(name="Units", width=110,
                                           value=self.ent.get("units", ""),
                                           placeholder="e.g. m/s")
         w["xlabel"] = pn.widgets.TextInput(
             name="Value axis label (blank: the computed profiles')", width=260,
             value=self.ent.get("xlabel", ""))
-        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
-                                         value=int(self.ent.get("panel", 0)) + 1)
-        w["color"] = pn.widgets.ColorPicker(name="Color", width=70,
-                                            value=_hex(self.ent.get("color", "k")))
-        w["ls"] = pn.widgets.Select(name="Line", options=SER_STYLES, width=100,
-                                    value=self.ent.get("ls") if self.ent.get("ls") in
-                                    SER_STYLES.values() else "-")
-        w["lw"] = _f("Line width", float(self.ent.get("lw", 1.5)), 90, step=0.25)
-        w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS, width=100,
-                                        value=self.ent.get("marker", ""))
+        w["panel"] = panel_widget(self.ent)
+        look_widgets(w, self.ent, ls=LINE_STYLES, lw=1.5, marker=True)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.note = pn.pane.HTML(margin=(0, 4), sizing_mode="stretch_width")
         w["text"].param.watch(lambda e: self._parse(e.new), "value")
@@ -249,9 +218,9 @@ class ProfileDataCard(_TableCard):
             w[k].param.watch(lambda e: self._changed(), "value")
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.rm],
-            [w["text"], _grid(pn.Column(pn.pane.HTML("<small>Or load a file</small>",
-                                                     margin=(0, 4)), w["file"], margin=0),
-                              w["panel"], self.dup),
+            [where_grid(self), w["text"],
+             pn.Column(pn.pane.HTML("<small>Or load a file</small>", margin=(0, 4)), w["file"],
+                       margin=0),
              self.note,
              _hint("Two columns, height (km) and value, split by commas, tabs or spaces; a "
                    "header line is optional (<i>z, w (m/s)</i> gives the label and units), "
@@ -271,7 +240,6 @@ class ProfileDataCard(_TableCard):
         w = self.w
         e = fg.profile_table_defaults()
         e.update(table={k: list(v) for k, v in self.table.items()},
-                 panel=max(0, int(w["panel"].value or 1) - 1),
-                 units=w["units"].value.strip(), lw=float(w["lw"].value or 1.5),
-                 **{k: w[k].value for k in ("label", "xlabel", "color", "ls", "marker")})
+                 panel=panel_index(w), units=w["units"].value.strip(), label=w["label"].value,
+                 xlabel=w["xlabel"].value, **look_values(w))
         return e

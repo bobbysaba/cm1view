@@ -7,6 +7,65 @@ has a matching git tag.
 
 ### Figures
 
+- **Tables**: a new kind of figure, *Tables*, sets out sounding parameters and field statistics
+  you pick across runs and times: rows and columns either way round, the values or their
+  differences from the first run or first time. Several cards make one table
+  ([Tables](guide/figures-panels.md#tables)).
+- **No more gaps in a card's options**: when a choice shows another option (say *Vertical: At a
+  height* showing *Height*), it now sits right beside the options around it, not one cell along.
+- **Pick a run's track file from a list**: *Track file* in *Layers → Runs used* lists the
+  files in your track folders, this run's first; *Type a path…* still takes any other.
+- **Animations can be reopened**: *Save animation* also saves the figure's settings as
+  `_src/<name>_spec.json`, so a GIF appears among the saved figures and its path opens it.
+- **Colorbar labels on shared bars**: a label or ticks on any card now reach a colorbar shared
+  by several panels, not only those on the first panel's card, and a figure-wide bar also
+  finds them on any part. The Style tab's label and ticks are now named for what they do: bars
+  with none of their own. Joint histograms get a *Colorbar label*.
+- **Each sounding's own line looks**: *Own line looks* on a sounding card sets the colour,
+  style and width of its temperature, dewpoint and parcel lines (say two soundings both red
+  and green, one dashed).
+- **Hold an entry's time in animations**: *Keep this time in animations* on sounding,
+  distribution, profile, joint and azimuthal cards leaves it where it is while the rest step,
+  such as t = 0 dashed under the moving time. Saved figures are unchanged.
+- **Adding a layer keeps your grid**: a new series, sounding, distribution, profile, joint
+  distribution or azimuthal mean goes in an empty panel of the rows and columns you set, or
+  with the last card when they are full, instead of always in a new panel. A grid that grew
+  for a card goes back to your rows and columns when the card moves back or is removed.
+- **Y range for one time-series panel** ([Time series](guide/figures-panels.md#time-series)):
+  the **Tree** tab sets a panel's own *y from* and *y to* for its left axis. Blank boxes use
+  the figure's values from *Layers → Plot*. Saved figures are unchanged.
+- **Tidier cards and sections**: cards now run where (run, time, panel), what, look, extras.
+  Panels are picked and shown by letter on every card; *In panels*, annotations and the
+  legend's *From panels* take letters or numbers. *Duplicate* is on sounding, distribution,
+  joint and azimuthal cards too. A fill's *Difference*, *Ensemble* and *Time window* fold away
+  and open when in use. In *Style → Panel labels* each label is one row with its checkbox first,
+  and a switch that reveals settings now sits above or beside them (contour key, maximum and
+  minimum, grid lines, line labels, hodograph heights and key). Saved figures are unchanged.
+- **Panels that differ in field use full fill cards**: *Panels → Time and fields* has a folded
+  fill card per row, column or panel, the same as a fill in *Layers*. Each panel's fill can now
+  set its scale, colour steps, opacity, blanking, reverse, derivative, difference, ensemble and
+  time window. In a grid of fields × heights a new fill now follows its column's height, unless
+  *Own height* is ticked. Saved figures open and draw as before.
+- **One legend block**: every kind of panel's legend (shown or not, where, columns, frame) is
+  now set in *Style → Legend*, showing only what reaches the kind of panel in the figure.
+  The separate copies in each kind's *Plot* section are gone. Saved figures are unchanged.
+- **Clearer wording in the figure editor**: one name for one thing across the cards
+  (*Colour*, *Colormap*, *Reverse*, *Start from white*, *Colorbar arrows*, *Colour steps*,
+  *Line style*, *Legend text*). On cards, the layer read is now *Read from* / *Read to*, and
+  the height axis's range *Axis from* / *Axis to*; *Plot* on series and profile cards is now
+  *Then apply*. The sounding layout is *Sounding layout*. Long hints fold after their first
+  sentence: click to read the rest. Saved figures are unchanged.
+- **The Style tab shows what applies** ([Style](guide/figures-style.md#style)): settings
+  that change nothing for a figure kind are hidden, such as *Colorbar* on joint and azimuthal
+  panels, *Contour key* away from maps, and axis labels and grid on a 3D scene. Saved
+  figures are unchanged.
+- **One home for each setting**: a time series' or time–height figure's axes, legend and
+  marks are now in *Layers → Plot* (they were in *Panels*); a section figure's *Top* and x
+  axis sit above its cards in *Layers*; panel title position and bold are in *Style → Panel
+  labels*; the *Export* tab is now *File*. Time zero is set per run in *Layers → Runs used*:
+  the *Minutes counted from* box and the series cards' *Time zero* appear only in figures
+  that use them, and still count there. Series cards no longer edit storm tracks: they say
+  what each run's track gives and point to *Runs used*. Saved figures are unchanged.
 - **Time zero per run** ([Runs](guide/figures-panels.md#runs)): plan views and
   cross-sections of several runs line up by time since each run's time zero, including
   their time labels, differences and ensembles. A time picked for a run stays its model
@@ -293,6 +352,10 @@ has a matching git tag.
   Panel: `figdraw.draw(spec, FigureData().panel_data(spec))` draws a saved spec from a
   script. The figure editor uses it. `cm1view/figures/batch.py` (`cm1view render`)
   builds on it; filling a saved figure's missing settings is `spec.with_defaults`.
+- What differs between the kinds of panel is one table, `cm1view/figures/kinds.py`. The
+  cards build their region, heights, look, colours, ensemble and buttons from shared parts
+  in `cards/base.py`, and the widgets that redraw the preview register as they are made.
+  The editor looks and works as before.
 
 ## 0.4.0 (2026-10-26)
 

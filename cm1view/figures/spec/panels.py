@@ -647,7 +647,9 @@ def sounding_label(entry, run_label, run, multi):
 def _one_time(spec, out, ents):
     """Panel arrays `out` with the time label's time and run ("time_s", "run"), when
     its entries `ents` are all at one moment (the same time since their time zeros,
-    not a time window): the first's."""
+    not a time window): the first's.  Entries held in animations (time_lock) don't count
+    beside ones that step: the label follows the frames."""
+    ents = [x for x in ents if not x.get("time_lock")] or ents
     keys = {time_key(spec, x) for x in ents}
     if len(keys) == 1 and keys.pop()[1] is None:
         out["time_s"], out["run"] = round(float(ents[0]["time_s"]), 1), entry_run(ents[0])

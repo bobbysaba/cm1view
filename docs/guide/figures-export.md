@@ -1,6 +1,6 @@
 # Export, animations and the script
 
-The **Export** tab holds the settings that apply when a figure is written, the animation,
+The **File** tab holds the settings that apply when a figure is written, the animation,
 templates and reopening a saved figure. Saving itself (folder, format, DPI) is above the
 preview ([Figures](figures.md#saving)).
 
@@ -38,7 +38,7 @@ Use a template to make the same figure for each of several runs (or `cm1view ren
 
 ## Animations
 
-**Export → Animation (GIF)** saves plan views, cross-sections, soundings (skew-T and
+**File → Animation (GIF)** saves plan views, cross-sections, soundings (skew-T and
 hodograph), distributions, profiles, joint distributions, azimuthal means and 3D scenes as
 animated GIFs (a 3D scene's box can follow the storm and its camera orbit: see
 [3D scenes](figures-panels.md#3d-scenes)). Time–height plots and time series show every
@@ -51,6 +51,12 @@ steps forward together, and storm-centred panels, sections and soundings follow 
 put. A profile, joint distribution or azimuthal mean over a time window keeps its length,
 and the animation ends when the window reaches the end of the run.
 
+To hold something still under the frames, tick **Keep this time in animations** on a
+sounding, distribution, profile, joint distribution or azimuthal mean card (or on a layer's
+own time in the Tree tab). Say two soundings share a panel, one at t = 0 dashed: hold it and
+the other moves over it. The panel's time label and the frame count follow what steps, and
+the legend names each entry's time.
+
 | Setting | Meaning |
 |---|---|
 | **End time** | The first panel's time in the last frame. By default the end of the run: the last time every panel has output. |
@@ -60,6 +66,12 @@ and the animation ends when the window reaches the end of the run.
 | **Loop** | On by default. |
 | **GIF path** | Where to save; blank uses `<Save as>.gif`. |
 | **Also save the frames (PNG)** | Saves each frame as `<name>_frames/<name>_000.png`, …. |
+
+An animation also saves the figure's settings as `_src/<name>_spec.json`, the same spec
+**+ script & data** writes and under the same name, so saving both as one name keeps the
+later one's settings (you're asked first). Reopen it from the saved-figure list, or give the
+path of the spec or the GIF. *Step*, *Frames per second* and the other settings above are not
+kept in it, and neither is a script or data: an animation has no one set of arrays.
 
 To make a video from the frames, e.g.
 `ffmpeg -framerate 4 -i name_%03d.png -pix_fmt yuv420p name.mp4`. **Stop** abandons a
@@ -110,7 +122,7 @@ with it), a template's file, or a template's name (as in *Templates*).
 | `--out PATH` | Where to save. Its extension, if an image format's, sets the format. It may hold `{run}` (the run's folder name), `{parent}` (the folder above it) and `{name}` (the figure's or template's name); several runs need `{run}` or `{parent}`. Default: where the figure was saved; with `--run`, `<Figures folder>/<parent>_<run>/<name>`. |
 | `--format`, `--dpi` | The image's format and resolution (default: the figure's export settings). |
 | `--bundle` | Also the script, data and spec, as **+ script & data**. |
-| `--gif` | An animation, as **Export → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
+| `--gif` | An animation, as **File → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
 | `--overwrite` | Replace files that are already there. Without it, nothing is drawn if any is. |
 | `--code` | Run the figure's own code (*Annotate → Your own code*). The editor asks before running code from a file; `render` leaves it off unless told. |
 | `--config`, `--cache-gb`, `--workers` | As for the viewer. |

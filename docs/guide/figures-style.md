@@ -4,6 +4,19 @@
 
 The **Style** tab sets the look shared by every panel, in folding sections.
 
+The tab shows only what reaches the figure kind's picture, so a few settings are not there
+for every kind:
+
+- **Colorbar**: plan views, cross-sections and time–height panels. Joint distributions and
+  azimuthal means have their own *Colorbar* switch in *Layers → Plot*.
+- **Contour key**: plan views and cross-sections, or any figure while the key is on.
+- **Axes and ticks** on a 3D scene: only *Ticks point* and *Frame width*, which reach its
+  colorbars. The scene's own labels and ticks are under *Look*.
+- **y tick every**: not on soundings, whose pressure axis keeps its ticks.
+- **Time label**: not on time series or time–height panels, which have no single time.
+- **Run name**: plan views, cross-sections, time–height panels and 3D scenes. Other panels
+  name their runs in the legend.
+
 ### Text
 
 | Setting | Meaning |
@@ -21,23 +34,23 @@ panels' y ranges differ, and likewise x; *Share limits* makes them the same; inn
 panels drop the axis labels either way, unless a panel has a different label of its own);
 **Share limits (panels of a kind)** none, x, y, or x and y; **Ticks point** out, in or
 across; **x tick every** and **y tick every**; **Frame width**; **Grid style** (dotted,
-dashed, solid); **Panel titles at** centre, left or right; and checkboxes for *Tick
-marks*, *Minor ticks*, *Grid lines*, *Equal x/y scale* and *Bold titles*.
+dashed, solid); and checkboxes for *Tick marks*, *Minor ticks*, *Grid lines* and *Equal x/y
+scale*.
 
 One panel can have labels of its own: in the **Tree** tab pick the panel and fill in *x
 label* or *y label* (blank: the labels here; a single space: no label).
 
 ### Panel labels
 
-Each label is switched on by its checkbox and then has its own *Where* (the corners and
-edges of the panel, or above its left or right corner), *Size*, *Bold* and *White box*:
+**Panel titles** have *Where* (centre, left or right) and *Bold*. Each other label has one
+row: its checkbox first, then its own *Where* (the corners and edges of the panel,
+or above its left or right corner), *Size*, *Bold* and *White box*:
 
 - **Panel letters**: *Style* `a`, `(a)`, `a)`, `A` or `(A)`.
 - **Time label**: *Text* with `{min}` (minutes from time zero), `{model}` (model minutes),
-  `{s}` (seconds) or `{hms}` (h:mm:ss), e.g. `t = {min:g} min`. **Minutes counted from**
-  sets time zero in model minutes (e.g. the initiation time); a run's own
-  [time zero](figures-panels.md#runs) adds to it on plan views, cross-sections, time
-  series and time–height panels.
+  `{s}` (seconds) or `{hms}` (h:mm:ss), e.g. `t = {min:g} min`. Time zero is set for each
+  run, in [*Layers → Runs used*](figures-panels.md#runs). A figure saved with a *Minutes
+  counted from* still shows that box, which adds to the runs' time zeros; at 0 it goes away.
 - **Height label** (for panels at several heights): *Text* with `{z}` (the height, km)
   or `{k}` (the model level), e.g. `{z:g} km AGL`; blank gives `z = … km` or `k = …`.
 - **Run name** (for figures of several runs), optionally *In the run's colour*.
@@ -51,19 +64,28 @@ Hidden for time series, soundings, distributions and vertical profiles, which ha
 | **Colorbars** | *One for the figure*, *per row*, *per column*, *per panel*, or *None*. |
 | **Where** | Below, right, above or left. |
 | **Length**, **Thickness**, **Gap** | Fractions (0–1) of the panel. Thickness is honoured above matplotlib's usual cap. |
-| **Label, every colorbar** | A label for the bars without their own (blank: the units). `$…$` is maths. |
+| **Label of bars with none of their own** | Blank: the units. A card's own label comes first, so clear that one for this to show. `$…$` is maths. |
 | **Label side**, **Bold label**, **Label size** | Auto, above / left, or below / right. |
-| **Ticks, every colorbar** | e.g. `0:60:10` (blank: automatic). |
+| **Ticks of bars with none of their own** | e.g. `0:60:10` (blank: automatic). |
 | **Tick format**, **Tick size** | e.g. `%.1f`, `%d`, `%.0e`. |
 
 With several colorbars each takes its own label and ticks from where its colours are set:
 a fill layer (*Layers*), a time–height series (*Layers → Series*) or a panel's field
-(*Panels*, when the panels differ in field). The Style tab's label and ticks are for the
-bars that have none of their own.
+(*Panels*, when the panels differ in field). A bar shared by several panels, such as one per
+row across two columns, takes the first label among them, whichever card it is on. The Style
+tab's label and ticks are for the bars that have none of their own.
 
 ### Legend
 
-**Layer legend on** a panel or on the figure (this part), with its position (*At*, and
+What this section offers follows the panels. Time series, soundings, distributions,
+profiles, joint distributions and azimuthal means each draw their own legend: **Legends on**
+*Each panel* gives *Legend* (for soundings, *Legend (one sounding)*: several soundings always
+have one), *At*, *Columns* and *Frame*. These belong to the kind of panel shown, so a part
+that changes kind and back finds its settings again. Box plots and violins have no legend,
+and a time–height panel lists only your own [legend entries](#legend-entries), so the section
+is hidden without them.
+
+Plan views, sections and 3D scenes have **Layer legend on** a panel or on the figure (this part), with its position (*At*, and
 *Anchor x, y* to place it anywhere: the *At* corner of the legend sits at that point, in
 fractions of the panel, or of the figure for a figure legend; below 0 or above 1 is
 outside, e.g. *At: upper left*, *Anchor: 1.02, 1* just right of the panel), the panel
@@ -77,9 +99,9 @@ figure turns off every panel's own legend, also those of panels it does not list
 panel, unticking *Panels' own legends* does the same. Either way a panel whose **Tree**
 *Legend* is *Yes* keeps its own (and a figure legend gathers it only when listed in
 *From panels*), so one panel can have a legend and the others none. The *outside*
-positions make room beside the panels. The columns and frame of those panels' own
-legends are set in *Panels* (a hodograph's key: *Hodograph → Key at*, *Key columns*,
-*Key frame*), and for one panel alone in the **Tree** tab: pick the panel, then *Legend of
+positions make room beside the panels. A hodograph's key has its own settings
+(*Hodograph → Key at*, *Key columns*, *Key frame*). For one panel alone, use the **Tree**
+tab: pick the panel, then *Legend of
 this panel* (shown or not, where and its anchor, columns, frame; a sounding's apply to
 both its skew-T legend and its hodograph key).
 
@@ -98,7 +120,7 @@ Extra space *between columns* and *between rows* (a fraction of a panel), and th
 
 A matplotlib style name (e.g. `dark_background`) or a `.mplstyle` file on the server, for
 colours and lines. The fonts and sizes stay the editor's. For a dark figure also set the
-*Background* to black (Export tab).
+*Background* to black (File tab).
 
 ## Annotate
 

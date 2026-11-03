@@ -288,6 +288,16 @@ def test_profile_of_your_own_data(ed):
 
 
 # ------------------------------------------------------------------ joint distributions
+def test_joint_colorbar_label(ed):
+    ed.kind.value = "joint"
+    ed.jo["cbar_label"].value = "my label"
+    spec, data, fig = render(ed)
+    bar = next(a for a in fig.axes if a.get_label() == "<colorbar>")
+    assert "my label" in (bar.get_xlabel(), bar.get_ylabel())
+    ed.jo["plot"].value = "scatter"  # (no colorbar)
+    assert not ed.jo["cbar_label"].visible
+
+
 @pytest.mark.parametrize("plot", ["hist", "scatter", "contour"])
 def test_joint_figure_draws_each_plot(ed, plot):
     import json
@@ -717,3 +727,117 @@ def test_ensemble_statistics_and_band():
     T, c, lo, hi = fg.ensemble_band([(t, t), (t, 3 * t)], "sd", "")
     assert np.isnan(c).all() and np.allclose(hi - lo, 2 * t)
     assert fg.ensemble_band([(t, t)]) is None
+
+
+# ------------------------------------------------------------------ tables
+def _table_two_runs(ed, demo_root):
+    """A table of every run at three times: sounding parameters, then field statistics."""
+    import os
+    from cm1view.figures.cards.seriescard import ALL_RUNS
+    from cm1view.figures import spec as fg
+    ed.kind.value = "table"
+    ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
+    ed._add_run()
+    a = ed.table_cards[0]
+    a.w["run"].value = ALL_RUNS
+    a.w["kind"].value = "mean"
+    a.w["params"].value = ["mlcape", "stp_eff"]
+    a.w["times"].value = fg.times_text(ed.run.times[2:5])
+    ed._add_table()
+    b = ed.table_cards[1]
+    b.w["what"].value = "field"
+    b.w["z"].value = 3.0
+    b.w["stats"].value = ["max", "n"]
+    return a, b
+
+
+def test_table_reads_each_value_of_each_run_and_time(ed, demo_root):
+    from cm1view.figures import draw as figdraw, spec as fg
+    a, b = _table_two_runs(ed, demo_root)
+    assert b.w["panel"].value == a.w["panel"].value and ed.rows.value * ed.cols.value == 1
+    spec, data, fig = render(ed)
+    d = data[0]
+    assert int(d["nq"]) == 4 and d["row_k"].tolist() == [0, 0, 0, 1, 1, 1]
+    assert d["row_min"].tolist() == [65.0, 70.0, 75.0, 65.0, 70.0, 75.0]
+    assert np.isfinite(d["Q0_v"]).all() and "why" not in d
+    # (the same numbers as a distribution of that field, at that time)
+    run, F = ed.open_run(spec["runs"][1]["path"])
+    ent = dict(spec["tables"][1], time_s=spec["tables"][1]["times_s"][2])
+    st = fg.dist_compute(run, F, ent, {})
+    assert d["Q2_v"][5] == pytest.approx(st["hi"]) and d["Q3_v"][5] == st["n"]
+    heads, rows, spans = figdraw.tbl_grid(d, spec["table"])
+    assert len(heads) == 4 and len(rows) == 6 and spans[0][1:] == (2, 2)
+    assert rows[0][0] == f"{spec['runs'][0]['label']} · 65 min"
+
+
+@pytest.mark.parametrize("layout,n_rows,n_cols", [
+    ("rows", 6, 4), ("values", 4, 6), ("values_run", 8, 3), ("values_time", 12, 2)])
+def test_table_layouts(ed, demo_root, layout, n_rows, n_cols):
+    from cm1view.figures import draw as figdraw
+    _table_two_runs(ed, demo_root)
+    ed.to["layout"].value = layout
+    spec, data, fig = render(ed)
+    heads, rows, _ = figdraw.tbl_grid(data[0], spec["table"])
+    assert (len(rows), len(heads)) == (n_rows, n_cols)
+    assert all(len(cells) == n_cols for _, cells in rows)
+
+
+def test_table_differences():
+    from cm1view.figures import draw as figdraw
+    d = dict(nq=1, row_k=np.array([0, 0, 1, 1]), row_min=np.array([30.0, 60.0, 30.0, 60.0]),
+             row_run=np.array(["A", "A", "B", "B"]), Q0_v=np.array([10.0, 12.0, 15.0, 9.0]),
+             Q0_name="x", Q0_units="", Q0_src="", Q0_dec=0, Q0_e=0)
+    _, rows, _ = figdraw.tbl_grid(d, dict(layout="rows", compare="run"))
+    assert rows == [("A · 30 min", ["10"]), ("A · 60 min", ["12"]),
+                    ("B − A · 30 min", ["+5"]), ("B − A · 60 min", ["−3"])]
+    _, rows, _ = figdraw.tbl_grid(d, dict(layout="rows", compare="time"))
+    assert [r[1][0] for r in rows] == ["10", "+2", "15", "−6"]
+    assert rows[1][0] == "A · 60 − 30 min"
+    # (nothing to differ from: the values)
+    one = dict(d, row_k=np.array([0, 0]), row_min=np.array([30.0, 60.0]),
+               row_run=np.array(["A", "A"]), Q0_v=np.array([1.0, 2.0]))
+    _, rows, _ = figdraw.tbl_grid(one, dict(compare="run"))
+    assert rows == [("30 min", ["1"]), ("60 min", ["2"])]
+
+
+def test_table_missing_value_says_why(ed):
+    from cm1view.figures import spec as fg
+    from cm1view.figures import draw as figdraw
+    ed.kind.value = "table"
+    c = ed.table_cards[0]
+    c.w["kind"].value = "trk"  # (no track yet at the first output)
+    c.w["times"].value = "0"
+    spec, data, fig = render(ed)
+    assert "track" in data[0].get("why", "")
+    assert figdraw.tbl_grid(data[0], spec["table"])[1][0][1][0] == "–"
+    assert not fg.animated(spec)
+
+
+def test_table_times_box():
+    from cm1view.figures import spec as fg
+    outs = [0.0, 1800.0, 3600.0, 5400.0, 7200.0]
+    assert fg.parse_times("30, 60", outs) == ([1800.0, 3600.0], [])
+    assert fg.parse_times("30-90/30", outs) == ([1800.0, 3600.0, 5400.0], [])
+    assert fg.parse_times("30-90", outs) == ([1800.0, 3600.0, 5400.0], [])
+    assert fg.parse_times("31 x", outs) == ([1800.0], ["x"])
+    assert fg.parse_times("", outs) == ([], [])
+    assert fg.times_text([1800.0, 5400.0]) == "30, 90"
+
+
+def test_table_saved_and_reopened(ed, demo_root, tmp_path):
+    from cm1view.figures import spec as fg
+    _table_two_runs(ed, demo_root)
+    ed.to["layout"].value = "values_time"
+    spec = ed.collect()
+    out = fg.save_bundle(spec, ed.panel_data(spec), str(tmp_path / "tbl"))
+    assert open(out["draw"]).read().count("def _table(") == 1
+    ed.set_spec(spec)
+    again = ed.collect()
+    assert again["tables"] == spec["tables"] and again["table"]["layout"] == "values_time"
+
+
+def test_table_runs_follow_the_figure(ed, demo_root):
+    a, b = _table_two_runs(ed, demo_root)
+    a.set_runs([1])
+    ed._remove_run(ed.run_rows[1])
+    assert ed.table_cards == [b] and b.run_list() is None

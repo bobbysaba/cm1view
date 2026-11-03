@@ -299,19 +299,27 @@ def _colorbars(fig, cb, mappables, used, cell):
     kw = dict(location=loc, shrink=float(cb.get("shrink", 0.8)),
               fraction=float(cb.get("fraction", 0.05)), pad=float(cb.get("pad", 0.02)))
     if mode == "shared":
-        groups = [(used, mappables[0][2])]
+        groups = [(used, [ml for _, _, ml in mappables])]
     elif mode in ("row", "col"):  # one colorbar per row (column) of panels
         by = {}
         for i, ax, ml in mappables:
             r, c = cell(i)
             by.setdefault(r if mode == "row" else c, []).append((ax, ml))
-        groups = [([a for a, _ in items], items[0][1]) for items in by.values()]
+        groups = [([a for a, _ in items], [ml for _, ml in items]) for items in by.values()]
     else:
-        groups = [(ax, ml) for _, ax, ml in mappables]
-    for axes, (m, lay) in groups:
+        groups = [(ax, [ml]) for _, ax, ml in mappables]
+    for axes, mls in groups:
+        m, lay = mls[0]
         c = fig.colorbar(m, ax=axes, extend=lay.get("extend", "neither"),
                          aspect=_cbar_aspect(axes, kw, orient), **kw)
-        _cbar_style(c, cb, lay, loc)
+        _cbar_style(c, cb, bar_layer([ml[1] for ml in mls]), loc)
+
+
+def bar_layer(lays):
+    """The layer a colorbar shared by layers lays speaks for: the first, with the first
+    label and ticks any of them sets (a label on any panel's card reaches their bar)."""
+    return dict(lays[0], **{k: next((lay[k] for lay in lays if lay.get(k)), "")
+                            for k in ("cbar_label", "cbar_ticks")})
 
 
 def _cbar_aspect(axes, kw, orient):

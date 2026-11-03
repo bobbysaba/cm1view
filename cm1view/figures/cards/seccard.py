@@ -1,12 +1,13 @@
 """The card of one cross-section of a figure (spec["sections"]): in a section figure
-one panel's (Layers tab: its run, time, section and panel number), in a plan view one
+one panel's (Layers tab: its run, time, section and panel), in a plan view one
 of the sections its Section line layer draws (Panels tab → Area)."""
 
 import panel as pn
 
 from .. import draw as figdraw
 from ..spec.sections import MOTION, ORIENTS, POSITIONS, describe, section_defaults
-from .base import _f, _grid, _fold, _load_widgets, _BTN, wanted_time
+from .base import (_f, _grid, _fold, _load_widgets, card_buttons, panel_widget, run_widget,
+                   wanted_time, where_grid)
 from ...viewer.ui import held
 
 
@@ -20,25 +21,16 @@ class SectionCard:
         self._loading = False  # (load: the widgets take another section's settings)
         s, self.w = self.sec, {}
         w = self.w
-        self.rm = pn.widgets.Button(name="✕", description="Remove the section", **_BTN)
+        card_buttons(self, "Remove the section", dup=True, per_run=(
+            "A copy of this card for each other run of the figure, down this "
+            "card's column (a row per run)"))
         self.ab = pn.widgets.Button(name="Use map A–B", height=32, button_type="light",
                                     button_style="outline")
-        self.dup = pn.widgets.Button(name="Duplicate", height=32, button_type="light",
-                                     button_style="outline",
-                                     description="A copy of this card in a new panel")
-        self.per_run = pn.widgets.Button(
-            name="One per run", height=32, button_type="light", button_style="outline",
-            description="A copy of this card for each other run of the figure, down this "
-                        "card's column (a row per run)")
-        names = ed._run_names()
-        k = int(s.get("run") or 0)
-        k = k if k in names.values() else 0
-        w["run"] = pn.widgets.Select(name="Run", value=k, width=170, **ed._run_choices(names))
-        opts = ed._time_opts(k)
+        w["run"] = run_widget(ed, s)
+        opts = ed._time_opts(w["run"].value)
         w["time"] = pn.widgets.Select(name="Time", options=opts, width=210, value=ed._nearest(
             opts, s.get("time_s") if s.get("time_s") is not None else ed.time1.value))
-        w["panel"] = pn.widgets.IntInput(name="Panel", start=1, end=64, width=70,
-                                         value=int(s.get("panel") or 0) + 1)
+        w["panel"] = panel_widget(s)
         w["label"] = pn.widgets.TextInput(name="Label (blank: automatic)", value=s["label"],
                                           width=160)
         w["orient"] = pn.widgets.Select(name="Orientation", options=ORIENTS,
@@ -70,7 +62,7 @@ class SectionCard:
         w["panel"].param.watch(lambda e: None if self._loading else ed._fit_grid(), "value")
         self.hint = pn.pane.HTML(margin=(2, 4))
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
-        self.where = _grid(w["run"], (w["time"], 2), w["panel"], self.dup, self.per_run)
+        self.where = where_grid(self, w["run"], (w["time"], 2))
         self.panel, self.body = _fold(
             [self.title, pn.Spacer(), self.rm],
             [self.where,

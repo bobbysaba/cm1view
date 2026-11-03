@@ -129,6 +129,8 @@ class FigureData:
             return self._joint_data(spec, progress, cancelled)
         if spec["kind"] == "azim":
             return self._azim_data(spec, progress, cancelled)
+        if spec["kind"] == "table":
+            return self._table_data(spec, progress, cancelled)
         if spec["kind"] == "scene":
             return self._scene_data(spec, cancelled)
         ctx = {}  # run index -> (run, Fields, fixes, centres, track signature)
@@ -412,12 +414,70 @@ class FigureData:
     @staticmethod
     def _times_vary(ents, ent, when):
         """Whether the entries in ent's panel (your own data aside: no time) are at
-        more than one time (when(x): an entry's time)."""
+        more than one time (when(x): an entry's time), or one is held beside others
+        (time_lock: they part in an animation, so its frames all name their times)."""
         mine = [x for x in ents if int(x.get("panel", 0)) == int(ent.get("panel", 0))
                 and not fg.is_table(x)]
-        return len({when(x) for x in mine}) > 1
+        return len({when(x) for x in mine}) > 1 or \
+            (len(mine) > 1 and any(x.get("time_lock") for x in mine))
 
     # ------------------------------------------------------------ soundings, distributions
+    def _sounding_of(self, ent, rs, storm, note):
+        """thermo.analyze result of sounding entry ent in run rs, kept (snd_cache)."""
+        run, _ = self.open_run(rs["path"])
+        fx = self.run_fixes(rs, run)
+        sig = track_sig(fx) if ent["where"].get("kind") == "trk" else ""
+        key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig, storm],
+                         sort_keys=True)
+        return self._kept(self.snd_cache, key, 40, note=note, compute=lambda:
+                          fg.sounding_column(run, ent, fx, storm=storm))
+
+    def _dist_of(self, ent, rs, note):
+        """dist.summarize result of distribution entry ent in run rs, kept (dist_cache)."""
+        run, F = self.open_run(rs["path"])
+        fx = self.run_fixes(rs, run)
+        r = ent["recipe"]
+        track = r["region"] == "track" or (r["field"] in F and F[r["field"]].storm)
+        key = json.dumps([run.path, float(ent["time_s"]), r, track_sig(fx) if track else ""],
+                         sort_keys=True)
+        return self._kept(self.dist_cache, key, 60, note=note, compute=lambda:
+                          fg.dist_compute(run, F, ent, fx))
+
+    def _table_data(self, spec, progress=None, cancelled=None):
+        """{panel: arrays} of a table figure; soundings and summaries are kept (with the
+        sounding and distribution figures'), so restyling reads nothing."""
+        runs, ents = spec["runs"], spec.get("tables", [])
+        storm = fg.storm_choice(spec.get("skewt", {}))
+        total = sum(1 for ent in ents for _ in fg.tbl_cells(spec, ent))
+        done = {}
+
+        def get(e, k, ts):
+            ent, key = ents[e], (e, k, ts)
+            if key in done:
+                return done[key]
+            if cancelled and cancelled():
+                return "stopped"
+            one = dict(ent, time_s=ts)
+            note = (lambda: progress(len(done), total)) if progress else (lambda: None)
+            try:
+                done[key] = self._sounding_of(one, runs[k], storm, note) \
+                    if ent.get("what") == "sounding" else self._dist_of(one, runs[k], note)
+            except (MissingAtTime, FileBusy) as ex:
+                done[key] = str(ex)
+            except Exception as ex:  # noqa: BLE001
+                traceback.print_exc()
+                done[key] = f"{type(ex).__name__}: {ex}"
+            return done[key]
+
+        def fields(k):
+            try:
+                return self.open_run(runs[k]["path"])[1]
+            except Exception:  # noqa: BLE001
+                return None
+
+        data = {i: fg.tbl_panel(spec, i, get, fields) for i in range(fg.npanels(spec))}
+        return None if cancelled and cancelled() else data
+
     def _sounding_data(self, spec, progress=None, cancelled=None):
         runs, ents = spec["runs"], spec.get("soundings", [])
         labels, multi = {}, len(runs) > 1
@@ -425,12 +485,7 @@ class FigureData:
 
         def entry(e, ent, rs, note):
             run, _ = self.open_run(rs["path"])
-            fx = self.run_fixes(rs, run)
-            sig = track_sig(fx) if ent["where"].get("kind") == "trk" else ""
-            key = json.dumps([run.path, float(ent["time_s"]), ent["where"], sig, storm],
-                             sort_keys=True)
-            r = self._kept(self.snd_cache, key, 40, note=note, compute=lambda:
-                           fg.sounding_column(run, ent, fx, storm=storm))
+            r = self._sounding_of(ent, rs, storm, note)
             labels[e] = fg.sounding_label(fg.since_t0(spec, ent), rs.get("label", ""), run, multi)
             return r
 
@@ -445,13 +500,7 @@ class FigureData:
 
         def entry(e, ent, rs, note):
             run, F = self.open_run(rs["path"])
-            fx = self.run_fixes(rs, run)
-            r = ent["recipe"]
-            track = r["region"] == "track" or (r["field"] in F and F[r["field"]].storm)
-            key = json.dumps([run.path, float(ent["time_s"]), r,
-                              track_sig(fx) if track else ""], sort_keys=True)
-            res = self._kept(self.dist_cache, key, 60, note=note, compute=lambda:
-                           fg.dist_compute(run, F, ent, fx))
+            res = self._dist_of(ent, rs, note)
             times = self._times_vary(ents, ent, lambda x: fg.time_key(spec, x))
             labels[e] = fg.dist_label(fg.since_t0(spec, ent), rs.get("label", ""), F, multi, times)
             vlabs[e] = fg.profile_value_label(F, ent)

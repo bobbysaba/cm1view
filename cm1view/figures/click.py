@@ -14,8 +14,9 @@ import panel as pn
 import param
 from panel.reactive import ReactiveHTML
 
-from .cards import ANN_FIELDS, _hint
+from .cards import ANN_FIELDS, _hint, _panel_tok
 from .draw.base import ann_on
+from .kinds import LINEAR
 from ..viewer.ui import held
 
 PLACE = {"Click: nothing": "", "Click to add text": "text",
@@ -27,8 +28,6 @@ PLACE = {"Click: nothing": "", "Click to add text": "text",
          "Drag a box: plan-view area": "area"}
 TWO = ("arrow", "line", "box", "circle", "section")
 DRAG = ("move", "area")  # (modes that need a drag, not a click)
-# panels whose axes clicks map onto
-LINEAR = ("plan", "xsec", "th", "line", "sounding", "dist", "profile", "joint", "azim")
 GRAB = 0.06  # how near (a fraction of the panel) a drag must start to grab a point
 
 
@@ -272,7 +271,7 @@ class FigureClick:
                 a.update(x2=x1, y2=y1, r=round(((x - x1) ** 2 + (y - y1) ** 2) ** 0.5, 2))
         self.ann_rows.append(self._ann_row(a))
         self._show_anns()
-        self._status(f"Added {mode} in panel {j + 1}: see <b>Annotate</b>.")
+        self._status(f"Added {mode} in panel {_panel_tok(j)}: see <b>Annotate</b>.")
         self.request()
 
     def _place_section(self, j, p1, p2):

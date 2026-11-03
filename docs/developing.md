@@ -148,7 +148,7 @@ figures/                  the Figure workspace
     seriescard.py         SeriesCard, SoundingCard
     distcard.py           DistCard, AnnotationRow
   widgets.py              editor mixin: the widgets of the Panels, Layers, Annotate and
-                          Export tabs
+                          File tabs
   specio.py               editor mixin: spec <-> widgets (set_spec, collect), undo / redo
   times.py                editor mixin: the panels' times and titles
   panelopts.py            editor mixin: the Panels tab's reactions (fields, heights,

@@ -90,7 +90,7 @@ class FigureExport:
         self._refresh_saved()
 
     def _refresh_saved(self):
-        """The saved-figure lists (Export tab and quick start), keeping their picks."""
+        """The saved-figure lists (File tab and quick start), keeping their picks."""
         g = saved_figures(self._fig_dir, config.expand(config.get("figures_dir")),
                           config.expand(config.state("last_multi_run_dir")))
         ch = dict(options={}, groups={"": {PICK: ""}} | g) if g else \
@@ -179,7 +179,7 @@ class FigureExport:
 
     def _load_spec(self, path=None):
         """Open a saved figure: its _spec.json, or the image / script saved with it
-        (default: the path in the Export tab).  True when it opened."""
+        (default: the path in the File tab).  True when it opened."""
         path = config.expand((path or self.spec_path.value).strip())
         if path and not path.lower().endswith(".json"):
             path = fg.bundle_paths({}, path)["spec"]

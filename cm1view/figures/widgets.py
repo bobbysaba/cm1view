@@ -1,8 +1,9 @@
-"""Figure editor: the widgets of the Panels, Layers, Annotate and Export tabs.
+"""Figure editor: the widgets of the Panels, Layers, Annotate and File tabs.
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
 import os
+from contextlib import contextmanager
 
 import panel as pn
 
@@ -12,9 +13,12 @@ from ..viewer.picker import RunPicker
 from .cards import (
     ANN_KINDS, DIST_BAR_LABELS, DIST_CUM, DIST_HSTYLES, DIST_NORMS, DIST_PLOTS,
     DIST_STATS_AT, DIST_WHIS, FIG_CMAPS, JOINT_PLOTS, LOCS, MARK_EXTREMES, SIZE_PRESETS,
+    TBL_COMPARE, TBL_DECIMALS, TBL_LAYOUTS,
     SND_LAYOUTS, STORM_MOTIONS,
-    TYPE_LABEL, GRID_DIMS, _auto, _checks, _chk, _f, _grid, _hint, _row, _section,
+    TYPE_LABEL, GRID_DIMS, _auto, _checks, _chk, _f, _grid, _hint, _row, _section, _when,
+    cmap_select,
 )
+from .kinds import KIND_LABELS
 from .times import _tlabel
 
 SND_ORDER = ("sbcape", "sbcin", "sblcl", "mlcape", "mlcin", "mllcl", "mllfc", "mucape",
@@ -26,16 +30,21 @@ STORM_KEYS = ("storm", "storm_u", "storm_v")  # (the SRH of the table, legend an
 class FigureWidgets:
     """Builds the editor's widgets; FigureEditor._build puts them together."""
 
+    @contextmanager
+    def _redraws(self):
+        """Widgets made in this block (attributes of the editor) redraw the preview when
+        they change: FigureEditor._wire watches them."""
+        before = set(vars(self))
+        yield
+        self._live_ws += [x for k, x in vars(self).items()
+                          if k not in before and isinstance(x, pn.widgets.Widget)]
+
     def _build_panel_widgets(self):
-        """Panels tab: grid and size, times, titles, area, runs."""
+        """Panels tab: grid and size, times, titles, area; and the runs (Layers tab)."""
         run = self.run
         # ---- Panels: grid and size
-        self.kind = pn.widgets.Select(name="Panels show", options={
-            "Plan views": "plan", "Vertical cross-sections": "xsec",
-            "Time–height (series)": "th", "Time series": "line", "Soundings": "sounding",
-            "Distributions": "dist", "Vertical profiles": "profile",
-            "Joint distributions (x vs y)": "joint",
-            "Azimuthal means (radius–height)": "azim", "3D scene (one picture)": "scene"})
+        with self._redraws():
+            self.kind = pn.widgets.Select(name="Panels show", options=KIND_LABELS)
         # what the rows and the columns step through (plan views and sections)
         self.g_rows = pn.widgets.Select(name="Rows are", options=GRID_DIMS, value="none")
         self.g_cols = pn.widgets.Select(name="Columns are", options=GRID_DIMS, value="times")
@@ -50,15 +59,17 @@ class FigureWidgets:
         self.rows = pn.widgets.IntInput(name="Rows", start=1, end=8)
         self.cols = pn.widgets.IntInput(name="Columns", start=1, end=8)
         self.size_preset = pn.widgets.Select(name="Size", options=SIZE_PRESETS, value="")
-        self.width = _f("Width (in)", 8.0, step=0.25, start=1.0)
-        self.height = _f("Height (in)", 6.0, step=0.25, start=1.0)
+        with self._redraws():
+            self.width = _f("Width (in)", 8.0, step=0.25, start=1.0)
+            self.height = _f("Height (in)", 6.0, step=0.25, start=1.0)
         self.fit_btn = pn.widgets.Button(
             name="Fit height", height=32, button_type="light",
             button_style="outline", description="The height the panels need at this width "
                                                  "(with room for labels, titles and colorbars)")
         # ---- Panels: times, fields, run & time of each panel
-        self.time1 = pn.widgets.Select(name="Time (every panel)", options={
-            _tlabel(t): float(t) for t in run.times})
+        with self._redraws():
+            self.time1 = pn.widgets.Select(name="Time (every panel)", options={
+                _tlabel(t): float(t) for t in run.times})
         self.tstep = pn.widgets.IntInput(name="Every … outputs", value=5, start=1)
         self.tfill = pn.widgets.Button(name="Fill from the shown time", height=32,
                                        button_type="light", button_style="outline")
@@ -70,10 +81,11 @@ class FigureWidgets:
             "Heights (km AGL)": "height", "Model levels (k)": "level"})
         self.tm_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.pf_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.pf_rows = []
+        self.pf_cards = []
         # ---- Panels: titles
-        self.suptitle = pn.widgets.TextInput(name="Figure title (blank: none)",
-                                             sizing_mode="stretch_width")
+        with self._redraws():
+            self.suptitle = pn.widgets.TextInput(name="Figure title (blank: none)",
+                                                 sizing_mode="stretch_width")
         self.titles_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.auto_titles = pn.widgets.Button(name="Fill in from fields, times or runs",
                                              height=32, button_type="light",
@@ -84,21 +96,26 @@ class FigureWidgets:
         self.dom = pn.widgets.Select(name="Plan-view area", options={
             "Centred on tracked storm": "storm", "Fixed box": "box",
             "Whole domain": "full"})
-        self.half = _f("Half-width (km)", 12.5, step=0.5, start=0.5)
+        with self._redraws():
+            self.half = _f("Half-width (km)", 12.5, step=0.5, start=0.5)
         self.box_x0 = _f("x min (km)", None, step=0.5)
         self.box_x1 = _f("x max (km)", None, step=0.5)
         self.box_y0 = _f("y min (km)", None, step=0.5)
         self.box_y1 = _f("y max (km)", None, step=0.5)
         self.box_html = pn.pane.HTML(margin=(2, 4))
-        self.coords = pn.widgets.Select(name="Axis coordinates", options={
-            "Model grid x, y": "grid", "Relative to the storm": "storm"})
-        self.xs_top = _f("Top (km)", 6.0, step=0.5, start=0.5)
-        self.xs_coords = pn.widgets.Select(
-            name="x–z, y–z x axis", options={"From the storm": "storm",
-                                             "Model grid x, y": "grid"},
-            description="The x axis of x–z and y–z sections through the storm: x (or y) "
-                        "from the storm's, or the model's. Fixed ones: the model's; angled "
-                        "and A–B ones: the distance along them")
+        with self._redraws():
+            self.coords = pn.widgets.Select(name="Axis coordinates", options={
+                "Model grid x, y": "grid", "Relative to the storm": "storm"})
+            self.xs_top = _f("Top (km)", 6.0, step=0.5, start=0.5)
+            self.xs_coords = pn.widgets.Select(
+                name="x–z, y–z x axis", options={"From the storm": "storm",
+                                                 "Model grid x, y": "grid"},
+                description="The x axis of x–z and y–z sections through the storm: x (or y) "
+                            "from the storm's, or the model's. Fixed ones: the model's; angled "
+                            "and A–B ones: the distance along them")
+        self.xs_axes = _grid(self.xs_top, self.xs_coords)  # (where the section cards are)
+        self.xs_axes_area = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.xs_axes_layers = pn.Column(sizing_mode="stretch_width", margin=0)
         self.sec_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.sec_add = pn.widgets.Button(name="+ Section", height=32, button_type="light",
                                          button_style="outline")
@@ -113,8 +130,9 @@ class FigureWidgets:
                   "into a new panel (e.g. an x–z card's y–z twin beside it); <b>One per "
                   "run</b> copies it down its column for each other run (runs × sections: "
                   "two cards and two clicks)."),
-            _row(self.sec_new), self.xsec_box, sizing_mode="stretch_width", margin=0)
-        # ---- Panels: runs
+            self.xs_axes_layers, _row(self.sec_new), self.xsec_box,
+            sizing_mode="stretch_width", margin=0)
+        # ---- Layers: runs used
         self.runs_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.run_rows = []
         self.add_pick = RunPicker(run.path, on_open=lambda p: self._add_run(p),
@@ -168,7 +186,7 @@ class FigureWidgets:
             _hint('Each card picks its <b>Run</b> and <b>Panel</b>, like the sounding and '
                   'section cards; regions around the storm use each run’s track, and every '
                   'series is cached, like the Series tool. Time series: cards with the same '
-                  'panel number share a panel (other units get their own axis), and a card '
+                  'panel share a panel (other units get their own axis), and a card '
                   'can draw <b>All runs</b> or <b>Several runs…</b> (with an ensemble band). '
                   'Time–height: one card per panel; <b>One per run</b> copies a card down '
                   'its column for the other runs.  Time series: <b>+ Your data</b> draws points of '
@@ -186,13 +204,10 @@ class FigureWidgets:
             lw=_f("Line width", 1.8, step=0.2),
             parcel=pn.widgets.Select(name="Parcel", options={
                 "Mixed layer": "ml", "Surface": "sb", "Most unstable": "mu", "None": "none"}),
-            params=_chk("CAPE / CIN in legend", True), legend=_chk("Legend (one sounding)", False),
-            guides=_chk("Adiabats", True), barbs=_chk("Wind barbs", True),
-            legend_loc=pn.widgets.Select(name="Legend at", options=LOCS),
-            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
-            legend_frame=_chk("Legend frame", True))
+            params=_chk("CAPE / CIN in legend", True),
+            guides=_chk("Adiabats", True), barbs=_chk("Wind barbs", True))
         hd = self.hd = dict(
-            layout=pn.widgets.Select(name="Panels show", options=SND_LAYOUTS),
+            layout=pn.widgets.Select(name="Sounding layout", options=SND_LAYOUTS),
             hodo_center=pn.widgets.Select(name="Hodograph centred on", options={
                 "The origin (0, 0)": "origin", "What is drawn (fit)": "fit",
                 "Custom (u, v below)": "custom"}),
@@ -228,7 +243,7 @@ class FigureWidgets:
                        description="Fraction of the skew-T's width: 0 left, 1 right"),
             inset_y=_f("Inset y (bottom edge)", 0.6, step=0.01,
                        description="Fraction of the skew-T's height: 0 bottom, 1 top"))
-        sk_shows = ("params", "legend", "legend_frame", "guides", "barbs")
+        sk_shows = ("params", "guides", "barbs")
         sk_main = [w for k, w in sk.items() if k not in sk_shows]
         sk.update(hd)  # (one dict for the spec)
         sk["table"] = pn.widgets.MultiChoice(
@@ -247,17 +262,17 @@ class FigureWidgets:
             _grid(hd["hodo_center"], hd["hodo_max"], hd["hodo_top"], hd["hodo_cu"],
                   hd["hodo_cv"], hd["srh"]),
             _grid(hd["inset_loc"], hd["inset_size"], hd["inset_x"], hd["inset_y"]),
-            _grid(hd["hodo_heights"], hd["hodo_key_loc"], hd["hodo_key_ncol"]),
+            _grid(hd["hodo_labels"], (hd["hodo_heights"], 2), hd["hodo_key"],
+                  hd["hodo_key_loc"], hd["hodo_key_ncol"], hd["hodo_key_frame"]),
             _checks(("Storm motions", [hd["hodo_rm"], hd["hodo_lm"], hd["hodo_mean"],
-                                       hd["hodo_storm"]]),
-                    ("Heights", [hd["hodo_labels"], hd["hodo_key"], hd["hodo_key_frame"]])),
+                                       hd["hodo_storm"]])),
             _hint("The key and SRH shading are drawn in a hodograph of its own (side by "
                   "side, or the hodograph alone), not in an inset. The ring marks the "
                   "storm motion; with one sounding, dotted lines show the storm-relative "
                   "inflow and the 0–500 m shear (the critical angle), as in the Sounding "
                   "tab."))
         self.snd_col = pn.Column(
-            _hint("Soundings with the same <b>Panel</b> number share a skew-T (colour = "
+            _hint("Soundings with the same <b>Panel</b> share a skew-T (colour = "
                   "sounding). Storm soundings follow each run’s track."),
             _row(self.snd_tab, self.snd_new), self.snd_box,
             _section("Sounding panels", _grid(hd["layout"]), _grid((sk["table"], 3)),
@@ -283,10 +298,6 @@ class FigureWidgets:
             ymin=_auto("Count axis from"), ymax=_auto("Count axis to"),
             logy=_chk("Log scale", False), means=_chk("Mean (diamond)", True),
             horizontal=_chk("Horizontal", False),
-            legend=_chk("Legend", True), legend_loc=pn.widgets.Select(
-                name="Legend at", options=["best"] + LOCS),
-            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
-            legend_frame=_chk("Legend frame", False),
             zero_line=_chk("Zero line", False),
             alpha=_f("Fill opacity", 0.35, step=0.05, start=0.0, end=1.0),
             lw=_f("Line width", 1.5, step=0.25, start=0.0),
@@ -296,14 +307,14 @@ class FigureWidgets:
             stats_at=pn.widgets.Select(name="Statistics shown", options=DIST_STATS_AT),
             stats_loc=pn.widgets.Select(name="Box at", options=LOCS, value="upper right"))
         stat_keys = ("stats", "stats_at", "stats_loc")
-        ds_shows = ("legend", "legend_frame", "means", "zero_line", "logy", "horizontal")
+        ds_shows = ("means", "zero_line", "logy", "horizontal")
         self.dist_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.dist_tab = pn.widgets.Button(name="+ The map's distributions", height=32,
                                           button_type="primary", button_style="outline")
         self.dist_new = pn.widgets.Button(name="+ Distribution", button_type="light",
                                           button_style="outline", height=32)
         self.dist_col = pn.Column(
-            _hint("Distributions with the same <b>Panel</b> number share a panel (colour = "
+            _hint("Distributions with the same <b>Panel</b> share a panel (colour = "
                   "distribution): e.g. one field at two times, or two runs."),
             _row(self.dist_tab, self.dist_new), self.dist_box,
             _section("Plot", _grid(*[w for k, w in ds.items()
@@ -321,13 +332,10 @@ class FigureWidgets:
         # vertical profiles
         po = self.po = dict(
             xmin=_auto("Values from"), xmax=_auto("Values to"),
-            zmin=_auto("Bottom (km)", description="Blank: the profiles' layer"),
-            zmax=_auto("Top (km)", description="Blank: the profiles' layer"),
-            legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
-            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
-            legend=_chk("Legend", True), legend_frame=_chk("Legend frame", False),
+            zmin=_auto("Axis from (km)", description="Blank: the profiles' layer"),
+            zmax=_auto("Axis to (km)", description="Blank: the profiles' layer"),
             zero_line=_chk("Zero line", False), mark_edited=_chk("Mark edited lines", True))
-        po_shows = ("legend", "legend_frame", "zero_line", "mark_edited")
+        po_shows = ("zero_line", "mark_edited")
         self.prof_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.prof_tab = pn.widgets.Button(name="+ The Series tool's layer series", height=32,
                                           button_type="primary", button_style="outline")
@@ -338,14 +346,14 @@ class FigureWidgets:
             description="A profile of your own (a sounding, observations, another model): "
                         "paste height and value columns or load a CSV file")
         self.prof_col = pn.Column(
-            _hint("Profiles with the same <b>Panel</b> number share a panel (colour = "
+            _hint("Profiles with the same <b>Panel</b> share a panel (colour = "
                   "profile, or run): e.g. two runs, or one run at two times. A card can "
                   "draw <b>All runs</b> or <b>Several runs…</b> (with an ensemble band); "
                   "<b>+ Your data</b> draws a profile of your own beside them."),
             _row(self.prof_tab, self.prof_new, self.prof_data), self.prof_box,
             _section("Plot", _grid(*[w for k, w in po.items() if k not in po_shows]),
                      _checks(*[po[k] for k in po_shows]),
-                     _hint("Values from / to and Bottom / Top: the axes' ranges (blank: the "
+                     _hint("Values from / to and Axis from / to: the axes' ranges (blank: the "
                            "data's values and the profiles' layer).")),
             sizing_mode="stretch_width", margin=0)
         # joint distributions
@@ -356,7 +364,9 @@ class FigureWidgets:
                                                "fraction: of the whole sample per bin"),
             bins=pn.widgets.IntInput(name="Bins (each axis)", value=60, start=2, end=200,
                                      width=90),
-            cmap=pn.widgets.Select(name="Colours", options=FIG_CMAPS, value="viridis"),
+            cmap=cmap_select(),
+            cbar_label=pn.widgets.TextInput(name="Colorbar label (blank: what it counts)",
+                                            value=""),
             pcts=pn.widgets.TextInput(name="Contours enclosing (%)", value="50, 90",
                                       description="Each contour encloses this percentage "
                                                   "of the pairs, densest first"),
@@ -368,20 +378,17 @@ class FigureWidgets:
                 name="Statistics of each (blank: none)", value=["n", "r"],
                 options={v: k for k, v in figdraw.JOINT_STATS.items()}),
             stats_loc=pn.widgets.Select(name="Box at", options=LOCS, value="upper left"),
-            legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
-            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
-            log=_chk("Log colours", True), reverse=_chk("Reverse colours", False),
+            log=_chk("Log colours", True), reverse=_chk("Reverse", False),
             colorbar=_chk("Colorbar", True), contours=_chk("Contours over", False),
             contour_labels=_chk("Contour labels", True), fit=_chk("Fit line", False),
-            one_one=_chk("1:1 line", False), zero_line=_chk("Zero lines", False),
-            legend=_chk("Legend", True), legend_frame=_chk("Legend frame", False))
+            one_one=_chk("1:1 line", False), zero_line=_chk("Zero lines", False))
         jo_shows = ("log", "reverse", "colorbar", "contours", "contour_labels", "fit",
-                    "one_one", "zero_line", "legend", "legend_frame")
+                    "one_one", "zero_line")
         self.joint_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.joint_new = pn.widgets.Button(name="+ Joint distribution", button_type="light",
                                            button_style="outline", height=32)
         self.joint_col = pn.Column(
-            _hint("Joint distributions with the same <b>Panel</b> number share a panel "
+            _hint("Joint distributions with the same <b>Panel</b> share a panel "
                   "(colour = joint distribution, or run): e.g. two runs, or two times."),
             _row(self.joint_new), self.joint_box,
             _section("Plot", _grid(*[w for k, w in jo.items()
@@ -400,62 +407,85 @@ class FigureWidgets:
         ao = self.ao = dict(
             plot=pn.widgets.Select(name="Shade as", options={"Grid cells": "mesh",
                                                              "Filled contours": "filled"}),
-            cmap=pn.widgets.Select(name="Colours", options={"The field's": ""} | {
+            cmap=pn.widgets.Select(name="Colormap", options={"The field's": ""} | {
                 c: c for c in FIG_CMAPS}, value=""),
             nlevels=pn.widgets.IntInput(name="Colour steps", value=15, start=2, end=60,
                                         width=90),
-            vmin=_auto("Colours from"), vmax=_auto("Colours to"),
+            vmin=_auto("Min"), vmax=_auto("Max"),
             cbar_label=pn.widgets.TextInput(name="Colorbar label (blank: the field's)",
                                             value=""),
             rmin=_auto("Radius from (km)"), rmax=_auto("Radius to (km)"),
-            zmin=_auto("Bottom (km)"), zmax=_auto("Top (km)"),
-            legend_loc=pn.widgets.Select(name="Legend at", options=["best"] + LOCS),
-            legend_ncol=pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1),
-            reverse=_chk("Reverse colours", False), colorbar=_chk("Colorbar", True),
-            clabels=_chk("Contour labels", True), legend=_chk("Legend", True),
-            legend_frame=_chk("Legend frame", False))
-        ao_shows = ("reverse", "colorbar", "clabels", "legend", "legend_frame")
+            zmin=_auto("Axis from (km)"), zmax=_auto("Axis to (km)"),
+            reverse=_chk("Reverse", False), colorbar=_chk("Colorbar", True),
+            clabels=_chk("Contour labels", True))
+        ao_shows = ("reverse", "colorbar", "clabels")
         self.azim_box = pn.Column(sizing_mode="stretch_width", margin=0)
         self.azim_new = pn.widgets.Button(name="+ Azimuthal mean", button_type="light",
                                           button_style="outline", height=32)
         self.azim_col = pn.Column(
-            _hint("Azimuthal means with the same <b>Panel</b> number share a panel: the "
+            _hint("Azimuthal means with the same <b>Panel</b> share a panel: the "
                   "first is shaded, the others drawn over it as contour lines (e.g. w "
                   "shaded with θ′ contours, or one run's against another's)."),
             _row(self.azim_new), self.azim_box,
             _section("Plot", _grid(*[w for k, w in ao.items() if k not in ao_shows]),
                      _checks(*[ao[k] for k in ao_shows]),
-                     _hint("Colours from / to: blank for the data's range (about 0 for a "
-                           "diverging field). Radius and Bottom / Top: the axes' ranges "
+                     _hint("Min, Max: blank for the data's range (about 0 for a "
+                           "diverging field). Radius and Axis from / to: the axes' ranges "
                            "(blank: the bins' and layer's).")),
             sizing_mode="stretch_width", margin=0)
-        # time axes of time-height / time-series panels
-        self.ts_tmin = pn.widgets.TextInput(name="From (min)", placeholder="data")
-        self.ts_tmax = pn.widgets.TextInput(name="To (min)", placeholder="data")
-        self.ts_zmin = _f("Bottom (km)", 0.0, step=0.5)
-        self.ts_zmax = _f("Top (km)", 10.0, step=0.5)
-        self.ts_ymin = _auto("y from (left axis)")
-        self.ts_ymax = _auto("y to (left axis)")
-        self.ts_legend = _chk("Legend", True)
-        self.ts_legloc = pn.widgets.Select(name="Legend at", options=["best"] + LOCS)
-        self.ts_legncol = pn.widgets.IntInput(name="Legend columns", start=1, end=8, value=1)
-        self.ts_legframe = _chk("Legend frame", False)
-        self.ts_zero = _chk("Zero line", False)
-        self.ts_mark = pn.widgets.Select(name="Mark each line's", options=MARK_EXTREMES)
-        self.ts_mark_legend = _chk("Extremes in the legend", False)
-        self.ts_mark_edited = _chk("Mark edited lines", True)
-        # the maximum / minimum of a layer (plan, section and time-height panels)
-        self.ex_on = _chk("Maximum / minimum", False)
-        self.ex_layer = pn.widgets.Select(name="Of layer", options={"First fill": -1})
-        self.ex_what = pn.widgets.Select(name="Show", value="both", options={
-            k: v for k, v in MARK_EXTREMES.items() if v})
-        self.ex_loc = pn.widgets.Select(name="Text at", options=LOCS, value="upper center")
-        self.ex_marker = _chk("Mark where (+ max, × min)", True)
-        self.ex_box = _chk("White box", True)
+        # tables
+        to = self.to = dict(
+            layout=pn.widgets.Select(name="Set out as", options=TBL_LAYOUTS, width=300),
+            compare=pn.widgets.Select(name="Show", options=TBL_COMPARE, width=220),
+            decimals=pn.widgets.Select(name="Decimals", options=TBL_DECIMALS, value=-1, width=100))
+        self.table_box = pn.Column(sizing_mode="stretch_width", margin=0)
+        self.table_new = pn.widgets.Button(name="+ Values", button_type="light",
+                                           button_style="outline", height=32)
+        self.table_col = pn.Column(
+            _hint("A table's values come from these cards, each with its runs and times; cards "
+                  "with the same <b>Panel</b> make one table."),
+            _row(self.table_new), self.table_box,
+            _section("Table", _grid((to["layout"], 2), to["compare"], to["decimals"]),
+                     _hint("Differences: the first run's or first time's own values stay, and "
+                           "the rest are shown less those, with their sign. Automatic decimals: "
+                           "whole numbers for most sounding parameters, one for STP and SCP, "
+                           "about three significant figures for statistics."),
+                     collapsed=False),
+            sizing_mode="stretch_width", margin=0)
+        with self._redraws():
+            # time axes of time-height / time-series panels
+            self.ts_tmin = pn.widgets.TextInput(name="From (min)", placeholder="data")
+            self.ts_tmax = pn.widgets.TextInput(name="To (min)", placeholder="data")
+            self.ts_zmin = _f("Axis from (km)", 0.0, step=0.5)
+            self.ts_zmax = _f("Axis to (km)", 10.0, step=0.5)
+            self.ts_ymin = _auto("y from (left axis)")
+            self.ts_ymax = _auto("y to (left axis)")
+            self.ts_zero = _chk("Zero line", False)
+            self.ts_mark = pn.widgets.Select(name="Mark each line's", options=MARK_EXTREMES)
+            self.ts_mark_legend = _chk("Extremes in the legend", False)
+            self.ts_mark_edited = _chk("Mark edited lines", True)
+            # the maximum / minimum of a layer (plan, section and time-height panels)
+            self.ex_on = _chk("Maximum / minimum", False)
+            self.ex_layer = pn.widgets.Select(name="Of layer", options={"First fill": -1})
+            self.ex_what = pn.widgets.Select(name="Show", value="both", options={
+                k: v for k, v in MARK_EXTREMES.items() if v})
+            self.ex_loc = pn.widgets.Select(name="Text at", options=LOCS, value="upper center")
+            self.ex_marker = _chk("Mark where (+ max, × min)", True)
+            self.ex_box = _chk("White box", True)
+        self.series_col.append(_section(
+            "Plot", _grid(
+                self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax, self.ts_ymin,
+                self.ts_ymax, self.ts_mark),
+            _checks(self.ts_zero, self.ts_mark_legend, self.ts_mark_edited),
+            _hint("Blank: the range of the data. Minutes count from each run's time zero "
+                  "(<b>Runs used</b>). <b>Mark edited lines</b>: “(edited)” after the legend "
+                  "label of a line with values changed by hand. For one time-series panel's "
+                  "own y range, use the <b>Tree</b> tab.")))
+        self.ex_opts = _grid(self.ex_layer, self.ex_what, self.ex_loc, self.ex_marker,
+                             self.ex_box)
+        _when(self.ex_on, self.ex_opts)
         self.ext_sec = _section(
-            "Maximum and minimum",
-            _grid(self.ex_layer, self.ex_what, self.ex_loc),
-            _checks(self.ex_on, self.ex_marker, self.ex_box),
+            "Maximum and minimum", _grid((self.ex_on, 3)), self.ex_opts,
             _hint("Of the chosen layer (a fill, contours or shading; else the first fill) "
                   "over what each panel shows, in each panel."))
 
@@ -463,20 +493,22 @@ class FigureWidgets:
         """Annotate tab (annotations, own code), the contour key and the export widgets."""
         run = self.run
         # ---- contour key (Style tab) and annotations (Annotate tab)
-        self.ck_on = _chk("Contour key (nested circles)", False)
-        self.ck_layer = pn.widgets.Select(name="Of layer", options={"First contours": -1})
-        self.ck_label = pn.widgets.TextInput(name="Name in the middle", value="w")
-        self.ck_x = _f("x (figure 0–1)", 0.01, step=0.01)
-        self.ck_y = _f("y (figure 0–1)", 0.01, step=0.01)
-        self.ck_size = _f("Size (0–1)", 0.1, step=0.01)
-        self.ck_fs = _f("Font (pt)", 10.0, step=1)
-        self.ck_frame = _chk("Frame", True)
+        with self._redraws():
+            self.ck_on = _chk("Contour key (nested circles)", False)
+            self.ck_layer = pn.widgets.Select(name="Of layer", options={"First contours": -1})
+            self.ck_label = pn.widgets.TextInput(name="Name in the middle", value="w")
+            self.ck_x = _f("x (figure 0–1)", 0.01, step=0.01)
+            self.ck_y = _f("y (figure 0–1)", 0.01, step=0.01)
+            self.ck_size = _f("Size (0–1)", 0.1, step=0.01)
+            self.ck_fs = _f("Font (pt)", 10.0, step=1)
+            self.ck_frame = _chk("Frame", True)
         self.ann_kind = pn.widgets.Select(name="Add", options=ANN_KINDS)
         self.ann_add = pn.widgets.Button(name="+ Add", button_type="primary",
                                          button_style="outline", height=32)
         self.ann_box = pn.Column(sizing_mode="stretch_width", margin=0)
         # ---- Annotate: the figure's own code
-        self.code_on = _chk("Run the code", False)
+        with self._redraws():
+            self.code_on = _chk("Run the code", False)
         # highlighted (Ace, which the browser loads from a CDN), or a plain box that
         # needs nothing from the internet; both hold the same text
         self.code = pn.widgets.CodeEditor(
@@ -492,7 +524,7 @@ class FigureWidgets:
                          " font-size: 12px; }"])
         self.code_box = _chk("Plain text box (if the highlighted editor stays blank, e.g. "
                              "without internet)", config.state("figure_code_plain") == "1")
-        # ---- Export (the bar above the preview, and the Export tab)
+        # ---- Saving (the bar above the preview, and the File tab)
         self._fig_dir = config.figures_dir(run.path)  # followed while the box is in it
         self.path = pn.widgets.TextInput(
             name="Save as (folder/name on the server, no extension)",
@@ -514,11 +546,12 @@ class FigureWidgets:
                                           label="Download", icon="download",
                                           button_type="primary", button_style="outline",
                                           height=32, margin=(5, 3))
-        self.tight = pn.widgets.Checkbox(name="Trim white space")
-        self.pad = _f("Margin when trimmed (in)", 0.05, step=0.01, start=0.0)
-        self.bg = pn.widgets.Select(name="Background", options={"White": "white",
-                                                                "Black": "black",
-                                                                "Transparent": "none"})
+        with self._redraws():
+            self.tight = pn.widgets.Checkbox(name="Trim white space")
+            self.pad = _f("Margin when trimmed (in)", 0.05, step=0.01, start=0.0)
+            self.bg = pn.widgets.Select(name="Background", options={"White": "white",
+                                                                    "Black": "black",
+                                                                    "Transparent": "none"})
         self.saved_pick = pn.widgets.Select(
             name="Saved figures (in the Figures folder, ⚙ Settings)",
             description="Figures saved with + script & data: this run's first, then the "
@@ -547,20 +580,11 @@ class FigureWidgets:
                                    _grid(self.box_x0, self.box_x1, self.box_y0, self.box_y1,
                                          n=2),
                                    self.box_html, margin=0, sizing_mode="stretch_width")
-        self.area_xs = pn.Column(self.sec_box, _grid(self.sec_add, self.xs_top, self.xs_coords),
-                                 self.xs_html,
-                                 margin=0, sizing_mode="stretch_width")
+        self.area_xs = pn.Column(self.sec_box, _grid(self.sec_add), self.xs_axes_area,
+                                 self.xs_html, margin=0, sizing_mode="stretch_width")
         self.area_body = pn.Column(self.area_plan, self.area_xs, margin=0,
                                    sizing_mode="stretch_width")
         self.area_sec = _section("Area", self.area_body)
-        self.ts_sec = _section("Time and value axes", _grid(
-            self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax, self.ts_ymin,
-            self.ts_ymax, self.ts_legloc, self.ts_legncol, self.ts_mark),
-            _checks(self.ts_legend, self.ts_legframe, self.ts_zero, self.ts_mark_legend,
-                    self.ts_mark_edited),
-            _hint("Blank: the range of the data. Minutes are counted from <b>Style → Panel "
-                  "labels → Minutes counted from</b>. <b>Mark edited lines</b>: "
-                  "“(edited)” after the legend label of a line with values changed by hand."))
         self.runs_sec = _section(
             "Runs used", _hint(
                 "Each layer, section, sounding, distribution and series picks its run in its "
@@ -578,16 +602,16 @@ class FigureWidgets:
         self._build_tree()
         # (the sections the figure kind uses only, and the area's: _keep_tabs)
         self.panels_all = [self.parts_sec, self.grid_sec, self.times_sec, self.titles_sec,
-                           self.area_sec, self.ts_sec]
+                           self.area_sec]
         self.area_all = [self.area_plan, self.area_xs]
         self.panels_tab = pn.Column(*self.panels_all, sizing_mode="stretch_width")
         return self.panels_tab
 
     def _more_tabs(self):
-        """The Annotate and Export tabs."""
+        """The Annotate and File tabs."""
         annotate_tab = pn.Column(
             _section("Annotations", _hint(
-                "Text, markers, arrows, lines and shapes in one panel (number) or all (0), in "
+                "Text, markers, arrows, lines and shapes in some panels or all, in "
                 "axis units (km; minutes and km or values for series) or panel fractions."),
                 _grid(self.ann_kind, self.ann_add), self.ann_box),
             _section("Your own code", _hint(
@@ -600,7 +624,7 @@ class FigureWidgets:
                 "click outside the box."), self.code_on, self.code, self.code_plain,
                 self.code_box),
             sizing_mode="stretch_width")
-        export_tab = pn.Column(
+        file_tab = pn.Column(
             _section("Image", _grid(self.tight, self.pad, self.bg),
                      _hint("Save, the format and the DPI are above the preview. Publishers "
                            "usually ask for 300–600 DPI, or PDF / EPS for line art.")),
@@ -613,4 +637,4 @@ class FigureWidgets:
                 _grid((self.spec_path, 2), self.load_btn)),
             self.tpl_sec,
             sizing_mode="stretch_width")
-        return annotate_tab, export_tab
+        return annotate_tab, file_tab

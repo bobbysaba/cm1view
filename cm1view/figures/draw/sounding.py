@@ -65,6 +65,46 @@ def sounding_colors(spec, d):
     return entry_colors(spec, d, "soundings", "nsnd", "N")
 
 
+SND_LINES = ("T", "Td", "Tp")  # (a sounding's own looks: its keys T_color, T_ls, T_lw, ...)
+
+
+def _snd_entries(spec, d):
+    """The spec entry of each sounding of panel data d."""
+    ents = spec.get("soundings", [])
+    idx = [int(d[f"N{j}_e"]) for j in range(int(d.get("nsnd", 0)))]
+    return [ents[e] if e < len(ents) else {} for e in idx]
+
+
+def sounding_looks(spec, d, cols):
+    """How each sounding of panel data d draws: {"T", "Td", "Tp": dict(color, ls, lw)},
+    the entry's own (T_color, T_ls, T_lw, ...: a blank one is automatic), else one
+    sounding in red, green and black and several in their colours cols (dewpoint dashed
+    and thinner, parcel dotted)."""
+    ents = _snd_entries(spec, d)
+    many = len(ents) > 1
+    lw = float(spec.get("skewt", {}).get("lw", 1.8))
+    out = []
+    for j, e in enumerate(ents):
+        col = cols[j]
+        auto = dict(T=(col if many else "#d62728", "-", lw),
+                    Td=(col if many else "#2ca02c", (0, (5, 2)) if many else "-",
+                        lw * (0.75 if many else 1.0)),
+                    Tp=(col if many else "k", (0, (1.5, 1.5)) if many else "--", 0.9))
+        out.append({k: dict(color=e.get(f"{k}_color") or auto[k][0],
+                            ls=e.get(f"{k}_ls") or auto[k][1],
+                            lw=float(e.get(f"{k}_lw") or auto[k][2])) for k in SND_LINES})
+    return out
+
+
+def hodo_styles(spec, d):
+    """The line style of each sounding's hodograph: its temperature's when the panel's
+    soundings differ by that, else (they cannot be told apart by it) HODO_LS."""
+    ents = _snd_entries(spec, d)
+    own = [e.get("T_ls") or "-" for e in ents]
+    return own if len(set(own)) == len(own) else \
+        [HODO_LS[j % len(HODO_LS)] for j in range(len(ents))]
+
+
 def _sounding(fig, ax, d, spec, fs):
     """A sounding panel in its layout; returns the axes the panel's labels go on (the
     skew-T, or the hodograph alone)."""
@@ -80,9 +120,10 @@ def _sounding(fig, ax, d, spec, fs):
             hspace=0.02)
         ax.remove()
         ax, tx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
-        _param_table(tx, d, n, cols, keys, spec)
+        _param_table(tx, d, n, [lk["T"]["color"] for lk in sounding_looks(spec, d, cols)],
+                     keys, spec)
     if lay == "hodo":
-        _hodo(ax, d, n, cols, o, fs, full=True, key_fs=key_fs)
+        _hodo(ax, d, n, cols, o, fs, full=True, key_fs=key_fs, styles=hodo_styles(spec, d))
         return ax
     if lay == "side":
         w = float(o.get("hodo_width", 0.62))  # hodograph width / skew-T width
@@ -90,7 +131,7 @@ def _sounding(fig, ax, d, spec, fs):
         ax.remove()
         ax, hx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
         _skewt(ax, d, spec, fs, cols, inset=False)
-        _hodo(hx, d, n, cols, o, fs, full=True, key_fs=key_fs)
+        _hodo(hx, d, n, cols, o, fs, full=True, key_fs=key_fs, styles=hodo_styles(spec, d))
         ax._cv_more = [hx]  # (its key goes into a figure legend with the skew-T's)
         return ax
     _skewt(ax, d, spec, fs, cols, inset=lay == "inset")
@@ -161,17 +202,14 @@ def _skewt(ax, d, spec, fs, cols, inset=True):
     n = int(d.get("nsnd", 0))
     many = n > 1
     handles = []
+    looks = sounding_looks(spec, d, cols)
     for j in range(n):
         p, T, Td = d[f"N{j}_p"], d[f"N{j}_T"], d[f"N{j}_Td"]
-        col = cols[j]
-        lw = float(o.get("lw", 1.8))
-        cT, cD, cP = (col, col, col) if many else ("#d62728", "#2ca02c", "k")
-        h, = ax.plot(X(T, p), p, color=cT, lw=lw, label=str(d.get(f"N{j}_label", "")))
-        ax.plot(X(Td, p), p, color=cD, lw=lw * (0.75 if many else 1.0),
-                ls=(0, (5, 2)) if many else "-")
+        h, = ax.plot(X(T, p), p, label=str(d.get(f"N{j}_label", "")), **looks[j]["T"])
+        ax.plot(X(Td, p), p, **looks[j]["Td"])
         Tp = d.get(f"N{j}_Tp")
         if Tp is not None and o.get("parcel", "ml") != "none":
-            ax.plot(X(Tp, p), p, color=cP, lw=0.9, ls=(0, (1.5, 1.5)) if many else "--")
+            ax.plot(X(Tp, p), p, **looks[j]["Tp"])
         handles.append(h)
     ax.set_ylim(pb, pt)
     ax.set_xlim(float(o.get("tmin", -40.0)), float(o.get("tmax", 50.0)))
@@ -217,7 +255,8 @@ def _skewt(ax, d, spec, fs, cols, inset=True):
                         d, n, X, pb, pt, ax.get_xlim(), corners[c], legend == c))
                 rect = corners[where]
         hx = ax.inset_axes([float(v) for v in rect])
-        _hodo(hx, d, n, cols, o, fs, full=bool(o.get("hodo_full_inset", False)))
+        _hodo(hx, d, n, cols, o, fs, full=bool(o.get("hodo_full_inset", False)),
+              styles=hodo_styles(spec, d))
         # (equal aspect shrinks the box: keep it in its corner, custom: at x, y)
         hx.set_anchor({"upper right": "NE", "upper left": "NW", "lower right": "SE",
                        "lower left": "SW", "custom": "SW"}.get(where, "C"))
@@ -292,14 +331,16 @@ def shared_hodo_half(items):
     return max(halves) if len(halves) > 1 else None
 
 
-def _hodo(hx, d, n, cols, o, fs, full=False, key_fs=None):
+def _hodo(hx, d, n, cols, o, fs, full=False, key_fs=None, styles=None):
     """Hodograph of the panel's soundings (one sounding: coloured by height bands).
     Bunkers right / left movers and the 0-6 km mean wind (hodo_marks), a ring at the
     storm motion of the SRH (hodo_storm; one sounding: with the storm-relative
     inflow and the 0-0.5 km shear, as the Sounding tab draws them), height labels
     along the trace (hodo_labels); full (a hodograph panel, not an inset): a key of
     the height bands (hodo_key; key_fs: its font size, else in step with the rest) and
-    SRH shading (srh "1" / "3": 0-1 / 0-3 km). The view: _hodo_view."""
+    SRH shading (srh "1" / "3": 0-1 / 0-3 km). The view: _hodo_view.  styles: each
+    sounding's line style (hodo_styles; none given: HODO_LS)."""
+    styles = styles or [HODO_LS[j % len(HODO_LS)] for j in range(n)]
     hx._cv_hodo = True
     many = n > 1
     hm = float(o.get("hodo_max", 40.0))
@@ -334,7 +375,7 @@ def _hodo(hx, d, n, cols, o, fs, full=False, key_fs=None):
                                     f"({storm})",
                         transform=hx.transAxes, ha="right", va="bottom",
                         fontsize=fs * small, color="0.25")
-        ls = HODO_LS[j % len(HODO_LS)] if many else "-"
+        ls = styles[j] if many else "-"
         for z0, z1, c in HODO_BANDS:  # the height colours, one line style a sounding
             if z0 >= top:
                 break
@@ -394,7 +435,7 @@ def _hodo(hx, d, n, cols, o, fs, full=False, key_fs=None):
             hs.append(Line2D([], [], marker="o", ms=6, mfc="none", mec=ring, mew=1.4, lw=0,
                              label=f"storm ({storm})"))
         if many:  # which line style is which sounding
-            hs += [Line2D([], [], color="k", lw=1.4, ls=HODO_LS[j % len(HODO_LS)],
+            hs += [Line2D([], [], color="k", lw=1.4, ls=styles[j],
                           label=str(d.get(f"N{j}_label", "")) or f"{j + 1}")
                    for j in range(n)]
         leg = hx.legend(handles=hs, **anchor_kw(o.get("hodo_key_loc") or "upper right",

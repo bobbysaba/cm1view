@@ -8,11 +8,13 @@ from .. import draw as figdraw, spec as fg
 import os
 
 from ...core import parcels as P, vectors
-from ...core.fields import DERIVS, deriv_name, deriv_options, split_deriv
+from ...core.fields import deriv_name, split_deriv
 from .base import (
-    FIG_CMAPS, LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, EXTEND, AZ_REFS,
-    AZ_CENTERS, PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _hex, _f, _grid, _hint, _checks, _fold, _near,
-    _nice, _panels_parse, _panels_text, _chk, _load_widgets, _take_new_runs,
+    LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS, LINE_STYLES,
+    PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _deriv_opts, _hex, _f, _grid, _hint, _checks, _fold,
+    _near, _nice, _panels_parse, _panels_text, _chk, _load_widgets, _section, _take_new_runs,
+    cmap_select,
+    color_widgets, known_cmap, _BTN,
 )
 from ...viewer.ui import held
 
@@ -63,20 +65,19 @@ class LayerCard:
         self.ed, self.type = ed, lay["type"]
         self._loading = False  # (load: the widgets take another layer's settings)
         self._syncing = False  # (the Derivative list following the Field)
+        self.head = ""  # (the title's name, for the layer's type: a panel's own fill)
         F, g = ed.fields, ed.fields.groups()
         self.lay = dict(lay)
         self.w = w = {}
         w["on"] = pn.widgets.Checkbox(value=lay.get("on", True), width=20, margin=(8, 2, 0, 4))
-        btn = dict(width=32, height=28, margin=(2, 1), button_type="default",
-                   button_style="outline")
-        self.up = pn.widgets.Button(name="↑", description="Draw earlier (below)", **btn)
-        self.down = pn.widgets.Button(name="↓", description="Draw later (on top)", **btn)
-        self.rm = pn.widgets.Button(name="✕", description="Remove the layer", **btn)
+        self.up = pn.widgets.Button(name="↑", description="Draw earlier (below)", **_BTN)
+        self.down = pn.widgets.Button(name="↓", description="Draw later (on top)", **_BTN)
+        self.rm = pn.widgets.Button(name="✕", description="Remove the layer", **_BTN)
         t = self.type
         if t in ("fill", "contour", "shade"):
             op, base = split_deriv(lay["field"])
             w["field"] = pn.widgets.Select(name="Field", groups=g, value=base)
-            dopts = self._deriv_opts(base)
+            dopts = _deriv_opts(F, base)
             w["deriv"] = pn.widgets.Select(
                 name="Derivative", options=dopts, value=op if op in dopts.values() else "",
                 width=100, description="Plot a derivative of the field (per km): ∂/∂z on "
@@ -102,22 +103,10 @@ class LayerCard:
         if t in ("fill", "contour", "shade", "vectors"):
             w["z_fixed"] = _chk("Own height (not the panel's)", lay.get("z_fixed", False))
         if t == "fill":
-            w["cmap"] = pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
-                                          value=lay["cmap"] if lay["cmap"] in FIG_CMAPS
-                                          else "viridis")
-            w["reverse"] = pn.widgets.Checkbox(name="Reverse", value=lay.get("reverse", False))
-            w["white_first"] = pn.widgets.Checkbox(
-                name="Start from white", value=lay.get("white_first", False))
-            w["vmin"] = _f("Min", lay["vmin"])
-            w["vmax"] = _f("Max", lay["vmax"])
-            w["nlevels"] = pn.widgets.IntInput(name="Color steps (0: smooth)",
-                                               value=int(lay.get("nlevels") or 0), start=0,
-                                               end=60)
+            color_widgets(w, lay)
             w["scale"] = pn.widgets.Select(name="Scale", options={"Linear": "linear",
                                                                   "Logarithmic": "log"},
                                            value=lay.get("scale", "linear"))
-            w["extend"] = pn.widgets.Select(name="Colorbar arrows", options=EXTEND,
-                                            value=lay.get("extend", "neither"))
             w["alpha"] = _f("Opacity (0–1)", float(lay.get("alpha", 1.0)), step=0.1, start=0.0,
                             end=1.0)
             w["style"] = pn.widgets.Select(name="Draw as", options={
@@ -126,12 +115,6 @@ class LayerCard:
             w["mask_below"] = pn.widgets.TextInput(
                 name="Blank where ≤", value="" if lay.get("mask_below") is None
                 else f"{lay['mask_below']:g}", placeholder="off")
-            w["cbar_label"] = pn.widgets.TextInput(
-                name="Colorbar label (blank: units)", value=lay.get("cbar_label", "") or "",
-                placeholder=lay.get("units", ""))
-            w["cbar_ticks"] = pn.widgets.TextInput(
-                name="Colorbar ticks (blank: auto)", value=lay.get("cbar_ticks", "") or "",
-                placeholder="0:60:10")
             m = lay.get("minus") or {}
             w["minus_on"] = _chk("Difference: minus another run or time", bool(lay.get("minus")))
             try:
@@ -193,7 +176,7 @@ class LayerCard:
             w["hatch_lw"] = _f("Pattern line width", float(lay.get("hatch_lw", 0.6)),
                                step=0.1, start=0.1)
             w["outline_on"] = pn.widgets.Checkbox(name="Outline", value=bool(lay.get("outline")))
-            w["outline"] = pn.widgets.ColorPicker(name="Outline color",
+            w["outline"] = pn.widgets.ColorPicker(name="Outline colour",
                                                   value=_hex(lay.get("outline") or "magenta"))
         if t == "vectors":
             opts = vectors.options(F)
@@ -231,13 +214,12 @@ class LayerCard:
             w["ref"] = pn.widgets.Select(name="Azimuth 0", options=AZ_REFS,
                                          value=lay.get("ref", "motion"))
         if t in ("contour", "shade", "vectors", "track", "line", "sector"):
-            w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(lay.get("color", "k")))
+            w["color"] = pn.widgets.ColorPicker(name="Colour", value=_hex(lay.get("color", "k")))
         if t in ("contour", "shade", "track", "line", "sector"):
             w["lw"] = _f("Outline width" if t == "shade" else "Line width", lay.get("lw", 1.0),
                          step=0.25)
         if t in ("track", "sector"):
-            w["ls"] = pn.widgets.Select(name="Style", options={"solid": "-", "dashed": "--",
-                                                               "dotted": ":"},
+            w["ls"] = pn.widgets.Select(name="Line style", options=LINE_STYLES,
                                         value=lay.get("ls", "-"))
         if t == "track":
             w["run_color"] = _chk("Run's colour", lay.get("run_color", False))
@@ -274,6 +256,19 @@ class LayerCard:
                 x.param.watch(lambda e: self._changed(), "value")
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self._set_title()
+        if t == "fill":  # (folded, unless in use: _open_used)
+            self.minus_sec = _section(
+                "Difference", _grid((w["minus_on"], 3), w["minus_run"], w["minus_time"],
+                                    w["minus_grid"]),
+                collapsed=not w["minus_on"].value)
+            self.ens_sec = _section(
+                "Ensemble", _grid((w["ens_on"], 3), (w["ens_runs"], 3), w["ens_stat"],
+                                  w["ens_thr"], w["ens_above"], w["ens_grid"]),
+                _hint("The field of each of the runs at the layer's time (the layer's Run is "
+                      "not used), combined cell by cell; runs without output at that time "
+                      "are left out."), collapsed=not w["ens_on"].value)
+            self.reduce_sec = _section("Time window", self._reduce_row(),
+                                       collapsed=not w["reduce_op"].value)
         self.panel, self.body = _fold([w["on"], self.title, pn.Spacer(), self.up, self.down,
                                        self.rm], self._layout(), collapsed)
         self.show(ed.kind.value)
@@ -288,18 +283,22 @@ class LayerCard:
         finally:
             self._loading = False
         self.lay = new.lay
+        self._open_used()
         if self.body.visible == collapsed:
             self.panel.objects[0].objects[0].clicks += 1  # (the chevron: fold / unfold)
         self.show(self.ed.kind.value)
         self._set_title()
 
     def _layout(self):
-        return [_grid(self.w["run"])] + self._rows()
+        return [_grid(self.w["run"], (self.w["panels"], 2))] + self._rows()
 
-    def _deriv_opts(self, base):
-        F = self.ed.fields
-        return deriv_options(F[base]) if base in F else {"None": ""} | \
-            {v: k for k, v in DERIVS.items()}
+    def _open_used(self):
+        """A fill's folded sections: open when they are in use, else shut."""
+        if self.type == "fill":
+            w = self.w
+            self.minus_sec.collapsed = not w["minus_on"].value
+            self.ens_sec.collapsed = not w["ens_on"].value
+            self.reduce_sec.collapsed = not w["reduce_op"].value
 
     def field_name(self):
         """The layer's field: the Field, or its Derivative (fields.deriv_name)."""
@@ -310,7 +309,7 @@ class LayerCard:
         if self._loading:
             return
         dw = self.w["deriv"]
-        opts = self._deriv_opts(ev.new)
+        opts = _deriv_opts(self.ed.fields, ev.new)
         if opts != dw.options:
             self._syncing = True
             try:
@@ -344,43 +343,35 @@ class LayerCard:
                           w["style"], w["mask_below"]),
                     _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                           w["nlevels"], w["scale"], w["extend"], w["alpha"],
-                          (w["cbar_label"], 2), w["cbar_ticks"], (w["panels"], 3)),
-                    _grid((w["minus_on"], 2), w["minus_run"], w["minus_time"],
-                          w["minus_grid"]),
-                    _grid((w["ens_on"], 2), (w["ens_runs"], 2), w["ens_stat"], w["ens_thr"],
-                          w["ens_above"], w["ens_grid"]),
-                    _hint("Ensemble: the field of each of the runs at the layer's time "
-                          "(the layer's Run is not used), combined cell by cell; runs "
-                          "without output at that time are left out."),
-                    self._reduce_row()]
+                          (w["cbar_label"], 2), w["cbar_ticks"]),
+                    self.minus_sec, self.ens_sec, self.reduce_sec]
         if t == "contour":
             return [_grid((w["field"], 2), w["deriv"], w["mode"], w["z"], w["z_fixed"],
                           (w["levels"], 2),
-                          w["color"], w["lw"], w["clabel_size"], w["clabel_fmt"],
-                          (w["legend"], 3), (w["panels"], 3)),
-                    self._reduce_row(), _checks(w["clabel"], w["neg_dashed"], title="Options")]
+                          w["color"], w["lw"], w["neg_dashed"], w["clabel"],
+                          w["clabel_size"], w["clabel_fmt"], (w["legend"], 3)),
+                    self._reduce_row()]
         if t == "shade":
             return [_grid((w["field"], 2), w["deriv"], w["mode"], w["z"], w["z_fixed"],
                           w["threshold"],
                           w["above"], w["hatch"], w["hatch_lw"],
                           w["color"], w["alpha"], w["outline_on"], w["outline"], w["lw"],
-                          (w["legend"], 3), (w["panels"], 3)),
+                          (w["legend"], 3)),
                     self._reduce_row()]
         if t == "vectors":
             return [_grid((w["vector"], 2), w["style"], w["frame"], w["color"], w["z"],
                           w["z_fixed"], w["spacing"],
                           w["zspacing"], w["scale"], w["width"], w["key"], w["density"],
-                          w["slw"], w["arrowsize"], w["barb_len"], w["barb_units"],
-                          (w["panels"], 3))]
+                          w["slw"], w["arrowsize"], w["barb_len"], w["barb_units"])]
         if t == "track":
-            return [_grid(w["run_color"], w["color"], w["lw"], w["ls"],
-                          (w["legend"], 3), (w["panels"], 3)), _checks(w["marker"])]
+            return [_grid(w["run_color"], w["color"], w["lw"], w["ls"], (w["legend"], 3)),
+                    _checks(w["marker"])]
         if t == "parcels":
             return [_grid((w["pset"], 2), w["color"], w["cvar"], w["cmap"], w["reverse"],
                           w["vmin"], w["vmax"], (w["cbar_label"], 2), w["tails"],
                           w["minutes"], (w["moving"], 2), w["move_u"], w["move_v"],
                           w["lw"], w["alpha"], w["ms"], w["within"],
-                          (w["xs_tails"], 2), (w["legend"], 3), (w["panels"], 3)),
+                          (w["xs_tails"], 2), (w["legend"], 3)),
                     _checks(w["heads"], w["interp"], title="Options"),
                     _hint("The parcels of a set of the viewer's Parcels tab, or of a saved "
                           "set, chosen again by its rule from this layer's run's parcel "
@@ -391,13 +382,12 @@ class LayerCard:
         if t == "sector":
             return [_grid((w["center"], 2), w["offx"], w["offy"], w["cx"], w["cy"],
                           (w["ref"], 2), w["az0"], w["az1"], w["rmax"], w["color"], w["lw"],
-                          w["ls"], (w["legend"], 3), (w["panels"], 3)),
+                          w["ls"], (w["legend"], 3)),
                     _hint("The sector of an azimuthal mean panel, at each panel's time: "
                           "azimuths clockwise from the storm's motion (its track's) or "
                           "from north, from the first to the second (0 to 360: a circle). "
                           "Give it the settings of the azimuthal mean it shows.")]
-        return [_grid(w["which"], w["color"], w["lw"], w["labels"], (w["legend"], 3),
-                      (w["panels"], 3))]
+        return [_grid(w["which"], w["color"], w["lw"], w["labels"], (w["legend"], 3))]
 
     def _reduce_row(self):
         w = self.w
@@ -455,9 +445,9 @@ class LayerCard:
         if t == "contour":
             w["clabel_size"].visible = w["clabel_fmt"].visible = w["clabel"].value
         if t == "fill":
-            w["white_first"].visible = True
             ens = w["ens_on"].value
-            w["minus_on"].visible = not ens
+            w["minus_on"].visible = self.minus_sec.visible = not ens
+            self.reduce_sec.visible = not xs
             for k in ("minus_run", "minus_time", "minus_grid"):
                 w[k].visible = w["minus_on"].value and not ens
             for k in ("ens_runs", "ens_stat", "ens_grid"):
@@ -525,7 +515,7 @@ class LayerCard:
         if only:
             sub += " · panel" + ("s " if len(only) > 1 else " ") + ", ".join(
                 figdraw.panel_letter(i, "{a}") for i in only)
-        self.title.object = f"<b>{TYPE_LABEL[t]}</b>{sub}"
+        self.title.object = f"<b>{self.head or TYPE_LABEL[t]}</b>{sub}"
 
     def _on_fill_field(self, ev):
         """New fill field: its default colours, range and units."""
@@ -537,7 +527,7 @@ class LayerCard:
         self.lay["units"] = d["units"]
         with held(self.ed):
             for k in ("cmap", "vmin", "vmax", "extend"):
-                self.w[k].value = d[k] if k != "cmap" or d[k] in FIG_CMAPS else "viridis"
+                self.w[k].value = known_cmap(d[k]) if k == "cmap" else d[k]
             self.w["mask_below"].value = "" if d["mask_below"] is None else f"{d['mask_below']:g}"
             self.w["cbar_label"].placeholder = d["units"]
         if self.w["ens_on"].value:  # (an ensemble: its statistic's colours)
@@ -572,7 +562,7 @@ class LayerCard:
                 vals = dict(cmap="RdBu", reverse=True, white_first=False, vmin=-a, vmax=a,
                             scale="linear", mask_below="")
             else:
-                vals = dict(cmap=d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis",
+                vals = dict(cmap=known_cmap(d["cmap"]),
                             reverse=False, vmin=d["vmin"], vmax=d["vmax"],
                             mask_below="" if d["mask_below"] is None else f"{d['mask_below']:g}")
             for k, v in vals.items():
@@ -589,7 +579,7 @@ class LayerCard:
             self._changed()
             return
         d = fg.layer_defaults("fill", self.ed.fields, self.field_name())
-        own = dict(cmap=d["cmap"] if d["cmap"] in FIG_CMAPS else "viridis", reverse=False,
+        own = dict(cmap=known_cmap(d["cmap"]), reverse=False,
                    vmin=d["vmin"], vmax=d["vmax"],
                    mask_below="" if d["mask_below"] is None else f"{d['mask_below']:g}")
         st = w["ens_stat"].value
@@ -676,13 +666,11 @@ class LayerCard:
         w["pset"] = pn.widgets.Select(name="Parcels", options=self._parcel_sets(lay),
                                       value="", description="The parcel set drawn: pick "
                                       "another set of the viewer, or a saved one")
-        w["color"] = pn.widgets.ColorPicker(name="Color", value=_hex(lay.get("color", "k")))
+        w["color"] = pn.widgets.ColorPicker(name="Colour", value=_hex(lay.get("color", "k")))
         w["cvar"] = pn.widgets.Select(name="Colour by", value=cvar, groups=P.var_choices(
             pf, {"Set colour": ""}, keep=cvar))
-        w["cmap"] = pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
-                                      value=lay.get("cmap") if lay.get("cmap") in FIG_CMAPS
-                                      else "viridis")
-        w["reverse"] = pn.widgets.Checkbox(name="Reverse", value=lay.get("reverse", False))
+        w["cmap"] = cmap_select(lay.get("cmap"))
+        w["reverse"] = _chk("Reverse", lay.get("reverse", False))
         for k, lab in (("vmin", "Min"), ("vmax", "Max")):
             w[k] = _f(lab, lay.get(k), placeholder="auto")
         w["cbar_label"] = pn.widgets.TextInput(

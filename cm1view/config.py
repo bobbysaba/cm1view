@@ -397,6 +397,27 @@ def find_track(path, levels=4):
     return None
 
 
+def track_files(path, levels=4, limit=200):
+    """The track files to offer for the run in `path`: those named for it, in find_track's
+    order, then the others in the track folders (.csv, .txt), closest folder first.  Each
+    folder is listed, not searched: nothing below it."""
+    import fnmatch as fn
+    path, name, parent = _names(path)
+    pats = [p.format(name=name, parent=parent) for p in get("track_patterns")]
+    own, other = [], []
+    for tdir in dict.fromkeys(_track_dirs(path, levels)):
+        try:
+            with os.scandir(tdir) as it:
+                names = sorted(e.name for e in it if _is(e, "file"))
+        except OSError:
+            continue
+        for pat in pats:
+            own += [os.path.join(tdir, n) for n in names if fn.fnmatch(n, pat)]
+        other += [os.path.join(tdir, n) for n in names
+                  if n.lower().endswith((".csv", ".txt"))]
+    return list(dict.fromkeys(own + other))[:limit]
+
+
 def track_save_path(path, levels=4):
     """Where a new track for the run in `path` is saved: the first track folder that
     exists (or is a full path), named by the first track file name without wildcards,

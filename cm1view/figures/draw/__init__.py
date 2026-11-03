@@ -65,6 +65,10 @@ joint distribution panels (kind "joint"): njoint, and per joint distribution n (
   J<n>_p   [x, y] of a random pick of the pairs (scatter plots)
   J<n>_e, J<n>_r, J<n>_label   joint entry and run index, legend text
   J<n>_xl, J<n>_yl             x and y axis labels
+table panels (kind "table"): nq values, each of Q<j>_v (one per row of row_k, the run index;
+  row_run, its name; row_min, minutes since its time zero), Q<j>_name, Q<j>_units, Q<j>_src
+  (its sounding or field), Q<j>_dec (decimals; -1: automatic) and Q<j>_e; why: why a value is
+  missing; spec["table"]: how they are set out (tables.tbl_grid)
 azimuthal mean panels (kind "azim"): nazim, and per azimuthal mean n (a field reduced
   in radius bins at every level of a layer within a sector around the storm or a
   point, at one time or a composite over a time window; spec["azim"]: how the first
@@ -104,9 +108,9 @@ Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts
   them.
 """
 
-from . import base, v2, layers, lines, sounding, scene3d, figure
+from . import base, v2, layers, lines, sounding, tables, scene3d, figure
 
-MODULES = (base, v2, layers, lines, sounding, scene3d, figure)  # (each uses only those before it)
+MODULES = (base, v2, layers, lines, sounding, tables, scene3d, figure)  # (each uses only those before it)
 for _m in MODULES:  # one namespace, as in an exported script
     globals().update({k: v for k, v in vars(_m).items() if not k.startswith("__")})
 

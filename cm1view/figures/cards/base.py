@@ -1,4 +1,5 @@
-"""Figure editor cards: the choices and constants, and small widget helpers."""
+"""Figure editor cards: the choices and constants, small widget helpers, and the parts that
+several cards share (buttons, region, heights, look, colours, ensemble)."""
 
 import math
 import re
@@ -140,13 +141,22 @@ def _grid(*objs, n=3):
         if isinstance(o, pn.widgets.Checkbox):
             o.margin = (5, 6, 12, 6)
         items.append(o)
-    grid = pn.Column(*items, sizing_mode="stretch_width", margin=0, styles={
-        "display": "grid", "grid-template-columns": f"repeat({n}, minmax(0, 1fr))",
-        "column-gap": "2px"})
-    _follow_shown(grid, items)  # (a hidden widget is not sent to the browser)
     # (inside a plain column: bokeh hides with a ":host {display: none}" stylesheet,
     # which the grid's inline display would override, so .visible = False did nothing)
-    return pn.Column(grid, sizing_mode="stretch_width", margin=0)
+    return pn.Column(_cells(items, n), sizing_mode="stretch_width", margin=0)
+
+
+def _cells(objs, n):
+    """A column laid out as n equal grid columns, holding those of objs that are shown (a
+    hidden one is not sent to the browser).  Panel puts an invisible scroll button among a
+    Column's children, and a widget shown later lands after it: in a grid the button takes
+    a cell, which left a hole in the options, so it is taken out of the layout."""
+    grid = pn.Column(*objs, sizing_mode="stretch_width", margin=0,
+                     stylesheets=[".scroll-button { display: none !important; }"], styles={
+                         "display": "grid", "column-gap": "2px",
+                         "grid-template-columns": f"repeat({n}, minmax(0, 1fr))"})
+    _follow_shown(grid, objs)
+    return grid
 
 
 def _checks(*groups, title="Show", n=2):
@@ -160,10 +170,7 @@ def _checks(*groups, title="Show", n=2):
     for head, bs in groups:
         for b in bs:
             b.width, b.sizing_mode, b.margin = None, "stretch_width", (2, 6, 2, 6)
-        grid = pn.Column(*bs, sizing_mode="stretch_width", margin=0, styles={
-            "display": "grid", "grid-template-columns": f"repeat({n}, minmax(0, 1fr))",
-            "column-gap": "2px"})
-        _follow_shown(grid, bs)
+        grid = _cells(bs, n)
         part = pn.Column(_label(head), grid, margin=(2, 0, 0, 12),
                          sizing_mode="stretch_width") if head else grid
         parts.append((part, bs))
@@ -232,9 +239,25 @@ def _follow_shown(col, objs):
     _keep_shown(col, objs)
 
 
+HINT_SHORT = 120  # (characters of a hint shown whole; a longer one folds after its first sentence)
+
+
+def _hint_html(text):
+    """A hint's HTML: a long one is its first sentence, which opens to show the rest (in
+    the browser alone: no widgets, no round trip)."""
+    if len(re.sub(r"<[^>]+>", "", text)) > HINT_SHORT:
+        depth = 0  # (not inside a tag such as <code>a. b</code>)
+        for m in re.finditer(r"<(/?)[a-zA-Z][^>]*>|(?<!e\.g)(?<!i\.e)\.\s+(?=\S)", text):
+            if m.group(0).startswith("<"):
+                depth += -1 if m.group(1) else 1
+            elif depth == 0:
+                return (f'<details class="cv-hint"><summary>{text[:m.start() + 1]}</summary>'
+                        f'{text[m.end():]}</details>')
+    return f'<div class="cv-hint">{text}</div>'
+
+
 def _hint(text, margin=(4, 4, 2, 4)):
-    return pn.pane.HTML(f'<div class="cv-hint">{text}</div>', margin=margin,
-                        sizing_mode="stretch_width")
+    return pn.pane.HTML(_hint_html(text), margin=margin, sizing_mode="stretch_width")
 
 
 def _when(chk, *objs):
@@ -244,6 +267,25 @@ def _when(chk, *objs):
             o.visible = bool(chk.value)
     chk.param.watch(show, "value")
     show()
+
+
+def _when_shown(chk, *objs):
+    """objs are shown while the checkbox chk is ticked and itself shown."""
+    def show(*e):
+        for o in objs:
+            o.visible = bool(chk.visible and chk.value)
+    chk.param.watch(show, ["value", "visible"])
+    show()
+
+
+def _retired(w):
+    """A setting that has a better home now, kept for the saved figures that use it: w is
+    shown only while it is not zero (set to 0 it goes, and stays gone)."""
+    def show(*e):
+        w.visible = bool(w.value)
+    w.param.watch(show, "value")
+    show()
+    return w
 
 
 def _fold(head, body, collapsed=False):
@@ -299,8 +341,24 @@ def _panels_parse(text):
     return sorted(out)
 
 
+def _panel_tok(i):
+    """Panel i (from 0) as typed: its letter (past z, where letters repeat: its number)."""
+    return figdraw.panel_letter(int(i), "{a}") if int(i) < 26 else str(int(i) + 1)
+
+
 def _panels_text(panels):
-    return ", ".join(figdraw.panel_letter(int(i), "{a}") for i in panels or [])
+    return ", ".join(_panel_tok(i) for i in panels or [])
+
+
+def _panels_loose(text):
+    """Like _panels_parse, also split by spaces, leaving out what is not a panel."""
+    out = set()
+    for tok in str(text or "").replace(",", " ").split():
+        try:
+            out.update(_panels_parse(tok))
+        except ValueError:
+            continue
+    return sorted(out)
 
 
 def _dark(color):
@@ -319,8 +377,9 @@ SER_REDUCE = {"Maximum": "max", "Minimum": "min", "Mean": "mean", "Percentile": 
 AZ_REFS = {"Storm motion (0: ahead, 90: right)": "motion", "Grid north (0: north, 90: east)":
            "north"}
 AZ_CENTERS = {"Tracked storm (offset, km)": "track", "Point (model x, y km)": "point"}
-SER_OPS = {"Value": "", "d/dz (per m)": "ddz", "d/dt (per s)": "ddt"}
+SER_OPS = {"None": "", "d/dz (per m)": "ddz", "d/dt (per s)": "ddt"}
 MARKERS = {"none": "", "dots": "o", "squares": "s", "triangles": "^"}
+LINE_STYLES = {"Solid": "-", "Dashed": "--", "Dotted": ":", "Dash-dot": "-."}
 SND_LAYOUTS = {"Skew-T with a hodograph inset": "inset",
                "Skew-T and hodograph side by side": "side", "Skew-T only": "skewt",
                "Hodograph only": "hodo"}
@@ -380,6 +439,230 @@ def _deriv_pair(F, name, width=210, first=None):
     return field, deriv
 
 
+# ------------------------------------------------------------ parts that cards share
+ENS_BANDS = {"Off": "", "Min to max": "minmax", "10–90th percentile": "p10p90",
+             "25–75th percentile": "p25p75", "Mean ± 1 sd": "sd"}
+ENS_MIDS = {"Mean": "mean", "Median": "median", "None": ""}
+ENS_MEMBERS = {"Faint": "faint", "Hidden": "hidden", "As other lines": "full"}
+
+
+def known_cmap(name):
+    """name if the Colormap lists offer it, else viridis."""
+    return name if name in FIG_CMAPS else "viridis"
+
+
+def cmap_select(value="viridis"):
+    return pn.widgets.Select(name="Colormap", options=FIG_CMAPS, value=known_cmap(value))
+
+
+def card_buttons(card, remove, moves=False, dup=False, per_run=""):
+    """A card's buttons: card.rm (tooltip `remove`), with moves card.up and card.down, with
+    dup card.dup, and with per_run (its tooltip) card.per_run."""
+    card.rm = pn.widgets.Button(name="✕", description=remove, **_BTN)
+    if moves:
+        card.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
+        card.down = pn.widgets.Button(name="↓", description="Later in the list", **_BTN)
+    plain = dict(height=32, button_type="light", button_style="outline")
+    if dup:
+        card.dup = pn.widgets.Button(name="Duplicate", **plain,
+                                     description="A copy of this card in a new panel")
+    if per_run:
+        card.per_run = pn.widgets.Button(name="One per run", description=per_run, **plain)
+
+
+def run_widget(ed, ent):
+    """The Run list of a card of one run: entry ent's, if the figure has it."""
+    names = ed._run_names()
+    k = int(ent.get("run") or 0)
+    return pn.widgets.Select(name="Run", value=k if k in names.values() else 0, width=170,
+                             **ed._run_choices(names))
+
+
+PANEL_CHOICES = {  # (a grid has at most 8 × 8 cells; letters repeat past z, as drawn)
+    figdraw.panel_letter(i, "{a}") if i < 26 else f'{figdraw.panel_letter(i, "{a}")} ({i + 1})':
+    i + 1 for i in range(64)}
+
+
+def panel_select(name="Panel", value=1, width=70):
+    """A list of the panels by letter; its value is counted from 1."""
+    return pn.widgets.Select(name=name, options=PANEL_CHOICES, width=width,
+                             value=min(max(int(value), 1), 64))
+
+
+def panel_widget(ent):
+    """The Panel list of a card (counted from 1; the spec's from 0: panel_index)."""
+    return panel_select(value=int(ent.get("panel") or 0) + 1)
+
+
+def panel_index(w):
+    return max(0, int(w["panel"].value or 1) - 1)
+
+
+def panel_tag(w):
+    """The letter of a card's panel."""
+    return figdraw.panel_letter(panel_index(w), "{a}")
+
+
+def where_grid(card, *objs):
+    """The first row of a card: objs (its run, time ...), its Panel and its buttons."""
+    return _grid(*objs, card.w["panel"], *[b for b in (getattr(card, "dup", None),
+                                                       getattr(card, "per_run", None)) if b])
+
+
+def label_widget(ent, name="Legend text (blank: automatic)", default=""):
+    return pn.widgets.TextInput(name=name, value=ent.get("label", default), width=220)
+
+
+def field_widget(F, name, label="Field"):
+    """A Field list, at field `name` if there is such a field (else the first)."""
+    return pn.widgets.Select(name=label, groups=F.groups(), width=210,
+                             value=name if name in F else next(iter(F.defs)))
+
+
+def layer_widgets(w, r):
+    """The layer a recipe r reads: Read from, Read to."""
+    w["z0"] = _f("Read from (km)", float(r.get("z0", 0.0)), 90, step=0.5)
+    w["z1"] = _f("Read to (km)", float(r.get("z1", 10.0)), 80, step=0.5)
+
+
+def vertical_widgets(w, r, modes, other):
+    """Where a recipe r reads: Vertical (modes; other: when r's is not one of them),
+    its Height and its layer."""
+    w["vmode"] = pn.widgets.Select(name="Vertical", options=modes, width=170,
+                                   value=r["vmode"] if r["vmode"] in modes.values() else other)
+    w["z"] = _f("Height (km)", float(r.get("z", 1.0)), 90, step=0.25)
+    layer_widgets(w, r)
+
+
+def vertical_recipe(w):
+    """A recipe's heights, of those the card has."""
+    return {k: w[k].value or 0.0 for k in ("z", "z0", "z1") if k in w}
+
+
+def region_widgets(card, r):
+    """The region of a recipe r: Region, with its radius and offset around the storm; a
+    fixed box is kept in card.box (keep_box)."""
+    w = card.w
+    card.box = r.get("box")
+    w["region"] = pn.widgets.Select(name="Region", options=SER_REGIONS, value=r["region"],
+                                    width=180)
+    w["radius"] = _f("Radius (km)", float(r.get("radius", 5.0)), 90, step=0.5)
+    off = r.get("offset") or (0.0, 0.0)
+    w["offx"] = _f("Offset x (km)", float(off[0]), 100, step=1.0)
+    w["offy"] = _f("Offset y (km)", float(off[1]), 100, step=1.0)
+
+
+def show_region(w):
+    w["radius"].visible = w["offx"].visible = w["offy"].visible = w["region"].value == "track"
+
+
+def keep_box(card):
+    """A fixed box starts as the map's view."""
+    r = card.w.get("region")
+    if r is not None and r.value == "box" and card.box is None:
+        card.box = [float(v) for v in card.ed.v.view]
+
+
+def region_recipe(card):
+    w = card.w
+    return dict(region=w["region"].value, radius=w["radius"].value or 5.0,
+                offset=(w["offx"].value or 0.0, w["offy"].value or 0.0),
+                box=card.box or [float(v) for v in card.ed.v.view])
+
+
+def reduce_widgets(w, r):
+    w["reduce"] = pn.widgets.Select(name="Reduce", options=SER_REDUCE, value=r["reduce"],
+                                    width=120)
+    w["pct"] = _f("Percentile", float(r.get("pct", 99.0)), 90, step=0.5)
+
+
+def reduce_recipe(w):
+    return dict(reduce=w["reduce"].value,
+                pct=w["pct"].value if w["pct"].value is not None else 99.0)
+
+
+def look_widgets(w, ent, auto=False, ls=None, lw=None, marker=False, axis=False):
+    """How an entry ent draws: Colour, with auto Automatic colour, with ls (the choices)
+    Line style, with lw (a default) Line width, then Markers and the y axis."""
+    if auto:
+        w["auto_color"] = _chk("Automatic colour", not ent.get("color"))
+    w["color"] = pn.widgets.ColorPicker(name="Colour", value=_hex(ent.get("color") or "k"),
+                                        width=70)
+    if ls:
+        w["ls"] = pn.widgets.Select(name="Line style", options=ls, width=100,
+                                    value=ent.get("ls") if ent.get("ls") in ls.values()
+                                    else next(iter(ls.values())))
+    if lw:
+        w["lw"] = _f("Line width", float(ent.get("lw") or lw), 90, step=0.25)
+    if marker:
+        w["marker"] = pn.widgets.Select(name="Markers", options=MARKERS,
+                                        value=ent.get("marker", ""), width=100)
+    if axis:
+        w["axis"] = pn.widgets.Select(name="y axis", options={"By units": "auto",
+                                                              "Own axis (right)": "right"},
+                                      value=ent.get("axis", "auto"), width=140)
+        w["ylabel"] = pn.widgets.TextInput(name="Axis label (blank: units)",
+                                           value=ent.get("ylabel", ""), width=180)
+
+
+def look_values(w, lw=1.5):
+    """The spec's keys of look_widgets (lw: a blank Line width's)."""
+    auto = "auto_color" in w and w["auto_color"].value
+    v = dict(color="" if auto else w["color"].value,
+             **{k: w[k].value for k in ("ls", "marker", "axis", "ylabel") if k in w})
+    if "lw" in w:
+        v["lw"] = float(w["lw"].value or lw)
+    return v
+
+
+def color_widgets(w, ent):
+    """A shaded entry's colours and colorbar (a fill layer, a time-height series)."""
+    w["cmap"] = cmap_select(ent["cmap"])
+    w["reverse"] = _chk("Reverse", ent.get("reverse", False))
+    w["white_first"] = _chk("Start from white", ent.get("white_first", False))
+    w["vmin"] = _f("Min", ent["vmin"])
+    w["vmax"] = _f("Max", ent["vmax"])
+    w["nlevels"] = pn.widgets.IntInput(name="Colour steps (0: smooth)", start=0, end=60,
+                                       value=int(ent.get("nlevels") or 0))
+    w["extend"] = pn.widgets.Select(name="Colorbar arrows", options=EXTEND,
+                                    value=ent.get("extend", "neither"))
+    w["cbar_label"] = pn.widgets.TextInput(
+        name="Colorbar label (blank: Style's, else units)", value=ent.get("cbar_label", "") or "",
+        placeholder=ent.get("units", ""),
+        description="Sets the colorbar of this panel. Panels sharing a colorbar: the first "
+                    "label among them")
+    w["cbar_ticks"] = pn.widgets.TextInput(
+        name="Colorbar ticks (blank: Style's, else auto)",
+        value=ent.get("cbar_ticks", "") or "", placeholder="0:60:10")
+
+
+def band_opacity(ent):
+    return _f("Band opacity", float(ent.get("ens_alpha", 0.25)), 100, step=0.05, start=0.0,
+              end=1.0)
+
+
+def ens_widgets(w, ent):
+    """An ensemble band over a card's runs."""
+    w["ens"] = pn.widgets.Select(name="Ensemble of its runs", options=ENS_BANDS,
+                                 value=ent.get("ens", ""), width=170)
+    w["ens_mid"] = pn.widgets.Select(name="Centre line", options=ENS_MIDS,
+                                     value=ent.get("ens_mid", "mean"), width=100)
+    w["ens_members"] = pn.widgets.Select(name="Runs' own lines", options=ENS_MEMBERS,
+                                         value=ent.get("ens_members", "faint"), width=130)
+    w["ens_alpha"] = band_opacity(ent)
+
+
+def show_ens(w, several):
+    w["ens"].visible = several
+    for k in ("ens_mid", "ens_members", "ens_alpha"):
+        w[k].visible = several and bool(w["ens"].value)
+
+
+def ens_values(w):
+    a = w["ens_alpha"].value
+    return dict(ens=w["ens"].value, ens_mid=w["ens_mid"].value,
+                ens_members=w["ens_members"].value, ens_alpha=float(a if a is not None else 0.25))
+
 
 # ------------------------------------------------------------ runs and times of a card
 ONE_TIME = -1.0  # (the "to" time of an entry at one time)
@@ -411,6 +694,11 @@ def wanted_time(card, key, opts, dt):
     return wants[key]
 
 
+def hold_value(w):
+    """The spec's key of a card's "Keep this time in animations" (only when ticked)."""
+    return {"time_lock": True} if w["hold"].value else {}
+
+
 class TimeCard:
     """The run and time of a card of one entry (a sounding, distribution, joint
     distribution, azimuthal mean or profile), and its time window when it has a "to"
@@ -419,6 +707,11 @@ class TimeCard:
     @staticmethod
     def _to_opts(opts):
         return {"— (this time only)": ONE_TIME} | dict(opts)
+
+    def _run_time_widgets(self, to=None, about=""):
+        """The Run list (w["run"], of one run) and its Time lists (see _time_widgets)."""
+        self.w["run"] = run_widget(self.ed, self.ent)
+        self._time_widgets(self.ed._time_opts(self.w["run"].value), to, about)
 
     def _time_widgets(self, opts, to=None, about=""):
         """The Time list (w["time"], from the entry's time_s) of choices opts, and with
@@ -432,6 +725,7 @@ class TimeCard:
             w["time1"] = pn.widgets.Select(
                 name=to, options=self._to_opts(opts), width=210, description=about,
                 value=ONE_TIME if t1 is None else ed._nearest(opts, t1))
+        w["hold"] = _chk("Keep this time in animations", bool(ent.get("time_lock")))
 
     def _t1(self):
         """The end of the time window (None: one time)."""
@@ -447,7 +741,8 @@ class TimeCard:
             w = self.w[k]
             label = next((n for n, v in w.options.items() if v == w.value), "")
             return label.split("(")[-1].rstrip(")")
-        return short("time") + (f" to {short('time1')}" if self._t1() is not None else "")
+        return short("time") + (f" to {short('time1')}" if self._t1() is not None else "") \
+            + (" (kept)" if self.w["hold"].value else "")
 
     def _time_run(self):
         """The run whose outputs the Time lists offer."""
@@ -491,17 +786,16 @@ class TimeCard:
         self.ed.request()
 
     def _changed(self):
-        r = self.w.get("region")
-        if r is not None and r.value == "box" and self.box is None:
-            self.box = [float(v) for v in self.ed.v.view]
+        keep_box(self)
         self._show()
         self.ed.request()
 
-    def _entry(self):
-        """The spec entry's keys every such card has (run, time, panel, label, colour)."""
+    def _entry(self, lw=1.5):
+        """The spec entry's keys every such card has (run, time, panel, label, its look;
+        lw: a blank Line width's)."""
         w = self.w
         e = dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0))
         if "time1" in w:
             e["time_s1"] = self._t1()
-        return dict(e, panel=max(0, int(w["panel"].value or 1) - 1), label=w["label"].value,
-                    color="" if w["auto_color"].value else w["color"].value)
+        return dict(e, panel=panel_index(w), label=w["label"].value, **look_values(w, lw),
+                    **hold_value(w))

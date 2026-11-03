@@ -3,9 +3,9 @@ several, e.g. tornadic vs non-tornadic), preview it at its final size, and expor
 image, a stand-alone script, the data and the spec.
 
 The editor has six tabs: Panels (what the grid shows: kind, size, times, titles,
-area, runs), Layers (what each panel draws), Tree (each panel alone), Style (fonts,
-axes, labels, colorbar, legend, spacing), Annotate and Export (with animated GIFs).
-Saving sits above the preview.
+area), Layers (what each panel draws, and the runs), Tree (each panel alone), Style (fonts,
+axes, labels, colorbar, legend, spacing), Annotate and File (image options, animated GIFs,
+opening saved figures, templates).  Saving sits above the preview.
 
 The FigureEditor is here (putting the widgets together, wiring them, the layer cards
 and rendering the preview); the rest are mixins, one module each: the widgets
@@ -13,7 +13,8 @@ and rendering the preview); the rest are mixins, one module each: the widgets
 the Panels tab's reactions (panelopts), runs (runs), sources and lists (sources),
 export (export), animations (anim), figures of several parts (combo), placing by
 clicking the preview (click), the panel tree (tree), style (style), the quick start
-(quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package.
+(quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package;
+what differs between the kinds of panel is in the table in kinds.
 The data behind a figure (reading the runs, the caches) is FigureData's (render), which
 works without the editor."""
 
@@ -34,6 +35,7 @@ from .anim import FigureAnimation
 from .click import ClickImage, FigureClick, place_map, watch_tight
 from .combo import FigureCombo
 from .export import FigureExport
+from .kinds import KINDS
 from .runs import AllFields, FigureRuns
 from .sources import FigureSources
 from .style import FigureStyle
@@ -58,9 +60,10 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._hold = False  # widgets being set from a spec: no re-render per widget
         self._req = 0
         self.cards = []
+        self._live_ws = []  # (the widgets that redraw the preview: _redraws, _wire)
         self._pf_base = None  # a 'field' figure's fill (Panels → Time and fields), not a card
         self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
-        self.prof_cards, self.joint_cards, self.azim_cards = [], [], []
+        self.prof_cards, self.joint_cards, self.azim_cards, self.table_cards = [], [], [], []
         self.sec_cards = []
         self._sec_spare = []  # (section cards a new figure left over: _sec_cards)
         self.tm_rows, self.title_ws, self.row_ws = [], [], []
@@ -98,7 +101,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self._build_panel_widgets()
         self._build_layer_widgets()
         self._build_scene()
-        self._build_text()
+        with self._redraws():
+            self._build_text()
         self._build_more()
         self._build_anim()
         self._build_style()
@@ -121,16 +125,16 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         # (the Layers tab holds the figure kind's columns only: _keep_tabs)
         self.layers_all = [self.xsec_col, self.plan_layers, self.series_col, self.snd_col,
                            self.dist_col, self.prof_col, self.joint_col, self.azim_col,
-                           self.scene_col, self.ext_sec, self.runs_sec]
+                           self.table_col, self.scene_col, self.ext_sec, self.runs_sec]
         self.layers_tab = layers_tab = pn.Column(*self.layers_all,
                                                  sizing_mode="stretch_width")
         style_tab = self._style_tab()
-        annotate_tab, export_tab = self._more_tabs()
+        annotate_tab, file_tab = self._more_tabs()
         # a tab is sent to the browser the first time it is opened, and then kept (not
         # dynamic: that sends it again at each switch)
         self.tab_list = [("Panels", panels_tab), ("Layers", layers_tab),
                          ("Tree", self.tree_tab), ("Style", style_tab),
-                         ("Annotate", annotate_tab), ("Export", export_tab)]
+                         ("Annotate", annotate_tab), ("File", file_tab)]
         self.tabs = pn.Tabs(*[(n, o if i == 0 else pn.Spacer())
                               for i, (n, o) in enumerate(self.tab_list)],
                             dynamic=False, sizing_mode="stretch_width")
@@ -166,25 +170,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
 
     def _wire(self):
         rq = lambda *e: self.request()  # noqa: E731
-        for w in (self.kind, self.width, self.height, self.time1, self.suptitle,
-                  self.half, self.coords, self.xs_top, self.xs_coords,
-                  self.font, self.math,
-                  self.fsize, self.fs_tick, self.fs_label, self.fs_title, self.fs_sup,
-                  self.fs_legend, self.xlabel, self.ylabel, self.ticklabels, self.share, self.tickdir,
-                  self.ticks, self.minor, self.xstep, self.ystep, self.frame_lw, self.grid,
-                  self.grid_ls, self.equal, self.title_loc, self.title_bold,
-                  self.let_on, self.let_fmt, self.let_loc, self.let_size, self.let_bold,
-                  self.let_box, self.tl_on, self.tl_fmt, self.tl_loc, self.tl_size,
-                  self.tl_bold, self.tl_box, self.tl_t0, self.rl_on, self.rl_loc,
-                  self.rl_size, self.rl_bold, self.rl_box, self.rl_color, self.zl_on,
-                  self.zl_fmt, self.zl_loc, self.zl_size, self.zl_bold, self.zl_box,
-                  self.cb_mode, self.cb_loc,
-                  self.cb_label, self.cb_ticks, self.cb_shrink, self.cb_fraction, self.cb_pad,
-                  self.cb_lsize, self.cb_tsize, self.cb_lbold, self.cb_lside, self.cb_fmt,
-                  self.lg_where, self.lg_loc, self.lg_anchor, self.lg_panel, self.lg_from,
-                  self.lg_title, self.lg_ncol, self.lg_frame, self.lg_own, self.sp_w, self.sp_h,
-                  self.sp_wpad, self.sp_hpad,
-                  self.bg, self.mplstyle, self.tight, self.pad):
+        for w in self._live_ws:
             w.param.watch(rq, "value")
         self.run_sel.param.watch(self._on_run_sel, "value")
         self.cb_mode.param.watch(lambda e: self._show_cbar(), "value")
@@ -230,6 +216,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.prof_data.on_click(lambda e: self._add_prof_data())
         self.joint_new.on_click(lambda e: self._add_joint())
         self.azim_new.on_click(lambda e: self._add_azim())
+        self.table_new.on_click(lambda e: self._add_table())
         self.jo["plot"].param.watch(lambda e: self._show_joint_opts(), "value")
         self.ser_add.on_click(lambda e: self._add_series_from_tab())
         self.ser_new.on_click(lambda e: self._add_series())
@@ -242,14 +229,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         self.snd_new.on_click(lambda e: self._add_sounding())
         self.ann_add.on_click(lambda e: self._add_annotation())
         for w in (*self.sk.values(), *self.ds.values(), *self.po.values(), *self.jo.values(),
-                  *self.ao.values(), self.ts_tmin, self.ts_tmax, self.ts_zmin, self.ts_zmax,
-                  self.ts_ymin, self.ts_ymax,
-                  self.ts_legend, self.ts_legloc, self.ts_legncol, self.ts_legframe, self.ts_zero,
-                  self.ts_mark, self.ts_mark_legend, self.ts_mark_edited,
-                  self.ex_on, self.ex_layer, self.ex_what, self.ex_loc,
-                  self.ex_marker, self.ex_box, self.ck_on, self.ck_layer,
-                  self.ck_label, self.ck_x, self.ck_y, self.ck_size, self.ck_fs,
-                  self.ck_frame, self.code_on, self.code):
+                  *self.ao.values(), *self.to.values(), self.code):
             w.param.watch(rq, "value")
         self.update.on_click(lambda e: self.request(force=True, delay=False))
         self.undo_btn.on_click(lambda e: self.undo())
@@ -391,9 +371,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
             return g != self.v.gen["fig"]
 
         def progress(i, n):
-            what = {"sounding": "sounding", "dist": "distribution", "profile": "profile",
-                    "joint": "joint distribution",
-                    "azim": "azimuthal mean"}.get(spec["kind"], "panel")
+            what = KINDS[spec["kind"]].one if spec["kind"] in KINDS else "panel"
             self.v._schedule(partial(self._status, f'<span class="busy">● Reading {what} '
                                                    f'{i + 1}/{n}…</span>'))
 
@@ -449,7 +427,7 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                                                     for i in miss))
                 if storm and any(not e.get("track") for e in spec["runs"]):
                     note += (" · storm-centred panels need a track for each run (see "
-                             "<b>Runs</b>)")
+                             "<b>Layers → Runs used</b>)")
                 elif storm and not self.v.fixes and any(e.get("track") == "viewer"
                                                         for e in spec["runs"]):
                     note += (" · storm-centred panels need a track: follow the storm in "

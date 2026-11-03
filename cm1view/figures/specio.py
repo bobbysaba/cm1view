@@ -4,12 +4,12 @@ collect reads it back) and undo / redo.
 A mixin of the FigureEditor (figures/editor.py)."""
 
 import json
-import re
 
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from .cards import FONTS, GRID_DIMS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num, _xy, _xy_text
+from .cards import (FONTS, GRID_DIMS, LETTERS, MATH_FONTS, NONE, TICKDIR, _num, _panels_loose,
+                    _panels_text, _xy, _xy_text)
 from .times import _heights
 from ..viewer.ui import held
 
@@ -28,14 +28,17 @@ class FigureSpecIO:
         self._auto_size = bool(spec.get("size_auto", False))  # until set by hand
         with held(self):
             s = spec
+            self._leg_block = ""  # (the panel legend's widgets: this spec's, not to be kept)
             self.time_match.value = s.get("time_match", "time")  # (the rows' time zeros show it)
             self._build_runs(s["runs"])
             self.kind.value = s["kind"]
+            self._legend_follow()
             self.g_rows.options = self.g_cols.options = dict(GRID_DIMS)  # (all, then the kind's)
             self.g_rows.value, self.g_cols.value = figdraw.grid_axes(s)
             self.gg_runs.value = figdraw.grid_runs(s)
             self.run_sel.value = min(int(s.get("run", 0)), len(s["runs"]) - 1)
             self.rows.value, self.cols.value = int(s["rows"]), int(s["cols"])
+            self._grid_grown = None  # (the spec's grid is the one set)
             self.width.value, self.height.value = float(s["size"][0]), float(s["size"][1])
             self.size_preset.value = ""
             self.suptitle.value = s.get("suptitle", "")
@@ -120,7 +123,7 @@ class FigureSpecIO:
             self._show_legend()
             self.lg_loc.value, self.lg_panel.value = lg.get("loc", "upper right"), \
                 int(lg.get("panel", 0)) + 1
-            self.lg_from.value = ", ".join(str(int(i) + 1) for i in lg.get("panels") or [])
+            self.lg_from.value = _panels_text(lg.get("panels"))
             self.lg_title.value = lg.get("title") or ""
             self.lg_ncol.value = int(lg.get("ncol", 1) or 1)
             self.lg_frame.value = lg.get("frame", True)
@@ -142,11 +145,7 @@ class FigureSpecIO:
             self.ts_tmax.value = "" if ts.get("tmax") in (None, "") else f"{float(ts['tmax']):g}"
             self.ts_zmin.value = float(ts.get("zmin") or 0.0)
             self.ts_zmax.value = float(ts.get("zmax") or 10.0)
-            self.ts_legend.value, self.ts_zero.value = ts.get("legend", True), \
-                ts.get("zero_line", False)
-            self.ts_legloc.value = ts.get("legend_loc", "best")
-            self.ts_legncol.value = int(ts.get("legend_ncol") or 1)
-            self.ts_legframe.value = bool(ts.get("legend_frame", False))
+            self.ts_zero.value = ts.get("zero_line", False)
             self.ts_mark.value = ts.get("mark") or ""
             self.ts_mark_legend.value = bool(ts.get("mark_legend", False))
             self.ts_mark_edited.value = bool(ts.get("mark_edited", True))
@@ -165,7 +164,7 @@ class FigureSpecIO:
                     wdg.value = (None if dd[k] in (None, "") else float(dd[k])) \
                         if isinstance(wdg, pn.widgets.FloatInput) else dd[k]
             for opts, ws in ((s.get("prof", {}), self.po), (s.get("joint", {}), self.jo),
-                             (s.get("azim", {}), self.ao)):
+                             (s.get("azim", {}), self.ao), (s.get("table", {}), self.to)):
                 for k, wdg in ws.items():
                     if k in opts:
                         wdg.value = (None if opts[k] in (None, "") else float(opts[k])) \
@@ -203,6 +202,7 @@ class FigureSpecIO:
             self.prof_cards = [self._prof_card(e) for e in s.get("profiles", [])]
             self.joint_cards = [self._joint_card(e) for e in s.get("joints", [])]
             self.azim_cards = [self._azim_card(e) for e in s.get("azims", [])]
+            self.table_cards = [self._table_card(e) for e in s.get("tables", [])]
             self.ann_rows = [self._ann_row(a) for a in s.get("annotations", [])]
             self._scene_set(fg.scene3d_of(s))
             self._show_series()
@@ -211,6 +211,7 @@ class FigureSpecIO:
             self._show_profiles()
             self._show_joints()
             self._show_azims()
+            self._show_tables()
             self._show_anns()
         self._show_region()
         self._on_kind(render_=False)
@@ -267,7 +268,7 @@ class FigureSpecIO:
             runs_as="cards" if self.kind.value == "th" else "rows",
             panels=[],
             layers=pf + [c.collect() for c in self.cards],
-            panel_fills=[self._pf_collect(r) for r in self.pf_rows],
+            panel_fills=[self._pf_collect(c) for c in self.pf_cards],
             panel_z=_heights(self.pz.value), panel_zmode=self.pz_mode.value,
             share=_num(self.part_share.value), place=self._part_place(),
             suptitle=self.suptitle.value, titles=titles, row_titles=row_titles,
@@ -319,8 +320,7 @@ class FigureSpecIO:
         s["legend"] = dict(s.get("legend", {}), where=self.lg_where.value,
                            loc=self.lg_loc.value,
                            panel=max(0, int(self.lg_panel.value or 1) - 1),
-                           panels=[int(v) - 1 for v in re.findall(r"\d+", self.lg_from.value)
-                                   if int(v) > 0],
+                           panels=_panels_loose(self.lg_from.value),
                            title=self.lg_title.value.strip(),
                            ncol=int(self.lg_ncol.value or 1), frame=self.lg_frame.value,
                            anchor=_xy(self.lg_anchor.value), own=self.lg_own.value)
@@ -362,6 +362,8 @@ class FigureSpecIO:
         s["azim"] = dict(s.get("azim", {}), **{
             k: _num(w.value) if isinstance(w, pn.widgets.FloatInput) else w.value
             for k, w in self.ao.items()})
+        s["tables"] = [c.collect() for c in self.table_cards]
+        s["table"] = dict(s.get("table", {}), **{k: w.value for k, w in self.to.items()})
         s["annotations"] = [r.collect() for r in self.ann_rows]
         if self.kind.value == "scene":  # (other figures: no 3D block in their spec)
             s["scene3d"] = self._scene_collect()
@@ -369,9 +371,7 @@ class FigureSpecIO:
             s.pop("scene3d", None)
         s["ts"] = dict(s.get("ts", {}), tmin=minutes(self.ts_tmin), tmax=minutes(self.ts_tmax),
                        zmin=float(self.ts_zmin.value or 0.0),
-                       zmax=float(self.ts_zmax.value or 10.0), legend=self.ts_legend.value,
-                       legend_loc=self.ts_legloc.value, legend_ncol=int(self.ts_legncol.value or 1),
-                       legend_frame=self.ts_legframe.value, zero_line=self.ts_zero.value,
+                       zmax=float(self.ts_zmax.value or 10.0), zero_line=self.ts_zero.value,
                        ymin=_num(self.ts_ymin.value), ymax=_num(self.ts_ymax.value),
                        mark=self.ts_mark.value, mark_legend=self.ts_mark_legend.value,
                        mark_edited=self.ts_mark_edited.value)
@@ -383,6 +383,7 @@ class FigureSpecIO:
         s["skewt"] = dict(s.get("skewt", {}), **{
             k: (float(w.value or 0.0) if isinstance(w, pn.widgets.FloatInput) else w.value)
             for k, w in self.sk.items()})
+        self._legend_store(s)
         s["edits"] = self._tree_collect()
         s["contour_key"] = dict(s.get("contour_key", {}), on=self.ck_on.value,
                                 layer=_spec_index(self.ck_layer.value, len(pf)),

@@ -151,7 +151,8 @@ def default_spec(run, F, t=0):
                                legend=True, legend_loc="best", legend_ncol=1,
                                legend_frame=False, mark_edited=True),
         joints=[], joint=dict(plot="hist", norm="count", bins=60, log=True, cmap="viridis",
-                              reverse=False, colorbar=True, ms=2.0, alpha=0.5, lw=1.2,
+                              reverse=False, colorbar=True, cbar_label="", ms=2.0, alpha=0.5,
+                              lw=1.2,
                               contours=False, pcts="50, 90", contour_labels=True, fit=False,
                               one_one=False, zero_line=False, xmin=None, xmax=None,
                               ymin=None, ymax=None, stats=["n", "r"], stats_loc="upper left",
@@ -161,6 +162,7 @@ def default_spec(run, F, t=0):
                             vmax=None, cbar_label="", colorbar=True, clabels=True, rmin=None,
                             rmax=None, zmin=None, zmax=None, legend=True, legend_loc="best",
                             legend_ncol=1, legend_frame=False),
+        tables=[], table=dict(layout="rows", compare="", decimals=-1),
         contour_key=dict(on=False, layer=-1, label="w", x=0.01, y=0.01, size=0.1, fs=10.0,
                          r0=0.35, step=0.15, yoffset=0.06, frame=True),
         annotations=[], code=dict(on=False, text=""),
@@ -487,8 +489,9 @@ def _edit_run(spec, key, e, default):
 def shift_times(spec, dt_s):
     """A copy of `spec` with every panel's time moved by dt_s seconds (a frame of an
     animation: the panels step through time together; in a figure of parts, the
-    panels of every part, and the soundings).  dt_s an OutputStep and the runs paired by
-    output number: moved by its outputs, each time in its own run."""
+    panels of every part, and the soundings; an entry or layer with "time_lock" stays).
+    dt_s an OutputStep and the runs paired by output number: moved by its outputs, each
+    time in its own run."""
     s = json.loads(json.dumps(spec, default=float))
     if s.get("kind") == "combo":
         s["parts"] = [shift_times(p, dt_s) for p in s["parts"]]
@@ -515,7 +518,7 @@ def shift_times(spec, dt_s):
         if sec.get("time_s") is not None:
             sec["time_s"] = moved(sec["time_s"], int(sec.get("run") or 0))
     for e in [e for key in ("soundings", "dists", "profiles", "joints", "azims")
-              for e in s.get(key) or []]:
+              for e in s.get(key) or [] if not e.get("time_lock")]:
         k = entry_run(e)
         e["time_s"] = moved(e["time_s"], k)
         if e.get("time_s1") is not None:
@@ -609,10 +612,11 @@ def time_key(spec, entry):
 
 def _entry_refs(p):
     """(run path, model time s, end of its time window or None) of each run of each
-    timed entry of part p (your own data: no time)."""
+    entry of part p that steps in an animation (your own data has no time; time_lock:
+    it stays)."""
     runs = p.get("runs") or []
     for e in p.get(figdraw.ENTRIES[p["kind"]]) or []:
-        if e.get("source") == "table":
+        if e.get("source") == "table" or e.get("time_lock"):
             continue
         for k in profile_runs(e, len(runs)):
             at = entry_at(p, e, k)

@@ -194,6 +194,13 @@ def spec_layers(spec, i):
     layers = [dict(lay) if not lay.get("panels") or i in lay["panels"] else
               dict(lay, on=False) for lay in spec["layers"]]
     cell = grid_cell(spec, i) or {}
+    if cell.get("fill"):
+        for j, lay in enumerate(layers):
+            if lay["type"] == "fill":
+                layers[j] = dict(lay, **cell["fill"])
+                if "z" in cell["fill"] and "z_fixed" not in cell["fill"]:  # (an older figure:
+                    layers[j]["z_fixed"] = True  # its panels' fills kept their own height)
+                break
     if cell.get("z") is not None:
         z = float(cell["z"])
         level = spec.get("panel_zmode", "height") == "level"
@@ -205,17 +212,13 @@ def spec_layers(spec, i):
                 layers[j] = dict(lay, mode="level", z=float(round(z)))
             elif not level and (lay["type"] == "vectors" or mode == "height"):
                 layers[j] = dict(lay, z=z)
-    if cell.get("fill"):
-        for j, lay in enumerate(layers):
-            if lay["type"] == "fill":
-                layers[j] = dict(lay, **cell["fill"])
-                break
     return edited_layers(layers, panel_edit(spec, i))
 
 
 def panel_edit(spec, i):
     """The changes made to panel i alone (spec["edits"][str(i)], the panel tree): its
-    "run", "time_s", "z" (km), "title", "xlabel", "ylabel" (" ": none), "layers"
+    "run", "time_s", "z" (km), "title", "xlabel", "ylabel" (" ": none), "ymin", "ymax"
+    (a time series' left axis; either missing: the figure's), "layers"
     ({str(j): the keys layer j has in this panel only, its own "run", "time_s" and "z"
     among them}), "extra" (layers of this panel only, drawn after the others),
     "legend" (its own legend: legend_opts) and "section" (the index of its
@@ -388,6 +391,10 @@ def _v1_panel(spec, i):
               if k in ("xlabel", "ylabel") and v is not None}
     if labels:
         own["axes"] = labels
+    ylim = {k: float(panel_edit(spec, i)[k]) for k in ("ymin", "ymax")
+            if panel_edit(spec, i).get(k) is not None}
+    if ylim and kind == "line":
+        own.setdefault("ts", {}).update(ylim)
     if own:
         p["opts"] = own
     return p
@@ -430,7 +437,8 @@ def _local_entries(spec, i, d):
         return d
     key, count = {"line": ("S", "nlines"), "sounding": ("N", "nsnd"),
                   "dist": ("D", "ndist"), "profile": ("P", "nprof"),
-                  "joint": ("J", "njoint"), "azim": ("A", "nazim")}[kind]
+                  "joint": ("J", "njoint"), "azim": ("A", "nazim"),
+                  "table": ("Q", "nq")}[kind]
     mine = [e for e, ent in enumerate(spec.get(ENTRIES[kind], []))
             if int(ent.get("panel", 0)) == i]
     where = {e: n for n, e in enumerate(mine)}

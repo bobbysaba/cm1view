@@ -62,7 +62,8 @@ class FigureAnimation:
                   "already: they stay as they are in a figure of parts, and cannot be "
                   "animated alone. Saved at "
                   "<i>GIF path</i>, or <code>&lt;Save as&gt;.gif</code> if it is blank "
-                  "(frames in <code>&lt;name&gt;_frames/</code>)."),
+                  "(frames in <code>&lt;name&gt;_frames/</code>). Its settings are saved in "
+                  "<code>_src/&lt;name&gt;_spec.json</code>, so it can be reopened."),
             _grid((self.an_path, 3)),
             _grid(self.an_step, self.an_end, self.an_fps), self.an_count,
             _grid(self.an_dpi, self.an_loop, self.an_frames),
@@ -145,7 +146,8 @@ class FigureAnimation:
             return
         opts = dict(fps=float(self.an_fps.value or 4.0), dpi=int(self.an_dpi.value or 110),
                     loop=bool(self.an_loop.value), frames=bool(self.an_frames.value))
-        paths = [base + ".gif"] + ([base + "_frames"] if opts["frames"] else [])
+        paths = [base + ".gif"] + ([base + "_frames"] if opts["frames"] else []) + \
+            [fg.bundle_paths(spec, base)["spec"]]
 
         def go():
             self._anim_gen += 1
@@ -220,13 +222,15 @@ class FigureAnimation:
                                                opts, images, missing, ends, len(offsets))
                     return
             path = fg.write_gif(images, base + ".gif", opts["fps"], opts["loop"])
+            spec_path = fg.save_spec(spec, base)
+            self.v._schedule(self._refresh_saved)
             mb = os.path.getsize(path) / 1e6
             note = (f" · {missing} frame{'s' if missing != 1 else ''} with an empty panel"
                     if missing else "")
             done(f"Saved <code>{path}</code> ({len(images)} frames, "
                  f"{images[0].width} × {images[0].height} px, {mb:.1f} MB)"
                  + (f" and the frames in <code>{fdir}/</code>" if opts["frames"] else "")
-                 + note)
+                 + f"; its settings in <code>{spec_path}</code>" + note)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             done(f"Could not make the animation: {e}", True)

@@ -371,7 +371,9 @@ def test_hidden_settings_are_not_sent(ed):
 
     def sent(w):
         return any(x is w for x in c.panel.select(pn.widgets.Widget))
-    assert not c.w["minus_on"].value and not sent(c.w["minus_run"])
+    assert not c.w["minus_on"].value and not sent(c.w["minus_on"])  # (Difference is folded)
+    c.minus_sec.collapsed = False
+    assert sent(c.w["minus_on"]) and not sent(c.w["minus_run"])  # (open: only the checkbox)
     c.w["minus_on"].value = True  # (shown: in the card again)
     assert sent(c.w["minus_run"])
     assert ed.tabs.objects[0] is ed.tab_list[0][1]  # (a tab: sent when first opened)
@@ -456,7 +458,7 @@ def test_saved_figures_listed(ed, tmp_path):
         ed._refresh_saved()  # (the save schedules it)
         spec = os.path.join(ed._fig_dir, "_src", "fig_spec.json")
         assert ed.saved_pick.groups["This run (parent_run)"] == {"fig": spec}
-        ed.saved_pick.value = spec  # the Export tab: picking fills in the path
+        ed.saved_pick.value = spec  # the File tab: picking fills in the path
         assert ed.spec_path.value == spec
         ed.open_quick()  # the quick start lists it too
         assert ed.qs_saved.value == "" and ed.qs_open.disabled
@@ -543,8 +545,8 @@ def test_each_colorbar_has_its_own_label(ed):
     ed.rows.value, ed.cols.value = 1, 2
     ed.g_rows.value, ed.g_cols.value = "none", "fields"
     ed.cb_mode.value = "each"
-    ed.pf_rows[0]["cbar_label"].value = "first bar"
-    ed.pf_rows[0]["cbar_ticks"].value = "0, 10"
+    ed.pf_cards[0].w["cbar_label"].value = "first bar"
+    ed.pf_cards[0].w["cbar_ticks"].value = "0, 10"
     ed.cb_label.value = "every other bar"  # (the Style tab's: bars without their own)
     spec, data, fig = render(ed)
     bars = [a for a in fig.axes[2:]]
@@ -555,14 +557,49 @@ def test_each_colorbar_has_its_own_label(ed):
     assert list(ticks) == [0.0, 10.0]
 
 
+@pytest.mark.parametrize("mode", ["shared", "row"])
+def test_shared_colorbar_takes_a_label_from_any_panel(ed, mode):
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"
+    ed.cb_mode.value = mode
+    ed.pf_cards[1].w["cbar_label"].value = "second panel's"  # (not the first panel's card)
+    ed.pf_cards[1].w["cbar_ticks"].value = "0, 10"
+    ed.cb_label.value = "for bars with none"
+    spec, data, fig = render(ed)
+    bars = [a for a in fig.axes if a.get_label() == "<colorbar>"]
+    assert len(bars) == 1
+    assert (bars[0].get_xlabel() or bars[0].get_ylabel()) == "second panel's"
+    assert list(bars[0].get_xticks() if bars[0].get_xlabel() else bars[0].get_yticks()) == [0, 10]
+    ed.pf_cards[1].w["cbar_label"].value = ""  # (none on any card: the Style tab's)
+    spec, data, fig = render(ed)
+    bars = [a for a in fig.axes if a.get_label() == "<colorbar>"]
+    assert (bars[0].get_xlabel() or bars[0].get_ylabel()) == "for bars with none"
+
+
+def test_figure_colorbar_takes_a_label_from_any_part(ed):
+    from cm1view.figures import draw as figdraw
+    from cm1view.figures.combo import combine
+
+    def labels(fig):
+        return {t for a in fig.axes for t in (a.get_xlabel(), a.get_ylabel())}
+
+    first, second = ed.collect(), ed.collect()
+    second["layers"][0] = dict(second["layers"][0], cbar_label="second part's")
+    spec = combine([first, second], like=first, one_colorbar=True)
+    assert "second part's" in labels(figdraw.draw(spec, ed.panel_data(spec)))
+    second["layers"][0]["cbar_label"], second["colorbar"]["label"] = "", "second part's style"
+    spec = combine([first, second], like=first, one_colorbar=True)
+    assert "second part's style" in labels(figdraw.draw(spec, ed.panel_data(spec)))
+
+
 def test_field_panels_own_their_fill(ed):
     from cm1view.figures import draw as figdraw
     ed.rows.value, ed.cols.value = 1, 2
     fills = sum(c.type == "fill" for c in ed.cards)
     ed.g_rows.value, ed.g_cols.value = "none", "fields"  # (Time and fields sets the fill: not a Layers card)
     assert sum(c.type == "fill" for c in ed.cards) == fills - 1
-    ed.pf_rows[1]["extend"].value = "max"
-    ed.pf_rows[1]["z"].value = 3.0
+    ed.pf_cards[1].w["extend"].value = "max"
+    ed.pf_cards[1].w["z"].value = 3.0
     s = ed.collect()
     assert s["layers"][0]["type"] == "fill"
     lay = figdraw.spec_layers(s, 1)[0]
@@ -573,6 +610,60 @@ def test_field_panels_own_their_fill(ed):
     assert ed.collect()["layers"][0] == s["layers"][0]
     ed.g_rows.value, ed.g_cols.value = "none", "times"  # back: a fill card again, as panel a had it
     assert ed.cards[0].type == "fill" and ed.cards[0].collect()["z"] == 1.0
+
+
+def test_a_panels_fill_has_every_layer_option(ed):
+    from cm1view.figures import draw as figdraw
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"
+    c = ed.pf_cards[1]
+    assert c.body.visible is False and "Panel b" in c.title.object
+    c.w["reverse"].value, c.w["nlevels"].value, c.w["scale"].value = True, 8, "log"
+    c.w["alpha"].value, c.w["mask_below"].value = 0.5, "2"
+    s = json.loads(json.dumps(ed.collect()))
+    lay = figdraw.spec_layers(s, 1)[0]
+    assert lay["reverse"] and lay["nlevels"] == 8 and lay["scale"] == "log"
+    assert lay["alpha"] == 0.5 and lay["mask_below"] == 2.0
+    assert not figdraw.spec_layers(s, 0)[0]["alpha"] == 0.5
+    assert not {"type", "on", "panels"} & set(s["panel_fills"][1])
+    render(ed)
+    ed.set_spec(s)  # (opened again: the same fills)
+    assert json.loads(json.dumps(ed.collect()))["panel_fills"] == s["panel_fills"]
+    ed.rows.value, ed.cols.value = 1, 3  # (a new panel: the others keep their cards)
+    assert ed.pf_cards[1].w["alpha"].value == 0.5 and len(ed.pf_cards) == 3
+
+
+def test_a_panels_fill_turns_off_what_the_shared_fill_has(ed):
+    from cm1view.figures import draw as figdraw
+    ed.rows.value, ed.cols.value = 1, 2
+    ed.cards[0].w["minus_on"].value = True
+    ed.g_rows.value, ed.g_cols.value = "none", "fields"
+    assert ed.pf_cards[1].w["minus_on"].value  # (a new panel: as the shared fill)
+    ed.pf_cards[1].w["minus_on"].value = False
+    s = ed.collect()
+    assert figdraw.spec_layers(s, 0)[0].get("minus")
+    assert not figdraw.spec_layers(s, 1)[0].get("minus")
+
+
+def test_fill_heights_in_a_grid_of_fields_and_heights(ed):
+    from cm1view.figures import draw as figdraw
+    ed.rows.value, ed.cols.value = 2, 2
+    ed.pz.value = "1, 3"
+    ed.g_rows.value, ed.g_cols.value = "fields", "heights"
+    s = ed.collect()
+    assert [figdraw.spec_layers(s, i)[0]["z"] for i in (0, 1)] == [1.0, 3.0]  # (the column's)
+    ed.pf_cards[1].w["z_fixed"].value = True  # (Own height: not the column's)
+    ed.pf_cards[1].w["z"].value = 5.0
+    s = ed.collect()
+    assert [figdraw.spec_layers(s, i)[0]["z"] for i in (2, 3)] == [5.0, 5.0]
+    # (a figure saved before these cards: each fill at the height it was given)
+    old = json.loads(json.dumps(s))
+    for pf in old["panel_fills"]:
+        pf.pop("z_fixed")
+        pf["z"] = 7.0
+    assert figdraw.spec_layers(old, 1)[0]["z"] == 7.0
+    ed.set_spec(old)
+    assert ed.pf_cards[0].w["z_fixed"].value and ed.pf_cards[0].w["z"].value == 7.0
 
 
 def test_number_boxes_round_float_tails():
@@ -595,6 +686,27 @@ def test_time_series_y_range(ed):
     wait(lambda: not ed.series_pending(), 120, "the series")
     spec, data, fig = render(ed)
     assert fig.axes[0].get_ylim() == (0.0, 50.0)
+
+
+def test_time_series_y_range_of_one_panel(ed):
+    ed.from_series()
+    ed.kind.value = "line"
+    ed.rows.value, ed.cols.value = 1, 2
+    s = ed.collect()
+    one = dict(s["series"][0], recipe=dict(s["series"][0]["recipe"], region="domain"))
+    ed.set_spec(dict(s, series=[one, dict(one, panel=1)]))
+    ed.ts_ymin.value, ed.ts_ymax.value = 0.0, 50.0
+    frm, to = ed._tree_y_range(1, {}, ed.collect()["ts"])
+    assert frm.placeholder == "0" and to.placeholder == "50"
+    to.value = 10.0
+    assert ed.collect()["edits"]["1"] == {"ymax": 10.0}
+    ed.panel_data(ed.collect())
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    spec, data, fig = render(ed)
+    assert fig.axes[0].get_ylim() == (0.0, 50.0)
+    assert fig.axes[1].get_ylim() == (0.0, 10.0)
+    to.value = None
+    assert "1" not in ed.collect().get("edits", {})
 
 
 def test_time_series_marks_extremes(ed):
@@ -977,3 +1089,189 @@ def test_panels_at_model_levels_with_height_labels(ed):
     assert ed.collect()["titles"] == [f"k = {k}" for k in ks]
     ed.pz_mode.value = "height"  # and back
     assert ed.collect()["panel_z"] == [round(float(z[k]), 2) for k in ks]
+
+
+def test_the_kinds_table_matches_the_editor(ed):
+    """What the table names exists: a new kind's entry cannot point at nothing."""
+    from cm1view.figures.kinds import KINDS
+    assert dict(ed.kind.options) == {k.label: key for key, k in KINDS.items()}
+    for k in KINDS.values():
+        for name in (*k.cols, k.cards, k.card, k.show, k.add, k.from_tool):
+            assert not name or hasattr(ed, name), name
+        if k.add or k.spread:
+            assert k.cards
+
+
+def test_widgets_made_live_redraw_the_preview(ed, monkeypatch):
+    """Every Style widget is registered as it is made, without a list to keep up."""
+    assert all(any(w is x for x in ed._live_ws) for w in (
+        ed.font, ed.fsize, ed.tl_t0, ed.lg_ncol, ed.pl_ncol, ed.sp_hpad, ed.ck_x, ed.ex_on, ed.ts_tmin,
+        ed.bg, ed.mplstyle, ed.half, ed.kind, ed.suptitle))
+    calls = []
+    monkeypatch.setattr(ed, "request", lambda *a, **k: calls.append(1))
+    old = ed.fsize.value
+    ed.fsize.value = old + 1
+    assert calls
+    ed.fsize.value = old
+
+
+def test_a_fills_extras_fold_unless_in_use(ed):
+    ed.kind.value = "plan"
+    c = ed._card(dict(ed.cards[0].collect(), type="fill"))
+    assert c.minus_sec.collapsed and c.ens_sec.collapsed and c.reduce_sec.collapsed
+    assert not c.minus_sec.objects  # (not sent to the browser yet)
+    used = ed._card(dict(c.collect(), minus=dict(run=None, time_s=None, grid="ask"),
+                         reduce=dict(op="max", t0=None, t1=None, every=1)))
+    assert not used.minus_sec.collapsed and not used.reduce_sec.collapsed
+    assert used.ens_sec.collapsed
+    c.load(used.collect())  # (a card kept for a new figure opens what that one uses)
+    assert not c.minus_sec.collapsed and c.w["minus_on"].value
+    c.load(dict(used.collect(), minus=None, reduce=None))
+    assert c.minus_sec.collapsed and c.reduce_sec.collapsed
+    ens = ed._card(dict(c.collect(), ens=dict(runs=None, stat="mean", threshold=0.0, above=True,
+                                              grid="ask")))
+    assert not ens.ens_sec.collapsed and not ens.minus_sec.visible
+
+
+@pytest.mark.parametrize("kind, cards, add", [
+    ("sounding", "snd_cards", "_add_sounding"), ("dist", "dist_cards", "_add_dist"),
+    ("joint", "joint_cards", "_add_joint"), ("azim", "azim_cards", "_add_azim")])
+def test_every_entry_card_duplicates_into_a_new_panel(ed, kind, cards, add):
+    ed.kind.value = kind
+    getattr(ed, add)()
+    have = getattr(ed, cards)
+    c = have[-1]
+    c.w["label"].value = "mine"
+    n = len(have)
+    c.dup.clicks += 1
+    have = getattr(ed, cards)
+    assert len(have) == n + 1 and have[-1].w["label"].value == "mine"
+    assert have[-1].w["panel"].value not in {x.w["panel"].value for x in have[:-1]}
+    assert f"panel {chr(96 + have[-1].w['panel'].value)}" in have[-1].title.object
+
+
+@pytest.mark.parametrize("kind, cards, add", [
+    ("sounding", "snd_cards", "_add_sounding"), ("line", "ser_cards", "_add_series"),
+    ("th", "ser_cards", "_add_series"), ("dist", "dist_cards", "_add_dist"),
+    ("profile", "prof_cards", "_add_profile"), ("joint", "joint_cards", "_add_joint"),
+    ("azim", "azim_cards", "_add_azim")])
+def test_adding_keeps_the_grid_set(ed, kind, cards, add):
+    """A new entry goes in the grid's free panel, else with the last card; it never
+    changes the rows and columns set."""
+    ed.kind.value = kind
+    ed.rows.value, ed.cols.value = 1, 1
+    got = getattr(ed, cards)
+    for c in got:
+        c.w["panel"].value = 1
+    getattr(ed, add)()
+    assert {c.w["panel"].value for c in got} == {1}
+    assert (ed.rows.value, ed.cols.value) == (1, 1)
+    ed.cols.value = 2
+    getattr(ed, add)()
+    assert got[-1].w["panel"].value == 2
+    assert (ed.rows.value, ed.cols.value) == (1, 2)
+    getattr(ed, add)()  # (full: with the last card)
+    assert got[-1].w["panel"].value == 2
+    assert (ed.rows.value, ed.cols.value) == (1, 2)
+
+
+def test_grid_goes_back_when_panels_are_not_needed(ed):
+    """A card moved past the grid grows it; moved back, the rows and columns set return.
+    Rows and columns changed by hand are the ones set from then on."""
+    ed.kind.value = "sounding"
+    ed.rows.value, ed.cols.value = 1, 1
+    ed._add_sounding()
+    c = ed.snd_cards[-1]
+    c.w["panel"].value = 3
+    assert ed.rows.value * ed.cols.value >= 3
+    c.w["panel"].value = 1
+    assert (ed.rows.value, ed.cols.value) == (1, 1)
+    c.w["panel"].value = 2
+    assert (ed.rows.value, ed.cols.value) == (2, 1)
+    ed.rows.value, ed.cols.value = 1, 2  # (by hand)
+    c.w["panel"].value = 1
+    assert (ed.rows.value, ed.cols.value) == (1, 2)
+    ed._dup_entry(c, ed.snd_cards, ed._snd_card, ed._show_soundings)  # (panel b: fits)
+    ed._dup_entry(c, ed.snd_cards, ed._snd_card, ed._show_soundings)  # (panel c: grows)
+    assert ed.rows.value * ed.cols.value >= 3
+    ed._remove_snd(ed.snd_cards[-1])
+    ed._remove_snd(ed.snd_cards[-1])
+    assert (ed.rows.value, ed.cols.value) == (1, 2)
+
+
+def test_sounding_own_line_looks_and_held_time(ed):
+    """A sounding card's own line looks and "Keep this time" reach the spec and the lines,
+    and a second sounding keeps its automatic looks."""
+    from cm1view.figures import draw as figdraw
+    ed.kind.value = "sounding"
+    ed.rows.value, ed.cols.value = 1, 1
+    ed._add_sounding()
+    ed._add_sounding()
+    a, b = ed.snd_cards[-2:]
+    b.w["panel"].value = a.w["panel"].value
+    assert "T_color" not in a.collect() and "time_lock" not in a.collect()
+    assert not a.w["T_color"].visible
+    a.w["own_looks"].value = True
+    assert a.w["T_color"].visible and a.w["Tp_lw"].visible
+    a.w["T_ls"].value = "--"
+    a.w["Td_lw"].value = 0.5
+    a.w["hold"].value = True
+    e = a.collect()
+    assert (e["T_color"], e["T_ls"], e["Td_lw"], e["time_lock"]) == ("#d62728", "--", 0.5, True)
+    assert "T_lw" not in e and "(kept)" in a.title.object
+    s = dict(soundings=[dict(e), b.collect()], skewt=dict(lw=2.0))
+    d = dict(nsnd=2, N0_e=0, N1_e=1)
+    looks = figdraw.sounding_looks(s, d, ["#111111", "#222222"])
+    assert looks[0]["T"] == dict(color="#d62728", ls="--", lw=2.0)
+    assert looks[0]["Td"] == dict(color="#2ca02c", ls="-", lw=0.5)
+    assert looks[1]["T"] == dict(color="#222222", ls="-", lw=2.0)
+    assert figdraw.hodo_styles(s, d) == ["--", "-"]  # (they differ: as the lines)
+    s["soundings"][0]["T_ls"] = "-"
+    assert figdraw.hodo_styles(s, d)[1] != "-"  # (they don't: a style each)
+    again = ed._snd_card(e)  # (reopened)
+    assert again.w["own_looks"].value and again.w["hold"].value
+    assert again.w["T_ls"].value == "--" and again.w["Td_lw"].value == 0.5
+
+
+def test_panels_go_by_letter(ed):
+    ed.kind.value = "dist"
+    ed._add_dist()
+    c = ed.dist_cards[-1]
+    assert "b" in c.w["panel"].options and c.w["panel"].options["b"] == 2
+    c.w["panel"].value = 2
+    assert c.collect()["panel"] == 1 and "panel b" in c.title.object
+    ed.lg_where.value = "figure"
+    ed.lg_from.value = "a, 3-4, nonsense"
+    s = ed.collect()
+    assert s["legend"]["panels"] == [0, 2, 3]
+    ed.set_spec(json.loads(json.dumps(s)))
+    assert ed.lg_from.value == "a, c, d"
+
+
+def test_label_switches_show_their_row(ed):
+    ed.let_on.value = False
+    assert not ed.let_loc.visible and not ed.let_fmt.visible
+    ed.let_on.value = True
+    assert ed.let_loc.visible and ed.let_fmt.visible
+    ed.ex_on.value = False
+    assert not ed.ex_opts.visible
+    ed.ex_on.value = True
+    assert ed.ex_opts.visible
+
+
+def test_options_close_up_when_one_is_hidden(ed):
+    """A card's options reflow when a choice hides or shows others: the hidden ones leave the
+    grid, and Panel's invisible scroll button (which a re-shown option lands after, and which
+    took a cell of the grid) is out of the layout."""
+    ed.from_series()
+    ed.kind.value = "line"
+    c = ed.ser_cards[0]
+    w = c.w
+    box = next(g[0] for g in c.body.objects if hasattr(g, "objects") and g.objects
+               and w["vmode"] in getattr(g[0], "objects", []))
+    assert any("scroll-button" in s and "display: none" in s for s in box.stylesheets)
+    w["vmode"].value = "layer"
+    assert w["z"] not in box.objects and w["z0"] in box.objects
+    w["vmode"].value = "height"
+    at = box.objects.index(w["vmode"])
+    assert box.objects[at + 1] is w["z"] and w["z0"] not in box.objects

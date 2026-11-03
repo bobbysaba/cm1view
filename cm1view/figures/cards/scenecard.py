@@ -5,7 +5,7 @@ import panel as pn
 
 from ...core import parcels as P, vectors
 from ...core.fields import CMAPS
-from .base import FIG_CMAPS, FRAMES, PAR_MOVING, PAR_TAILS, _BTN, _f, _grid, _hex
+from .base import FRAMES, PAR_MOVING, PAR_TAILS, _BTN, _f, _grid, _hex, cmap_select
 from .layercard import parcel_pick, parcel_sets
 from ...viewer.ui import held
 
@@ -15,7 +15,7 @@ SCENE_PROJ = {"Perspective": "perspective", "Orthographic (no foreshortening)": 
 SCENE_RES = {"Auto": 0, "Full": 1, "1/2": 2, "1/3": 3, "1/4": 4}
 SCENE_LIGHTS = {"Light kit (soft, from several sides)": "kit", "Three lights": "three",
                 "Headlight (from the camera)": "head"}
-SCENE_BG = {"The figure's (Export tab)": "", "White": "white", "Black": "black",
+SCENE_BG = {"The figure's (File tab)": "", "White": "white", "Black": "black",
             "Transparent": "transparent"}
 SCENE_ARROWS = {"3D arrows (scaled by length)": "glyph", "Lines (as the 3D view)": "lines"}
 SCENE_BARS = {"Below": "bottom", "Right": "right", "Left": "left", "Above": "top",
@@ -124,9 +124,7 @@ class ParRow:
             color=pn.widgets.ColorPicker(name="Colour", value=_hex(e.get("color") or "#d62728")),
             cvar=pn.widgets.Select(name="Colour by", value=cvar, groups=P.var_choices(
                 pf, {"Set colour": ""}, keep=cvar)),
-            cmap=pn.widgets.Select(name="Colormap", options=FIG_CMAPS,
-                                   value=e.get("cmap") if e.get("cmap") in FIG_CMAPS
-                                   else "viridis"),
+            cmap=cmap_select(e.get("cmap")),
             tails=pn.widgets.Select(name="Tails", options=SCENE_PAR_TAILS,
                                     value=e.get("tails", "until")),
             minutes=_f("Minutes", float(e.get("minutes", 10.0)), step=5.0, start=0.0),

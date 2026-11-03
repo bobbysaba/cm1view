@@ -15,12 +15,8 @@ import panel as pn
 from . import draw as figdraw, spec as fg
 from .render import panel_name  # noqa: F401  (combo.panel_name, as before)
 from .cards import _auto, _chk, _grid, _hint, _num, _section
+from .kinds import KIND_NAMES
 from ..viewer.ui import held
-
-KIND_NAMES = {"plan": "plan views", "xsec": "cross-sections", "th": "time–height",
-              "line": "time series", "sounding": "soundings", "dist": "distributions",
-              "profile": "profiles", "joint": "joint distributions",
-              "azim": "azimuthal means"}
 
 
 class FigureCombo:
@@ -68,7 +64,7 @@ class FigureCombo:
                 "size (the parts then keep their shares of it). Parts are → Custom grid "
                 "puts each part in cells of its own, e.g. a plan view on the left with a "
                 "section above a sounding on its right. Panel letters run on from part "
-                "to part."),
+                "to part on the figure; on a part's cards they count from a in that part."),
             self.part_sel, _grid(self.part_add, self.part_rm, self.part_arr),
             self.part_grid_box, self.part_title, self.part_size, self.part_note)
         self._show_parts()

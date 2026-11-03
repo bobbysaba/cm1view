@@ -10,8 +10,7 @@ import panel as pn
 from . import spec as fg
 from ..theme import DIALOG_DARK
 from .cards import QUICK_VARY, SIZE_PRESETS, _grid, _hint
-
-MAPS = ("plan", "xsec")  # (the kinds with a fill field, a grid and panels that differ)
+from .kinds import KINDS, MAPS
 
 
 class FigureQuick:
@@ -50,7 +49,7 @@ class FigureQuick:
             pn.layout.Divider(margin=(6, 4)),
             _grid((self.qs_saved, 2), self.qs_open), self.qs_load_note,
             _hint("Figures saved with <b>+ script & data</b> in the Figures folder "
-                  "(⚙ Settings); the Export tab opens any other."), width=640, margin=10,
+                  "(⚙ Settings); the File tab opens any other."), width=640, margin=10,
             stylesheets=[DIALOG_DARK])
         self.qs_kind.param.watch(lambda e: self._quick_show(), "value")
         self.qs_vary.param.watch(lambda e: self._quick_show(), "value")
@@ -89,42 +88,13 @@ class FigureQuick:
         maps = kind in MAPS
         self.qs_field.visible = maps
         self.qs_vary.visible = kind == "plan"  # (sections: a card per panel)
-        self.qs_rows.visible = self.qs_cols.visible = kind not in ("th", "scene")  # (th: its
-        #                                                   cards'; a 3D scene: one picture)
-        note = {
-            "th": "Time–height panels: a series card per panel (Layers → Series: its "
-                  "run and panel), like the section cards; click a card's <b>One per "
-                  "run</b> for runs × series.  It starts with no series, so nothing is "
-                  "computed until you add one.",
-            "line": "Time series: it starts with no series, so nothing is computed until "
-                    "you add one in Layers → Series (each card with its run, or all runs, "
-                    "and its panel number).",
-            "sounding": "The Sounding tab's soundings go one per panel (more soundings "
-                        "than panels: they wrap and share panels); panels left over start "
-                        "as a copy of the last, to change in Layers → Soundings.",
-            "dist": "The Distribution tool's distributions go one per panel (more than "
-                    "panels: they wrap and share panels); panels left over start as a "
-                    "copy of the last, to change in Layers → Distributions.",
-            "profile": "The Series tool's layer series go one per panel at the shown time "
-                       "(more than panels: they wrap and share panels); panels left over "
-                       "start as a copy of the last, to change in Layers → Profiles.",
-            "joint": "Every panel starts with vertical vorticity against w at 1 km at the "
-                     "shown time, to change in Layers → Joint distributions.",
-            "azim": "Every panel starts with w around the tracked storm (else the middle "
-                    "of the map's view) at the shown time, the whole ring out to 20 km, to "
-                    "change in Layers → Azimuthal means.",
-            "scene": "One 3D picture of what the 3D workspace shows (its box, surfaces "
-                     "and camera; the whole domain without a box), at the shown time: "
-                     "change it in Layers.",
-            "xsec": "A section card per panel (Layers → Sections), alternately x–z and "
-                    "y–z (through the storm when it is tracked) at the shown time: set "
-                    "each card's run, time "
-                    "and section there.  For runs × sections, keep one row of cards and "
-                    "click each one's <b>One per run</b>."}.get(kind) or (maps and {
+        # (time-height: its cards'; a 3D scene: one picture)
+        self.qs_rows.visible = self.qs_cols.visible = KINDS[kind].quick_grid
+        note = KINDS[kind].note or (maps and {
             "fields": "Every panel starts with this fill: pick each panel's field in "
                       "Panels → Time and fields.",
             "heights": "Pick each panel's height in Panels → Time and heights.",
-            "runs": "A panel per run: add runs in Panels → Runs, times.  For a grid such "
+            "runs": "A panel per run: add runs in Layers → Runs used.  For a grid such "
                     "as runs × times, set Panels → Grid and size → Rows are / "
                     "Columns are.",
             "none": "Every panel is alike: change one in the panel tree (its run, time, "
@@ -160,10 +130,10 @@ class FigureQuick:
                 self._quick_xsec = False
             if kind == "plan":
                 self.g_rows.value, self.g_cols.value = "none", vary
-            if kind not in ("th", "scene"):
+            if KINDS[kind].quick_grid:
                 self.rows.value = int(self.qs_rows.value)
                 self.cols.value = int(self.qs_cols.value)
-            if kind in ("sounding", "dist", "profile", "joint", "azim", "xsec"):
+            if KINDS[kind].spread:
                 self._quick_spread(kind)
             if self.qs_size.value:
                 self.size_preset.value = self.qs_size.value
@@ -185,27 +155,12 @@ class FigureQuick:
             self._show_sections()
             self._build_titles()
             return
-        cards = {"sounding": self.snd_cards, "dist": self.dist_cards,
-                 "profile": self.prof_cards, "joint": self.joint_cards,
-                 "azim": self.azim_cards}[kind]
-        ents = [c.collect() for c in cards]
+        k = KINDS[kind]
+        ents = [c.collect() for c in getattr(self, k.cards)]
         if not ents:
             return
         ents = [dict(e, panel=i % n) for i, e in enumerate(ents)] + \
             [dict(ents[-1], panel=i) for i in range(len(ents), n)]
-        if kind == "sounding":
-            self.snd_cards = [self._snd_card(e) for e in ents]
-            self._show_soundings()
-        elif kind == "dist":
-            self.dist_cards = [self._dist_card(e) for e in ents]
-            self._show_dists()
-        elif kind == "profile":
-            self.prof_cards = [self._prof_card(e) for e in ents]
-            self._show_profiles()
-        elif kind == "joint":
-            self.joint_cards = [self._joint_card(e) for e in ents]
-            self._show_joints()
-        else:
-            self.azim_cards = [self._azim_card(e) for e in ents]
-            self._show_azims()
+        setattr(self, k.cards, [getattr(self, k.card)(e) for e in ents])
+        getattr(self, k.show)()
         self._build_titles()

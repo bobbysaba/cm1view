@@ -175,6 +175,17 @@ def test_layers_take_the_panels_run_time_and_height():
 
 
 # ------------------------------------------------------------------ the panel tree
+def test_panel_edit_y_range_is_that_panel_s_and_keeps_its_legend():
+    from cm1view.figures import draw as figdraw
+    v1 = dict(version=1, kind="line", rows=1, cols=2, size=[8, 4], ts=dict(ymin=-1.0, ymax=9.0),
+              series=[dict(panel=0), dict(panel=1)],
+              edits={"1": dict(ymax=0.0, legend=dict(on=False))})
+    v2, _ = figdraw.upgrade(v1)
+    a, b = (figdraw.panel_view(v2, p)["ts"] for p in v2["panels"])
+    assert (a["ymin"], a["ymax"]) == (-1.0, 9.0)
+    assert (b["ymin"], b["ymax"], b["legend"]) == (-1.0, 0.0, False)
+
+
 def test_panel_edits_change_that_panel_alone():
     from cm1view.figures import draw as figdraw
     v1 = edited_v1()
@@ -288,9 +299,10 @@ def test_saved_spec_is_version_2_and_reopens_with_its_edits(ed, tmp_path):
 def test_annotation_in_several_panels():
     from cm1view.figures.cards.distcard import parse_panels, panels_text
     from cm1view.figures.draw.base import ann_on
-    assert [parse_panels(t) for t in ("", "all", "0", "2", "1, 3-4")] == \
-        [-1, -1, -1, 1, [0, 2, 3]]
-    assert panels_text([0, 2, 3]) == "1, 3-4" and panels_text(-1) == "" and panels_text(1) == "2"
+    assert [parse_panels(t) for t in ("", "all", "0", "2", "1, 3-4", "a, c-d", "b")] == \
+        [-1, -1, -1, 1, [0, 2, 3], [0, 2, 3], 1]
+    assert panels_text([0, 2, 3]) == "a, c-d" and panels_text(-1) == "" and panels_text(1) == "b"
+    assert parse_panels(panels_text([0, 26, 27])) == [0, 26, 27]  # (past z: numbers)
     a = dict(kind="text", panel=[0, 2])
     assert [ann_on(a, i) for i in range(4)] == [True, False, True, False]
     assert all(ann_on(dict(panel=-1), i) for i in range(4))

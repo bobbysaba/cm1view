@@ -81,11 +81,65 @@ def test_legend_settings_round_trip(ed):
     lg = ed.collect()["legend"]
     assert (lg["where"], lg["loc"], lg["panels"], lg["title"], lg["ncol"]) == \
         ("figure", "outside right center", [0, 1], "Layers", 2)
-    ed.ts_legncol.value, ed.ts_legframe.value = 3, True
-    ts = ed.collect()["ts"]
-    assert ts["legend_ncol"] == 3 and ts["legend_frame"] is True
     ed.lg_where.value = "panel"
     assert ed.lg_panel.visible and "outside right center" not in ed.lg_loc.options
+
+
+def test_one_legend_block_writes_to_the_kind_shown(ed):
+    """Style → Legend holds the panels' own legend of the kind shown; other kinds' blocks
+    keep theirs, also through a change of kind and back and a round trip."""
+    ed.kind.value = "line"
+    assert ed.pl_on.visible and not ed.lg_panel.visible and not ed.lg_title.visible
+    ed.pl_ncol.value, ed.pl_frame.value, ed.pl_loc.value = 3, True, "lower left"
+    ed.pl_on.value = False
+    s = ed.collect()
+    assert (s["ts"]["legend"], s["ts"]["legend_loc"], s["ts"]["legend_ncol"],
+            s["ts"]["legend_frame"]) == (False, "lower left", 3, True)
+    assert s["dist"]["legend_ncol"] == 1 and s["dist"]["legend"] is True
+
+    ed.kind.value = "dist"  # (its own settings, not the time series')
+    assert ed.pl_ncol.value == 1 and ed.pl_on.value is True and ed.pl_loc.value == "best"
+    ed.pl_ncol.value = 2
+    s = ed.collect()
+    assert s["dist"]["legend_ncol"] == 2 and s["ts"]["legend_ncol"] == 3
+
+    ed.kind.value = "sounding"  # (its defaults differ, and the label says why)
+    assert ed.pl_on.name == "Legend (one sounding)"
+    assert ed.pl_on.value is False and ed.pl_frame.value is True
+    ed.kind.value = "plan"  # (no block: nothing written, and back)
+    assert not ed.pl_on.visible and ed.lg_panel.visible and ed.lg_title.visible
+    ed.kind.value = "line"
+    assert ed.pl_ncol.value == 3 and ed.pl_on.value is False
+
+    s = ed.collect()
+    ed.set_spec(s)
+    assert ed.collect()["ts"] == s["ts"] and ed.collect()["dist"] == s["dist"]
+    ed.set_spec(dict(s, kind="dist"))  # (another spec: not the widgets' old values)
+    assert ed.pl_ncol.value == 2 and ed.collect()["ts"]["legend_ncol"] == 3
+
+
+def test_legend_settings_follow_the_place_and_the_kind(ed):
+    ed.kind.value = "profile"
+    assert ed.lg_where.name == "Legends on" and ed.lg_own.visible and ed.pl_loc.visible
+    ed.lg_where.value = "figure"  # (one legend: its settings, and the panels' switch)
+    assert ed.lg_loc.visible and ed.lg_from.visible and ed.pl_on.visible
+    assert not ed.pl_loc.visible and not ed.lg_own.visible
+    ed.lg_where.value = "panel"
+    ed.kind.value = "dist"
+    assert ed.lg_sec.visible
+    ed.ds["plot"].value = "box"  # (draws no legend)
+    assert not ed.lg_sec.visible
+    ed.ds["plot"].value = "hist"
+    assert ed.lg_sec.visible
+    ed.kind.value = "th"  # (lists only legend entries of your own)
+    assert not ed.lg_sec.visible
+    ed.ann_kind.value = "legend"
+    ed._add_annotation()
+    assert ed.lg_sec.visible
+    ed._remove_ann(ed.ann_rows[-1])
+    assert not ed.lg_sec.visible
+    ed.kind.value = "scene"
+    assert ed.lg_sec.visible and not ed.lg_panel.visible and not ed.lg_from.visible
 
 
 def test_figure_legend_draws_from_the_editor(ed):

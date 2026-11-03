@@ -111,6 +111,7 @@ body, #main, .main {{ background: var(--cv-bg) !important; }}
            color: var(--cv-text); }}
 .cv-time small {{ font-size: 12px; color: var(--cv-muted); font-weight: 400; }}
 .cv-hint {{ font-size: 12px; color: var(--cv-muted); }}
+.cv-hint summary {{ cursor: pointer; }}
 .cv-hint kbd {{ background: var(--cv-raised); border: 1px solid var(--cv-grid);
                border-radius: 4px; padding: 0 4px; font-size: 11px; color: var(--cv-text); }}
 .cv-status {{ font-size: 12px; color: var(--cv-muted); }}

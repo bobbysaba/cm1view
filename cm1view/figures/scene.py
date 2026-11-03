@@ -52,7 +52,7 @@ class FigureScene:
             z=_f("Height (km; 0: lowest level)", 0.0, step=0.25, start=0.0),
             cmap=pn.widgets.Select(name="Colormap", options=SCENE_FLOOR_CMAPS,
                                    value="Field default"),
-            rev=_chk("Reverse colours", False),
+            rev=_chk("Reverse", False),
             range=pn.widgets.Select(name="Range", options=SCENE_FLOOR_RANGE, value="data"),
             lo=_f("Min", 0.0), hi=_f("Max", 1.0))
         self.sc_s = dict(
@@ -177,7 +177,7 @@ class FigureScene:
                      _grid(*self.sc_labels),
                      _checks(lk["outline"], lk["ticks"], lk["legend"], lk["seed_box"])),
             _section("Animation", _grid(self.sc_anim["follow"], self.sc_anim["orbit"]),
-                     _hint("For <b>Export → Animation (GIF)</b>: each frame steps the "
+                     _hint("For <b>File → Animation (GIF)</b>: each frame steps the "
                            "scene's time. A box following the track needs a <b>Fixed "
                            "box</b> and the run's track; the orbit is shared out evenly, "
                            "so a looping 360° turn does not repeat a frame.")),

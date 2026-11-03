@@ -11,10 +11,10 @@ tabs have a page each:
 
 | Tab | Page |
 |---|---|
-| **Panels**: what the panels show, the grid, times, runs | [Figure panels](figures-panels.md) |
+| **Panels**: what the panels show, the grid, times, titles | [Figure panels](figures-panels.md) |
 | **Layers**: fills, contours, vectors, series, soundings, distributions | [Figure layers](figures-layers.md) |
 | **Style** and **Annotate**: fonts, axes, colorbars, legends; text, arrows, your own code | [Style and annotations](figures-style.md) |
-| **Export**: trimming, animations (GIF), templates, reopening | [Export, animations and the script](figures-export.md) |
+| **File**: trimming, animations (GIF), templates, reopening | [Export, animations and the script](figures-export.md) |
 
 ## Starting a figure
 
@@ -32,7 +32,7 @@ A figure can start from
 
 | Setting | Meaning |
 |---|---|
-| **Panels show** | *Plan views*, *Vertical cross-sections*, *Time–height (series)*, *Time series*, *Soundings*, *Distributions*, *Vertical profiles*, *Joint distributions*, *Azimuthal means* or *3D scene (one picture)*. |
+| **Panels show** | *Plan views*, *Vertical cross-sections*, *Time–height (series)*, *Time series*, *Soundings*, *Distributions*, *Vertical profiles*, *Joint distributions*, *Azimuthal means*, *Tables (sounding parameters, field statistics)* or *3D scene (one picture)*. |
 | **Panels differ in** | (Plan views.) *Time*, *Field*, *Height*, *Run*, or *Nothing*; the panels fill the grid row by row. For a grid of two (e.g. runs × times) set *Panels → Grid and size → Rows are / Columns are*. Cross-sections start with a section card per panel, x–z and y–z in turn (*Layers → Sections*). |
 | **Colour fill** | The field every panel starts with. |
 | **Rows**, **Columns** | The grid, up to 8 × 8. |
@@ -83,4 +83,5 @@ because matplotlib's style settings are process-wide.
 A figure may show several runs. Every layer, sounding, distribution and series picks its
 own run, and runs have their own storm track (the Track tool, or `storm_tracks/<run>.csv`
 found automatically; see `track_dirs` and `track_patterns` in [Settings](../settings.md)).
+A run's *Track file* lists the files in those folders, or takes a path you type.
 See [Figure panels](figures-panels.md#runs) for how runs are added and coloured.

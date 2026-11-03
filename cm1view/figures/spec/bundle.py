@@ -51,10 +51,11 @@ def save_kw(spec, dpi=None):
 def bundle_paths(spec, base):
     """{image, script, data, spec, draw} for a bundle saved as `base`: the image, the
     script in scripts/ next to it, the arrays, spec and drawing code in _src/ (`base`
-    may be the image or the script)."""
+    may be the image, a GIF or the script)."""
     base = _abs(base)
     root, ext = os.path.splitext(base)
-    if ext.lower() in (".png", ".pdf", ".svg", ".eps", ".tif", ".tiff", ".jpg", ".py"):
+    if ext.lower() in (".png", ".pdf", ".svg", ".eps", ".tif", ".tiff", ".jpg", ".gif",
+                       ".py"):
         base = root
     if ext.lower() == ".py" and os.path.basename(os.path.dirname(base)) == "scripts":
         base = os.path.join(os.path.dirname(os.path.dirname(base)), os.path.basename(base))
@@ -127,6 +128,22 @@ def changed_runs(spec):
             ("", r["namelist_sha256"])]
 
 
+def write_spec(form, v2, path):
+    """A saved figure's spec: version 2, with the editor's settings that made it under
+    "form" (load_spec opens those)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(dict(v2, form=form), f, indent=1, default=float)
+    return path
+
+
+def save_spec(spec, base):
+    """The spec alone, where a bundle saved as `base` has it, so the figure can be
+    reopened (an animation has no one image or set of arrays to keep).  Returns its path."""
+    form = dict(spec, made_with=made_with(spec))
+    return write_spec(form, figdraw.upgrade(form)[0], bundle_paths(spec, base)["spec"])
+
+
 def save_bundle(spec, data, base, run=None, note=""):
     """Image, script in scripts/, data, spec and drawing code in _src/ (see
     bundle_paths).  Returns the paths.  The spec is saved as version 2 (every panel
@@ -139,8 +156,7 @@ def save_bundle(spec, data, base, run=None, note=""):
         os.makedirs(os.path.dirname(d), exist_ok=True)
     out["image"] = save_image(v2, data, out["image"])
     np.savez_compressed(out["data"], **flatten(data))
-    with open(out["spec"], "w") as f:
-        json.dump(dict(v2, form=form), f, indent=1, default=float)
+    write_spec(form, v2, out["spec"])
     with open(out["draw"], "w") as f:
         f.write(drawing_code())
     with open(out["script"], "w") as f:

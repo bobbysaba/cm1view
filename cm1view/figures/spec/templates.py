@@ -26,6 +26,8 @@ def template(spec, name=""):
             p[key] = [e for e in p.get(key) or [] if int(e.get("run", 0)) == 0
                       or key == "profiles" and "runs" in e
                       and (e["runs"] is None or len(e["runs"]) > 1)]
+        for e in p.get("tables") or []:  # (of several runs: every run of the new figure)
+            e["runs"], e["run"] = [0] if e.get("runs") == [0] else None, 0
         for e in p["profiles"]:  # (of several runs: every run of the new figure)
             if "runs" in e and e.get("source") != "table":
                 e["runs"] = [0] if e["runs"] == [0] else None
@@ -39,7 +41,7 @@ def template(spec, name=""):
         else:  # (a series of the first run only stays so, the others: every run)
             for e in p.get("series") or []:
                 e["runs"] = [0] if e.get("runs") == [0] else None
-        for lay in p.get("layers") or []:
+        for lay in (p.get("layers") or []) + (p.get("panel_fills") or []):
             if (lay.get("minus") or {}).get("run") not in (None, 0):
                 lay.pop("minus")
             if lay.get("ens"):  # (an ensemble: of the new figure's runs)
@@ -81,6 +83,8 @@ def from_template(tpl, run, t):
             e["time_s"] = near(e["time_s"])
             if e.get("time_s1") is not None:
                 e["time_s1"] = near(e["time_s1"])
+        for e in p.get("tables") or []:  # (shift_times leaves a table's times)
+            e["times_s"] = sorted({near(float(ts) + dt) for ts in e.get("times_s") or []})
         for e in (p.get("edits") or {}).values():
             for lay in [e] + list((e.get("layers") or {}).values()) + list(e.get("extra") or []):
                 if lay.get("time_s") is not None and not lay.get("time_lock"):
