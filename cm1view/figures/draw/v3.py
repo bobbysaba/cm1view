@@ -58,6 +58,47 @@ def _key_at(ck, doc):
     return dict(ck, layer=at, lay=copy.deepcopy(_key_layer(dict(ck, layer=at), lays)))
 
 
+def inset_items(p):
+    """The layer items of panel p's insets with layers of their own."""
+    return [item for ins in p.get("insets") or [] for item in ins.get("layers") or []]
+
+
+def _resolved_inset(doc, ins, at):
+    """An inset as version 2 has it: its own layers written out, None for the panel's."""
+    out = copy.deepcopy(ins)
+    if ins.get("layers") is not None:
+        out["layers"] = [run_ids(lay, at) for _, lay in panel_layers(doc, ins)]
+    return out
+
+
+def inset_panel(q, ins):
+    """Inset `ins` of version-2 panel q as a panel of its own, which is how its arrays are read and
+    how it is drawn: the panel, with its layers unless the inset has others and its settings
+    unless the inset has others (its own area), keyed by the negative of the inset's id."""
+    out = {k: v for k, v in q.items() if k != "insets"}
+    opts = copy.deepcopy(q.get("opts") or {})
+    for key, val in (ins.get("opts") or {}).items():
+        opts[key] = dict(opts[key], **val) if isinstance(val, dict) and \
+            isinstance(opts.get(key), dict) else copy.deepcopy(val)
+    out.update(id=-int(ins["id"]), title="")
+    if ins.get("layers") is not None:
+        out["layers"] = ins["layers"]
+    if opts:
+        out["opts"] = opts
+    return out
+
+
+def panel_or_inset(res, pid):
+    """The version-2 panel of id pid, or as a panel the inset whose key it is (inset_panel)."""
+    for q in res["panels"]:
+        if q["id"] == pid:
+            return q
+        for ins in q.get("insets") or []:
+            if -int(ins["id"]) == pid:
+                return inset_panel(q, ins)
+    raise KeyError(pid)
+
+
 def resolve(doc):
     """The version-2 spec of document `doc` (the figure settings, style and kinds' settings
     side by side; a kind's settings another kind has otherwise: in its panels' opts; shared
@@ -106,6 +147,8 @@ def resolve(doc):
             q.pop("opts", None)
         if p.get("section") is not None:
             q["section"] = secs.index(p["section"]) if p["section"] in secs else 0
+        if p.get("insets"):
+            q["insets"] = [_resolved_inset(doc, ins, at) for ins in p["insets"]]
         panels.append(q)
     if "extremes" in out:
         out["extremes"] = dict(ex, layer=-1 if ex_at is None else ex_at)

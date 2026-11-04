@@ -9,7 +9,7 @@ from matplotlib.colors import to_rgba
 from matplotlib.contour import ContourSet
 from matplotlib.lines import Line2D
 from matplotlib.offsetbox import AnchoredOffsetbox
-from matplotlib.patches import Circle, Patch, Rectangle
+from matplotlib.patches import Circle, ConnectionPatch, Patch, Rectangle
 from matplotlib.text import Text
 
 from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_letter,
@@ -17,6 +17,7 @@ from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_le
                    run_code, run_color, layer_color, run_time_opts)
 from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _z_text,
                  LEGEND_OPTS)
+from .v3 import inset_panel
 from .layers import (_fill, _contour, _shade, _vectors, _parcels, parcel_label,
                      sector_outline, extend_of,
                      union_extend, _extends, _ticks, _colorbars, _cbar_style, bar_layer,
@@ -28,6 +29,8 @@ from .tables import _table, _tbl_width, finish_tables
 from .scene3d import scene_panel, finish_scenes, scene_dpi
 
 MIN_LABEL_PT = 6.0  # (fit_labels)
+INSET_KINDS = ("plan", "xsec")  # (the kinds with zoom insets: axes in km, arrays that can be cut)
+INSET_PAD = 0.03  # (from a panel's edge, a fraction of it)
 SCALE_OPTS = {"dist": "dist", "profile": "prof", "joint": "joint", "azim": "azim",
               "sounding": "skewt"}  # (a kind whose scales follow its data -> its options)
 
@@ -342,6 +345,7 @@ def _block(fig, spec, k, bv, data, fs, ext):
                       order[id(p)] if letter is None else int(letter), _z_text(V, p), p["id"])
             if p.get("rowlabel"):
                 _row_label(ax, p["rowlabel"], V, pfs)
+            _insets(fig, ax, spec, p, V, d, data, pfs, entries[p["id"]], bv)
         placed.append((p, ax, V))
         if getattr(ax, "_cv_hodo", False) and cols > 1:
             # equal axes are squares in the middle of a wider cell: pack the outer columns
@@ -364,6 +368,9 @@ def _block(fig, spec, k, bv, data, fs, ext):
             _axes_of(mine, data, rows, min((_cell(p)[1] for p, _, _ in mine), default=0)
                      if name in own else 0, gv.get("axes", {}))
         _legends(fig, gv, mine, entries, mixed)
+    for _, ax, _ in placed:  # (the panels' limits are final now)
+        for mark in getattr(ax, "_cv_marks", ()):
+            _inset_mark(ax, *mark)
     fig._cv_mappables = mappables
     where = {p["id"]: _cell(p)[:2] for p in pans}
     if bv.get("colorbar", {}).get("mode") == "groups":
@@ -392,6 +399,138 @@ def _block(fig, spec, k, bv, data, fs, ext):
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
                  code["text"])
+
+
+def inset_limits(ins, d):
+    """((x0, x1), (y0, y1)) an inset shows, in its axis units, with its arrays d, or None: where its
+    window was read (a plan view's), cut to its "view" (a cross-section's: the arrays are the
+    section's)."""
+    view = ins.get("view")
+    if view and None not in view:
+        return tuple(float(v) for v in view[:2]), tuple(float(v) for v in view[2:4])
+    if d.get("missing") or "xlim" not in d or "ylim" not in d:
+        return None
+    return tuple(float(v) for v in d["xlim"]), tuple(float(v) for v in d["ylim"])
+
+
+def inset_rect(ins, lims, panel_lims, equal):
+    """[x, y, width, height] of an inset, fractions of its panel: "loc" a corner, or "custom" (its
+    lower left at "x", "y"); "size" its width; "h" its height, else as tall as what it shows is
+    on the panel's scale (equal: a plan view's km are square), else square in fractions."""
+    w = float(ins.get("size") or 0.4)
+    h = ins.get("h")
+    if h not in (None, ""):
+        h = float(h)
+    elif equal and lims and panel_lims:
+        (a0, a1), (b0, b1) = lims
+        (c0, c1), (e0, e1) = panel_lims
+        h = w * abs((b1 - b0) / (a1 - a0)) * abs((c1 - c0) / (e1 - e0))
+    else:
+        h = w
+    most = 1.0 - 2.0 * INSET_PAD
+    if max(w, h) > most:  # (it stays inside its panel, and its shape)
+        w, h = w * most / max(w, h), h * most / max(w, h)
+    loc = ins.get("loc") or "upper right"
+    if loc == "custom":
+        return [float(ins.get("x", INSET_PAD)), float(ins.get("y", INSET_PAD)), w, h]
+    return [INSET_PAD if "left" in loc else 1.0 - INSET_PAD - w,
+            INSET_PAD if "lower" in loc else 1.0 - INSET_PAD - h, w, h]
+
+
+def _inset_shift(d, cd):
+    """What to add to an inset's axis units for its panel's (their origins differ: an inset with
+    other coordinates than its panel's)."""
+    if "origin" not in d or "origin" not in cd:
+        return 0.0, 0.0
+    return tuple(float(a) - float(b) for a, b in zip(cd["origin"], d["origin"]))
+
+
+def inset_lines(rect, box):
+    """Which corners to join, as [(corner of the box, corner of the inset)], each corner (0 or 1 from
+    the left, 0 or 1 from the bottom), for an inset at `rect` and a box at `box` ([x, y, width,
+    height] alike): two lines that keep clear of both, or as near as an overlap allows."""
+    def apart(a, a1, b, b1):  # (b is after a: 1; before it: -1; they overlap: 0)
+        return 1 if b >= a1 else -1 if b1 <= a else 0
+
+    dx = apart(box[0], box[0] + box[2], rect[0], rect[0] + rect[2])
+    dy = apart(box[1], box[1] + box[3], rect[1], rect[1] + rect[3])
+    if dx and not dy:  # (beside it: the sides facing each other)
+        return [(((dx + 1) // 2, e), ((1 - dx) // 2, e)) for e in (0, 1)]
+    if dy and not dx:  # (above or below it)
+        return [((e, (dy + 1) // 2), (e, (1 - dy) // 2)) for e in (0, 1)]
+    if not dx:  # (over it: by where the middles are)
+        dx = 1 if rect[0] + 0.5 * rect[2] >= box[0] + 0.5 * box[2] else -1
+        dy = 1 if rect[1] + 0.5 * rect[3] >= box[1] + 0.5 * box[3] else -1
+    return [((0, 1), (0, 1)), ((1, 0), (1, 0))] if dx * dy > 0 else \
+        [((0, 0), (0, 0)), ((1, 1), (1, 1))]
+
+
+def _inset_mark(ax, ins, cax, rect, lims, shift, color):
+    """The box in the panel over what inset cax (at `rect`) shows, and the lines from it to the
+    inset, inside the panel's limits as they finally are: what shows beyond them has no place in
+    it.  None of it moves the panel, or says how much room the figure needs."""
+    if ins.get("mark", True) is False or not lims:
+        return
+    (x0, x1), (y0, y1) = lims
+    (c0, c1), (e0, e1) = sorted(ax.get_xlim()), sorted(ax.get_ylim())
+    x0, x1 = max(x0 + shift[0], c0), min(x1 + shift[0], c1)
+    y0, y1 = max(y0 + shift[1], e0), min(y1 + shift[1], e1)
+    if x1 <= x0 or y1 <= y0 or (x0, x1, y0, y1) == (c0, c1, e0, e1):
+        return  # (nothing of it in the panel; all of the panel: an overview, not a zoom)
+    look = dict(edgecolor=color, linewidth=float(ins.get("lw", 1.0)), linestyle=ins.get("ls", "-"),
+                zorder=4.99, clip_on=False, in_layout=False)
+    ax.add_artist(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, **look))
+    if ins.get("connect", True) is False:
+        return
+    box = [(x0 - c0) / (c1 - c0), (y0 - e0) / (e1 - e0), (x1 - x0) / (c1 - c0), (y1 - y0) / (e1 - e0)]
+    for (u, w), at_inset in inset_lines(rect, box):
+        ax.add_artist(ConnectionPatch((x0 + u * (x1 - x0), y0 + w * (y1 - y0)), at_inset,
+                                      ax.transData, cax.transAxes, **look))
+
+
+def _insets(fig, ax, spec, p, V, d, data, fs, legend, bv):
+    """Panel p's zoom insets, in its axes ax: each a small panel of its own arrays (panel_view of
+    inset_panel, data[negative of its id]) with no labels, a frame, and a box and lines in the panel
+    (spec.doc has what an inset holds).  What a panel's labels say holds for its insets; a
+    colorbar is the panel's; a layer of the inset's own names itself in the panel's legend."""
+    if p["kind"] not in INSET_KINDS or d.get("missing"):
+        return
+    for ins in p.get("insets") or []:
+        q = inset_panel(p, ins)
+        cd = data.get(q["id"])
+        if cd is None:
+            continue
+        IV = dict(panel_view(spec, q, bv), extremes={})
+        # (a vector key is the panel's, as its colorbar; an own layer's stays with it)
+        lays = _panel_layers(q) if ins.get("layers") is not None else \
+            [dict(lay, key=False) for lay in _panel_layers(q)]
+        lims = inset_limits(ins, cd)
+        equal = p["kind"] == "plan" and V.get("axes", {}).get("equal", True)
+        rect = inset_rect(ins, lims, (d["xlim"], d["ylim"]) if "xlim" in d else None, equal)
+        cax = ax.inset_axes(rect)
+        cax.set_in_layout(False)
+        color = ins.get("color") or ("white" if spec.get("mplstyle") == "dark_background"
+                                     else "black")
+        _panel(fig, cax, cd, IV, lays, fs, legend)
+        if lims:
+            cax.set_xlim(*lims[0])
+            cax.set_ylim(*lims[1])
+        if equal:
+            cax.set_aspect("equal")
+        if ins.get("ticks"):
+            cax.tick_params(labelsize=0.8 * font_size(V, "tick"), length=2.0, pad=1.5)
+        else:
+            cax.set_xticks([])
+            cax.set_yticks([])
+        for spine in cax.spines.values():
+            spine.set_edgecolor(color)
+            spine.set_linewidth(float(ins.get("lw", 1.0)))
+        shift = _inset_shift(d, cd)
+        if shift == (0.0, 0.0):  # (annotations are in the panel's axis units)
+            _annotate(cax, p["id"], [a for a in V.get("annotations", [])
+                                     if a.get("coords") != "axes"], fs)
+        ax.__dict__.setdefault("_cv_insets", {})[q["id"]] = cax
+        ax.__dict__.setdefault("_cv_marks", []).append((ins, cax, rect, lims, shift, color))
 
 
 def _cell_inches(fig, b, r, c, rs, cs):

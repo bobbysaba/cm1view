@@ -417,7 +417,7 @@ def main(argv=None):
                 data = fd.panel_data(s)
                 for i, d in data.items():
                     if d.get("missing"):
-                        say(f"note: panel {i}: {d['missing']}")
+                        say(f"note: {'panel' if i >= 0 else 'inset'} {abs(i)}: {d['missing']}")
                 if args.bundle:
                     run = fd.open_run(rp)[0] if rp else None
                     out = list(fg.save_bundle(s, data, base, run).values())

@@ -4,7 +4,7 @@ Only what is shown exists as widgets: a node's are made when it is picked.
 The figure's size, title, look, grid and panels, the runs, plan views (planview), soundings
 (entryview), cross-sections (xsecview), time-height panels and time series (seriesview),
 distributions, profiles, joint distributions, azimuthal means and tables (statsview), 3D scenes
-(sceneview), and annotations (annotview).  Every kind has a pane in `panes`.  Above them, Find
+(sceneview), zoom insets (insetview) and annotations (annotview).  Every kind has a pane in `panes`.  Above them, Find
 (findview), which comes here with a section to pin at the top."""
 
 import html
@@ -23,6 +23,7 @@ from .annotview import AnnotPane
 from .entryview import EntryPane
 from .findview import Finder
 from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure node)
+from .insetview import InsetPane
 from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget, kind_bar_rows,
                     legend_extra, legend_reaches, panels_differ)
 from .planview import PlanPane
@@ -48,6 +49,7 @@ class Inspector:
         self.plan = PlanPane(self)
         self.grid = GridPane(self)
         self.annots = AnnotPane(self)
+        self.insets = InsetPane(self)
         self.panes = dict(plan=self.plan, sounding=EntryPane(self), xsec=XsecPane(self),
                           th=SeriesPane(self, "th"), line=SeriesPane(self, "line"),
                           dist=DistPane(self), profile=ProfilePane(self), joint=JointPane(self),
@@ -80,6 +82,8 @@ class Inspector:
             title, objs = self._layer(doc, node)
         elif node.startswith("panel:"):
             title, objs = self._panel(doc, node)
+        elif node.startswith("inset:"):
+            title, objs = self.insets.objs(doc, node)
         else:
             objs = self._figure(doc) if node == nodes.FIGURE else self._runs(doc)
         self.head.object = (f'<div class="cv-h" style="margin:0">{html.escape(title)}</div>'

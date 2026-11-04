@@ -130,10 +130,13 @@ def _saved_box(fig, spec, size_px, dpi):
 
 def panel_boxes(fig, spec, size_px, dpi):
     """{panel: [left, right, top, bottom]}, fractions of the image just saved from fig, of
-    every panel drawn, whatever its axes."""
+    every panel drawn, whatever its axes, and of its zoom insets (by their keys, negative), ahead
+    of the panels: they are what a click there is on."""
     x0, y1, W, H = _saved_box(fig, spec, size_px, dpi)
     out = {}
-    for i, ax in (getattr(fig, "_cv_axes", None) or {}).items():
+    drawn = (getattr(fig, "_cv_axes", None) or {}).items()
+    inside = [(k, cax) for _, ax in drawn for k, cax in getattr(ax, "_cv_insets", {}).items()]
+    for i, ax in [*inside, *drawn]:
         boxes = [a.get_window_extent() for a in (ax, *getattr(ax, "_cv_parts", ()))]
         f = fig.dpi
         out[i] = [(min(e.x0 for e in boxes) / f - x0) / W, (max(e.x1 for e in boxes) / f - x0) / W,

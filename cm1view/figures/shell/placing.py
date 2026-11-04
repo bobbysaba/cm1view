@@ -20,13 +20,25 @@ HINTS = dict(
     area="Drag a box in a plan view: all plan views show that area, but those with an area of "
          "their own.",
     area_panel="Drag a box in a plan view: that panel alone shows that area. Its Area section "
-               "takes it back.")
+               "takes it back.",
+    inset="Drag a box in a plan view or cross-section over what to zoom in on: a new inset shows "
+          "it, in the corner furthest from it. It is under the panel in the tree.",
+    inset_area="Drag a box in a panel: its inset (the one picked, if the panel has several) zooms "
+               "in on that.",
+    inset_place="Drag a box in a panel: its inset (the one picked, if the panel has several) sits "
+                "there.")
 OWN_AREA = "area_panel"
 AREAS = ("area", OWN_AREA)
+NEW_INSET, INSET_AREA, INSET_PLACE = "inset", "inset_area", "inset_place"
+INSET_DRAGS = (NEW_INSET, INSET_AREA, INSET_PLACE)
+SMALLEST_INSET = 0.04  # (of a panel: a smaller drag is a slip)
 OWN_OF_THE_AREA = ("domain.mode", "domain.box")  # (a panel with these ignores the kind's box)
 # (the old editor's list has one area, which is the kind's; here, also a panel's)
 MODES = {("Drag: area of all plan views" if v == "area" else k): v for k, v in PLACE.items()}
 MODES["Drag: area of one plan view"] = OWN_AREA
+MODES["Drag: new zoom inset"] = NEW_INSET
+MODES["Drag: what an inset zooms in on"] = INSET_AREA
+MODES["Drag: where an inset sits"] = INSET_PLACE
 
 
 def fraction_entry(box):
@@ -52,7 +64,7 @@ class Placing:
         self.pending = None
         mode = ev.new
         self.hint.visible = bool(mode)
-        self.shell.image.band = mode in ("box", *AREAS)
+        self.shell.image.band = mode in ("box", *AREAS, *INSET_DRAGS)
         text = HINTS.get(mode) or (
             "Click in a panel of the preview" + (" twice, or drag from the first point to the "
                                                  "second" if mode in TWO else "")
@@ -91,9 +103,10 @@ class Placing:
         return got
 
     def click(self, fx, fy):
-        if self.mode.value in (*DRAG, OWN_AREA):
+        if self.mode.value in (*DRAG, OWN_AREA, *INSET_DRAGS):
             self.shell.say("Drag (press, move, release) in the preview to "
                            + ("move an annotation." if self.mode.value == "move" else
+                              "place the inset." if self.mode.value in INSET_DRAGS else
                               "draw the plan-view area."), True)
             return
         got = self._locate(fx, fy)
@@ -118,6 +131,8 @@ class Placing:
             self._move(pid, b, (u0, w0), (u1, w1))
         elif mode in AREAS:
             self._area(pid, to_data(b, u0, w0), to_data(b, u1, w1), own=mode == OWN_AREA)
+        elif mode in INSET_DRAGS:
+            self._inset(pid, b, (u0, w0), (u1, w1))
         else:
             self.pending = None  # (a drag: both points of a two-point item)
             self._placed(pid, *self._at(pid, b, u0, w0))
@@ -190,6 +205,85 @@ class Placing:
             f" Panel{'s' if len(keep) > 1 else ''} {', '.join(keep)} keep"
             f"{'' if len(keep) > 1 else 's'} an area of {'their' if len(keep) > 1 else 'its'} own."
             if keep else ""))
+
+    # ------------------------------------------------------------ zoom insets
+    def _storm_centre(self, p):
+        """A plan view following the storm: the storm's place in grid km, which is the middle of
+        what it shows (None: it doesn't follow it)."""
+        if p["kind"] != "plan":
+            return None
+        res = figdraw.resolve(self.shell.doc)
+        q = next(x for x in res["panels"] if x["id"] == p["id"])
+        if figdraw.panel_view(res, q).get("domain", {}).get("mode") != "storm":
+            return None
+        now = self.shown_area(p["id"])
+        return None if now is None else (0.5 * (now[0] + now[1]), 0.5 * (now[2] + now[3]))
+
+    def _inset_box(self, pid, b, a, c):
+        """What a drag from fractions a to c of panel box b shows: (grid km of a plan view, else the
+        axis units), and the panel's limits on the same footing."""
+        d = self.origin.get(pid, (0.0, 0.0))
+        (x0, y0), (x1, y1) = to_data(b, *a), to_data(b, *c)
+        xs, ys = sorted((x0 + d[0], x1 + d[0])), sorted((y0 + d[1], y1 + d[1]))
+        lims = ((b[4][0] + d[0], b[4][1] + d[0]), (b[5][0] + d[1], b[5][1] + d[1]))
+        return [*xs, *ys], lims
+
+    def _inset(self, pid, b, a, c):
+        """A drag in panel pid: a new inset, or what its inset shows, or where it sits."""
+        shell, mode = self.shell, self.mode.value
+        p = de.panel_by_id(shell.doc, pid)
+        if p["kind"] not in de.INSET_KINDS:
+            shell.say("Zoom insets are for plan views and cross-sections.", True)
+            return
+        if abs(a[0] - c[0]) < SMALLEST_INSET or abs(a[1] - c[1]) < SMALLEST_INSET:
+            shell.say("Drag a larger box.", True)
+            return
+        box, lims = self._inset_box(pid, b, a, c)
+        letter = nodes.letters(shell.doc)[pid]
+        centre = self._storm_centre(p)
+        if mode == NEW_INSET:
+            made = []
+            shell.edit(lambda d: made.append(de.add_inset(d, pid, box, lims, centre)))
+            shell._show(f"inset:{pid}:{made[0]['id']}")
+            shell.say(f"New zoom inset in panel {letter}: under it in the tree.")
+            return
+        ins = self._inset_of(p)
+        if ins is None:
+            shell.say(f"Panel {letter} has no inset: make one first.", True)
+            return
+        iid = ins["id"]
+
+        def on_it(d):
+            q = de.panel_by_id(d, pid)
+            return q, de.inset_by_id(q, iid)
+
+        if mode == INSET_AREA:
+            shell.edit(lambda d: de.set_inset_area(*on_it(d), box, centre),
+                       node=f"inset:{pid}:{iid}")
+            shell.say(f"The inset of panel {letter} zooms in on the box dragged.")
+            return
+        u, w = sorted((a[0], c[0])), sorted((a[1], c[1]))
+
+        def place(d):
+            q, one = on_it(d)
+            one.update(loc="custom", x=round(u[0], 3), y=round(w[0], 3), size=round(u[1] - u[0], 3))
+            if q["kind"] == "plan":  # (as tall as what it shows)
+                one.pop("h", None)
+            else:
+                one["h"] = round(w[1] - w[0], 3)
+
+        shell.edit(place, node=f"inset:{pid}:{iid}")
+        shell.say(f"The inset of panel {letter} sits there now.")
+
+    def _inset_of(self, p):
+        """The inset of panel p a drag is about: the one picked, else its last."""
+        node = self.shell.node
+        have = p.get("insets") or []
+        if node.startswith(f"inset:{p['id']}:"):
+            picked = de.inset_by_id(p, node.rsplit(":", 1)[1])
+            if picked is not None:
+                return picked
+        return have[-1] if have else None
 
     def _move(self, pid, b, start, end):
         shell = self.shell

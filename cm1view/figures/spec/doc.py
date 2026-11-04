@@ -11,6 +11,12 @@
             from the others (a converted figure of parts: one group per part)
   panels    [{id, kind, cell [row, col, rowspan, colspan], run, time_s, z, zmode, title,
             rowlabel, letter, opts, layers, section, group, insets}]
+            insets [{id, loc, size, x, y, h, opts, view, layers, mark, connect, color, lw, ls,
+            ticks}]: zoom insets of a plan view or cross-section, its arrays under the negative
+            of the id (ids are the whole document's; draw.figure's inset_rect has the place);
+            layers: as a panel's, or none for the panel's; opts: over the panel's (a plan view's
+            area: domain, coords; domain may have "off", its centre from the storm's); view: a
+            cross-section's [x0, x1, z0, z1]; mark, connect: the box in the panel, and the lines
   annotations  [{..., panel: id, or a list of ids, or -1 for every panel}]
   notes     what a conversion could not carry over (text for the user)
 
@@ -368,13 +374,13 @@ def drop_annotations(doc, gone):
 
 
 def one_panel(doc, p, res=None):
-    """The one-panel version-1 spec of panel p (a document's, or its id) that FigureData
-    reads its arrays with: all the panel's settings, the panel's layers written out, and
+    """The one-panel version-1 spec of panel p (a document's, or its id, or an inset's key)
+    that FigureData reads its arrays with: all the panel's settings, the panel's layers written out, and
     every run of the document, so a run's number is the same as in the panel.  res:
     figdraw.resolve(doc) if at hand."""
     res = figdraw.resolve(doc) if res is None else res
     pid = p["id"] if isinstance(p, dict) else p
-    q = next(x for x in res["panels"] if x["id"] == pid)
+    q = figdraw.panel_or_inset(res, pid)  # (an inset: read as a panel of its own)
     v = copy.deepcopy(figdraw.panel_view(res, q))
     v.update(version=1, rows=1, cols=1, panels=[], edits={}, titles=[], row_titles=[],
              panel_fills=[], panel_z=[], times_s=[], grid=dict(rows="none", cols="none", runs=[]),

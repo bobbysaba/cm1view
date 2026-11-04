@@ -29,7 +29,8 @@ def plan_window(run, spec, center):
     if center is None:
         return None
     h = float(dom["half"])
-    return center[0] - h, center[0] + h, center[1] - h, center[1] + h
+    ox, oy = dom.get("off") or (0.0, 0.0)  # (an inset's: its centre from the storm's)
+    return center[0] + ox - h, center[0] + ox + h, center[1] + oy - h, center[1] + oy + h
 
 
 def data_key(spec, i, center, path=""):

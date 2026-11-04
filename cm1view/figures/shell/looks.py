@@ -187,8 +187,18 @@ def kind_block(block):
 class Scope:
     """Where the settings of a node live.  kind: its kind; pid: its panel."""
 
+    BACK = "Back to what all panels have"
+    shares_range = True  # (axes.share reaches it)
+
     def __init__(self, kind=None, pid=None):
         self.kind, self.pid = kind, pid
+
+    def fold_key(self, section):
+        return f"look:{self.pid}:{self.kind}:{section}"
+
+    def _holder(self, doc):
+        """What has this scope's own "opts": its panel."""
+        return de.panel_by_id(doc, self.pid)
 
     def _layers_up(self, doc, block):
         """The dictionaries a setting of `block` resolves through, last wins."""
@@ -199,7 +209,7 @@ class Scope:
         elif kind_block(block):  # (the figure: as the first kind has it)
             out.append(next(iter(kinds.values()), {}))
         if self.pid is not None:
-            out.append(de.panel_by_id(doc, self.pid).get("opts") or {})
+            out.append(self._holder(doc).get("opts") or {})
         return out
 
     def value(self, doc, st):
@@ -227,7 +237,7 @@ class Scope:
     def _targets(self, doc, top):
         """The dictionaries to write a setting of block (or top-level key) `top` to."""
         if self.pid is not None:
-            return [de.panel_by_id(doc, self.pid).setdefault("opts", {})]
+            return [self._holder(doc).setdefault("opts", {})]
         if top in FIGURE_KEYS:
             return [doc]
         if self.kind and top in OF_A_KIND:
@@ -255,7 +265,7 @@ class Scope:
 
     def own_keys(self, doc, keys):
         """Those of the settings `keys` the panel of this scope has of its own."""
-        opts = de.panel_by_id(doc, self.pid).get("opts") or {} if self.pid is not None else {}
+        opts = self._holder(doc).get("opts") or {} if self.pid is not None else {}
         out = []
         for k in keys:
             block, _, key = k.rpartition(".")
@@ -266,7 +276,7 @@ class Scope:
 
     def take_back(self, doc, key):
         """A panel's own setting gone: it inherits again."""
-        p = de.panel_by_id(doc, self.pid)
+        p = self._holder(doc)
         block, _, name = key.rpartition(".")
         opts = p.get("opts") or {}
         if not block:
@@ -285,7 +295,7 @@ class Scope:
 
     def _own_block(self, doc):
         if self.pid is not None:
-            return de.panel_by_id(doc, self.pid).get("opts") or {}
+            return self._holder(doc).get("opts") or {}
         return (doc.get("kinds") or {}).get(self.kind) or {}
 
     @staticmethod
@@ -315,7 +325,29 @@ class Scope:
             if not held[block]:
                 held.pop(block)
         if self.pid is not None and not held:
-            de.panel_by_id(doc, self.pid).pop("opts", None)
+            self._holder(doc).pop("opts", None)
+
+
+class InsetScope(Scope):
+    """An inset's: its own opts, over its panel's, which it inherits."""
+
+    BACK = "Back to its panel's"
+    shares_range = False  # (its axes are its own)
+
+    def __init__(self, kind, pid, iid):
+        super().__init__(kind, pid)
+        self.iid = iid
+
+    def fold_key(self, section):
+        return f"look:inset{self.iid}:{section}"
+
+    def _holder(self, doc):
+        return de.inset_by_id(de.panel_by_id(doc, self.pid), self.iid)
+
+    def _layers_up(self, doc, block):
+        return [*super()._layers_up(doc, block)[:-1],
+                de.panel_by_id(doc, self.pid).get("opts") or {},
+                self._holder(doc).get("opts") or {}]
 
 
 def panels_differ(doc, kind, keys):
@@ -381,7 +413,7 @@ class Sections:
         extra = self.extras.get(section)
         if not rows and extra is None:
             return None
-        key = f"look:{self.scope.pid}:{self.scope.kind}:{section}"
+        key = self.scope.fold_key(section)
         folds = self.ins.folds
         title = next((SECTION_NAMES[(k, section)] for k in self.kinds
                       if (k, section) in SECTION_NAMES), section)
@@ -511,7 +543,7 @@ class Sections:
 
     def _reset_line(self, section, marks):
         """What is changed in a section, and its reset."""
-        word = "Back to what all panels have" if self.scope.pid is not None else \
+        word = self.scope.BACK if self.scope.pid is not None else \
             "Back to the figure's" if self.scope.kind is not None and section == "Colorbar" else \
             "Back to a new figure's"
         reset = pn.widgets.Button(name=f"↺ {word}", height=26, margin=(2, 2), button_type="light",
@@ -815,7 +847,8 @@ def area_extra(shell, scope):
         mode = by_key.get("domain.mode")
         half = by_key.get("domain.half")
         col = pn.Column(_grid(*ws, n=2), note, margin=0, sizing_mode="stretch_width")
-        shared = scope.pid is not None and _merged(doc, scope, "axes").get("share", "none") != "none"
+        shared = scope.pid is not None and scope.shares_range and \
+            _merged(doc, scope, "axes").get("share", "none") != "none"
         warn = [_hint("Axes and ticks has panels share a range: this panel's axes stretch to it, "
                       "so they can show more than its own area.")] if shared else []
 

@@ -1,6 +1,7 @@
 """What the tree of a figure document holds, without widgets.  A node is a string:
 
-  figure, runs, kind:<kind>, panel:<id>, layer:<panel id>:<place in the panel>"""
+  figure, runs, kind:<kind>, panel:<id>, layer:<panel id>:<place in the panel>,
+  inset:<panel id>:<inset id>"""
 
 from .. import draw as figdraw
 from ..cards import TYPE_LABEL
@@ -131,13 +132,16 @@ def tree_items(doc, fields=None):
                             label=f"{names[p['id']]}  {tail}" if tail else names[p["id"]]))
             for j, (_, lay) in enumerate(figdraw.panel_layers(doc, p)):
                 out.append(dict(id=f"layer:{p['id']}:{j}", depth=2, label=layer_name(lay, fields)))
+            for n, ins in enumerate(p.get("insets") or []):
+                out.append(dict(id=f"inset:{p['id']}:{ins['id']}", depth=2,
+                                label=f"Zoom inset {n + 1}"))
     return out
 
 
 def panel_of(doc, node):
     """The panel a panel or layer node is of (None: none, or no longer there)."""
     head, _, rest = node.partition(":")
-    if head not in ("panel", "layer"):
+    if head not in ("panel", "layer", "inset"):
         return None
     pid = int(rest.partition(":")[0])
     return next((p for p in doc.get("panels") or [] if p["id"] == pid), None)
@@ -148,6 +152,8 @@ def outlined(doc, node):
     if node.startswith("kind:"):
         kind = node.partition(":")[2]
         return [p["id"] for p in doc.get("panels") or [] if p["kind"] == kind]
+    if node.startswith("inset:"):  # (its box in the preview: by its key)
+        return [-int(node.rsplit(":", 1)[1])]
     p = panel_of(doc, node)
     return [] if p is None else [p["id"]]
 
@@ -163,7 +169,32 @@ def still_there(doc, node):
         return False
     if node.startswith("layer:"):
         return int(node.rsplit(":", 1)[1]) < len(figdraw.panel_layers(doc, p))
+    if node.startswith("inset:"):
+        return inset_of(doc, node) is not None
     return True
+
+
+def inset_of(doc, node):
+    """The inset an inset node is of (None: no longer there)."""
+    p = panel_of(doc, node)
+    iid = int(node.rsplit(":", 1)[1])
+    return next((ins for ins in (p or {}).get("insets") or [] if int(ins["id"]) == iid), None)
+
+
+def inset_word(doc, node):
+    """An inset node in words: "inset 1 of panel a"."""
+    p = panel_of(doc, node)
+    at = [int(ins["id"]) for ins in p.get("insets") or []].index(int(node.rsplit(":", 1)[1]))
+    return f"inset {at + 1} of panel {letters(doc)[p['id']]}"
+
+
+def node_at(doc, key):
+    """The node of what a click found (pick_at): a panel, or by its negative key an inset."""
+    if key >= 0:
+        return f"panel:{key}"
+    p = next((p for p in doc.get("panels") or []
+              if any(-int(ins["id"]) == key for ins in p.get("insets") or [])), None)
+    return FIGURE if p is None else f"inset:{p['id']}:{-key}"
 
 
 def scope(doc, node):
@@ -176,6 +207,8 @@ def scope(doc, node):
         kind = node.partition(":")[2]
         n = len(outlined(doc, node))
         return f"Applies to all {kind_name(kind, n)}"
+    if node.startswith("inset:"):
+        return f"Applies to {inset_word(doc, node)} only"
     p = panel_of(doc, node)
     return f"Applies to panel {letters(doc)[p['id']]} only"
 
@@ -194,6 +227,9 @@ def runs_used(doc):
             add(p["run"], p["id"])
         for _, lay in figdraw.panel_layers(doc, p):
             figdraw.run_ids(lay, lambda v, pid=p["id"]: add(v, pid))
+        for ins in p.get("insets") or []:
+            for _, lay in figdraw.panel_layers(doc, ins):
+                figdraw.run_ids(lay, lambda v, pid=p["id"]: add(v, pid))
     return out
 
 

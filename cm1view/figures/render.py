@@ -225,12 +225,13 @@ class FigureData:
         res, data = figdraw.resolve(doc), {}
         n = len(res["panels"])
         for at, q in enumerate(res["panels"]):
-            d = self.panel_data(fg.one_panel(doc, q["id"], res),
-                                progress and (lambda *_, at=at: progress(at, n)), cancelled)
-            if d is None:
-                return None
-            if 0 in d:
-                data[q["id"]] = d[0]
+            for i in [q["id"], *(-int(ins["id"]) for ins in q.get("insets") or [])]:
+                d = self.panel_data(fg.one_panel(doc, i, res),
+                                    progress and (lambda *_, at=at: progress(at, n)), cancelled)
+                if d is None:
+                    return None
+                if 0 in d:
+                    data[i] = d[0]
         return fg.share_series_range(res, data)
 
     def _combo_data(self, spec, progress=None, cancelled=None):

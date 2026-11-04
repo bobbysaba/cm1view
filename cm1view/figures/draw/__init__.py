@@ -112,6 +112,9 @@ Specs of version 2 (upgrade() makes one of a version-1 spec or a figure of parts
 
 Specs of version 3 (the editor's document, spec.doc): resolve() makes the version-2 spec
 that is drawn.
+
+  A plan view or cross-section's "insets": zoom insets, each a small panel with a box and lines
+  in its panel (_insets): its arrays under the negative of its "id"; what it holds: spec.doc.
 """
 
 from . import base, v3, v2, layers, lines, sounding, tables, scene3d, figure

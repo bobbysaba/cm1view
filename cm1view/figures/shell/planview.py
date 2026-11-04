@@ -266,6 +266,7 @@ class PlanPane:
             objs.append(self._panel_row(doc, pid, j, len(lays)).panel)
         if not lays:
             objs.append(_note("No layers here: add one above."))
+        objs += self.ins.insets.panel_objs(doc, p)
         objs += self._panel_looks(doc, pid)
         objs += self.ins.grid.place_objs(doc, pid)
         return objs

@@ -130,6 +130,8 @@ class InPanel:
     """Layer j of a panel, as it is drawn there: edits go to its overrides, or if it is a
     layer of the panel's own, to it."""
 
+    ALONE = "this panel only"
+
     def __init__(self, doc, pid, j):
         self.pid, self.j = pid, j
         self.ref = figdraw.panel_layers(doc, de.panel_by_id(doc, pid))[j][0]
@@ -137,6 +139,10 @@ class InPanel:
 
     def panel(self, doc):
         return de.panel_by_id(doc, self.pid)
+
+    def run_of(self, doc):
+        """The run its layer takes its times from, if it has none of its own."""
+        return de.panel_by_id(doc, self.pid).get("run")
 
     def layer(self, doc):
         return figdraw.panel_layers(doc, self.panel(doc))[self.j][1]
@@ -146,6 +152,21 @@ class InPanel:
 
     def write(self, doc, changes):
         de.write_panel(doc, self.panel(doc), self.j, changes)
+
+
+class InInset(InPanel):
+    """Layer j of an inset with layers of its own: as InPanel, in the inset (panel_layers and the
+    document's changes to a panel's layers read only its "layers")."""
+
+    ALONE = "this inset only"
+
+    def __init__(self, doc, pid, iid, j):
+        self.pid, self.iid, self.j = pid, iid, j
+        self.ref = figdraw.panel_layers(doc, self.panel(doc))[j][0]
+        self.key = f"i:{iid}:{self.ref}" if self.ref else f"i:{iid}:own{j}"
+
+    def panel(self, doc):
+        return de.inset_by_id(de.panel_by_id(doc, self.pid), self.iid)
 
 
 def describe(lay, fields=None, p=None, kind="plan"):
@@ -333,7 +354,7 @@ class LayerRow:
                  and k != "on"] if p is not None else []
         tail = ""
         if isinstance(t, InPanel) and t.ref is None:
-            tail = ' <span class="cv-hint">this panel only</span>'
+            tail = f' <span class="cv-hint">{t.ALONE}</span>'
         elif marks:
             tail = f' <span class="cv-hint" style="color:{ACCENT}">differs here</span>'
         self.title.object = f"<b>{text}</b>{tail}"
@@ -395,8 +416,8 @@ def own_time_widgets(row):
     holds it)."""
     shell, t = row.shell, row.target
     doc = shell.doc
-    p, lay = t.panel(doc), t.layer(doc)
-    rid = lay.get("run") or p.get("run")
+    lay = t.layer(doc)
+    rid = lay.get("run") or t.run_of(doc)
     topts = {PANELS_TIME: ""} | shell.time_opts(de.run_index(doc, rid))
     now = "" if lay.get("time_s") is None else float(lay["time_s"])
     if now not in topts.values():

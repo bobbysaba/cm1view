@@ -128,6 +128,12 @@ def write_panel(doc, p, j, changes):
     _follow_series(p)
 
 
+def _panels_draw(doc, lid):
+    """Whether a panel, or an inset of one, draws shared layer lid."""
+    return any(x.get("ref") == lid for q in doc["panels"]
+               for x in [*(q.get("layers") or []), *figdraw.inset_items(q)])
+
+
 def clear_over(doc, p, j, key=None):
     """Layer j of panel p back at its shared layer's: one key, or all."""
     item = places(doc, p)[j]
@@ -211,7 +217,10 @@ def remove_shared(doc, kind, lid):
     """A shared layer out of a kind's panels (out of the document when no panel draws it)."""
     for p in panels_of(doc, kind):
         p["layers"] = [x for x in p.get("layers") or [] if x.get("ref") != lid]
-    if not any(x.get("ref") == lid for p in doc.get("panels") or [] for x in p.get("layers") or []):
+        for ins in p.get("insets") or []:
+            if ins.get("layers") is not None:
+                ins["layers"] = [x for x in ins["layers"] if x.get("ref") != lid]
+    if not _panels_draw(doc, lid):
         doc["layers"].pop(lid, None)
 
 
@@ -281,8 +290,7 @@ def remove_in_panel(doc, p, j):
     item = places(doc, p)[j]
     p["layers"].remove(item)
     lid = item.get("ref")
-    if lid is not None and not any(x.get("ref") == lid for q in doc["panels"]
-                                   for x in q.get("layers") or []):
+    if lid is not None and not _panels_draw(doc, lid):
         doc["layers"].pop(lid, None)
     _follow_series(p)
 
@@ -330,7 +338,9 @@ def apply_heights(doc, panels=None):
         if p.get("z") is None or p["kind"] != "plan":
             continue
         z, level = float(p["z"]), p.get("zmode", "height") == "level"
-        for item in places(doc, p):
+        have = doc.get("layers") or {}
+        for item in [*places(doc, p), *(x for x in figdraw.inset_items(p)
+                                        if "ref" not in x or x["ref"] in have)]:
             lay = dict(doc["layers"][item["ref"]], **overrides(item)) if "ref" in item else item
             if _at_height(lay, level):
                 _set_keys(doc, item, dict(mode="level", z=float(round(z))) if level
@@ -345,7 +355,7 @@ def set_height(doc, p, z, zmode="height"):
     if z is None:
         p.pop("z", None)
         p.pop("zmode", None)
-        for item in places(doc, p):
+        for item in [*places(doc, p), *figdraw.inset_items(p)]:
             if "ref" in item:
                 over = overrides(item)
                 if not over.get("z_fixed"):
@@ -599,6 +609,7 @@ def copy_panel(doc, pid, cell):
     new = copy.deepcopy(panel_by_id(doc, pid))
     new.pop("rowlabel", None)
     new.update(id=1 + max(p["id"] for p in doc["panels"]), cell=[int(cell[0]), int(cell[1]), 1, 1])
+    _new_inset_ids(doc, new)
     doc["panels"].append(new)
     copy_annotations(doc, pid, new["id"])
     letters_in_order(doc)
@@ -636,7 +647,7 @@ def split_shared(doc, kind, lid):
     layers = dict(doc["layers"], **{new: copy.deepcopy(doc["layers"][lid])})
     doc["layers"] = {k: layers[k] for k in keys}
     for p in panels_of(doc, kind):
-        for item in p.get("layers") or []:
+        for item in [*(p.get("layers") or []), *figdraw.inset_items(p)]:
             if item.get("ref") == lid:
                 item["ref"] = new
     return new
@@ -799,6 +810,7 @@ def panel_per_run(doc, pid, times=None):
                 item["runs"] = [rid]
         if times and rid in times:
             new["time_s"] = float(times[rid])
+        _new_inset_ids(doc, new)
         doc["panels"].append(new)
         made += 1
     letters_in_order(doc)
@@ -809,7 +821,7 @@ def panel_per_run(doc, pid, times=None):
 def _follow_series(p):
     """A time-height panel's run is its series': the one shown (the first), as one_panel reads
     it by the panel's."""
-    if p["kind"] != "th":
+    if p.get("kind") != "th":  # (an inset's layers: no kind, and no run of its own)
         return
     first = next((x for x in p.get("layers") or [] if x.get("source") not in ("table", "parcels")),
                  None)
@@ -1002,6 +1014,85 @@ def set_area(doc, box, kind="plan", pid=None):
     else:
         k = panel_by_id(doc, pid).setdefault("opts", {})
     k["domain"] = dict(k.get("domain") or {}, mode="box", box=[round(float(v), 2) for v in box])
+
+
+# ------------------------------------------------------------ zoom insets
+INSET_KINDS = figdraw.INSET_KINDS
+INSET_LOOK = dict(mark=True, connect=True, color="#000000", lw=1.0, ls="-", ticks=False)
+INSET_PLACE = dict(loc="upper right", size=0.4, x=None, y=None, h=None)
+
+
+def inset_by_id(p, iid):
+    return next((ins for ins in p.get("insets") or [] if int(ins["id"]) == int(iid)), None)
+
+
+def new_inset_id(doc):
+    """An id no inset has (arrays go by it, in the whole figure: spec.doc)."""
+    return 1 + max([int(ins["id"]) for p in doc.get("panels") or [] for ins in p.get("insets") or []]
+                   or [0])
+
+
+def _new_inset_ids(doc, p):
+    """A panel just copied, not yet in the document: its insets get ids of their own."""
+    start = new_inset_id(doc)
+    for n, ins in enumerate(p.get("insets") or []):
+        ins["id"] = start + n
+
+
+def clear_corner(area, lims):
+    """The corner of a panel whose axis limits are `lims` furthest from `area` (x0, x1, y0, y1)
+    in it, where an inset of it hides the least of what it zooms in on."""
+    (a, b), (c, e) = lims
+    u = (0.5 * (area[0] + area[1]) - a) / ((b - a) or 1.0)
+    w = (0.5 * (area[2] + area[3]) - c) / ((e - c) or 1.0)
+    return f"{'lower' if w > 0.5 else 'upper'} {'left' if u > 0.5 else 'right'}"
+
+
+def set_inset_area(p, ins, box, center=None):
+    """What inset `ins` of panel p shows: box [x0, x1, y0, y1], in grid km for a plan view, in the
+    panel's axis units for a cross-section.  center: the storm's (x, y) in grid km when the panel
+    follows it, and the inset follows too, staying square, over the same part of the storm."""
+    box = [round(float(v), 2) for v in box]
+    if p["kind"] != "plan":
+        ins["view"] = box
+        return
+    opts = ins.setdefault("opts", {})
+    if center is None:
+        opts["domain"] = dict(mode="box", box=box)
+    else:
+        half = round(0.5 * max(box[1] - box[0], box[3] - box[2]), 2)
+        opts["domain"] = dict(mode="storm", half=half,
+                              off=[round(0.5 * (box[0] + box[1]) - float(center[0]), 2),
+                                   round(0.5 * (box[2] + box[3]) - float(center[1]), 2)])
+
+
+def add_inset(doc, pid, box, lims=None, center=None):
+    """A new zoom inset of panel pid showing box (set_inset_area), with the panel's layers, in the
+    corner furthest from what it shows.  lims: the panel's axis limits, with box in those units
+    (cross-section) or at the same origin (plan view).  Returns it."""
+    p = panel_by_id(doc, pid)
+    ins = dict(id=new_inset_id(doc), loc="upper right", size=0.4)
+    if lims is not None:
+        ins["loc"] = clear_corner(box, lims)
+    set_inset_area(p, ins, box, center)
+    p.setdefault("insets", []).append(ins)
+    return ins
+
+
+def remove_inset(doc, pid, iid):
+    p = panel_by_id(doc, pid)
+    p["insets"] = [ins for ins in p.get("insets") or [] if int(ins["id"]) != int(iid)]
+
+
+def own_inset_layers(doc, pid, iid, own):
+    """An inset's layers its own, starting as the panel's (each still following a shared layer, but
+    for what it changes), or (own False) back to the panel's."""
+    p = panel_by_id(doc, pid)
+    ins = inset_by_id(p, iid)
+    if own:
+        ins["layers"] = copy.deepcopy(p.get("layers") or [])
+    else:
+        ins.pop("layers", None)
 
 
 # ------------------------------------------------------------ 3D scenes

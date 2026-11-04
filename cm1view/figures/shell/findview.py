@@ -11,8 +11,9 @@ import panel as pn
 from ...theme import PANEL
 from .. import settings as table
 from . import nodes
-from .looks import (FIGURE_SECTIONS, KIND_SECTIONS, PANEL_KEYS, SECTION_NAMES, legend_reaches,
-                    row_words, rows_of)
+from .insetview import AREA as INSET_AREA, LOOK, PLACE
+from .looks import (AREA_OF_A_PANEL, FIGURE_SECTIONS, KIND_SECTIONS, PANEL_KEYS, SECTION_NAMES,
+                    legend_reaches, row_words, rows_of)
 from .sceneview import KEY_NAMES, SECTIONS as SCENE_SECTIONS
 from .treeview import TreeView
 
@@ -58,6 +59,11 @@ ENTRY_ROWS = {"sounding": ("Soundings", "where when location point"),
               "dist": ("Distributions", "field region when"), "profile": ("Profiles", "field when"),
               "joint": ("Joint distributions", "fields region"),
               "azim": ("Azimuthal means", "field center"), "table": ("Values", "columns")}
+PLACE_ROWS = (("Where", "corner place position"), ("Width", "size big"),
+              ("Height", "size tall"))
+LOOK_ROWS = (("Box in the panel", "mark frame rectangle"), ("Lines to the inset", "connector"),
+             ("Colour", "of the box and lines"), ("Line width", "thickness"),
+             ("Line style", "dashed"), ("Tick labels", "numbers axis"))
 SECTION_WORDS = {"Text": "font size", "Spacing": "gap margin padding", "Legend": "key",
                  "Panel labels": "text"}
 EXPORT_ROWS = (("Save to", "path file folder image"), ("Animation", "gif frames movie"),
@@ -116,6 +122,16 @@ def hits_of(shell):
                      _title([kind], section))
         if kind == "plan":
             add_hand("Fixed box", "Area", f"panel {letter}", f"panel:{picked['id']}", AREA_WORDS)
+        for ins in picked.get("insets") or []:
+            node = f"inset:{picked['id']}:{ins['id']}"
+            where = nodes.inset_word(doc, node)
+            for section, rows in ((PLACE, PLACE_ROWS), (LOOK, LOOK_ROWS)):
+                for label, words in rows:
+                    add_hand(label, section, where, node, f"zoom inset {words}")
+            if kind == "plan":
+                add_rows(rows_of(INSET_AREA, [kind], AREA_OF_A_PANEL), where, node, INSET_AREA)
+            add_hand("Fixed box" if kind == "plan" else "Zoom", INSET_AREA, where, node,
+                     f"zoom inset {AREA_WORDS}")
     # (the figure's)
     fig = "Figure"
     for section in FIGURE_SECTIONS:
@@ -165,6 +181,10 @@ def hits_of(shell):
         if kind in kinds:
             p = _panel_node(doc, picked, (kind,))
             add_hand(label, None, f"panel {names[p['id']]}", f"panel:{p['id']}", words)
+    p = _panel_node(doc, picked, MAPS)
+    if p is not None:
+        add_hand("Zoom inset", None, f"panel {names[p['id']]}", f"panel:{p['id']}",
+                 "add box magnify connector lines")
     # (the runs', and Export's)
     for label, words in RUN_ROWS:
         add_hand(label, None, "Runs", nodes.RUNS, f"{words} run")

@@ -31,8 +31,8 @@ _copy = plain_copy
 def _items(p):
     """Panel p's layers as [(the dictionary its own keys are in, the whole of the item)]: of a
     reference to a shared layer, its "over"."""
-    return [(item.setdefault("over", {}) if "ref" in item else item) for item in
-            p.get("layers") or []]
+    held = [*(p.get("layers") or []), *figdraw.inset_items(p)]
+    return [(item.setdefault("over", {}) if "ref" in item else item) for item in held]
 
 
 def _scene_of(doc, p):
@@ -60,10 +60,12 @@ def _resolved_refs(doc, get):
     has gone from the figure has nothing that steps (the panel itself says it has no run)."""
     res, out = figdraw.resolve(doc), []
     for q in res["panels"]:
-        try:
-            out += get(one_panel(doc, q["id"], res))
-        except IndexError:
-            continue
+        own = [-int(ins["id"]) for ins in q.get("insets") or [] if ins.get("layers") is not None]
+        for i in [q["id"], *own]:  # (an inset as the panel steps as the panel does)
+            try:
+                out += get(one_panel(doc, i, res))
+            except IndexError:
+                continue
     return out
 
 
@@ -118,6 +120,11 @@ def shift_doc(doc, dt):
                     layer(over, rid)
             elif kind in MAPPED:
                 layer(item, rid)
+        for item in figdraw.inset_items(p):
+            if "ref" not in item:
+                layer(item, rid)
+            elif not shared.get(item["ref"], {}).get("time_lock"):
+                layer(item.get("over") or {}, rid)
     for lay in shared.values():
         layer(lay, None)
     return s

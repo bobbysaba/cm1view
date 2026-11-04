@@ -297,7 +297,7 @@ class FigureShell:
             self.placing.click(fx, fy)
             return
         hit = nodes.pick_at(self._boxes, fx, fy)
-        self.select(nodes.FIGURE if hit is None else f"panel:{hit}")
+        self.select(nodes.FIGURE if hit is None else nodes.node_at(self.doc, hit))
 
     def _on_drag(self, ev):
         if ev.new and self.placing.on:
@@ -542,6 +542,8 @@ class FigureShell:
         miss = [names[i] for i, d in data.items() if d.get("missing") and i in names]
         if miss:
             note += f" · no data in panel{'s' if len(miss) > 1 else ''} " + ", ".join(miss)
+        if any(i < 0 and d.get("missing") for i, d in data.items()):
+            note += " · no data in an inset"
         return note
 
     def _apply(self, g, png, wh, dpi, bg, boxes, note, drawn):
