@@ -1,10 +1,10 @@
 """The inspector: the settings of the one thing picked in the tree, and what an edit reaches.
 Only what is shown exists as widgets: a node's are made when it is picked.
 
-Editable so far: the figure's size, title, look, grid and panels, the runs, plan views
-(planview), soundings (entryview), cross-sections (xsecview), time-height panels and time series
-(seriesview), distributions, profiles, joint distributions, azimuthal means and tables (statsview).
-A 3D scene is shown, with a panel's title and place to edit, until it moves here."""
+The figure's size, title, look, grid and panels, the runs, plan views (planview), soundings
+(entryview), cross-sections (xsecview), time-height panels and time series (seriesview),
+distributions, profiles, joint distributions, azimuthal means and tables (statsview), 3D scenes
+(sceneview), and annotations (annotview).  Every kind has a pane in `panes`."""
 
 import html
 import os
@@ -17,11 +17,13 @@ from ..cards import SIZE_PRESETS, _hex, _row
 from ..cards.base import _f
 from ..runs import TYPE_PATH, _track_options, _track_path
 from . import docedit as de, nodes
+from .annotview import AnnotPane
 from .entryview import EntryPane
 from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure node)
 from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget,
                     panels_differ)
 from .planview import PlanPane
+from .sceneview import ScenePane
 from .seriesview import SeriesPane
 from .statsview import AzimPane, DistPane, JointPane, ProfilePane, TablePane
 from .xsecview import XsecPane
@@ -33,24 +35,18 @@ def _note(text):
                         sizing_mode="stretch_width")
 
 
-def _lines(rows):
-    """Rows of (name, value) as a small table (values are escaped)."""
-    cells = "".join(f'<tr><td style="padding:1px 10px 1px 0;opacity:.7">{html.escape(a)}</td>'
-                    f'<td>{html.escape(str(b))}</td></tr>' for a, b in rows)
-    return pn.pane.HTML(f'<table style="font-size:13px;border-collapse:collapse">{cells}</table>',
-                        margin=(4, 4), sizing_mode="stretch_width")
-
-
 class Inspector:
     def __init__(self, shell):
         self.shell = shell
         self.folds = {}  # what is open: by layer id or section, so it outlasts undo and redo
         self.plan = PlanPane(self)
         self.grid = GridPane(self)
+        self.annots = AnnotPane(self)
         self.panes = dict(plan=self.plan, sounding=EntryPane(self), xsec=XsecPane(self),
                           th=SeriesPane(self, "th"), line=SeriesPane(self, "line"),
                           dist=DistPane(self), profile=ProfilePane(self), joint=JointPane(self),
-                          azim=AzimPane(self), table=TablePane(self))  # (moved here)
+                          azim=AzimPane(self), table=TablePane(self),
+                          scene=ScenePane(self))
         self.head = pn.pane.HTML(margin=(4, 4, 0, 4), sizing_mode="stretch_width",
                                  styles={"flex": "0 0 auto"})
         # (taller than the pane: it scrolls.  Its height is what it holds: Bokeh's max-height 100%
@@ -127,7 +123,7 @@ class Inspector:
         fit.disabled = not self.shell.can_follow(doc)
         if fit.disabled:
             fit.description = "Only a figure of one kind of panel, in equal cells, has an " \
-                              "automatic size"
+                              "automatic size (a 3D scene's is typed)"
         title.param.watch(lambda ev: self.shell.edit(
             lambda d: d.update(suptitle=ev.new.strip())), "value")
         objs = [_row(width, height, preset, fit), title, *self.grid.grid_objs(doc)]
@@ -142,6 +138,7 @@ class Inspector:
             "Maximum and minimum": lambda by: [key_layer_widget(
                 self.shell, doc, "extremes", figdraw.EXTREME_TYPES, "First fill")]})
         objs += [c for c in (looks.card(s) for s in FIGURE_SECTIONS) if c is not None]
+        objs.append(self.annots.card(doc))
         own = {}
         for kind in kinds:
             if kind in PANEL_KEYS:
@@ -285,69 +282,12 @@ class Inspector:
 
     # ------------------------------------------------------------ all panels of a kind
     def _kind(self, doc, node):
-        kind = node.partition(":")[2]
-        if kind in self.panes:
-            return self.panes[kind].kind_objs(doc)
-        mine = [p for p in nodes.in_order(doc) if p["kind"] == kind]
-        names, fields = nodes.letters(doc), self.shell.fields
-        shared = {}  # (the shared layers these panels draw: how many of them)
-        for p in mine:
-            for ref, _ in figdraw.panel_layers(doc, p):
-                if ref is not None:
-                    shared[ref] = shared.get(ref, 0) + 1
-        rows = [("Panels", ", ".join(names[p["id"]] for p in mine))]
-        rows += [(f"Layer {j + 1}", f"{nodes.layer_name(doc['layers'][ref], fields)} "
-                                    f"({n} of {len(mine)} panels)")
-                 for j, (ref, n) in enumerate(shared.items())]
-        return f"All {nodes.kind_name(kind, len(mine))}", [
-            _lines(rows), _note("Shown only: editing comes with each kind's move here.")]
+        return self.panes[node.partition(":")[2]].kind_objs(doc)
 
     # ------------------------------------------------------------ a panel
     def _panel(self, doc, node):
-        p = nodes.panel_of(doc, node)
-        if p["kind"] in self.panes:
-            return self.panes[p["kind"]].panel_objs(doc, node)
-        pid = p["id"]
-        letter = nodes.letters(doc)[pid]
-        fields = self.shell.fields
-
-        def apply(d, value):
-            next(x for x in d["panels"] if x["id"] == pid)["title"] = value
-
-        title = pn.widgets.TextInput(name="Title", value=p.get("title") or "",
-                                     sizing_mode="stretch_width")
-        title.param.watch(lambda ev: self.shell.edit(lambda d: apply(d, ev.new.strip())), "value")
-        rows = [("Kind", nodes.KINDS[p["kind"]].label if p["kind"] in nodes.KINDS else p["kind"])]
-        if p.get("run") is not None:
-            rows.append(("Run", nodes.run_names(doc).get(p["run"], "no such run")))
-        if p.get("time_s") is not None:
-            rows.append(("Time", f"{float(p['time_s']) / 60:g} min"))
-        if p.get("z") is not None:
-            rows.append(("Height", f"{float(p['z']):g} km"))
-        for j, (ref, lay) in enumerate(figdraw.panel_layers(doc, p)):
-            rows.append((f"Layer {j + 1}", nodes.layer_name(lay, fields)
-                         + ("" if ref is None else " (shared)")))
-        return f"Panel {letter}", [title, _lines(rows),
-                                   _note("Shown only, apart from the title and its place: "
-                                         "editing comes with each kind's move here."),
-                                   *self.grid.place_objs(doc, pid)]
+        return self.panes[nodes.panel_of(doc, node)["kind"]].panel_objs(doc, node)
 
     # ------------------------------------------------------------ a layer
     def _layer(self, doc, node):
-        p = nodes.panel_of(doc, node)
-        if p["kind"] in self.panes:
-            return self.panes[p["kind"]].layer_objs(doc, node)
-        j = int(node.rsplit(":", 1)[1])
-        ref, lay = figdraw.panel_layers(doc, p)[j]
-        letter = nodes.letters(doc)[p["id"]]
-        item = p["layers"][j] if ref is None else next(
-            (x for x in p["layers"] if x.get("ref") == ref), {})
-        rows = [("Type", lay.get("type", "entry")), ("Field", lay.get("field") or "")]
-        if ref is not None:
-            over = sorted(item.get("over") or {})
-            rows.append(("Shared", "with the other panels drawing it"))
-            rows.append(("Differs here", ", ".join(over) or "nothing"))
-        name = nodes.layer_name(lay, self.shell.fields)
-        return f"{name} in panel {letter}", [
-            _lines([x for x in rows if x[1]]),
-            _note("Shown only: editing comes with each kind's move here.")]
+        return self.panes[nodes.panel_of(doc, node)["kind"]].layer_objs(doc, node)

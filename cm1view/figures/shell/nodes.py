@@ -10,6 +10,7 @@ from ..kinds import KINDS
 FIGURE, RUNS, KIND_PREFIX = "figure", "runs", "kind:"
 ENTRY_WORDS = {"dist": "Distribution", "profile": "Profile", "joint": "Joint",
                "azim": "Azimuthal", "table": "Values"}  # (entry_name's)
+KIND_WORDS = {"scene": "3D scenes"}  # (a kind whose name doesn't read as a plural)
 
 
 def in_order(doc):
@@ -29,7 +30,7 @@ def letters(doc):
 def kind_name(kind, n):
     """All panels of a kind, in words: "plan views (6)"."""
     k = KINDS.get(kind)
-    return f"{k.name if k else kind} ({n})"
+    return f"{KIND_WORDS.get(kind) or (k.name if k else kind)} ({n})"
 
 
 def layer_name(lay, fields=None):

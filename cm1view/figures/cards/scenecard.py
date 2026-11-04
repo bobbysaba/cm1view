@@ -5,7 +5,7 @@ import panel as pn
 
 from ...core import parcels as P, vectors
 from ...core.fields import CMAPS
-from .base import FRAMES, PAR_MOVING, PAR_TAILS, _BTN, _f, _grid, _hex, cmap_select
+from .base import FRAMES, _GRID_N, PAR_MOVING, PAR_TAILS, _BTN, _f, _grid, _hex, cmap_select
 from .layercard import parcel_pick, parcel_sets
 from ...viewer.ui import held
 
@@ -25,6 +25,11 @@ SCENE_STREAM_BY = {"Height": "z", "Vertical velocity": "w"}
 SCENE_FLOOR_RANGE = {"From the data": "data", "Field default": "field", "Custom": "custom"}
 SCENE_FLOOR_CMAPS = ["Field default"] + list(CMAPS)  # (the 3D view's: also plotly's)
 SCENE_PAR_TAILS = {k.replace("panel", "scene"): v for k, v in PAR_TAILS.items()}
+
+
+def _cols(n):
+    """A row's columns: n, or three in a narrower pane (grid_columns), where n would clip them."""
+    return 3 if _GRID_N[-1] < 3 else n
 
 
 def _onbox(value):
@@ -49,7 +54,7 @@ class IsoRow:
         self.rm = pn.widgets.Button(name="✕", description="Remove the isosurface", **_BTN)
         for x in w.values():
             x.param.watch(lambda ev: ed.request(), "value")
-        self.panel = pn.Row(w["on"], _grid((w["var"], 2), w["val"], w["color"], w["op"], n=5),
+        self.panel = pn.Row(w["on"], _grid((w["var"], 2), w["val"], w["color"], w["op"], n=_cols(5)),
                             self.rm, margin=0, sizing_mode="stretch_width")
 
     def collect(self):
@@ -84,7 +89,7 @@ class VecRow:
                 x.param.watch(lambda ev: ed.request(), "value")
         self.ed = ed
         self.panel = pn.Row(w["on"], _grid((w["q"], 2), w["level"], w["frame"], w["density"],
-                                           w["ref"], w["color"], n=4),
+                                           w["ref"], w["color"], n=_cols(4)),
                             self.rm, margin=0, sizing_mode="stretch_width")
         self._show()
 
@@ -148,7 +153,7 @@ class ParRow:
         self.panel = pn.Row(w["on"], _grid((self.pset, 2), w["color"], w["cvar"], w["cmap"],
                                            w["tails"], w["minutes"], w["lw"], w["ms"],
                                            w["alpha"], w["heads"], (w["moving"], 2),
-                                           w["move_u"], w["move_v"], n=4),
+                                           w["move_u"], w["move_v"], n=_cols(4)),
                             self.rm, margin=0, sizing_mode="stretch_width")
 
     def _show(self):

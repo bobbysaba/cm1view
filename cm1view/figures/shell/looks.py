@@ -29,7 +29,7 @@ KIND_SECTIONS = {"plan": ("Area", "Axes and ticks"),
                  "profile": ("Plot", "Legend in the panel", "Axes and ticks"),
                  "joint": ("Plot", "Statistics", "Legend in the panel", "Axes and ticks"),
                  "azim": ("Plot", "Legend in the panel", "Axes and ticks"),
-                 "table": ("Table",)}
+                 "table": ("Table",), "scene": ()}
 SECTION_NAMES = {("xsec", "Area"): "Height and x axis"}  # (a kind's words for a section)
 # (a plan panel's own look: what is drawn panel by panel, the rest being its grid's or the figure's)
 PANEL_KEYS = {
@@ -82,6 +82,7 @@ PANEL_KEYS["joint"] = {**_own_rows("joint", "joint", "Plot", "Statistics"), **PA
 PANEL_KEYS["azim"] = {**_own_rows("azim", "azim", "Plot"), **PANEL_KEYS["plan"]}
 PANEL_KEYS["table"] = {**_own_rows("table", "table", "Table"),
                        "Panel labels": PANEL_KEYS["plan"]["Panel labels"]}
+PANEL_KEYS["scene"] = {"Panel labels": PANEL_KEYS["plan"]["Panel labels"]}  # (axes: it has none)
 # (shown by the sounding pane, as the layout has them)
 LAYOUT_HIDES = {"Skew-T": ("hodo",), "Hodograph": ("skewt",)}
 LEFT_OUT = ("legend.panel", "legend.panels")  # (panels by id: M9)

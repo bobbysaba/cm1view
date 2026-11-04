@@ -263,6 +263,7 @@ class DistPanel:
     def _on_dist_figure(self, ev):
         self.workspace.value = "Figure"
         self.figed.from_dists()
+        self.figed._quick_done()  # (the new layout takes it, when it is what shows)
 
     # ================================================================ drawing
     def _dist_empty(self, logy=False):

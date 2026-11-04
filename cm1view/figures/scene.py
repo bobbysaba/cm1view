@@ -25,6 +25,24 @@ from ..viewer.ui import held
 ISO_MAX = VEC_MAX = PAR_MAX = 6
 
 
+def next_iso(F, isos):
+    """A new isosurface after `isos`: reflectivity 30 dBZ first, then updraft 10 m/s, then the
+    last one's field."""
+    have = [(e.get("var"), e.get("val")) for e in isos]
+    return next((dict(var=v, val=x, color=c, op=o) for v, x, c, o in (
+        ("dbz", 30.0, "#7dd3fc", 0.25), ("winterp", 10.0, "#f97316", 0.85),
+        ("winterp", -5.0, "#3b82f6", 0.7)) if v in F and (v, x) not in have),
+        dict(var=have[-1][0] if have else None, val=0.0, color="#a3a3a3", op=0.5))
+
+
+def next_vec(run, vecs):
+    """A new plane of vectors after `vecs`."""
+    lv = [float(e.get("level") or 0.0) for e in vecs]
+    return dict(level=max(lv) + 1.0 if lv else 0.0,
+                frame="grid" if (run.umove or run.vmove) else "ground",
+                color=("#000000", "#b45309", "#0e7490")[len(lv) % 3])
+
+
 class FigureScene:
     """The widgets of a 3D scene figure, and the spec's "scene3d" block."""
 
@@ -245,43 +263,38 @@ class FigureScene:
         self._spar_section.visible = self.v.pf is not None or bool(self.spar_rows)
 
     def _add_iso(self):
-        """A new isosurface: reflectivity 30 dBZ first, then updraft 10 m/s, then the
-        last one's field."""
-        F, have = self.fields, [r.w["var"].value for r in self.iso_rows]
-        e = next((dict(var=v, val=x, color=c, op=o) for v, x, c, o in (
-            ("dbz", 30.0, "#7dd3fc", 0.25), ("winterp", 10.0, "#f97316", 0.85),
-            ("winterp", -5.0, "#3b82f6", 0.7)) if v in F and (v, x) not in [
-            (r.w["var"].value, r.w["val"].value) for r in self.iso_rows]),
-            dict(var=have[-1] if have else None, val=0.0, color="#a3a3a3", op=0.5))
-        self.iso_rows.append(self._iso_row(e))
+        self.iso_rows.append(self._iso_row(next_iso(self.fields, [
+            dict(var=r.w["var"].value, val=r.w["val"].value) for r in self.iso_rows])))
         self._scene_rows()
         self.request()
 
     def _add_svec(self):
-        lv = [float(r.w["level"].value or 0.0) for r in self.svec_rows]
-        self.svec_rows.append(self._svec_row(dict(
-            level=max(lv) + 1.0 if lv else 0.0,
-            frame="grid" if (self.run.umove or self.run.vmove) else "ground",
-            color=("#000000", "#b45309", "#0e7490")[len(lv) % 3])))
+        self.svec_rows.append(self._svec_row(next_vec(self.run, [
+            dict(level=r.w["level"].value) for r in self.svec_rows])))
         self._scene_rows()
         self.request()
+
+    def next_parcels(self, have, say):
+        """A new parcel set of a scene holding the sets named `have`: the viewer's next one,
+        else the run's first saved set (None: there is none; say(html, True) says so)."""
+        e = next((e for e in self._scene_parcels() if e["name"] not in have), None)
+        if e is not None:
+            return e
+        v = self.v
+        saved = P.list_sets(v.run.path) if v.pf is not None else []
+        if not saved:
+            say("Choose parcels in the viewer's <b>Parcels</b> tab first (or save a set "
+                "there).", True)
+            return None
+        src = parcel_pick(self, "f:" + saved[0])
+        return None if src is None else dict(fg.layer_defaults("parcels", self.F), lw=1.5, **src)
 
     def _add_spar(self):
         """The viewer's next parcel set not in the scene yet, else the run's first
         saved set."""
-        have = {r.e.get("name") for r in self.spar_rows}
-        e = next((e for e in self._scene_parcels() if e["name"] not in have), None)
+        e = self.next_parcels({r.e.get("name") for r in self.spar_rows}, self._msg)
         if e is None:
-            v = self.v
-            saved = P.list_sets(v.run.path) if v.pf is not None else []
-            if not saved:
-                self._msg("Choose parcels in the viewer's <b>Parcels</b> tab first (or save "
-                          "a set there).", True)
-                return
-            src = parcel_pick(self, "f:" + saved[0])
-            if src is None:
-                return
-            e = dict(fg.layer_defaults("parcels", self.F), lw=1.5, **src)
+            return
         self.spar_rows.append(self._spar_row(e))
         self._scene_rows()
         self.request()

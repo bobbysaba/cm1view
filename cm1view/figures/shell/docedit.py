@@ -1,6 +1,6 @@
 """Changes to a figure document, without widgets: layers shared or of a panel, what differs in
 a panel, a panel's height, a run's time zero, titles, the grid and where panels sit, sections,
-series, and filling panels.  Each takes the document and changes it in place; the shell keeps a copy first, for
+series, annotations, a 3D scene's settings, and filling panels.  Each takes the document and changes it in place; the shell keeps a copy first, for
 undo.
 
 Layers are named by id (shared) or by place in their panel (j, as figdraw.panel_layers counts
@@ -12,7 +12,8 @@ import json
 from .. import draw as figdraw
 from ..draw.base import _cell
 from ..kinds import KINDS
-from ..spec.sections import describe as section_words
+from ..spec.arrays import scene3d_of
+from ..spec.sections import describe as section_words, section_defaults
 
 MISSING = object()  # (a key a layer no longer has)
 HEIGHT_KEYS = ("z", "mode")  # (what a panel's own height writes in its layers)
@@ -598,6 +599,7 @@ def copy_panel(doc, pid, cell):
     new.pop("rowlabel", None)
     new.update(id=1 + max(p["id"] for p in doc["panels"]), cell=[int(cell[0]), int(cell[1]), 1, 1])
     doc["panels"].append(new)
+    copy_annotations(doc, pid, new["id"])
     letters_in_order(doc)
     return new
 
@@ -606,6 +608,7 @@ def remove_panel(doc, pid):
     """Panel pid out of the figure; its cell stays empty.  Shared layers stay in the document
     (a plan view added later finds them)."""
     doc["panels"] = [p for p in doc["panels"] if p["id"] != pid]
+    drop_annotations(doc, {pid})
     letters_in_order(doc)
 
 
@@ -928,6 +931,128 @@ def kind_size(doc):
     return min(16.0, float(w)), min(16.0, float(h))
 
 
+# ------------------------------------------------------------ annotations
+def ann_panels(a):
+    """The ids an annotation names: [-1] for every panel."""
+    p = a.get("panel", -1)
+    return [int(q) for q in p] if isinstance(p, (list, tuple)) else [int(p)]
+
+
+def drop_annotations(doc, gone):
+    """Panels `gone` are no longer in the figure: what names only them goes with them (a later
+    panel can take a freed id, and must not inherit it); the others lose them."""
+    keep = []
+    for a in doc.get("annotations") or []:
+        ids = ann_panels(a)
+        left = [i for i in ids if i not in gone]
+        if left != ids:
+            if not left:
+                continue
+            a["panel"] = left[0] if len(left) == 1 else left
+        keep.append(a)
+    if doc.get("annotations"):
+        doc["annotations"] = keep
+
+
+def copy_annotations(doc, pid, new):
+    """Panel `new` is a copy of pid: what is in pid is in the copy too."""
+    for a in doc.get("annotations") or []:
+        ids = ann_panels(a)
+        if pid in ids and -1 not in ids:
+            a["panel"] = [*ids, new]
+
+
+def new_annotation(kind, panel, lims=None):
+    """A new annotation of a kind, as the old editor starts one: in the middle of the panel, so it
+    shows.  lims: the (xlim, ylim) of the axis units; None: as fractions of the panel."""
+    if lims is None:
+        coords, (x, y), dx, dy = "axes", (0.5, 0.5), 0.15, 0.15
+    else:
+        (x0, x1), (y0, y1) = lims
+        coords, x, y = "data", 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+        dx, dy = 0.15 * (x1 - x0), 0.15 * (y1 - y0)
+    r = min(abs(dx), abs(dy)) if coords == "data" else 0.15
+    return dict(kind=kind, panel=panel, coords=coords, x=round(x, 2), y=round(y, 2),
+                x2=round(x + dx, 2), y2=round(y + dy, 2), r=round(r, 2),
+                text={"text": "A", "legend": "Entry"}.get(kind, ""), color="#000000",
+                size=10.0 if kind != "marker" else 8.0, lw=1.5,
+                ls="--" if kind in ("vline", "hline") else "-")
+
+
+# ------------------------------------------------------------ placing by clicks
+def place_section(doc, pid, a, b):
+    """A-B (grid km) from two clicks in plan view pid: into the panel's section if that is an A-B
+    one, else the first A-B section, else the only section, else a new one, which the panel then
+    shows.  Returns its id."""
+    p = panel_by_id(doc, pid)
+    secs = doc.setdefault("sections", {})
+    sid = p.get("section") if secs.get(p.get("section"), {}).get("orient") == "ab" else None
+    sid = sid or next((i for i, s in secs.items() if s.get("orient") == "ab"), None)
+    if sid is None and len(secs) == 1:
+        sid = next(iter(secs))
+    if sid is None:
+        sid = add_section(doc, section_defaults(orient="ab", pos="fixed"))
+    write_section(doc, sid, dict(orient="ab", a=[float(v) for v in a], b=[float(v) for v in b]))
+    p["section"] = sid
+    return sid
+
+
+def set_area(doc, box, kind="plan"):
+    """The kind's panels show the fixed box [x0, x1, y0, y1] (grid km)."""
+    k = doc.setdefault("kinds", {}).setdefault(kind, {})
+    k["domain"] = dict(k.get("domain") or {}, mode="box", box=[round(float(v), 2) for v in box])
+
+
+# ------------------------------------------------------------ 3D scenes
+SCENE_START_AXES = dict(xlabel="", ylabel="", ticklabels="all", equal=False)  # (as from_3d's)
+
+
+def scene_kind_block(doc):
+    """The scene settings all 3D scenes share, as the document holds them."""
+    return ((doc.get("kinds") or {}).get("scene") or {}).get("scene3d") or {}
+
+
+def scene_own(doc, pid):
+    """The scene settings panel pid has of its own, as the document holds them."""
+    return (panel_by_id(doc, pid).get("opts") or {}).get("scene3d") or {}
+
+
+def scene_block(doc, pid=None):
+    """A panel's whole scene block, with the defaults, or the kind's (pid None)."""
+    own = {} if pid is None else scene_own(doc, pid)
+    return scene3d_of(dict(scene3d={**scene_kind_block(doc), **own}))
+
+
+def scene_kind_write(doc, key, value):
+    k = doc.setdefault("kinds", {}).setdefault("scene", {})
+    k["scene3d"] = dict(k.get("scene3d") or {}, **{key: value})
+
+
+def write_scene(doc, pid, key, value):
+    """A scene setting (a key of the block, whole) on panel pid, or all scenes (pid None).  The
+    only scene's goes to the kind unless it holds that setting itself: there is nothing to differ
+    from, and what reads the kind's block keeps working."""
+    if pid is None or (key not in scene_own(doc, pid) and len(panels_of(doc, "scene")) < 2):
+        scene_kind_write(doc, key, value)
+        return
+    opts = panel_by_id(doc, pid).setdefault("opts", {})
+    opts["scene3d"] = dict(opts.get("scene3d") or {}, **{key: value})
+
+
+def scene_take_back(doc, pid, key):
+    """Panel pid's own setting gone: it has all scenes' again."""
+    p = panel_by_id(doc, pid)
+    opts = p.get("opts") or {}
+    own = dict(opts.get("scene3d") or {})
+    own.pop(key, None)
+    if own:
+        opts["scene3d"] = own
+    else:
+        opts.pop("scene3d", None)
+    if not opts:
+        p.pop("opts", None)
+
+
 # ------------------------------------------------------------ the grid: filling panels
 def fill_problem(doc, rows, cols, kind="plan"):
     """Why the grid can't be rows x cols (panels of other kinds off it), or None."""
@@ -1075,6 +1200,7 @@ def fill_panels(doc, rows, cols, row_dim="none", col_dim="none", steps=None, run
                 write_panel(doc, p, j, {k: v for k, v in cell["fields"].items()
                                         if k not in ("z", "mode", "on", "type")})
     gone = {p["id"] for p in pool}
+    drop_annotations(doc, gone)
     doc["panels"] = sorted((p for p in doc["panels"] if p["id"] not in gone),
                            key=lambda p: _cell(p)[:2])
     grid = doc.setdefault("grid", {})

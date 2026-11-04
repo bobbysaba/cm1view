@@ -17,6 +17,7 @@ from panel.reactive import ReactiveHTML
 from .cards import ANN_FIELDS, _hint, _panel_tok
 from .draw.base import ann_on
 from .kinds import LINEAR
+from .spec.doc import is_doc
 from ..viewer.ui import held
 
 PLACE = {"Click: nothing": "", "Click to add text": "text",
@@ -144,14 +145,18 @@ def place_map(fig, spec, size_px, dpi):
     """{data key: (left, right, top, bottom) as fractions of the saved image, xlim,
     ylim, skew} of the panels whose axes clicks map onto (plain linear axes, and
     skew-T panels: skew = (skew, bottom pressure), else None), for the preview just
-    saved from fig (its trimmed box, if any, recorded by watch_tight)."""
-    kinds = {}
-    for k, part in enumerate(spec.get("parts") or [spec]):
-        kinds[k] = part["kind"]
+    saved from fig (its trimmed box, if any, recorded by watch_tight).  Of a document: by
+    panel id."""
+    if is_doc(spec):
+        kinds = {p["id"]: p["kind"] for p in spec.get("panels") or []}
+        kind_of = kinds.get
+    else:
+        kinds = {k: part["kind"] for k, part in enumerate(spec.get("parts") or [spec])}
+        kind_of = lambda i: kinds.get(int(i) // 1000 if spec.get("kind") == "combo" else 0)  # noqa: E731
     x0, y1, W, H = _saved_box(fig, spec, size_px, dpi)
     out = {}
     for i, ax in (getattr(fig, "_cv_axes", None) or {}).items():
-        if kinds.get(int(i) // 1000 if spec.get("kind") == "combo" else 0) not in LINEAR:
+        if kind_of(i) not in LINEAR:
             continue
         skew = getattr(ax, "_cv_skew", None)
         if getattr(ax, "_cv_hodo", False) or ax.get_xscale() != "linear" or (
@@ -186,6 +191,80 @@ def to_frac(b, x, y):
     else:
         w = (y - yl[0]) / ((yl[1] - yl[0]) or 1e-9)
     return (x - xl[0]) / ((xl[1] - xl[0]) or 1e-9), w
+
+
+def locate(place, fx, fy):
+    """(key, its place_map entry, u, w) of the panel of `place` holding a point of the preview
+    (u, w: fractions of the panel from the left and bottom), or None."""
+    hit = next(((i, b) for i, b in place.items()
+                if b[0] <= fx <= b[1] and b[2] <= fy <= b[3]), None)
+    if hit is None:
+        return None
+    i, b = hit
+    return i, b, (fx - b[0]) / max(b[1] - b[0], 1e-9), (b[3] - fy) / max(b[3] - b[2], 1e-9)
+
+
+def dragged_to(b, u0, w0, f0, f1):
+    """The panel fractions (u, w) a drag from (u0, w0) in panel box b ends at, from its two
+    points in the preview, f0 and f1 (fractions of the image, x then y)."""
+    return (u0 + (f1[0] - f0[0]) / max(b[1] - b[0], 1e-9),
+            w0 - (f1[1] - f0[1]) / max(b[3] - b[2], 1e-9))
+
+
+def placed_item(mode, panel, first, x, y):
+    """The annotation of a click-placing mode finishing at (x, y); first: the (x, y) of the first
+    click of a two-point one."""
+    a = dict(kind=mode, panel=panel, coords="data", x=x, y=y, x2=x, y2=y,
+             text="A" if mode == "text" else "", color="#000000",
+             size=10.0 if mode != "marker" else 8.0, lw=1.5, ls="-", r=1.0)
+    if first is not None:
+        x1, y1 = first
+        a.update(x=x1, y=y1, x2=x, y2=y)
+        if mode == "circle":
+            a.update(x2=x1, y2=y1, r=round(((x - x1) ** 2 + (y - y1) ** 2) ** 0.5, 2))
+    return a
+
+
+def grab_annotation(anns, panel, b, start):
+    """What a drag starting at `start` (fractions of panel b) takes of annotations `anns`: (its
+    place in anns, its grip), or None (nothing of panel `panel` near enough)."""
+    best = None
+    for n, a in enumerate(anns):
+        if not ann_on(a, panel):
+            continue
+        for grip, (u, w) in _grips(a, b, start).items():
+            dist = math.hypot(u - start[0], w - start[1])
+            if dist < GRAB and (best is None or dist < best[0]):
+                best = (dist, n, grip)
+    return None if best is None else best[1:]
+
+
+def axis_digits(lim):
+    """Decimals that place a point on axis range lim to about a thousandth of it (2 at least)."""
+    span = abs(float(lim[1]) - float(lim[0]))
+    return max(2, 3 - math.floor(math.log10(span))) if span > 0 else 2
+
+
+def moved_annotation(a, b, start, end, grip, digits=(2, 2)):
+    """The new values of annotation a's keys when grabbed at grip and dragged from `start` to
+    `end` (fractions of panel b).  digits: the decimals of its x and y in axis units."""
+    du, dw = end[0] - start[0], end[1] - start[1]
+    axes = a.get("coords") == "axes"
+    new = {}
+    pts = {"all": [("x", "y"), ("x2", "y2")], "1": [("x", "y")], "2": [("x2", "y2")]}
+    for kx, ky in pts[grip if grip in pts else "all"]:
+        if kx not in a and ky not in a:
+            continue
+        x, y = float(a.get(kx, a.get("x", 0.0))), float(a.get(ky, a.get("y", 0.0)))
+        if a["kind"] == "vline":  # (moves sideways only; hline: up and down)
+            y = to_data(b, *start)[1]
+        u, w = (x, y) if axes else to_frac(b, x, y)
+        x, y = (u + du, w + dw) if axes else to_data(b, u + du, w + dw)
+        if kx in a:
+            new[kx] = round(x, 4 if axes else digits[0])
+        if ky in a and a["kind"] != "vline":
+            new[ky] = round(y, 4 if axes else digits[1])
+    return new
 
 
 def watch_tight(fig):
@@ -239,23 +318,20 @@ class FigureClick:
         """(panel j, its place_map entry, u, w) of a point of the preview (u, w:
         fractions of the panel from the left and bottom), or None (the status line
         says why)."""
-        hit = next(((i, b) for i, b in self._place.items()
-                    if b[0] <= fx <= b[1] and b[2] <= fy <= b[3]), None)
+        hit = locate(self._place, fx, fy)
         if hit is None:
             self._status("Click inside a panel (plan views, sections, time–height, "
                          "time series or skew-Ts)." if self._place else
                          "Clicks place things in plan views, sections, time–height, "
                          "time-series and skew-T panels.", True)
             return None
-        i, b = hit
+        i, b, u, w = hit
         k, j = divmod(int(i), 1000) if (self._place_spec or {}).get("kind") == "combo" \
             else (0, int(i))
         if self._multi_part() and k != self.part_i:
             self._status(f"That panel is in part {k + 1}: pick it in <b>Figure parts</b> "
                          "to place things there.", True)
             return None
-        u = (fx - b[0]) / max(b[1] - b[0], 1e-9)
-        w = (b[3] - fy) / max(b[3] - b[2], 1e-9)
         return j, b, u, w
 
     def _on_click(self, ev):
@@ -280,8 +356,8 @@ class FigureClick:
         if got is None:
             return
         j, b, u0, w0 = got
-        u1 = u0 + (float(ev.new[2]) - float(ev.new[0])) / max(b[1] - b[0], 1e-9)
-        w1 = w0 - (float(ev.new[3]) - float(ev.new[1])) / max(b[3] - b[2], 1e-9)
+        u1, w1 = dragged_to(b, u0, w0, [float(v) for v in ev.new[:2]],
+                            [float(v) for v in ev.new[2:4]])
         if mode == "move":
             self._move_annotation(j, b, (u0, w0), (u1, w1))
             return
@@ -304,14 +380,10 @@ class FigureClick:
             self._place_section(j, self._pending[1:], (x, y))
             self._pending = None
             return
-        a = dict(kind=mode, panel=j, coords="data", x=x, y=y, x2=x, y2=y,
-                 text="A" if mode == "text" else "", color="#000000",
-                 size=10.0 if mode != "marker" else 8.0, lw=1.5, ls="-", r=1.0)
+        first = None
         if mode in TWO:
-            (_, x1, y1), self._pending = self._pending, None
-            a.update(x=x1, y=y1, x2=x, y2=y)
-            if mode == "circle":
-                a.update(x2=x1, y2=y1, r=round(((x - x1) ** 2 + (y - y1) ** 2) ** 0.5, 2))
+            (_, *first), self._pending = self._pending, None
+        a = placed_item(mode, j, first, x, y)
         self.ann_rows.append(self._ann_row(a))
         self._show_anns()
         self._status(f"Added {mode} in panel {_panel_tok(j)}: see <b>Annotate</b>.")
@@ -351,36 +423,15 @@ class FigureClick:
     def _move_annotation(self, j, b, start, end):
         """Move the annotation of panel j grabbed at `start` (panel fractions) to `end`:
         all of it, or the end grabbed."""
-        best = None
-        for r in self.ann_rows:
-            a = r.collect()
-            if not ann_on(a, j):
-                continue
-            for grip, (u, w) in _grips(a, b, start).items():
-                dist = math.hypot(u - start[0], w - start[1])
-                if dist < GRAB and (best is None or dist < best[0]):
-                    best = (dist, r, a, grip)
+        anns = [r.collect() for r in self.ann_rows]
+        best = grab_annotation(anns, j, b, start)
         if best is None:
             self._status("No annotation there: start the drag on one (its text, marker, "
                          "centre, middle or an end).", True)
             return
-        _, row, a, grip = best
-        du, dw = end[0] - start[0], end[1] - start[1]
-        axes = a.get("coords") == "axes"
-        new = {}
-        pts = {"all": [("x", "y"), ("x2", "y2")], "1": [("x", "y")], "2": [("x2", "y2")]}
-        for kx, ky in pts[grip if grip in pts else "all"]:
-            if kx not in a and ky not in a:
-                continue
-            x, y = float(a.get(kx, a.get("x", 0.0))), float(a.get(ky, a.get("y", 0.0)))
-            if a["kind"] == "vline":  # (moves sideways only; hline: up and down)
-                y = to_data(b, *start)[1]
-            u, w = (x, y) if axes else to_frac(b, x, y)
-            x, y = (u + du, w + dw) if axes else to_data(b, u + du, w + dw)
-            if kx in a:
-                new[kx] = round(x, 4 if axes else 2)
-            if ky in a and a["kind"] != "vline":
-                new[ky] = round(y, 4 if axes else 2)
+        n, grip = best
+        row, a = self.ann_rows[n], anns[n]
+        new = moved_annotation(a, b, start, end, grip)
         with held(self):
             for k, v in new.items():
                 row.w[k].value = v

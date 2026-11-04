@@ -16,7 +16,8 @@ from ..times import _nearest_t
 from . import docedit as de, nodes
 
 # (the kinds edited here)
-ADDABLE = ("plan", "sounding", "xsec", "th", "line", "dist", "profile", "joint", "azim", "table")
+ADDABLE = ("plan", "sounding", "xsec", "th", "line", "dist", "profile", "joint", "azim", "table",
+           "scene")
 NEW_ROW, NEW_COL = "new row", "new column"
 
 
@@ -166,12 +167,16 @@ class GridPane:
         spec = fg.default_spec(shell.ed.run, shell.ed.fields, shell.v.t)
         rid = own_run(shell)
         ts = shown_time(shell, rid)
+        scene3d = shell.ed.viewer_scene() if kind == "scene" else None
         made = []
 
         def apply(d):
             grow = {NEW_ROW: "row", NEW_COL: "col"}.get(place)
             at = place if isinstance(place, tuple) else de.next_cell(d, grow)
             start = {k: spec[k] for k in KIND_KEYS[kind] if k in spec}
+            if kind == "scene":  # (the first shows what the 3D workspace does; seed_kind)
+                start = dict(axes=dict(start.get("axes") or {}, **de.SCENE_START_AXES),
+                             scene3d=scene3d)
             de.seed_kind(d, kind, start, KINDS[kind].labels)
             if kind == "plan":
                 p = de.plan_panel(d, at, rid, ts, spec["layers"], fg.card_section(
@@ -179,6 +184,8 @@ class GridPane:
             elif kind == "xsec":
                 p = de.xsec_panel(d, at, rid, ts, spec["layers"], fg.card_section(
                     spec["sections"][0]))
+            elif kind == "scene":
+                p = de.add_panel(d, kind, at, run=rid, time_s=ts)
             else:
                 p = de.add_panel(d, kind, at, self.ins.panes[kind].first_entries())
             present = {KINDS[q["kind"]] for q in d["panels"]} | {KINDS[k] for k in ADDABLE}
@@ -215,7 +222,8 @@ class GridPane:
 
     # ------------------------------------------------------------ a panel's
     def place_objs(self, doc, pid):
-        """Where panel pid sits (its cell and how many it spans), a copy of it, removing it."""
+        """What is at the end of a panel's settings: its annotations; where panel pid sits (its
+        cell and how many it spans), a copy of it, removing it."""
         shell = self.shell
         rows, cols = de.grid_shape(doc)
         r, c, rs, cs = _cell(de.panel_by_id(doc, pid))
@@ -257,7 +265,7 @@ class GridPane:
         kind = de.panel_by_id(doc, pid)["kind"]
         rm.on_click(lambda e: shell.edit(lambda d: de.remove_panel(d, pid),
                                          node=nodes.KIND_PREFIX + kind))
-        return [pn.pane.HTML("<b>Place</b>", margin=(8, 4, 0, 4)),
+        return [self.ins.annots.card(doc, pid), pn.pane.HTML("<b>Place</b>", margin=(8, 4, 0, 4)),
                 _grid(row, col, tall, wide, n=2), said,
                 pn.Row(copy_btn, rm, margin=0, sizing_mode="stretch_width")]
 

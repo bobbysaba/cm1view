@@ -101,9 +101,7 @@ class AnnotationRow:
         self.w = w = {}
         w["kind"] = pn.widgets.Select(name="Kind", options=ANN_KINDS, value=a.get("kind", "text"),
                                       width=130)
-        w["panel"] = pn.widgets.TextInput(name="Panels (blank: all)", width=120,
-                                          value=panels_text(a.get("panel", -1)),
-                                          placeholder="all, or a, c-d")
+        w["panel"] = self._panel_widget(a)
         w["coords"] = pn.widgets.Select(name="Position in", options={
             "Axis units (km, min)": "data", "Panel fraction (0–1)": "axes"},
             value=a.get("coords", "data"), width=170)
@@ -133,6 +131,23 @@ class AnnotationRow:
         self.panel, self.body = _fold([self.title, pn.Spacer(), self.rm], [_grid(*w.values())])
         self._show()
 
+    def _panel_widget(self, a):
+        return pn.widgets.TextInput(name="Panels (blank: all)", width=120,
+                                    value=panels_text(a.get("panel", -1)),
+                                    placeholder="all, or a, c-d")
+
+    def _panels(self):
+        """The annotation's "panel", as the panels widget has it."""
+        return parse_panels(self.w["panel"].value)
+
+    def _where(self):
+        """The panels it is in, in words."""
+        p = self._panels()
+        ps = [p] if isinstance(p, int) else p
+        return "every panel" if p == -1 else \
+            ("panels " if len(ps) > 1 else "panel ") + \
+            ", ".join(figdraw.panel_letter(q, "{a}") for q in ps)
+
     def _show(self):
         w = self.w
         use = ANN_FIELDS[w["kind"].value]
@@ -145,13 +160,8 @@ class AnnotationRow:
             w["ls"].visible = look != "marker"
             w["alpha"].visible = look == "patch"
         kind = next(k for k, v in ANN_KINDS.items() if v == w["kind"].value)
-        p = parse_panels(w["panel"].value)
-        ps = [p] if isinstance(p, int) else p
-        where = "every panel" if p == -1 else \
-            ("panels " if len(ps) > 1 else "panel ") + \
-            ", ".join(figdraw.panel_letter(q, "{a}") for q in ps)
         txt = f" “{w['text'].value}”" if "text" in use and w["text"].value else ""
-        self.title.object = f"<b>{kind}</b>{txt} · {where}"
+        self.title.object = f"<b>{kind}</b>{txt} · {self._where()}"
 
     def _changed(self):
         self._show()
@@ -159,8 +169,7 @@ class AnnotationRow:
 
     def collect(self):
         w = self.w
-        a = dict(kind=w["kind"].value, panel=parse_panels(w["panel"].value),
-                 color=w["color"].value)
+        a = dict(kind=w["kind"].value, panel=self._panels(), color=w["color"].value)
         for k in ANN_FIELDS[a["kind"]]:
             v = w[k].value
             a[k] = float(v or 0.0) if isinstance(w[k], pn.widgets.FloatInput) else v
