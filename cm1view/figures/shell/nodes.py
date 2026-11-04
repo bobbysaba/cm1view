@@ -7,7 +7,7 @@ from ..cards import TYPE_LABEL
 from ..draw.base import _cell
 from ..kinds import KINDS
 
-FIGURE, RUNS = "figure", "runs"
+FIGURE, RUNS, KIND_PREFIX = "figure", "runs", "kind:"
 
 
 def in_order(doc):

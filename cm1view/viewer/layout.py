@@ -412,7 +412,8 @@ class Layout:
                     f'{self.error}</div>') if self.error else None
         objs = [o for o in (err,) if o is not None]
         shell = self.figed.shell  # (the figure's new layout, when asked for)
-        self.fig_ws = pn.Column(self.figed.panel, *([shell.panel] if shell else []),
+        self.fig_ws = pn.Column(self.figed.panel, *([shell.panel, self.figed.quick] if shell
+                                                    else []),
                                 sizing_mode="stretch_width", visible=False,
                                 margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,

@@ -53,6 +53,7 @@ processes and renders figures.
 | `test_parcels.py` | Parcel output: reads, lattice, selections, sets, trajectory cache, heads, wraps, split files; the Parcels panel |
 | `test_pdecomp.py` | The pressure decomposition, on copies of demo files |
 | `test_figure_shell.py` | The figure editor's new layout: its tree, picking, edits and undo, the switch |
+| `test_figure_shell_plan.py` | Plan views there: shared layers and overrides, heights, time zero, Fill panels, look settings, the quick start |
 | `test_figure.py`, `test_figure_layers.py`, `test_figure_runs.py`, `test_figure_export.py`, `test_figure_spec.py` | The figure editor: widgets ↔ spec, layers, several runs, export and animation, spec upgrades |
 | `test_legend.py` | Legends of blocks and panels |
 | `test_images.py` | Image baselines and save–load–draw |
@@ -147,6 +148,11 @@ figures/                  the Figure workspace
                           CM1VIEW_FIGURE_SHELL set until every kind has moved there
     nodes.py              what the tree holds, what a node reaches (no widgets)
     treeview.py           the tree: one widget, rows drawn in the browser
+    docedit.py            changes to a document: layers shared or a panel's, what differs,
+                          heights, time zero, filling panels (no widgets)
+    layerrow.py           a layer in the inspector: a LayerCard on the document
+    looks.py              look settings at the node's scope, from the settings table
+    planview.py           plan views in the inspector, and the Fill panels tool
     inspector.py          the settings of what is picked
     frame.py              FigureShell: panes, document, undo, preview
   editor.py               the Figure workspace editor (FigureEditor): putting the

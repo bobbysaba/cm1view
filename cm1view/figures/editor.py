@@ -109,6 +109,8 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         # the new layout, while it is being built: only when asked for
         self.shell = FigureShell(self) if os.environ.get("CM1VIEW_FIGURE_SHELL") else None
         self.shell_btn.visible = self.shell is not None
+        if self.shell is not None:  # (the quick start shows over either layout: viewer.layout)
+            self.preview.objects = [o for o in self.preview.objects if o is not self.quick]
 
     # ------------------------------------------------------------ widgets
     def _build(self):

@@ -4,6 +4,7 @@ several cards share (buttons, region, heights, look, colours, ensemble)."""
 import json
 import math
 import re
+from contextlib import contextmanager
 
 import panel as pn
 from matplotlib import font_manager
@@ -126,13 +127,28 @@ def _row(*objs):
                       sizing_mode="stretch_width")
 
 
-def _grid(*objs, n=3):
+_GRID_N = [3]  # (columns of a _grid unless it says)
+
+
+@contextmanager
+def grid_columns(n):
+    """The cards built meanwhile lay their settings out in n columns (a narrower pane)."""
+    _GRID_N.append(n)
+    try:
+        yield
+    finally:
+        _GRID_N.pop()
+
+
+def _grid(*objs, n=None):
     """Widgets in n equal columns (a CSS grid), each filling its cell; (widget, k)
     spans k columns.  Everything sits on the cell's bottom line, so checkboxes and
     buttons line up with the input boxes beside them; hidden widgets leave no gap."""
+    n = _GRID_N[-1] if n is None else n
     items = []
     for o in objs:
         o, span = o if isinstance(o, tuple) else (o, 1)
+        span = min(span, n)
         o.width = None
         o.sizing_mode = "stretch_width"
         st = {"align-self": "end"}

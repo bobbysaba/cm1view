@@ -1,0 +1,315 @@
+"""The look settings in the inspector, from the settings table (figures/settings.py): each row's
+widget is a copy of the old editor's, shown from and written to the document at the scope of
+the node picked.  A section's widgets are made when it is opened.
+
+Look resolves style, then kinds[kind], then the panel's opts (spec/doc.py), so:
+
+  Figure   writes style (a kind's block: every kind in the figure), or the figure's own keys
+  Kind     writes kinds[kind] (a block no kind holds: the same as Figure)
+  Panel    writes the panel's opts, and shows what it inherits otherwise"""
+
+import copy
+
+import panel as pn
+
+from .. import settings as table
+from ..cards import _grid
+from ..cards.base import SECTION
+from ..spec.doc import FIGURE_KEYS, KIND_KEYS
+from . import docedit as de, nodes
+
+FIGURE_SECTIONS = ("Text", "Panel labels", "Colorbar", "Legend", "Contour key",
+                   "Maximum and minimum", "Spacing", "matplotlib style", "Your own code")
+KIND_SECTIONS = {"plan": ("Area", "Axes and ticks")}
+# (a plan panel's own look: what is drawn panel by panel, the rest being its grid's or the figure's)
+PANEL_KEYS = {
+    "plan": {"Axes and ticks": ("axes.xlabel", "axes.ylabel", "axes.ticks", "axes.minor",
+                                "axes.tickdir", "axes.xstep", "axes.ystep", "axes.frame_lw",
+                                "axes.grid", "axes.grid_ls"),
+             "Panel labels": ("axes.title_loc", "axes.title_bold", "letters.on", "letters.loc",
+                              "letters.size", "letters.bold", "letters.box", "time_label.on",
+                              "time_label.fmt", "time_label.loc", "time_label.size",
+                              "time_label.bold", "time_label.box", "run_label.on", "run_label.loc",
+                              "run_label.size", "run_label.bold", "run_label.box",
+                              "run_label.run_color", "z_label.on", "z_label.fmt", "z_label.loc",
+                              "z_label.size", "z_label.bold", "z_label.box")}}
+LEFT_OUT = ("xsec.ztop", "xsec.coords",  # (a section's: with sections, M6)
+            "legend.panel", "legend.panels")  # (panels by id: M9)
+
+
+def _split(st):
+    block, _, key = st.key.rpartition(".")
+    return block, key
+
+
+def kind_block(block):
+    """Whether a block of settings goes under kinds (spec/doc.py's KIND_KEYS)."""
+    return any(block in keys for keys in KIND_KEYS.values())
+
+
+class Scope:
+    """Where the settings of a node live.  kind: its kind; pid: its panel."""
+
+    def __init__(self, kind=None, pid=None):
+        self.kind, self.pid = kind, pid
+
+    def _layers_up(self, doc, block):
+        """The dictionaries a setting of `block` resolves through, last wins."""
+        kinds = doc.get("kinds") or {}
+        out = [doc.get("style") or {}]
+        if self.kind is not None:
+            out.append(kinds.get(self.kind) or {})
+        elif kind_block(block):  # (the figure: as the first kind has it)
+            out.append(next(iter(kinds.values()), {}))
+        if self.pid is not None:
+            out.append(de.panel_by_id(doc, self.pid).get("opts") or {})
+        return out
+
+    def value(self, doc, st):
+        """Setting st's value here, as its widget shows it (table.KEEP: its widget's own)."""
+        block, key = _split(st)
+        if not block:
+            held = doc if key in FIGURE_KEYS else {}
+            for d in self._layers_up(doc, key):
+                if key in d:
+                    held = d
+            return st.as_.show(held[key]) if key in held else (
+                table.KEEP if st.default is table.KEEP else st.as_.show(st.default))
+        held = dict(doc[block]) if block in FIGURE_KEYS and isinstance(doc.get(block), dict) else {}
+        for d in self._layers_up(doc, block):
+            if isinstance(d.get(block), dict):
+                held.update(d[block])
+        if key == "*":
+            return st.as_.show(held)
+        if key in held:
+            return st.as_.show(held[key])
+        return table.KEEP if st.default is table.KEEP else st.as_.show(st.default)
+
+    def _targets(self, doc, top):
+        """The dictionaries to write a setting of block (or top-level key) `top` to."""
+        if self.pid is not None:
+            return [de.panel_by_id(doc, self.pid).setdefault("opts", {})]
+        if top in FIGURE_KEYS:
+            return [doc]
+        if kind_block(top):
+            kinds = doc.setdefault("kinds", {})
+            names = [self.kind] if self.kind else list(kinds) or ["plan"]
+            return [kinds.setdefault(k, {}) for k in names]
+        return [doc.setdefault("style", {})]
+
+    def write(self, doc, st, value):
+        """Setting st takes its widget's value."""
+        block, key = _split(st)
+        read = st.as_.read(value)
+        for d in self._targets(doc, block or key):
+            if not block:
+                d[key] = read
+            elif key == "*":
+                d[block] = dict(d.get(block) or {}, **read)
+            else:
+                d[block] = dict(d.get(block) or {}, **{key: read})
+        if st.key == "letters.on" and self.pid is None:  # (by hand: no longer the count's)
+            style = doc.setdefault("style", {})
+            style["letters"] = dict(style.get("letters") or {}, auto=False)
+
+    def own_keys(self, doc, keys):
+        """Those of the settings `keys` the panel of this scope has of its own."""
+        opts = de.panel_by_id(doc, self.pid).get("opts") or {} if self.pid is not None else {}
+        out = []
+        for k in keys:
+            block, _, key = k.rpartition(".")
+            if isinstance(opts.get(block), dict) and key in opts[block]:
+                out.append(k)
+        return out
+
+    def take_back(self, doc, key):
+        """A panel's own setting gone: it inherits again."""
+        p = de.panel_by_id(doc, self.pid)
+        block, _, name = key.rpartition(".")
+        opts = p.get("opts") or {}
+        if isinstance(opts.get(block), dict):
+            opts[block].pop(name, None)
+            if not opts[block]:
+                opts.pop(block)
+        if not opts:
+            p.pop("opts", None)
+
+
+def panels_differ(doc, kind, keys):
+    """The panels of a kind with a setting of `keys` of their own: {letter: [keys]}."""
+    names, out = nodes.letters(doc), {}
+    for p in de.panels_of(doc, kind):
+        own = Scope(kind, p["id"]).own_keys(doc, keys)
+        if own:
+            out[names[p["id"]]] = own
+    return out
+
+
+def rows_of(section, kinds, only=None):
+    """The table's rows of a section reaching any of `kinds` (only: of those keys)."""
+    out = []
+    seen = set()
+    for st in table.SETTINGS:
+        if st.section != section or st.key in LEFT_OUT or st.key in seen:
+            continue
+        if only is not None and st.key not in only:
+            continue
+        if any(k in st.kinds for k in kinds):
+            out.append(st)
+            seen.add(st.key)
+    return out
+
+
+def make_widget(ed, st, shown, on_change):
+    """A copy of the old editor's widget for setting st, showing `shown`, on its own."""
+    w = table.widget_of(ed, st).clone(visible=True, disabled=False)
+    if shown is not table.KEEP:
+        try:
+            w.value = shown
+        except ValueError:  # (a value its list doesn't have)
+            pass
+    w.param.watch(lambda ev: on_change(st, w), "value")
+    return w
+
+
+class Sections:
+    """The collapsible sections of look settings of one node.  extras: {section: widgets to
+    add (a function)}."""
+
+    def __init__(self, inspector, scope, kinds, extras=None):
+        self.ins, self.shell, self.scope, self.kinds = inspector, inspector.shell, scope, kinds
+        self.extras = extras or {}
+
+    def _on_change(self, st, w):
+        self.shell.edit(lambda d: self.scope.write(d, st, w.value))
+
+    def card(self, section, only=None):
+        """The card of a section (None when it has no rows)."""
+        rows = rows_of(section, self.kinds, only)
+        extra = self.extras.get(section)
+        if not rows and extra is None:
+            return None
+        key = f"look:{self.scope.pid}:{self.scope.kind}:{section}"
+        folds = self.ins.folds
+        card = pn.Card(title=section, collapsed=True, **SECTION)
+
+        def fill():
+            if not card.objects:
+                card.objects = self._body(section, rows, extra)
+
+        def on_fold(ev):
+            folds[key] = not ev.new
+            if not ev.new:
+                fill()
+
+        card.param.watch(on_fold, "collapsed")
+        if folds.get(key):
+            card.collapsed = False
+        return card
+
+    def _body(self, section, rows, extra):
+        doc, ed = self.shell.doc, self.shell.ed
+        out = []
+        by_key = {}
+        for st in rows:
+            if st.key == "time_label.t0_min" and not self.scope.value(doc, st):
+                continue  # (an older figure's: run time zeros do this now)
+            w = make_widget(ed, st, self.scope.value(doc, st), self._on_change)
+            by_key[st.key] = w
+            out.append(w)
+        objs = [_grid(*out, n=2)] if out else []
+        if extra is not None:
+            objs += extra(by_key)
+        return objs
+
+    def chips(self, keys):
+        """A panel's own settings of `keys`, each to take back (↺)."""
+        own = self.scope.own_keys(self.shell.doc, keys)
+        if not own:
+            return []
+        names = {st.key: table.widget_of(self.shell.ed, st).name for st in table.SETTINGS}
+
+        def back(key):
+            self.shell.edit(lambda d: self.scope.take_back(d, key), node=self.shell.node)
+
+        chips = []
+        for key in own:
+            b = pn.widgets.Button(name=f"↺ {names.get(key) or key}", height=26, margin=(2, 2),
+                                  button_type="light", button_style="outline",
+                                  description="Back to what all panels have")
+            b.on_click(lambda e, k=key: back(k))
+            chips.append(b)
+        return [pn.FlexBox(*chips, sizing_mode="stretch_width")]
+
+
+def key_layer_widget(shell, doc, block, types, first):
+    """The layer the contour key or Maximum / minimum speaks for: a shared one by id."""
+    fields = shell.fields
+    opts = {first: -1}
+    for lid, lay in (doc.get("layers") or {}).items():
+        if lay.get("type") in types:
+            name = lay.get("field")
+            label = fields[name].label if fields is not None and name in fields else str(name)
+            opts[f"{TYPE_NAME.get(lay['type'], lay['type'])}: {label} ({lid})"] = lid
+    now = ((doc.get("style") or {}).get(block) or {}).get("layer", -1)
+    w = pn.widgets.Select(name="Of the layer", options=opts, value=now if now in opts.values()
+                          else -1, sizing_mode="stretch_width")
+
+    def on_pick(ev):
+        def apply(d):
+            style = d.setdefault("style", {})
+            style[block] = dict(style.get(block) or {}, layer=ev.new)
+        shell.edit(apply)
+
+    w.param.watch(on_pick, "value")
+    return w
+
+
+TYPE_NAME = {"fill": "Fill", "contour": "Contours", "shade": "Shading"}
+
+
+def area_extra(shell, scope):
+    """The Area section's box, which is written whole (x min ... y max), shown while the area
+    is a fixed box; the half-width while it follows the storm."""
+    def extra(by_key):
+        doc = shell.doc
+        kinds = doc.get("kinds") or {}
+        dom = copy.deepcopy((kinds.get(scope.kind) or {}).get("domain") or {})
+        box = list(dom.get("box") or [None] * 4)
+        ed = shell.ed
+        ws = [src.clone(value=box[n], visible=True, disabled=False) for n, src in enumerate(
+            (ed.box_x0, ed.box_x1, ed.box_y0, ed.box_y1))]
+        note = pn.pane.HTML(margin=(0, 4), sizing_mode="stretch_width")
+        mode = by_key.get("domain.mode")
+        half = by_key.get("domain.half")
+        col = pn.Column(_grid(*ws, n=2), note, margin=0, sizing_mode="stretch_width")
+
+        def on_box(ev):
+            b = [w.value for w in ws]
+            ok = None not in b and b[1] > b[0] and b[3] > b[2]
+            note.object = "" if ok else (
+                '<div class="cv-status" style="color:#f87171">The box needs x max above x min '
+                'and y max above y min.</div>')
+            if ok:
+                def apply(d):
+                    k = d.setdefault("kinds", {}).setdefault(scope.kind, {})
+                    k["domain"] = dict(k.get("domain") or {}, box=[float(v) for v in b])
+                shell.edit(apply)
+
+        def on_mode(*ev):
+            m = mode.value if mode is not None else dom.get("mode")
+            col.visible = m == "box"
+            if half is not None:
+                half.visible = m == "storm"
+            if m == "box" and None in [w.value for w in ws]:  # (a start: the map's view)
+                for w, v in zip(ws, shell.v.view):
+                    w.value = round(float(v), 2)
+
+        for w in ws:
+            w.param.watch(on_box, "value")
+        if mode is not None:
+            mode.param.watch(on_mode, "value")
+        on_mode()
+        return [col]
+
+    return extra

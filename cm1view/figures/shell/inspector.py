@@ -1,8 +1,8 @@
 """The inspector: the settings of the one thing picked in the tree, and what an edit reaches.
 Only what is shown exists as widgets: a node's are made when it is picked.
 
-So far: the figure's size and title, the runs, a panel's title; the rest is shown, not yet
-edited."""
+Editable so far: the figure's size, title, look and panels (Fill panels), the runs, and plan
+views (planview).  Other kinds are shown, with a panel's title to edit, until they move here."""
 
 import html
 import os
@@ -11,11 +11,13 @@ import panel as pn
 
 from ... import config
 from .. import draw as figdraw
-from ..cards import _hex, _row
+from ..cards import SIZE_PRESETS, _hex, _row
 from ..cards.base import _f
 from ..draw.base import _cell
 from ..runs import TYPE_PATH, _track_options, _track_path
-from . import nodes
+from . import docedit as de, nodes
+from .looks import FIGURE_SECTIONS, Scope, Sections, key_layer_widget
+from .planview import PlanPane
 from ...theme import GRID
 
 
@@ -57,8 +59,12 @@ def grid_map(doc):
 class Inspector:
     def __init__(self, shell):
         self.shell = shell
-        self.head = pn.pane.HTML(margin=(4, 4, 0, 4), sizing_mode="stretch_width")
-        self.body = pn.Column(margin=0, sizing_mode="stretch_width")
+        self.folds = {}  # what is open: by layer id or section, so it outlasts undo and redo
+        self.plan = PlanPane(self)
+        self.head = pn.pane.HTML(margin=(4, 4, 0, 4), sizing_mode="stretch_width",
+                                 styles={"flex": "0 0 auto"})
+        self.body = pn.Column(margin=0, sizing_mode="stretch_width",
+                              styles={"flex": "0 0 auto"})  # (taller than the pane: it scrolls)
         self.panel = pn.Column(self.head, self.body, width=440, scroll="y-auto",
                                sizing_mode="stretch_height",
                                styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
@@ -85,28 +91,76 @@ class Inspector:
         w, h = (list(doc.get("size") or [8.0, 6.0]) + [6.0])[:2]
         width = _f("Width (in)", float(w), 110, step=0.25)
         height = _f("Height (in)", float(h), 110, step=0.25)
+        preset = pn.widgets.Select(name="Size", options=SIZE_PRESETS, value="", width=170)
+        fit = pn.widgets.Button(name="Fit height", height=32, align="end", button_type="light",
+                                button_style="outline", margin=(4, 4),
+                                description="The height for the width and the panels; it then "
+                                            "follows them, until a size is typed")
+        self.size_ws = (width, height)
         title = pn.widgets.TextInput(name="Figure title", value=doc.get("suptitle") or "",
                                      sizing_mode="stretch_width")
 
         def on_size(ev):
+            if self._quiet:
+                return
             if width.value and height.value:
                 self.shell.edit(lambda d: d.update(size=[float(width.value), float(height.value)],
                                                    size_auto=False))
 
+        def on_preset(ev):
+            if not ev.new:
+                return
+            if "x" in ev.new:
+                size, auto = [float(v) for v in ev.new.split("x")], False
+            else:
+                size, auto = [float(ev.new), float(height.value or 6.0)], True
+            self.shell.edit(lambda d: d.update(size=size, size_auto=auto), node=nodes.FIGURE)
+
         width.param.watch(on_size, "value")
         height.param.watch(on_size, "value")
+        preset.param.watch(on_preset, "value")
+        fit.on_click(lambda ev: self.shell.edit(lambda d: d.update(size_auto=True),
+                                                node=nodes.FIGURE))
         title.param.watch(lambda ev: self.shell.edit(
             lambda d: d.update(suptitle=ev.new.strip())), "value")
-        objs = [_row(width, height), title, _note("Where the panels sit:"), grid_map(doc)]
+        objs = [_row(width, height, preset, fit), title, _note("Where the panels sit:"),
+                grid_map(doc)]
         for text in doc.get("notes") or []:
             objs.append(_note(html.escape(str(text))))
+        if any(p["kind"] == "plan" for p in doc.get("panels") or []):
+            objs.append(self.plan.fill_card(doc))
+        kinds = list(dict.fromkeys(p["kind"] for p in doc.get("panels") or []))
+        looks = Sections(self, Scope(), kinds, {
+            "Contour key": lambda by: [key_layer_widget(self.shell, doc, "contour_key",
+                                                        ("contour",), "First contours")],
+            "Maximum and minimum": lambda by: [key_layer_widget(
+                self.shell, doc, "extremes", figdraw.EXTREME_TYPES, "First fill")]})
+        objs += [c for c in (looks.card(s) for s in FIGURE_SECTIONS) if c is not None]
+        if doc.get("groups"):
+            objs.append(_note("This figure was made of parts: each part's colorbar, legend and "
+                              "ticks stay its own, whatever is set here."))
         return objs
+
+    _quiet = False  # (the size boxes being set from the document)
+
+    def size_followed(self, size):
+        """The height followed the panels: the Figure node's boxes say so."""
+        ws = getattr(self, "size_ws", None)
+        if ws is None or self.shell.node != nodes.FIGURE:
+            return
+        self._quiet = True
+        try:
+            ws[0].value, ws[1].value = float(size[0]), float(size[1])
+        finally:
+            self._quiet = False
 
     # ------------------------------------------------------------ the runs
     def _runs(self, doc):
         used, names = nodes.runs_used(doc), nodes.letters(doc)
         objs = [self._run_row(r, k, used.get(r["id"], []), names, len(doc["runs"]))
                 for k, r in enumerate(doc.get("runs") or [])]
+        if len(doc.get("runs") or []) > 1:
+            objs.insert(0, self._time_match(doc))
         have = {os.path.abspath(r["path"]) for r in doc.get("runs") or []}
         others = self.shell.ed._other_runs(have)
         if others:
@@ -116,6 +170,27 @@ class Inspector:
             add.on_click(lambda ev: self._add_run(pick.value))
             objs.append(pn.Row(pick, add, margin=0, sizing_mode="stretch_width"))
         return objs
+
+    def _time_match(self, doc):
+        """How the runs line up: by time zero, or output number (each run lists its outputs)."""
+        w = self.shell.ed.time_match.clone(visible=True, disabled=False, value="output" if any(
+            r.get("outputs_s") for r in doc["runs"]) else "time")
+
+        def on_pick(ev):
+            def apply(d):
+                style = d.setdefault("style", {})
+                style.pop("time_match", None)
+                for r in d["runs"]:
+                    r.pop("outputs_s", None)
+                if ev.new == "output":
+                    style["time_match"] = "output"
+                    for r in d["runs"]:
+                        run = self.shell.ed.open_run(r["path"])[0]
+                        r["outputs_s"] = [float(t) for t in run.times]
+            self.shell.edit(apply, node=nodes.RUNS)
+
+        w.param.watch(on_pick, "value")
+        return w
 
     def _run_row(self, r, k, used, names, n):
         rid = r["id"]
@@ -132,11 +207,14 @@ class Inspector:
         color = pn.widgets.ColorPicker(name="Colour", width=70, value=_hex(
             r.get("color") or figdraw.RUN_COLORS[k % len(figdraw.RUN_COLORS)]))
         t0 = _f("Time zero (min)", float(r.get("t0_min") or 0.0), 110, step=1.0,
-                description="The model time this run counts from: time labels and legends "
-                            "count this run's times from it")
+                description="The model time this run counts from: its time labels count from "
+                            "it, and panels of the other runs move to stay at the same time "
+                            "since their time zeros")
+        by_output = bool(r.get("outputs_s"))
         label.param.watch(lambda ev: change(label=ev.new), "value")
         color.param.watch(lambda ev: change(color=ev.new), "value")
-        t0.param.watch(lambda ev: change(t0_min=float(ev.new or 0.0)), "value")
+        t0.disabled = by_output and k > 0
+        t0.param.watch(lambda ev: self.shell.edit(lambda d: de.set_t0(d, rid, ev.new)), "value")
         track = self._track_widgets(r, own, change)
         rm = pn.widgets.Button(name="✕", width=32, height=28, margin=(2, 1), button_type="default",
                                button_style="outline", disabled=bool(used) or n < 2,
@@ -191,21 +269,15 @@ class Inspector:
                 f"{run.ni}×{run.nj}×{run.nk}, dx {run.dx:g} m · {where}")
 
     def _add_run(self, path):
-        def apply(d):
-            ids = {r["id"] for r in d["runs"]}
-            n = len(d["runs"])
-            while f"r{n}" in ids:
-                n += 1
-            d["runs"].append(dict(id=f"r{n}", path=path, label=os.path.basename(path), track="",
-                                  color=figdraw.RUN_COLORS[len(d["runs"]) %
-                                                           len(figdraw.RUN_COLORS)]))
-        self.shell.edit(apply, node=nodes.RUNS)
+        self.shell.add_run(path, node=nodes.RUNS)
 
     # ------------------------------------------------------------ all panels of a kind
     def _kind(self, doc, node):
         kind = node.partition(":")[2]
+        if kind == "plan":
+            return self.plan.kind_objs(doc)
         mine = [p for p in nodes.in_order(doc) if p["kind"] == kind]
-        names, fields = nodes.letters(doc), self.shell.ed.fields
+        names, fields = nodes.letters(doc), self.shell.fields
         shared = {}  # (the shared layers these panels draw: how many of them)
         for p in mine:
             for ref, _ in figdraw.panel_layers(doc, p):
@@ -221,9 +293,11 @@ class Inspector:
     # ------------------------------------------------------------ a panel
     def _panel(self, doc, node):
         p = nodes.panel_of(doc, node)
+        if p["kind"] == "plan":
+            return self.plan.panel_objs(doc, node)
         pid = p["id"]
         letter = nodes.letters(doc)[pid]
-        fields = self.shell.ed.fields
+        fields = self.shell.fields
         r, c, rs, cs = _cell(p)
 
         def apply(d, value):
@@ -251,6 +325,8 @@ class Inspector:
     # ------------------------------------------------------------ a layer
     def _layer(self, doc, node):
         p = nodes.panel_of(doc, node)
+        if p["kind"] == "plan":
+            return self.plan.layer_objs(doc, node)
         j = int(node.rsplit(":", 1)[1])
         ref, lay = figdraw.panel_layers(doc, p)[j]
         letter = nodes.letters(doc)[p["id"]]
@@ -261,7 +337,7 @@ class Inspector:
             over = sorted(item.get("over") or {})
             rows.append(("Shared", "with the other panels drawing it"))
             rows.append(("Differs here", ", ".join(over) or "nothing"))
-        name = nodes.layer_name(lay, self.shell.ed.fields)
+        name = nodes.layer_name(lay, self.shell.fields)
         return f"{name} in panel {letter}", [
             _lines([x for x in rows if x[1]]),
             _note("Shown only: editing comes with each kind's move here.")]

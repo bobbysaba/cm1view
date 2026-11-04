@@ -6,6 +6,7 @@ import base64
 import html
 import io
 import json
+import os
 import struct
 import time as _time
 import traceback
@@ -16,7 +17,9 @@ import panel as pn
 from .. import draw as figdraw, spec as fg
 from ...theme import GRID
 from ..click import ClickImage, panel_boxes, watch_tight
-from . import nodes
+from ..runs import AllFields
+from ..times import _tlabel
+from . import docedit as de, nodes
 from .inspector import Inspector
 from .treeview import TreeView
 
@@ -49,6 +52,7 @@ class FigureShell:
         self._req = 0
         self._boxes = {}  # panel -> where it is in the preview
         self._png = None
+        self.fields = ed.fields  # (the fields of the document's runs: _sync_fields)
         self._build()
 
     # ------------------------------------------------------------ widgets
@@ -59,8 +63,10 @@ class FigureShell:
                                                                              "tree", **ib)
         self.undo_btn = pn.widgets.Button(icon="arrow-back-up", description="Undo", **ib)
         self.redo_btn = pn.widgets.Button(icon="arrow-forward-up", description="Redo", **ib)
-        self.new_btn = pn.widgets.Button(icon="file-plus", disabled=True,
-                                         description="Not here yet: in the old layout", **ib)
+        self.new_btn = pn.widgets.Button(
+            icon="file-plus", description="New figure: what the panels show, the grid, field "
+                                          "and width; or a template, or a saved figure (Undo "
+                                          "takes it back)", **ib)
         self.exp_btn = pn.widgets.Button(name="Export", icon="download", height=32, margin=(4, 4),
                                          button_type="primary", disabled=True,
                                          description="Not here yet: in the old layout")
@@ -99,6 +105,7 @@ class FigureShell:
                                visible=False, styles={"min-height": "0"})
         self.tree_btn.on_click(lambda e: setattr(self.tree_pane, "visible",
                                                  not self.tree_pane.visible))
+        self.new_btn.on_click(lambda e: self.new_figure())
         self.undo_btn.on_click(lambda e: self.undo())
         self.redo_btn.on_click(lambda e: self.redo())
         self.update.on_click(lambda e: self.request(force=True, delay=False))
@@ -112,21 +119,47 @@ class FigureShell:
     def open(self):
         """Show the old editor's figure here (as it was left here, if it hasn't changed)."""
         ed = self.ed
-        try:
-            src = json.dumps(ed.collect_all(), sort_keys=True, default=float)
-            if src != self._src:
-                doc = fg.to_doc(json.loads(src))
-                if self.doc is not None:  # (Undo goes back to what was here)
-                    self._keep()
-                    self._future = []
-                self.doc, self._src = doc, src
-        except Exception as e:  # noqa: BLE001
-            traceback.print_exc()
-            ed._msg(f"This figure could not be opened in the new layout: {e}", True)
+        why = self._take_old()
+        if why:
+            ed._msg(f"This figure could not be opened in the new layout: {why}", True)
             return
         self.showing = True
         ed.panel.visible, self.panel.visible = False, True
         self._show(self.node if nodes.still_there(self.doc, self.node) else nodes.FIGURE)
+        self.request(force=True, delay=False)
+
+    def _take_old(self):
+        """The old editor's figure into the document, if it changed since (Undo goes back to
+        what was here).  Why it can't be, or None."""
+        try:
+            src = json.dumps(self.ed.collect_all(), sort_keys=True, default=float)
+            if src != self._src:
+                doc = fg.to_doc(json.loads(src))
+                if self.doc is not None:
+                    self._keep()
+                    self._future = []
+                self.doc, self._src = doc, src
+                self._sync_fields()
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            return str(e)
+        return None
+
+    def new_figure(self):
+        """The quick start, over this figure: its gallery, templates and last figure."""
+        ed = self.ed
+        ed.open_quick()
+        grid = self.doc.get("grid") or {}
+        ed.qs_rows.value, ed.qs_cols.value = int(grid.get("rows", 1)), int(grid.get("cols", 1))
+
+    def take_figure(self):
+        """The quick start made or opened a figure, which it does in the old editor: here
+        now."""
+        why = self._take_old()
+        if why:
+            self.say(f"This figure could not be opened here: {html.escape(why)}", True)
+            return
+        self._show(nodes.FIGURE)
         self.request(force=True, delay=False)
 
     def close(self):
@@ -137,7 +170,7 @@ class FigureShell:
     def _show(self, node):
         """The tree, the outlines and the inspector for the document, with node picked."""
         self.node = node
-        self.tree.param.update(items=nodes.tree_items(self.doc, self.ed.fields), sel=node)
+        self.tree.param.update(items=nodes.tree_items(self.doc, self.fields), sel=node)
         self._mark()
         self.inspector.show(node)
         self.undo_btn.disabled, self.redo_btn.disabled = not self._hist, not self._future
@@ -168,12 +201,76 @@ class FigureShell:
             return
         self._keep()
         fn(self.doc)
+        self._follow_size()
         self._future = []
-        self.tree.items = nodes.tree_items(self.doc, self.ed.fields)
+        self.tree.items = nodes.tree_items(self.doc, self.fields)
         self.undo_btn.disabled, self.redo_btn.disabled = False, True
         if node is not None:
-            self._show(node)
+            self._show(node if nodes.still_there(self.doc, node) else nodes.FIGURE)
         self.request()
+
+    def _follow_size(self):
+        """A figure of plan views with an automatic size: its height for its width and grid."""
+        doc = self.doc
+        if not doc.get("size_auto") or {p["kind"] for p in doc["panels"]} != {"plan"}:
+            return
+        try:
+            h = self.fit_height(doc)
+        except (KeyError, TypeError, ValueError):  # (settings it can't estimate from)
+            return
+        if abs(h - float(doc["size"][1])) > 0.02:
+            doc["size"] = [float(doc["size"][0]), h]
+            self.inspector.size_followed(doc["size"])
+
+    def fit_height(self, doc):
+        """The old editor's estimate (fit_height), of the first panel's settings."""
+        res = figdraw.resolve(doc)
+        q = res["panels"][0]
+        grid = doc.get("grid") or {}
+        s = dict(figdraw.panel_view(res, q), rows=grid.get("rows", 1), cols=grid.get("cols", 1),
+                 size=doc["size"], suptitle=doc.get("suptitle") or "",
+                 titles=[p["title"] for p in doc["panels"] if p.get("title")],
+                 row_titles=[p["rowlabel"] for p in doc["panels"] if p.get("rowlabel")])
+        return self.ed.fit_height(s)
+
+    # ------------------------------------------------------------ the document's runs
+    def _sync_fields(self):
+        """The field lists: the fields of every run of the document."""
+        fields = []
+        for r in self.doc.get("runs") or []:
+            try:
+                fields.append(self.ed.open_run(r["path"])[1])
+            except Exception:  # noqa: BLE001  (a run that can't be opened: its panels say)
+                continue
+        self.fields = AllFields(fields) if fields else self.ed.fields
+
+    def time_opts(self, k):
+        """{label: model time} of the outputs of the document's run k."""
+        try:
+            run = self.ed.open_run(self.doc["runs"][k]["path"])[0]
+        except Exception:  # noqa: BLE001
+            return {}
+        return {_tlabel(t): float(t) for t in run.times}
+
+    def other_runs(self):
+        """{label: path} of the runs not in the document."""
+        return self.ed._other_runs({os.path.abspath(r["path"]) for r in self.doc["runs"]})
+
+    def add_run(self, path, node=None):
+        """A run into the document.  Its place, or None (the status line says why)."""
+        try:
+            run = self.ed.open_run(path)[0]
+        except Exception as e:  # noqa: BLE001
+            self.say(f"Could not open {html.escape(path)}: {html.escape(str(e))}", True)
+            return None
+        entry = dict(fg.run_entry(run), id=de.new_run_id(self.doc))
+        entry["color"] = figdraw.RUN_COLORS[len(self.doc["runs"]) % len(figdraw.RUN_COLORS)]
+
+        def apply(d):
+            d["runs"].append(entry)
+        self.edit(apply, node=node)
+        self._sync_fields()
+        return len(self.doc["runs"]) - 1
 
     def _keep(self):
         self._hist.append(self._state())
@@ -184,6 +281,7 @@ class FigureShell:
 
     def _restore(self, state):
         self.doc = json.loads(state[0])
+        self._sync_fields()
         self._show(state[1] if nodes.still_there(self.doc, state[1]) else nodes.FIGURE)
         self.request()
 

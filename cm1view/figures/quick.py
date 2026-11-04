@@ -227,16 +227,25 @@ class FigureQuick:
         self.qs_load_note.object = html
         self.qs_load_note.visible = True
 
+    def _quick_done(self):
+        """A figure is in the widgets: the new layout takes it, when it is what shows."""
+        if self._in_shell():
+            self.shell.take_figure()
+
     def _quick_open(self, path):
         """Open a saved figure (it closes the dialog); if it cannot be opened, say why in
         the dialog."""
-        if not self._load_spec(path):
+        if self._load_spec(path):
+            self._quick_done()
+        else:
             self._quick_note(self.msg.object)
 
     def _quick_template(self):
         """Apply the template picked (it closes the dialog); if it cannot be applied, say
         why in the dialog."""
-        if not self._apply_template(self.qs_tpl.value):
+        if self._apply_template(self.qs_tpl.value):
+            self._quick_done()
+        else:
             self._quick_note(self.msg.object)
 
     def _quick_earlier(self):
@@ -244,6 +253,8 @@ class FigureQuick:
         why = self.open_state(self._earlier[0], "Reopened the last figure")
         if why:
             self._quick_note(f'<div class="cv-status">{why}</div>')
+        else:
+            self._quick_done()
 
     def _quick_make(self):
         """A new figure (Undo takes it back) with the quick start's settings."""
@@ -275,6 +286,7 @@ class FigureQuick:
                 self.size_preset.value = self.qs_size.value
         finally:
             self.auto.value = live
+        self._quick_done()
         self.request()  # (shortly: the dialog closes and the editor shows first)
 
     def _quick_spread(self, kind):
