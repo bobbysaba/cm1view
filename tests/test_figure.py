@@ -3,7 +3,7 @@ soundings, clicks on the preview, and the publication options drawn without erro
 
 import numpy as np
 
-from conftest import render
+from conftest import render, set_look
 
 
 def test_motion_section_ends_turn_with_the_motion():
@@ -184,7 +184,7 @@ def test_sounding_table_lists_every_parameter(ed):
     ed.from_soundings()
     keys = [k for k, _, _ in figdraw.SND_PARAMS]
     assert sorted(ed.sk["table"].options.values()) == sorted(keys)
-    ed.sk["table"].value = ["sbcape", "sbcin", "mucin", "shear01"]
+    set_look(ed, "sounding", "skewt", table=["sbcape", "sbcin", "mucin", "shear01"])
     spec, data, fig = render(ed)
     par = data[0]["N0_par"]
     assert par.size == len(keys)
@@ -202,19 +202,16 @@ def test_sounding_table_lists_every_parameter(ed):
 def test_sounding_storm_motion_ring_and_inset(ed):
     from matplotlib.backends.backend_agg import FigureCanvasAgg
     ed.from_soundings()
-    ed.sk["srh"].value = "1"
+    set_look(ed, "sounding", "skewt", srh="1")
     spec, data, fig = render(ed)
     d = data[0]
     assert np.allclose(d["N0_storm"], d["N0_rm"])
     srh_rm = d["N0_srh1"]
-    ed.sk["storm"].value = "lm"  # the SRH follows the storm motion
+    set_look(ed, "sounding", "skewt", storm="lm")  # the SRH follows the storm motion
     spec, data, fig = render(ed)
     assert np.allclose(data[0]["N0_storm"], data[0]["N0_lm"])
     assert data[0]["N0_srh1"] != srh_rm
-    assert not ed.sk["storm_u"].visible
-    ed.sk["storm"].value = "custom"
-    assert ed.sk["storm_u"].visible
-    ed.sk["storm_u"].value, ed.sk["storm_v"].value = 5.0, -3.0
+    set_look(ed, "sounding", "skewt", storm="custom", storm_u=5.0, storm_v=-3.0)
     spec, data, fig = render(ed)
     assert np.allclose(data[0]["N0_storm"], [5.0, -3.0])
     skew = next(a for a in fig.axes if a.child_axes)
@@ -222,17 +219,14 @@ def test_sounding_storm_motion_ring_and_inset(ed):
     assert any(ln.get_marker() == "o" and np.allclose(ln.get_xydata()[0], [5.0, -3.0])
                for ln in hodo.get_lines())  # the ring
     for where, left in (("upper left", True), ("upper right", False)):
-        ed.sk["inset_loc"].value = where
+        set_look(ed, "sounding", "skewt", inset_loc=where)
         spec, data, fig = render(ed)
         FigureCanvasAgg(fig).draw()
         skew = next(a for a in fig.axes if a.child_axes)
         hx = skew.child_axes[0].get_window_extent()
         mid = 0.5 * (skew.get_window_extent().x0 + skew.get_window_extent().x1)
         assert (hx.x1 < mid) == left
-    assert not ed.sk["inset_x"].visible
-    ed.sk["inset_loc"].value = "custom"
-    assert ed.sk["inset_x"].visible and ed.sk["inset_y"].visible
-    ed.sk["inset_x"].value, ed.sk["inset_y"].value, ed.sk["inset_size"].value = 0.0, 0.0, 0.5
+    set_look(ed, "sounding", "skewt", inset_loc="custom", inset_x=0.0, inset_y=0.0, inset_size=0.5)
     spec, data, fig = render(ed)
     FigureCanvasAgg(fig).draw()
     skew = next(a for a in fig.axes if a.child_axes)
@@ -243,16 +237,13 @@ def test_sounding_storm_motion_ring_and_inset(ed):
     # the view: square, about the origin, a custom centre, or fit to the traces
     hodo = next(c for c in skew.child_axes if getattr(c, "_cv_hodo", False))
     assert np.allclose(hodo.get_xlim(), (-40, 40)) and np.allclose(hodo.get_ylim(), (-40, 40))
-    assert not ed.sk["hodo_cu"].visible
-    ed.sk["hodo_center"].value = "custom"
-    assert ed.sk["hodo_cu"].visible and ed.sk["hodo_max"].visible
-    ed.sk["hodo_cu"].value, ed.sk["hodo_cv"].value, ed.sk["hodo_max"].value = 10.0, 5.0, 20.0
+    set_look(ed, "sounding", "skewt", hodo_center="custom", hodo_cu=10.0, hodo_cv=5.0,
+             hodo_max=20.0)
     spec, data, fig = render(ed)
     hodo = next(c for c in next(a for a in fig.axes if a.child_axes).child_axes
                 if getattr(c, "_cv_hodo", False))
     assert np.allclose(hodo.get_xlim(), (-10, 30)) and np.allclose(hodo.get_ylim(), (-15, 25))
-    ed.sk["hodo_center"].value = "fit"
-    assert not ed.sk["hodo_max"].visible
+    set_look(ed, "sounding", "skewt", hodo_center="fit")
     spec, data, fig = render(ed)
     hodo = next(c for c in next(a for a in fig.axes if a.child_axes).child_axes
                 if getattr(c, "_cv_hodo", False))

@@ -411,7 +411,7 @@ class Layout:
         err = _html(f'<div class="cv-status" style="color:#f87171;padding:4px 8px">'
                     f'{self.error}</div>') if self.error else None
         objs = [o for o in (err,) if o is not None]
-        self.fig_ws = pn.Column(self.figed.shell.panel, self.figed.quick,
+        self.fig_ws = pn.Column(self.figed.shell.panel, out_of_flow(self.figed.quick),
                                 sizing_mode="stretch_width", visible=False,
                                 margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,

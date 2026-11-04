@@ -138,8 +138,8 @@ def test_workspaces_fill_a_short_window(ff, server):
     click_text(ff, "Figure")
     assert until(lambda: find(ff, "Export"), 60), "no Figure editor"
     time.sleep(5)
-    cols = [r for r in rects(ff, ".scrollable") if r[3] > 300]  # (the tree, the inspector)
-    assert len(cols) >= 2 and all(abs(r[1] + r[3] - 600) < 20 for r in cols), cols
+    cols = [r for r in rects(ff, ".scrollable-vertical") if r[3] > 300]  # (the tree, the inspector)
+    assert len(cols) == 2 and all(abs(r[1] + r[3] - 600) < 2 for r in cols), cols
 
 
 def test_figure_workspace(ff, server, shots):

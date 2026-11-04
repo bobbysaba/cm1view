@@ -270,6 +270,7 @@ def test_autosave_keeps_changes_and_the_earlier_figure(viewer, reg):
         if os.path.exists(name):
             os.remove(name)
     ed.shell.auto.value = False
+    ed.shell.showing = True  # (the workspace open: Auto-redraw off, an edit is kept at once)
     ed.shell._keep_figure()
     assert not os.path.exists(ed._auto_path())  # the example alone
 
@@ -286,6 +287,7 @@ def test_autosave_keeps_changes_and_the_earlier_figure(viewer, reg):
     try:
         e2 = v2.figed
         e2.shell.auto.value = False
+        e2.shell.showing = True
         assert e2._auto_earlier()[0]["doc"]["suptitle"] == "first"
         e2.open_quick()
         assert e2.qs_earlier_row.visible

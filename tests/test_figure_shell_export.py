@@ -299,7 +299,7 @@ def test_the_example_is_not_kept_but_an_edit_is(shell):
     assert ed.own_figure()
     with open(ed._auto_path()) as f:
         state = json.load(f)
-    assert state["doc"]["suptitle"] == "mine" and state["showing"] and state["spec"]
+    assert state["doc"]["suptitle"] == "mine" and "spec" not in state
 
 
 def test_a_session_gives_the_document_back(shell, reg):
@@ -312,8 +312,7 @@ def test_a_session_gives_the_document_back(shell, reg):
     v.main()
     v.apply_session(s)
     other = v.figed.shell
-    assert other.showing and other.doc["suptitle"] == "mine"
-    assert other._take_old() is None and other.doc["suptitle"] == "mine"  # (kept)
+    assert other.doc["suptitle"] == "mine"
     v.close()
 
 

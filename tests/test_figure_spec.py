@@ -509,49 +509,6 @@ def test_an_older_scene_with_a_grid_draws_one_picture():
 # ------------------------------------------------------------------ figure parts' note
 
 
-# ------------------------------------------------------------------ what follows a move
-def test_step_moves_follow_the_item_or_keep_the_place():
-    from cm1view.figures.tree import step_moves
-    assert step_moves(["a", "b", "c"], ["b", "c"]) == {1: 0, 2: 1}  # (one gone)
-    assert step_moves(["a", "b"], ["b", "a"]) == {0: 1, 1: 0}  # (swapped)
-    assert step_moves([1.0, 3.0, 6.0], [1.0, 3.0, 7.0]) == {0: 0, 1: 1, 2: 2}  # (retyped)
-    assert step_moves([1.0, 1.0], [1.0]) == {0: 0}  # (the same height twice)
-
-
-def _grid(rows, cols, rd="none", cd="none", r=(), c=()):
-    return dict(rows=rows, cols=cols, axes=(rd, cd), steps=(list(r), list(c)))
-
-
-def test_panel_moves_of_each_kind_of_grid():
-    from cm1view.figures.tree import panel_moves
-    # runs × times, a time added: the cell's run and time stay
-    was = _grid(2, 2, "runs", "times", "ab", range(2))
-    panels, rows = panel_moves(was, _grid(2, 3, "runs", "times", "ab", range(3)))
-    assert panels == {0: 0, 1: 1, 2: 3, 3: 4} and rows == {0: 0, 1: 1}
-    # the first run taken out: the other run's panels move up
-    panels, rows = panel_moves(was, _grid(1, 2, "runs", "times", "b", range(2)))
-    assert panels == {2: 0, 3: 1} and rows == {1: 0}
-    # one list of runs: at its run, wherever the grid puts it
-    panels, _ = panel_moves(_grid(1, 3, "none", "runs", (), "abc"),
-                            _grid(1, 2, "none", "runs", (), "ac"))
-    assert panels == {0: 0, 2: 1}
-    # no list, one more column: each panel keeps its cell
-    panels, _ = panel_moves(_grid(2, 2), _grid(2, 3))
-    assert panels == {0: 0, 1: 1, 2: 3, 3: 4}
-
-
-def test_panel_moves_leave_numbers_that_still_hold():
-    from cm1view.figures.tree import panel_moves
-    assert panel_moves(None, _grid(2, 2)) == (None, None)
-    assert panel_moves(_grid(2, 2), None) == (None, None)
-    assert panel_moves(_grid(1, 4), _grid(2, 2)) == (None, None)  # (reshaped: reading order)
-    assert panel_moves(_grid(2, 2), _grid(1, 2)) == (None, None)  # (off the grid: it waits)
-    assert panel_moves(_grid(1, 3, "none", "times", (), range(3)),  # (a list by its place)
-                       _grid(3, 1, "none", "times", (), range(3))) == (None, None)
-    assert panel_moves(_grid(1, 2, "none", "times", (), range(2)),  # (another list)
-                       _grid(1, 2, "none", "heights", (), [1.0, 3.0])) == (None, None)
-
-
 # ---------------------------------------------------------------- B3: parts, label defaults
 
 

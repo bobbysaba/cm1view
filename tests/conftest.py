@@ -122,6 +122,11 @@ def new_spec(ed, kind="plan", rows=2, cols=3, vary="times"):
     return fg.plain_copy(ed.shell.new_form(s))
 
 
+def set_look(ed, kind, block, **values):
+    """Settings of a kind's look changed in the figure the editor holds, as its card does."""
+    ed.shell.edit(lambda d: d["kinds"][kind][block].update(values))
+
+
 def put(s, widget, value):
     """Spec s with the setting of widget name `widget` (settings.py) as if typed there."""
     from cm1view.figures import settings as table

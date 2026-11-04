@@ -221,7 +221,7 @@ def test_templates_apply_to_another_run(ed, coarse_run):
         ed.qs_tpl.value = path
         assert not ed.qs_tpl_go.disabled
         ed.qs_tpl_go.clicks += 1
-        assert not ed.quick.open and "two by three" in ed.shell._said + ed.shell.status.object
+        assert not ed.quick.open and "two by three" in ed.shell._said
         assert ed.shell.doc["runs"][0]["path"] == ed.run.path
         render(ed)
         ed.open_quick()

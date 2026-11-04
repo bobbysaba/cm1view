@@ -55,6 +55,11 @@ def _reset(card):
     return next(o for o in card.objects if type(o).__name__ == "Row")
 
 
+def _shown(card, name):
+    return any(getattr(w, "name", None) == name and hasattr(w, "value") and w.visible
+               for w in card.select())
+
+
 # ------------------------------------------------------------------ without widgets
 def test_values_that_read_the_same():
     assert _same(None, "") and _same([], None) and _same(10, 10.0) and _same([1], (1,))
@@ -201,7 +206,7 @@ def test_a_kinds_own_colorbar_goes_back_to_the_figures(shell):
     card = _section(shell, "Colorbar")
     assert "● 2" in card.header.object
     line = _reset(card)
-    assert line[1].name == "↺ Back to the figure's"
+    assert line[1].name == "↺ Use the figure's setting"
     line[1].clicks += 1
     assert "colorbar" not in shell.doc["kinds"]["plan"]
 
@@ -325,3 +330,41 @@ def test_every_hit_opens_where_it_says(shell):
         shell.inspector.go_to(node, section)
         title = shell.inspector.body.objects[0].title
         assert title == section or title.startswith(f"{section} ("), (node, section)
+
+
+def test_what_a_soundings_settings_show_hangs_on_their_neighbours(shell):
+    _new_figure(shell, "sounding")
+    shell.edit(lambda d: d["kinds"]["sounding"]["skewt"].update(layout="inset"))
+    shell._show("kind:sounding")
+    sk = shell.ed.sk
+    name = {k: sk[k].name for k in ("storm", "storm_u", "inset_loc", "inset_x", "inset_y",
+                                    "hodo_center", "hodo_cu", "hodo_max")}
+    panels = _section(shell, "Sounding panels")
+    assert not _shown(panels, name["storm_u"])
+    _in(panels, name["storm"]).value = "custom"
+    assert _shown(panels, name["storm_u"])
+    hodo = _section(shell, "Hodograph")
+    assert not _shown(hodo, name["inset_x"])
+    _in(hodo, name["inset_loc"]).value = "custom"
+    assert _shown(hodo, name["inset_x"]) and _shown(hodo, name["inset_y"])
+    assert not _shown(hodo, name["hodo_cu"]) and _shown(hodo, name["hodo_max"])
+    _in(hodo, name["hodo_center"]).value = "custom"
+    assert _shown(hodo, name["hodo_cu"]) and _shown(hodo, name["hodo_max"])
+    _in(hodo, name["hodo_center"]).value = "fit"
+    assert not _shown(hodo, name["hodo_cu"]) and not _shown(hodo, name["hodo_max"])
+    assert shell.doc["kinds"]["sounding"]["skewt"]["hodo_center"] == "fit"
+
+
+def test_what_a_distributions_settings_show_hangs_on_the_plot(shell):
+    _new_figure(shell, "dist")
+    shell.edit(lambda d: d["kinds"]["dist"]["dist"].update(plot="hist", stats_at="box"))
+    shell._show("kind:dist")
+    ds = shell.ed.ds
+    plot = _section(shell, "Plot")
+    assert _shown(plot, ds["bar_labels"].name)
+    _in(plot, ds["plot"].name).value = "box"
+    assert not _shown(plot, ds["bar_labels"].name)
+    stats = _section(shell, "Statistics")
+    assert _shown(stats, ds["stats_loc"].name)
+    _in(stats, ds["stats_at"].name).value = "legend"
+    assert not _shown(stats, ds["stats_loc"].name)

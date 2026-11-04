@@ -144,6 +144,13 @@ def click_text(ff, txt, how="text"):
     pos = find(ff, txt, how)
     if pos is None:
         raise RuntimeError(f"not found: {txt!r}")
+    end = time.time() + 5.0  # (a dialog still opening moves it: a click would land beside it)
+    while time.time() < end:
+        time.sleep(0.25)
+        now = find(ff, txt, how)
+        if now is None or now == pos:
+            break
+        pos = now
     click(ff, *pos)
 
 

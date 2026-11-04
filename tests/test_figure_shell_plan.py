@@ -693,7 +693,9 @@ def test_a_saved_figure_from_the_gallery_comes_here(shell, tmp_path):
 
 
 def test_the_quick_start_sits_outside_the_new_layout(shell):
-    assert shell.ed.quick not in shell.ed.preview.objects
+    quick = shell.ed.quick
+    assert not any(o is quick for o in shell.panel.select())
+    assert any(o is quick for o in shell.v.fig_ws.objects)
 
 
 def test_look_sections_open_when_asked_and_write_at_their_scope(shell):

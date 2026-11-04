@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pytest
 
-from conftest import difference_layer, edited_v1, new_spec, render, swath_layer
+from conftest import difference_layer, edited_v1, new_spec, render, set_look, swath_layer
 
 
 # ------------------------------------------------------------------ distributions
@@ -15,10 +15,8 @@ from conftest import difference_layer, edited_v1, new_spec, render, swath_layer
 def test_distribution_bar_labels_and_statistics_box(ed):
     from matplotlib.offsetbox import AnchoredOffsetbox, AnchoredText
     ed.from_dists()  # one distribution: its statistics still show
-    ed.ds["plot"].value, ed.ds["bins"].value = "hist", 10
-    ed.ds["bar_labels"].value = "percent"
-    ed.ds["stats"].value, ed.ds["stats_at"].value = ["n", "median", "p5_95"], "box"
-    assert ed.ds["bar_labels"].visible and ed.ds["stats_loc"].visible
+    set_look(ed, "dist", "dist", plot="hist", bins=10, bar_labels="percent",
+             stats=["n", "median", "p5_95"], stats_at="box")
     spec, data, fig = render(ed)
     ax = fig.axes[0]
     pct = [float(t.get_text().rstrip("%")) for t in ax.texts if t.get_text().endswith("%")]
@@ -26,12 +24,9 @@ def test_distribution_bar_labels_and_statistics_box(ed):
     boxes = [a for a in ax.artists  # (not the panel labels)
              if isinstance(a, AnchoredOffsetbox) and not isinstance(a, AnchoredText)]
     assert len(boxes) == 1 and ax.get_legend() is None
-    ed.ds["stats_at"].value = "legend"  # one distribution: a legend for its statistics
-    assert not ed.ds["stats_loc"].visible
+    set_look(ed, "dist", "dist", stats_at="legend")  # one distribution: a legend for its statistics
     spec, data, fig = render(ed)
     assert "median" in fig.axes[0].get_legend().texts[0].get_text()
-    ed.ds["plot"].value = "box"
-    assert not ed.ds["bar_labels"].visible
 
 
 # ------------------------------------------------------------------ vertical profiles

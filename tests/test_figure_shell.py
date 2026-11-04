@@ -225,12 +225,10 @@ def test_leaving_the_workspace_and_returning_keeps_the_edits(shell):
     assert shell.doc["suptitle"] == "Kept"
 
 
-def test_while_it_shows_the_old_editor_draws_nothing(shell):
+def test_what_the_data_asks_of_the_editor_reaches_the_shell(shell):
     gen = shell.v.gen["fig"]
-    png = shell.ed._png
     shell.ed.request(force=True, delay=False)  # (a series coming in)
-    assert shell.v.gen["fig"] == gen + 1  # (drawn: here)
-    assert shell.ed._png is png
+    assert shell.v.gen["fig"] == gen + 1
     shell.ed._status("from the data")
     assert "from the data" in shell.status.object
 
