@@ -4,17 +4,17 @@ from types import SimpleNamespace
 
 import panel as pn
 
-from .. import draw as figdraw, spec as fg
+from .. import spec as fg
 import os
 
 from ...core import parcels as P, vectors
 from ...core.fields import deriv_name, split_deriv
 from .base import (
-    LEVEL_MODES, FRAMES, HATCHES, TYPE_LABEL, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS, LINE_STYLES,
-    PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _deriv_opts, _hex, _f, _grid, _hint, _checks, _fold,
-    _near, _nice, _panels_parse, _panels_text, _chk, _load_widgets, _section, _take_new_runs,
+    LEVEL_MODES, FRAMES, HATCHES, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS, LINE_STYLES,
+    PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _deriv_opts, _hex, _f, _grid, _hint, _checks,
+    _near, _nice, _chk, _section, _take_new_runs,
     cmap_select,
-    color_widgets, known_cmap, set_folded, _BTN,
+    card_body, color_widgets, known_cmap,
 )
 from ...viewer.ui import held
 
@@ -59,22 +59,16 @@ def parcel_pick(ed, choice):
 
 
 class LayerCard:
-    """Widgets of one layer (a card that folds away); collect() -> the layer dict."""
+    """Widgets of one layer; collect() -> the layer dict."""
 
-    def __init__(self, ed, lay, collapsed=False):
+    def __init__(self, ed, lay):
         self.ed, self.type = ed, lay["type"]
-        self._loading = False  # (load: the widgets take another layer's settings)
+        self._loading = False  # (the widgets being set: nothing has changed)
         self._syncing = False  # (the Derivative list following the Field)
-        self.head = ""  # (the title's name, for the layer's type: a panel's own fill)
         F, g = ed.fields, ed.fields.groups()
         self.lay = dict(lay)
         self.w = w = {}
         w["on"] = pn.widgets.Checkbox(value=lay.get("on", True), width=20, margin=(8, 2, 0, 4))
-        self.up = pn.widgets.Button(name="↑", description="Draw earlier (below)", **_BTN)
-        self.down = pn.widgets.Button(name="↓", description="Draw later (on top)", **_BTN)
-        self.dup = pn.widgets.Button(name="", icon="copy", **_BTN,
-                                     description="A copy of this layer, drawn just above it")
-        self.rm = pn.widgets.Button(name="✕", description="Remove the layer", **_BTN)
         t = self.type
         if t in ("fill", "contour", "shade"):
             op, base = split_deriv(lay["field"])
@@ -245,10 +239,6 @@ class LayerCard:
         w["run"] = pn.widgets.Select(
             name="Run", value=int(k) if k is not None and int(k) in names.values() else -1,
             width=170, **ed._layer_run_choices(names))
-        w["panels"] = pn.widgets.TextInput(
-            name="In panels (blank: all)", value=_panels_text(lay.get("panels")),
-            placeholder="e.g. a, c or 1-3",
-            description="Draw this layer only in these panels (letters or numbers)")
         if t == "vectors":
             w["vector"].param.watch(self._on_vector, "value")
         w["run"].param.watch(self._on_run, "value")
@@ -256,9 +246,7 @@ class LayerCard:
             if k != "run" and (k not in ("field", "deriv", "minus_on", "ens_on", "ens_stat",
                                          "ens_runs") or t != "fill"):
                 x.param.watch(lambda e: self._changed(), "value")
-        self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
-        self._set_title()
-        if t == "fill":  # (folded, unless in use: _open_used)
+        if t == "fill":  # (folded, unless in use)
             self.minus_sec = _section(
                 "Difference", _grid((w["minus_on"], 3), w["minus_run"], w["minus_time"],
                                     w["minus_grid"]),
@@ -271,38 +259,8 @@ class LayerCard:
                       "are left out."), collapsed=not w["ens_on"].value)
             self.reduce_sec = _section("Time window", self._reduce_row(),
                                        collapsed=not w["reduce_op"].value)
-        self.panel, self.body = _fold([w["on"], self.title, pn.Spacer(), self.up, self.down,
-                                       self.dup, self.rm], self._layout(), collapsed)
+        self.body = card_body(_grid(w["run"]), *self._rows())
         self.show(ed.kind.value)
-
-    def load(self, lay, collapsed=False, keep_open=False):
-        """Show layer lay (of this card's type) in these widgets: a new figure keeps its
-        cards, which the browser already has, instead of building new ones.  keep_open
-        (undo): folded sections left open stay open."""
-        new = LayerCard(self.ed, lay, collapsed)  # (never shown: its settings)
-        self._loading = True
-        try:
-            _load_widgets(self.w, new.w)
-        finally:
-            self._loading = False
-        self.lay = new.lay
-        self._open_used(keep_open)
-        set_folded(self, collapsed)
-        self.show(self.ed.kind.value)
-        self._set_title()
-
-    def _layout(self):
-        return [_grid(self.w["run"], (self.w["panels"], 2))] + self._rows()
-
-    def _open_used(self, keep_open=False):
-        """A fill's folded sections: open when they are in use, else shut (keep_open:
-        those open stay so)."""
-        if self.type == "fill":
-            w = self.w
-            for sec, used in ((self.minus_sec, w["minus_on"].value),
-                              (self.ens_sec, w["ens_on"].value),
-                              (self.reduce_sec, w["reduce_op"].value)):
-                sec.collapsed = not used and (sec.collapsed or not keep_open)
 
     def field_name(self):
         """The layer's field: the Field, or its Derivative (fields.deriv_name)."""
@@ -474,52 +432,7 @@ class LayerCard:
         if self._loading:
             return
         self.show(self.ed.kind.value)
-        self._set_title()
-        if self.type == "line":
-            self.ed._show_region()  # (the section settings show while a line is on)
         self.ed.request()
-
-    def _set_title(self):
-        t, w = self.type, self.w
-        sub = ""
-        if "field" in w:
-            d = self.ed.fields[self.field_name()]
-            sub = f" · {d.label}"
-            m = w["mode"].value
-            if self.ed.kind.value != "xsec":
-                z = w["z"].value or 0
-                own = self.ed._uses("heights") and not w["z_fixed"].value
-                sub += {"height": " · the panel's height" if own else f" · {z:g} km",
-                        "level": f" · k = {z:g}",
-                        "colmax": " · column max", "colmin": " · column min"}.get(m, "")
-            if w["reduce_op"].value and self.ed.kind.value != "xsec":
-                sub += {"composite": " · storm-following mean"}.get(
-                    w["reduce_op"].value, f" · {w['reduce_op'].value} over a time window")
-            if t == "fill" and w["ens_on"].value:
-                sub += f" · ensemble {w['ens_stat'].value}"
-            elif t == "fill" and w["minus_on"].value:
-                sub += " · difference"
-        elif t == "sector":
-            a0, a1 = w["az0"].value or 0.0, w["az1"].value
-            a1 = 360.0 if a1 is None else a1
-            sub = (f" · {a0:g}–{a1:g}° from "
-                   f"{'motion' if w['ref'].value == 'motion' else 'north'}"
-                   f" · {w['rmax'].value or 0:g} km")
-        elif t == "parcels":
-            sub = f" · {self.lay.get('name') or 'parcels'}" + (
-                f" · coloured by {w['cvar'].value}" if w["cvar"].value else "")
-        elif t == "vectors":
-            sub = (f' · {vectors.VECTORS[w["vector"].value].label}'
-                   + {"streamlines": " · streamlines", "barbs": " · barbs"}.get(
-                       w["style"].value, " · arrows"))
-        try:
-            only = _panels_parse(w["panels"].value)
-        except ValueError:  # (collect() reports it)
-            only = []
-        if only:
-            sub += " · panel" + ("s " if len(only) > 1 else " ") + ", ".join(
-                figdraw.panel_letter(i, "{a}") for i in only)
-        self.title.object = f"<b>{self.head or TYPE_LABEL[t]}</b>{sub}"
 
     def _on_fill_field(self, ev):
         """New fill field: its default colours, range and units."""
@@ -658,7 +571,6 @@ class LayerCard:
             pf = self.ed.v.pf
             lay["units"] = pf.units(lay["cvar"]) if pf is not None and lay["cvar"] and \
                 pf.has(lay["cvar"]) else ""
-        lay["panels"] = _panels_parse(w["panels"].value)
         return lay
 
     # ------------------------------------------------------------ parcels

@@ -1,12 +1,10 @@
 """The card of one joint distribution of a joint distribution figure."""
 
-import panel as pn
-
 from ...core import joint
 from ...viewer.numinput import FloatInput
-from .base import (_num, _grid, _hint, _fold, TimeCard, card_buttons, field_widget,
-                   label_widget, look_widgets, panel_tag, panel_widget, region_recipe,
-                   region_widgets, show_region, vertical_recipe, vertical_widgets, where_grid)
+from .base import (_num, _grid, _hint, TimeCard, card_body, field_widget,
+                   label_widget, look_widgets, region_recipe,
+                   region_widgets, show_region, vertical_recipe, vertical_widgets)
 from .distcard import DIST_VMODES
 
 JOINT_PLOTS = {"2D histogram": "hist", "Scatter": "scatter", "Density contours": "contour"}
@@ -15,13 +13,12 @@ JOINT_PLOTS = {"2D histogram": "hist", "Scatter": "scatter", "Density contours":
 class JointCard(TimeCard):
     """One joint distribution of a joint distribution figure: run, time (or a time
     window whose pairs are all taken), a joint recipe (x and y fields, height, layer or
-    whole depth, region, value limits of each), look and panel."""
+    whole depth, region, value limits of each) and look."""
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         F, r = ed.fields, ent["recipe"]
         self.w = w = {}
-        card_buttons(self, "Remove the joint distribution", dup=True)
         self._run_time_widgets("To (a time window)",
                                "Take the pairs of every output from Time to this one")
         w["field"] = field_widget(F, r["field"], "x field")
@@ -40,24 +37,20 @@ class JointCard(TimeCard):
                                                               else {}))
         w["label"] = label_widget(ent)
         look_widgets(w, ent, auto=True)
-        w["panel"] = panel_widget(ent)
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
-            if k not in ("run", "panel"):
+            if k != "run":
                 x.param.watch(lambda e: self._changed(), "value")
-        w["panel"].param.watch(lambda e: (self._show(), ed._fit_grid(), ed.request()), "value")
-        self.title = pn.pane.HTML("<b>Joint</b>", margin=(6, 4, 0, 4))
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.rm],
-            [where_grid(self, w["run"], (w["time"], 2), (w["time1"], 2), w["hold"]),
-             _grid((w["field"], 2), (w["yfield"], 2), w["vmode"], w["z"], w["z0"], w["z1"],
-                   w["region"], w["radius"], w["offx"], w["offy"], w["lo"], w["hi"], w["ylo"],
-                   w["yhi"], w["auto_color"], w["color"], (w["label"], 3)),
-             _hint("The pairs of x and y values at the same points of the region (a 2D "
-                   "field pairs at one height). Around the storm: a disc around each "
-                   "run's track. A time window takes the pairs of all its outputs. "
-                   "Automatic colour: the run's colour when each joint distribution of "
-                   "the panel is from another run, else the next colour.")])
+        self.body = card_body(
+            _grid(w["run"], (w["time"], 2), (w["time1"], 2), w["hold"]),
+            _grid((w["field"], 2), (w["yfield"], 2), w["vmode"], w["z"], w["z0"], w["z1"],
+                  w["region"], w["radius"], w["offx"], w["offy"], w["lo"], w["hi"], w["ylo"],
+                  w["yhi"], w["auto_color"], w["color"], (w["label"], 3)),
+            _hint("The pairs of x and y values at the same points of the region (a 2D "
+                  "field pairs at one height). Around the storm: a disc around each "
+                  "run's track. A time window takes the pairs of all its outputs. "
+                  "Automatic colour: the run's colour when each joint distribution of "
+                  "the panel is from another run, else the next colour."))
         self._show()
 
     def _show(self):
@@ -70,9 +63,6 @@ class JointCard(TimeCard):
         w["z0"].visible = w["z1"].visible = not two and mode == "layer"
         show_region(w)
         w["color"].visible = not w["auto_color"].value
-        self.title.object = (f"<b>Joint</b> · {F[w['yfield'].value].label} vs "
-                             f"{F[w['field'].value].label} · {self._when()} · panel "
-                             f"{panel_tag(w)}")
 
     def recipe(self):
         w, F = self.w, self.ed.fields

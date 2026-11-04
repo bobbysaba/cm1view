@@ -10,11 +10,11 @@ from ...core import series as ser
 from ...core.fields import deriv_name
 from .. import spec as fg
 from .base import (
-    _auto, _chk, _f, _grid, _hex, _hint, _fold, _retired, SER_OPS, SND_WHERE, _deriv_pair, TimeCard,
-    _take_new_runs, LINE_STYLES, card_buttons, color_widgets, ens_values, ens_widgets, keep_box, known_cmap,
-    label_widget, look_values, look_widgets, panel_index, panel_tag, panel_widget, reduce_recipe,
+    _auto, _chk, _f, _grid, _hex, _hint, _retired, SER_OPS, SND_WHERE, _deriv_pair, TimeCard,
+    _take_new_runs, LINE_STYLES, card_body, color_widgets, ens_values, ens_widgets, keep_box, known_cmap,
+    label_widget, look_values, look_widgets, per_run_button, reduce_recipe,
     reduce_widgets, region_recipe, region_widgets, show_ens, show_region, vertical_recipe,
-    vertical_widgets, where_grid,
+    vertical_widgets,
 )
 from .seriesvals import SeriesValues
 from ...viewer.ui import held
@@ -39,7 +39,7 @@ def several_run_choices(ed, names=None):
 class SeveralRuns:
     """The Run list of a card that may show one run, every run or the runs picked (Runs
     box): a series card (but a time-height one: one run) and a profile card.  After a
-    change: _run_picked() (the Run list), _runs_picked() (the Runs box), _reshow()."""
+    change: _run_picked() (the Run list), _runs_picked() (the Runs box)."""
     _EDITS = "series before its recipe or Then apply changed"  # (what edits_changed says)
 
     def _several(self):
@@ -61,32 +61,6 @@ class SeveralRuns:
             return sorted(int(j) for j in self.w["runs"].value if not isinstance(j, str)) \
                 or None
         return [int(k)] if isinstance(k, int) and k >= 0 else [0]
-
-    def set_runs(self, runs):
-        """Show runs (None: every run; a card of one run: the first)."""
-        w = self.w
-        with held(self.ed):
-            if runs is not None and len(runs) == 1 or not self._several():
-                w["runs"].value = []
-                w["run"].value = int((runs or [0])[0])
-            elif runs is None:
-                w["runs"].value = []
-                w["run"].value = ALL_RUNS
-            else:
-                w["runs"].value = sorted(int(k) for k in runs)
-                w["run"].value = SOME_RUNS
-        self._reshow()
-
-    def refresh_runs(self, names=None):
-        """The run lists' choices again (runs renamed, added or removed, or another
-        kind of figure), keeping the card's runs."""
-        names = names or self.ed._run_names()
-        keep = self.run_list()
-        with held(self.ed):
-            self.w["runs"].options = self.ed._series_run_opts(names)
-            self.w["run"].param.update(**self._run_choices(names))
-        self.set_runs([k for k in keep if k in names.values()] or [0]
-                      if keep is not None else None)
 
     def _on_run(self, ev):
         if self.ed._hold:
@@ -125,7 +99,7 @@ class SeveralRuns:
 
 class SeriesCard(SeveralRuns):
     """One series of a time-height / time-series figure, like a sounding card: its
-    run (a time series: also every run, or the runs picked), panel, a Series-tab
+    run (a time series: also every run, or the runs picked), a Series-tab
     recipe (field, level or layer, region, reduction), an optional derivative, and its
     look.  A time-height card is one panel (its run's series)."""
 
@@ -133,10 +107,10 @@ class SeriesCard(SeveralRuns):
         self.ed, self.ent = ed, dict(ent)
         F, r = ed.fields, ent["recipe"]
         self.w = w = {}
-        card_buttons(self, "Remove the series", moves=True, dup=True, per_run=(
+        self.per_run = per_run_button(
             "Time series: a card for each run (this card's runs, or each "
             "other run of the figure) in this panel; time-height: a copy for "
-            "each other run, down this card's column (a row per run)"))
+            "each other run, down this card's column (a row per run)")
         self._kind = ed.kind.value
         runs = ent.get("runs")
         k = (ALL_RUNS if self._kind != "th" else 0) if runs is None else \
@@ -158,26 +132,23 @@ class SeriesCard(SeveralRuns):
             "Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
             description="From an older figure: adds to its run's time zero (on the Runs "
                         "node), which is the place to set it. At 0 this box goes away"))
-        w["panel"] = panel_widget(ent)
         w["runs"] = pn.widgets.MultiChoice(name="Runs", options=ed._series_run_opts(),
                                            value=[int(k) for k in (runs or [])]
                                            if k == SOME_RUNS else [], width=260)
         ens_widgets(w, ent)
-        self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.info = pn.pane.HTML(margin=(0, 4))
         recipe_keys = ("vmode", "z", "z0", "z1", "region", "radius", "offx", "offy", "reduce",
                        "pct")
         for k in recipe_keys:
             w[k].param.watch(lambda e: self._changed(), "value")
         for k, x in w.items():
-            if k not in recipe_keys and k not in ("field", "deriv", "panel", "run", "runs"):
+            if k not in recipe_keys and k not in ("field", "deriv", "run", "runs"):
                 x.param.watch(lambda e: ed.request(), "value")
-        w["panel"].param.watch(lambda e: self._where_changed(), "value")
         w["run"].param.watch(self._on_run, "value")
         w["runs"].param.watch(self._on_runs, "value")
         w["field"].param.watch(self._on_field, "value")
         w["deriv"].param.watch(self._on_field, "value")
-        w["op"].param.watch(lambda e: self._op_changed(), "value")
+        w["op"].param.watch(lambda e: self._edits_stale(), "value")
         w["ens"].param.watch(lambda e: self.show(ed.kind.value), "value")
         self.th_row = _grid(w["cmap"], w["reverse"], w["white_first"], w["vmin"], w["vmax"],
                             w["nlevels"], w["extend"], (w["cbar_label"], 2), w["cbar_ticks"])
@@ -185,21 +156,15 @@ class SeriesCard(SeveralRuns):
                               w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"])
         self.trk_note = pn.pane.HTML(margin=(0, 4), sizing_mode="stretch_width")
         self.vals = SeriesValues(self)  # (time series: its values, and your edits of them)
-        self.where = where_grid(self, w["run"], (w["runs"], 2), w["t0"])
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.up, self.down, self.rm],
-            [self.where,
-             _grid((w["field"], 2), w["deriv"], w["vmode"], w["z"], w["z0"], w["z1"],
-                   w["region"], w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"],
-                   w["op"], (w["label"], 3)), self.trk_note, self.th_row, self.line_row,
-             self.vals.section, self.info])
-        self._set_title()
+        self.body = card_body(
+            _grid(w["run"], (w["runs"], 2), w["t0"], self.per_run),
+            _grid((w["field"], 2), w["deriv"], w["vmode"], w["z"], w["z0"], w["z1"],
+                  w["region"], w["radius"], w["offx"], w["offy"], w["reduce"], w["pct"],
+                  w["op"], (w["label"], 3)), self.trk_note, self.th_row, self.line_row,
+            self.vals.section, self.info)
         self.show(ed.kind.value)
 
     def show(self, kind):
-        if kind != self._kind:  # (every run / the runs picked: time series only)
-            self._kind = kind
-            self.refresh_runs()
         w, two = self.w, self.ed.fields[self.field_name()].ndim == 2
         th = kind == "th"  # (time-height: always every level of the layer)
         lay = th or w["vmode"].value == "layer"
@@ -213,7 +178,6 @@ class SeriesCard(SeveralRuns):
         w["runs"].visible = kind == "line" and w["run"].value == SOME_RUNS
         show_ens(w, kind == "line" and w["run"].value in (ALL_RUNS, SOME_RUNS))
         self.refresh_tracks()
-        self._set_title()
 
     def refresh_tracks(self):
         """Around the tracked storm: what the track of each of the card's runs gives (they
@@ -241,9 +205,6 @@ class SeriesCard(SeveralRuns):
             return self.ed._run_choices(names)
         return several_run_choices(self.ed, names)
 
-    def _reshow(self):
-        self.show(self._kind)
-
     def _run_picked(self):
         self._where_changed()
 
@@ -255,27 +216,12 @@ class SeriesCard(SeveralRuns):
         self.ed._series_changed()
         self.vals.refresh()
 
-    def _set_title(self):
-        w = self.w
-        d = self.ed.fields[self.field_name()]
-        op = {"ddz": " · d/dz", "ddt": " · d/dt"}.get(w["op"].value, "")
-        runs = self.run_list()
-        names = {k: n.split(". ", 1)[-1] for n, k in self.ed._run_names().items()}
-        run = "every run" if runs is None else names.get(runs[0], "") if len(runs) == 1 \
-            else f"{len(runs)} runs"
-        self.title.object = (f"<b>Series</b> · {d.label}{op} · {run} · "
-                             f"panel {panel_tag(w)}")
-
     def _changed(self):
         keep_box(self)
         self.show(self.ed.kind.value)
         self._auto_label()
         self._edits_stale()
         self.ed.request()
-
-    def _op_changed(self):
-        self._set_title()
-        self._edits_stale()
 
     def _auto_label(self):
         """Keep an automatic label in step with the recipe (an edited one stays)."""
@@ -294,7 +240,6 @@ class SeriesCard(SeveralRuns):
             for k in ("vmin", "vmax", "extend", "white_first"):
                 self.w[k].value = e[k]
             self.w["cmap"].value = known_cmap(e["cmap"])
-        self._set_title()
         self._changed()
 
     def field_name(self):
@@ -318,7 +263,6 @@ class SeriesCard(SeveralRuns):
         e.update(look_values(w), **ens_values(w))
         e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
         e["t0_min"] = float(w["t0"].value or 0.0)
-        e["panel"] = panel_index(w)
         e["runs"] = self.run_list()
         if e.get("edits"):  # (a copy: the card goes on editing its own)
             e["edits"] = {k: dict(v) for k, v in e["edits"].items() if v}
@@ -334,12 +278,11 @@ SND_LINES = (("T", "Temperature", "#d62728", "-"), ("Td", "Dewpoint", "#2ca02c",
 
 
 class SoundingCard(TimeCard):
-    """One sounding of a sounding figure: run, time, where, look and panel."""
+    """One sounding of a sounding figure: run, time, where and look."""
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         self.w = w = {}
-        card_buttons(self, "Remove the sounding", dup=True)
         self._run_time_widgets()
         wh = ent.get("where", {})
         w["kind"] = pn.widgets.Select(name="Where", options=SND_WHERE,
@@ -359,25 +302,21 @@ class SoundingCard(TimeCard):
                 name="Line style", options=LINE_STYLES,
                 value=ent.get(f"{k}_ls") if ent.get(f"{k}_ls") in LINE_STYLES.values() else ls)
             w[f"{k}_lw"] = _auto("Line width", ent.get(f"{k}_lw"), step=0.25)
-        w["panel"] = panel_widget(ent)
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
             if k != "run":
                 x.param.watch(lambda e: self._changed(), "value")
-        w["panel"].param.watch(lambda e: ed._fit_grid(), "value")
-        self.title = pn.pane.HTML("<b>Sounding</b>", margin=(6, 4, 0, 4))
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.rm],
-            [where_grid(self, w["run"], (w["time"], 2), w["hold"]),
-             _grid(w["kind"], w["x"], w["y"], w["avg"], w["auto_color"], w["color"],
-                   (w["label"], 3), w["own_looks"]),
-             _grid(*[w[f"{k}_{x}"] for k, *_ in SND_LINES for x in ("color", "ls", "lw")]),
-             _hint("Automatic colour: the run's colour (the <b>Runs</b> node) when each "
+        self.body = card_body(
+            _grid(w["run"], (w["time"], 2), w["hold"]),
+            _grid(w["kind"], w["x"], w["y"], w["avg"], w["auto_color"], w["color"],
+                  (w["label"], 3), w["own_looks"]),
+            _grid(*[w[f"{k}_{x}"] for k, *_ in SND_LINES for x in ("color", "ls", "lw")]),
+            _hint("Automatic colour: the run's colour (the <b>Runs</b> node) when each "
                    "sounding of the panel is from another run, else the next colour. Own line "
                    "looks set the temperature, dewpoint and parcel lines (a blank width: "
                    "automatic); the colour above stays on the barbs and hodograph marks. Keep "
                    "this time holds the sounding still under the ones that step in an "
-                   "animation.")])
+                   "animation."))
         self._show()
 
     def _show(self):
@@ -387,9 +326,6 @@ class SoundingCard(TimeCard):
         for k, *_ in SND_LINES:
             for x in ("color", "ls", "lw"):
                 w[f"{k}_{x}"].visible = w["own_looks"].value
-        where = {"trk": "storm", "pt": "point", "mean": "domain mean"}[w["kind"].value]
-        self.title.object = (f"<b>Sounding</b> · {where} · {self._when()} "
-                             f"· panel {panel_tag(w)}")
 
     def collect(self):
         w = self.w

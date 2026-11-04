@@ -7,10 +7,6 @@ import json
 
 from . import draw as figdraw, spec as fg
 
-# settings a figure of parts has one of (each part keeps a copy)
-WHOLE_FIGURE = ("export", "background", "spacing")
-
-
 def share_sections(parts, src):
     """The plan-view and section parts of a figure of parts take part src's list of
     cross-sections (when src is one of those kinds), in place: they share one list.  A
@@ -35,15 +31,6 @@ def share_sections(parts, src):
             out.append(dict(fg.card_section(sec), **keys))
         p["sections"] = out
     return parts
-
-
-def share_figure(parts, src):
-    """The parts take the whole figure's settings from src (a part, or the figure), in
-    place."""
-    for p in parts:
-        if p is not src:
-            p.update({k: json.loads(json.dumps(src[k], default=float))
-                      for k in WHOLE_FIGURE if k in src})
 
 
 def combine(parts, arrange="row", title="", like=None, size=None, one_colorbar=False,

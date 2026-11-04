@@ -1,7 +1,6 @@
 """Figure editor cards: the choices and constants, small widget helpers, and the parts that
 several cards share (buttons, region, heights, look, colours, ensemble)."""
 
-import json
 import math
 import re
 from contextlib import contextmanager
@@ -233,21 +232,6 @@ def _keep_shown(col, objs):
         col.objects = keep
 
 
-LOAD = ("groups", "options", "disabled_options", "name", "placeholder", "start", "end")
-
-
-def _load_widgets(w, src):
-    """Widgets w (a dict) take the settings and values of src's (a card of the same kind
-    built for other settings, never shown): a card the browser has shows them."""
-    for k, x in src.items():
-        y = w[k]
-        upd = {p: getattr(x, p) for p in LOAD
-               if p in x.param and getattr(x, p) != getattr(y, p)}
-        if "groups" in upd:  # (a grouped list: its groups make the options)
-            upd.pop("options", None)
-        y.param.update(**upd, value=x.value)
-
-
 def _follow_shown(col, objs):
     """_keep_shown(col, objs) now and whenever one of objs is shown or hidden."""
     objs = list(objs)
@@ -275,24 +259,6 @@ def _hint_html(text):
 
 def _hint(text, margin=(4, 4, 2, 4)):
     return pn.pane.HTML(_hint_html(text), margin=margin, sizing_mode="stretch_width")
-
-
-def _when(chk, *objs):
-    """objs are shown while the checkbox chk is ticked."""
-    def show(*e):
-        for o in objs:
-            o.visible = bool(chk.value)
-    chk.param.watch(show, "value")
-    show()
-
-
-def _when_shown(chk, *objs):
-    """objs are shown while the checkbox chk is ticked and itself shown."""
-    def show(*e):
-        for o in objs:
-            o.visible = bool(chk.visible and chk.value)
-    chk.param.watch(show, ["value", "visible"])
-    show()
 
 
 def _retired(w):
@@ -328,58 +294,6 @@ def set_folded(card, folded):
     """Fold or unfold a _fold card, as its chevron does."""
     if card.body.visible == folded:
         card.panel.objects[0].objects[0].clicks += 1
-
-
-def _plain(x):
-    """x as JSON would give it back (lists for tuples; 1 and 1.0 compare equal)."""
-    return json.loads(json.dumps(x, default=float))
-
-
-def _read_card(card):
-    """What card collects, plainly; None when its settings are incomplete."""
-    try:
-        return _plain(card.collect())
-    except Exception:  # noqa: BLE001  (undo must not stop at a half-typed card)
-        return None
-
-
-def kept_cards(old, ents, make, same=True, load=None):
-    """Undo's cards for entries ents, from the cards shown (old).  A card already showing
-    its entry stays as it is, wherever it was (with same: nothing else it lists has
-    changed, such as the runs).  The others take the folding of the card that was in
-    their place; load(card, entry, folded), if given, reuses a card of that place and says
-    whether it could, else make(entry) builds one."""
-    free = set(range(len(old)))
-    out = [None] * len(ents)
-    if same:
-        read = [_read_card(c) for c in old]
-        wanted = [_plain(e) for e in ents]
-        if len(old) == len(ents):  # (nothing added or removed: each in its place first)
-            for j, p in enumerate(wanted):
-                if read[j] == p:
-                    out[j] = old[j]
-                    free.discard(j)
-        at = 0  # (then the next card in order: alike cards keep their order)
-        for j, p in enumerate(wanted):
-            if out[j] is None:
-                k = next((k for k in sorted(free, key=lambda k: (k < at, k))
-                          if read[k] == p), None)
-                if k is not None:
-                    out[j] = old[k]
-                    free.discard(k)
-                    at = k + 1
-    for j, e in enumerate(ents):
-        if out[j] is not None:
-            continue
-        near = old[j] if j < len(old) else None
-        folded = near is not None and not near.body.visible
-        if load is not None and j in free and load(near, e, folded):
-            out[j] = near
-            free.discard(j)
-        else:
-            out[j] = make(e)
-            set_folded(out[j], folded)
-    return out
 
 
 def _near(opts, ts):
@@ -530,19 +444,15 @@ def cmap_select(value="viridis"):
     return pn.widgets.Select(name="Colormap", options=FIG_CMAPS, value=known_cmap(value))
 
 
-def card_buttons(card, remove, moves=False, dup=False, per_run=""):
-    """A card's buttons: card.rm (tooltip `remove`), with moves card.up and card.down, with
-    dup card.dup, and with per_run (its tooltip) card.per_run."""
-    card.rm = pn.widgets.Button(name="✕", description=remove, **_BTN)
-    if moves:
-        card.up = pn.widgets.Button(name="↑", description="Earlier in the list", **_BTN)
-        card.down = pn.widgets.Button(name="↓", description="Later in the list", **_BTN)
-    plain = dict(height=32, button_type="light", button_style="outline")
-    if dup:
-        card.dup = pn.widgets.Button(name="Duplicate", **plain,
-                                     description="A copy of this card in a new panel")
-    if per_run:
-        card.per_run = pn.widgets.Button(name="One per run", description=per_run, **plain)
+def card_body(*objs):
+    """A card's settings: what the inspector's row shows below its head."""
+    return pn.Column(*objs, margin=0, sizing_mode="stretch_width")
+
+
+def per_run_button(tip):
+    """A card's One per run button."""
+    return pn.widgets.Button(name="One per run", description=tip, height=32, button_type="light",
+                             button_style="outline")
 
 
 def run_widget(ed, ent):
@@ -562,26 +472,6 @@ def panel_select(name="Panel", value=1, width=70):
     """A list of the panels by letter; its value is counted from 1."""
     return pn.widgets.Select(name=name, options=PANEL_CHOICES, width=width,
                              value=min(max(int(value), 1), 64))
-
-
-def panel_widget(ent):
-    """The Panel list of a card (counted from 1; the spec's from 0: panel_index)."""
-    return panel_select(value=int(ent.get("panel") or 0) + 1)
-
-
-def panel_index(w):
-    return max(0, int(w["panel"].value or 1) - 1)
-
-
-def panel_tag(w):
-    """The letter of a card's panel."""
-    return figdraw.panel_letter(panel_index(w), "{a}")
-
-
-def where_grid(card, *objs):
-    """The first row of a card: objs (its run, time ...), its Panel and its buttons."""
-    return _grid(*objs, card.w["panel"], *[b for b in (getattr(card, "dup", None),
-                                                       getattr(card, "per_run", None)) if b])
 
 
 def label_widget(ent, name="Legend text (blank: automatic)", default=""):
@@ -758,17 +648,6 @@ def _take_new_runs(ed, box, picked):
         box.value = sorted(set(keep))
 
 
-def wanted_time(card, key, opts, dt):
-    """The time (s) card wants in its list w[key] of outputs opts after moving by dt s:
-    what it wanted before while that still shows, else what it shows."""
-    wants = card.__dict__.setdefault("_want", {})
-    cur, want = float(card.w[key].value), wants.get(key)
-    if want is None or card.ed._nearest(opts, want) != cur:
-        want = cur
-    wants[key] = want + dt
-    return wants[key]
-
-
 def hold_value(w):
     """The spec's key of a card's "Keep this time in animations" (only when ticked)."""
     return {"time_lock": True} if w["hold"].value else {}
@@ -810,29 +689,9 @@ class TimeCard:
         return None if t1 in (None, ONE_TIME) or t0 is None or float(t1) <= float(t0) \
             else float(t1)
 
-    def _when(self):
-        """The time (or window) as the title shows it: '1:30:00 to 1:45:00'."""
-        def short(k):
-            w = self.w[k]
-            label = next((n for n, v in w.options.items() if v == w.value), "")
-            return label.split("(")[-1].rstrip(")")
-        return short("time") + (f" to {short('time1')}" if self._t1() is not None else "") \
-            + (" (kept)" if self.w["hold"].value else "")
-
     def _time_run(self):
         """The run whose outputs the Time lists offer."""
         return int(self.w["run"].value or 0)
-
-    def move_time(self, dt):
-        """The card's times moved by dt s (a run's time zero changed), to the nearest
-        outputs; what it wants is kept apart from what they show, so small steps add up."""
-        o = self.ed._time_opts(self._time_run())
-        t1 = self._t1()
-        with held(self.ed):
-            self.w["time"].value = self.ed._nearest(o, wanted_time(self, "time", o, dt))
-            if t1 is not None:
-                self.w["time1"].value = self.ed._nearest(o, wanted_time(self, "time1", o, dt))
-        self._show()
 
     def _set_times(self, k, k0=None):
         """The Time lists offer run k's outputs: the nearest to the times shown, or with
@@ -866,11 +725,11 @@ class TimeCard:
         self.ed.request()
 
     def _entry(self, lw=1.5):
-        """The spec entry's keys every such card has (run, time, panel, label, its look;
+        """The spec entry's keys every such card has (run, time, label, its look;
         lw: a blank Line width's)."""
         w = self.w
         e = dict(run=int(w["run"].value or 0), time_s=float(w["time"].value or 0.0))
         if "time1" in w:
             e["time_s1"] = self._t1()
-        return dict(e, panel=panel_index(w), label=w["label"].value, **look_values(w, lw),
+        return dict(e, label=w["label"].value, **look_values(w, lw),
                     **hold_value(w))

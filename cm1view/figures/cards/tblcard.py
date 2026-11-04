@@ -6,9 +6,9 @@ from ...core import dist
 from ...viewer.numinput import FloatInput
 from .. import draw as figdraw, spec as fg
 from .base import (
-    SND_WHERE, _f, _fold, _grid, _hint, _num, card_buttons, field_widget, keep_box, label_widget,
-    panel_index, panel_tag, panel_widget, region_recipe, region_widgets, show_region,
-    vertical_recipe, vertical_widgets, where_grid,
+    SND_WHERE, _f, _grid, _hint, _num, card_body, field_widget, keep_box, label_widget,
+    region_recipe, region_widgets, show_region,
+    vertical_recipe, vertical_widgets,
 )
 from .distcard import DIST_VMODES
 from .seriescard import ALL_RUNS, SOME_RUNS, SeveralRuns, several_run_choices
@@ -31,7 +31,6 @@ class TableCard(SeveralRuns):
         self.ed, self.ent = ed, dict(ent)
         r = ent["recipe"]
         self.w = w = {}
-        card_buttons(self, "Remove these values", dup=True)
         runs = fg.profile_runs(ent)
         k = ALL_RUNS if runs is None else int(runs[0]) if len(runs) == 1 else SOME_RUNS
         w["run"] = pn.widgets.Select(name="Run", width=170, **several_run_choices(ed))
@@ -67,26 +66,22 @@ class TableCard(SeveralRuns):
             name="Statistics", value=list(ent.get("stats") or []), width=420,
             options={v: k for k, v in fg.TBL_STATS.items()})
         w["label"] = label_widget(ent, "Name in the headings (blank: automatic)")
-        w["panel"] = panel_widget(ent)
         w["run"].param.watch(self._on_run, "value")
         w["runs"].param.watch(self._on_runs, "value")
         for k, x in w.items():
-            if k not in ("run", "runs", "panel"):
+            if k not in ("run", "runs"):
                 x.param.watch(lambda e: self._changed(), "value")
-        w["panel"].param.watch(lambda e: (self._show(), ed._fit_grid(), ed.request()), "value")
-        self.title = pn.pane.HTML("<b>Values</b>", margin=(6, 4, 0, 4))
         self.t_note = pn.pane.HTML(margin=(0, 4))
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.rm],
-            [where_grid(self, w["run"], (w["runs"], 3), (w["times"], 2)), self.t_note,
-             _grid(w["what"], w["kind"], w["x"], w["y"], w["avg"], (w["field"], 2), w["vmode"],
-                   w["z"], w["z0"], w["z1"], w["region"], w["radius"], w["offx"], w["offy"],
-                   w["lo"], w["hi"], (w["label"], 3)),
-             w["params"], w["stats"],
-             _hint("Each value is read from every run here at every time here (the other runs "
-                   "at the same time since their time zeros). More entries in a panel add "
-                   "columns to one table, so it can hold both parameters and statistics. "
-                   "Statistics take every value of the field in the region at that time.")])
+        self.body = card_body(
+            _grid(w["run"], (w["runs"], 3), (w["times"], 2)), self.t_note,
+            _grid(w["what"], w["kind"], w["x"], w["y"], w["avg"], (w["field"], 2), w["vmode"],
+                  w["z"], w["z0"], w["z1"], w["region"], w["radius"], w["offx"], w["offy"],
+                  w["lo"], w["hi"], (w["label"], 3)),
+            w["params"], w["stats"],
+            _hint("Each value is read from every run here at every time here (the other runs "
+                  "at the same time since their time zeros). More entries in a panel add "
+                  "columns to one table, so it can hold both parameters and statistics. "
+                  "Statistics take every value of the field in the region at that time."))
         self._show()
 
     def _outputs(self):
@@ -117,23 +112,11 @@ class TableCard(SeveralRuns):
         self.times, bad = fg.parse_times(w["times"].value, self._outputs())
         self.t_note.object = f'<div class="cv-hint">Not a time: {", ".join(bad)}.</div>' if bad \
             else "" if self.times else '<div class="cv-hint">Give at least one time.</div>'
-        runs = self.run_list()
-        names = {k: n.split(". ", 1)[-1] for n, k in self.ed._run_names().items()}
-        run = "every run" if runs is None else names.get(runs[0], "") if len(runs) == 1 \
-            else f"{len(runs)} runs"
-        what = "Sounding" if snd else self.ed.fields[w["field"].value].label
-        n = len(w["params" if snd else "stats"].value)
-        self.title.object = (f"<b>Values</b> · {what} · {n} value{'s' * (n != 1)} · {run} · "
-                             f"{len(self.times)} time{'s' * (len(self.times) != 1)} · panel "
-                             f"{panel_tag(w)}")
 
     def _changed(self):
         keep_box(self)
         self._show()
         self.ed.request()
-
-    def _reshow(self):
-        self._show()
 
     def _run_picked(self):
         self._show()
@@ -151,7 +134,7 @@ class TableCard(SeveralRuns):
 
     def collect(self):
         w, runs = self.w, self.run_list()
-        return dict(what=w["what"].value, panel=panel_index(w), label=w["label"].value,
+        return dict(what=w["what"].value, label=w["label"].value,
                     run=int(runs[0]) if runs else 0, runs=runs, times_s=list(self.times),
                     where=dict(kind=w["kind"].value, x=float(w["x"].value or 0.0),
                                y=float(w["y"].value or 0.0), avg=float(w["avg"].value or 0.0)),

@@ -4,9 +4,8 @@ import panel as pn
 
 from ...core import azim
 from ...viewer.numinput import FloatInput
-from .base import (_f, _grid, _hint, _fold, AZ_REFS, AZ_CENTERS, TimeCard, card_buttons,
-                   field_widget, label_widget, layer_widgets, look_widgets, panel_tag, panel_widget,
-                   where_grid)
+from .base import (_f, _grid, _hint, AZ_REFS, AZ_CENTERS, TimeCard, card_body,
+                   field_widget, label_widget, layer_widgets, look_widgets)
 
 AZ_OPS = {"Mean": "mean", "Maximum": "max", "Minimum": "min"}
 
@@ -14,13 +13,12 @@ AZ_OPS = {"Mean": "mean", "Maximum": "max", "Minimum": "min"}
 class AzimCard(TimeCard):
     """One azimuthal mean of an azimuthal mean figure: run, time (or a time window it
     is a composite of), an azimuthal mean recipe (field, centre, sector, radius, layer,
-    reduction), look and panel."""
+    reduction) and look."""
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         F, r = ed.fields, ent["recipe"]
         self.w = w = {}
-        card_buttons(self, "Remove the azimuthal mean", dup=True)
         self._run_time_widgets("Composite to (a time window)",
                                "Every output from Time to this one, each around its own centre")
         w["field"] = field_widget(F, r["field"])
@@ -46,28 +44,24 @@ class AzimCard(TimeCard):
                                            value=ent.get("levels", ""), width=170,
                                            placeholder="e.g. 5, 10 or -6:6:2")
         look_widgets(w, ent, auto=True, lw=1.0)
-        w["panel"] = panel_widget(ent)
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
-            if k not in ("run", "panel"):
+            if k != "run":
                 x.param.watch(lambda e: self._changed(), "value")
-        w["panel"].param.watch(lambda e: (self._show(), ed._fit_grid(), ed.request()), "value")
-        self.title = pn.pane.HTML("<b>Azimuthal</b>", margin=(6, 4, 0, 4))
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.rm],
-            [where_grid(self, w["run"], (w["time"], 2), (w["time1"], 2), w["hold"]),
-             _grid((w["field"], 2), w["op"],
-                   (w["center"], 2), w["offx"], w["offy"], w["px"], w["py"], (w["ref"], 2),
-                   w["az0"], w["az1"], w["rmax"], w["dr"], w["z0"], w["z1"], (w["label"], 3)),
-             _grid(w["levels"], w["auto_color"], w["color"], w["lw"]),
-             _hint("The field reduced over rings around the centre, in bins of radius at "
+        self.body = card_body(
+            _grid(w["run"], (w["time"], 2), (w["time1"], 2), w["hold"]),
+            _grid((w["field"], 2), w["op"],
+                  (w["center"], 2), w["offx"], w["offy"], w["px"], w["py"], (w["ref"], 2),
+                  w["az0"], w["az1"], w["rmax"], w["dr"], w["z0"], w["z1"], (w["label"], 3)),
+            _grid(w["levels"], w["auto_color"], w["color"], w["lw"]),
+            _hint("The field reduced over rings around the centre, in bins of radius at "
                    "every model level from Read from to Read to, within the sector: azimuths "
                    "clockwise from the storm's motion (its track's; the domain's without "
                    "one) or from north, from the first to the second (0 to 360: the whole "
                    "ring; 0 to 90: the front-right quadrant). A time window is a "
                    "composite, each output around its own centre. The panel's first is "
                    "shaded; the others are contour lines (levels, colour and width "
-                   "below).")])
+                   "below)."))
         self._show()
 
     def _show(self):
@@ -76,10 +70,6 @@ class AzimCard(TimeCard):
         w["px"].visible = w["py"].visible = pt
         w["offx"].visible = w["offy"].visible = not pt
         w["color"].visible = not w["auto_color"].value
-        d = self.ed.fields[w["field"].value]
-        two = " · <i>a 3D field is needed</i>" if d.ndim == 2 else ""
-        self.title.object = (f"<b>Azimuthal</b> · {d.label} · {self._when()} · panel "
-                             f"{panel_tag(w)}{two}")
 
     def recipe(self):
         w = self.w

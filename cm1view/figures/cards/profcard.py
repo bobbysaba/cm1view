@@ -6,10 +6,10 @@ from ...core import series as ser
 from ...core.fields import deriv_name
 from .. import spec as fg
 from .base import (
-    _grid, _hint, _fold, _deriv_pair, TimeCard, LINE_STYLES, card_buttons, ens_values,
-    ens_widgets, hold_value, keep_box, label_widget, layer_widgets, look_values, look_widgets, panel_index,
-    panel_tag, panel_widget, reduce_recipe, reduce_widgets, region_recipe, region_widgets, show_ens,
-    show_region, vertical_recipe, where_grid,
+    _grid, _hint, _deriv_pair, TimeCard, LINE_STYLES, card_body, ens_values,
+    ens_widgets, hold_value, keep_box, label_widget, layer_widgets, look_values, look_widgets,
+    per_run_button, reduce_recipe, reduce_widgets, region_recipe, region_widgets, show_ens,
+    show_region, vertical_recipe,
 )
 from .seriescard import ALL_RUNS, SOME_RUNS, SeveralRuns, several_run_choices
 from .seriesvals import ProfileValues
@@ -21,16 +21,16 @@ PROF_OPS = {"None": "", "d/dz (per m)": "ddz"}
 class ProfileCard(SeveralRuns, TimeCard):
     """One profile of a profile figure: its run (or every run, or the runs picked:
     a line each, or an ensemble band), time (or a time window it is averaged over), a
-    layer series recipe (field, bottom and top, region, reduction), look and panel."""
+    layer series recipe (field, bottom and top, region, reduction) and look."""
     _EDITS = "profile before its recipe, time or Then apply changed"
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         F, r = ed.fields, ent["recipe"]
         self.w = w = {}
-        card_buttons(self, "Remove the profile", dup=True, per_run=(
+        self.per_run = per_run_button(
             "A card for each run (this card's runs, or each other run of the "
-            "figure) in this panel"))
+            "figure) in this panel")
         runs = fg.profile_runs(ent)
         k = ALL_RUNS if runs is None else int(runs[0]) if len(runs) == 1 else SOME_RUNS
         w["run"] = pn.widgets.Select(name="Run", width=170, **several_run_choices(ed))
@@ -51,39 +51,36 @@ class ProfileCard(SeveralRuns, TimeCard):
                         "the maximum of dw/dz at each level)")
         w["label"] = label_widget(ent)
         look_widgets(w, ent, auto=True, ls=PROF_STYLES, lw=1.5)
-        w["panel"] = panel_widget(ent)
         ens_widgets(w, ent)
         w["run"].param.watch(self._on_run, "value")
         w["runs"].param.watch(self._on_runs, "value")
         what = ("time", "time1", "field", "deriv", "z0", "z1", "region", "radius", "offx",
                 "offy", "reduce", "pct", "op")  # (what the values are of: edits go stale)
         for k, x in w.items():
-            if k not in ("run", "runs", "panel"):
+            if k not in ("run", "runs"):
                 x.param.watch(lambda e, k=k: self._changed(k in what), "value")
-        w["panel"].param.watch(lambda e: (self._show(), ed._fit_grid(), ed.request()), "value")
-        self.title = pn.pane.HTML("<b>Profile</b>", margin=(6, 4, 0, 4))
         self.info = pn.pane.HTML(margin=(0, 4))
         self.t_note = pn.pane.HTML(margin=(0, 4))  # (a run with no output at the time)
         self._t_run = self._time_run()  # (the run the Time lists are of)
         self.vals = ProfileValues(self)  # (its values, and your edits of them)
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.rm],
-            [where_grid(self, w["run"], (w["time"], 2), (w["runs"], 3), (w["time1"], 2), w["hold"]),
-             _grid((w["field"], 2), w["deriv"],
-                   w["z0"], w["z1"], w["region"], w["radius"], w["offx"], w["offy"],
-                   w["reduce"], w["pct"], w["op"], w["auto_color"], w["color"], w["ls"],
-                   w["lw"],
-                   (w["label"], 3)),
-             _grid(w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"]),
-             self.vals.section, self.t_note, self.info,
-             _hint("The field reduced over the region at every model level from Read "
+        self.body = card_body(
+            _grid(w["run"], (w["time"], 2), (w["runs"], 3), (w["time1"], 2), w["hold"],
+                  self.per_run),
+            _grid((w["field"], 2), w["deriv"],
+                  w["z0"], w["z1"], w["region"], w["radius"], w["offx"], w["offy"],
+                  w["reduce"], w["pct"], w["op"], w["auto_color"], w["color"], w["ls"],
+                  w["lw"],
+                  (w["label"], 3)),
+            _grid(w["ens"], w["ens_mid"], w["ens_members"], w["ens_alpha"]),
+            self.vals.section, self.t_note, self.info,
+            _hint("The field reduced over the region at every model level from Read "
                    "from to Read to (a layer series, computed only at the times needed and cached with "
                    "the Series tool's). Around the storm: a disc around each run's track. "
                    "A time window averages the profiles of its outputs. Several runs: a "
                    "line each at the same time since each run's time zero (Time is the "
                    "first run's), or an ensemble band. Automatic colour: the run's colour "
                    "when each profile of the panel is from another run, else the next "
-                   "colour.")])
+                   "colour."))
         self._show()
 
     def _show(self):
@@ -93,16 +90,6 @@ class ProfileCard(SeveralRuns, TimeCard):
         w["color"].visible = not w["auto_color"].value
         w["runs"].visible = w["run"].value == SOME_RUNS
         show_ens(w, w["run"].value in (ALL_RUNS, SOME_RUNS))
-        d = self.ed.fields[self.field_name()]
-        when = self._when()
-        two = " · <i>a 3D field is needed</i>" if d.ndim == 2 else ""
-        runs = self.run_list()
-        names = {k: n.split(". ", 1)[-1] for n, k in self.ed._run_names().items()}
-        run = "every run" if runs is None else names.get(runs[0], "") if len(runs) == 1 \
-            else f"{len(runs)} runs"
-        op = " · d/dz" if w["op"].value == "ddz" else ""
-        self.title.object = (f"<b>Profile</b> · {d.label}{op} · {run} · {when} · panel "
-                             f"{panel_tag(w)}{two}")
         self.time_note()
 
     def time_note(self):
@@ -136,10 +123,6 @@ class ProfileCard(SeveralRuns, TimeCard):
         ks = self.run_list()
         return int(ks[0]) if ks else 0
 
-    def _reshow(self):
-        self._t_run = self._time_run()
-        self._show()
-
     def _run_picked(self):
         self._runs_changed()
 
@@ -170,7 +153,7 @@ class ProfileCard(SeveralRuns, TimeCard):
         eds = {k: dict(v) for k, v in (self.ent.get("edits") or {}).items() if v}
         return dict(run=int(runs[0]) if runs else 0, runs=runs,
                     time_s=float(w["time"].value or 0.0),
-                    time_s1=self._t1(), panel=panel_index(w), label=w["label"].value,
+                    time_s1=self._t1(), label=w["label"].value,
                     recipe=self.recipe(), op=w["op"].value, **look_values(w), **ens_values(w),
                     **hold_value(w),
                     **({"edits": eds} if eds else {}))

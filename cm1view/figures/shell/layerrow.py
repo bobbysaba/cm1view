@@ -14,7 +14,7 @@ import panel as pn
 
 from .. import draw as figdraw
 from ..cards import LayerCard, TYPE_LABEL
-from ..cards.base import _BTN, CARD, GHOST, _chk, grid_columns
+from ..cards.base import _BTN, CARD, GHOST, TimeCard, _chk, grid_columns
 from ..runs import RunLists
 from ..spec.sections import describe as section_words
 from ..times import _tlabel, nearest
@@ -36,7 +36,6 @@ class CardHost(RunLists):
         self._uses = lambda d: by_height and d == "heights"
         self._hold = False
         self._changed = changed
-        self.time1 = SimpleNamespace(value=0.0)  # (a section card's, never shown here)
 
     # (series cards: what they read of the figure, and their Values section)
     @property
@@ -60,9 +59,6 @@ class CardHost(RunLists):
     def _series_changed(self):
         self.request()
 
-    def _show_region(self):
-        """(Sections have their own place in the tree.)"""
-
     def request(self):
         if not self._hold:
             self._changed()
@@ -78,9 +74,6 @@ class CardHost(RunLists):
 
     def _moved_time(self, ts, k0, k1):
         return figdraw.moved_time(dict(runs=self.shell.doc["runs"]), ts, k0, k1)
-
-    def _fit_grid(self):
-        """(A card's Panel list isn't shown here.)"""
 
     def _time_opts(self, k):
         return self.shell.time_opts(k)
@@ -264,11 +257,6 @@ class LayerRow:
         lay = de.plain(self.target.layer(doc))
         with grid_columns(2):
             self.card = card = self.make_card(host, de.to_card(doc, lay))
-        for key in ("panels", "panel"):
-            if key in card.w:
-                card.w[key].visible = False
-        if hasattr(card, "dup"):
-            card.dup.visible = False
         if hasattr(card, "per_run"):
             card.per_run.visible = self.per_run is not None
             if self.per_run is not None:
@@ -289,7 +277,7 @@ class LayerRow:
     def _keep_time(self, lay):
         """An entry's time, or a time window's end, that is no output (time zero moved it): its
         list says so, as a panel's does; it is kept until another is picked."""
-        if not hasattr(self.card, "move_time"):
+        if not isinstance(self.card, TimeCard):
             return
         moved = False
         for name, key in (("time", "time_s"), ("time1", "time_s1")):

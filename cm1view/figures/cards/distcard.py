@@ -8,9 +8,9 @@ from .. import draw as figdraw
 from ...viewer.numinput import FloatInput
 from .base import (
     _hex, _f, _num, _grid, _hint, _fold, ANN_KINDS, ANN_FIELDS, _BTN, _chk, TimeCard,
-    LINE_STYLES, _panel_tok, _panels_loose, card_buttons, field_widget, label_widget,
-    look_widgets, panel_tag, panel_widget, region_recipe, region_widgets, show_region,
-    vertical_recipe, vertical_widgets, where_grid,
+    LINE_STYLES, _panel_tok, _panels_loose, card_body, field_widget, label_widget,
+    look_widgets, region_recipe, region_widgets, show_region,
+    vertical_recipe, vertical_widgets,
 )
 
 
@@ -31,13 +31,12 @@ DIST_WHIS = {"1.5 × IQR (Tukey)": "tukey", "Min – max": "range", "5th – 95t
 
 class DistCard(TimeCard):
     """One distribution of a distribution figure: run, time, a dist recipe (field,
-    height, layer or whole depth, region, value limits), look and panel."""
+    height, layer or whole depth, region, value limits) and look."""
 
     def __init__(self, ed, ent):
         self.ed, self.ent = ed, dict(ent)
         F, r = ed.fields, ent["recipe"]
         self.w = w = {}
-        card_buttons(self, "Remove the distribution", dup=True)
         self._run_time_widgets()
         w["field"] = field_widget(F, r["field"])
         vertical_widgets(w, r, DIST_VMODES, "height")
@@ -50,23 +49,19 @@ class DistCard(TimeCard):
                                         width=90)
         w["label"] = label_widget(ent)
         look_widgets(w, ent, auto=True)
-        w["panel"] = panel_widget(ent)
         w["run"].param.watch(self._on_run, "value")
         for k, x in w.items():
-            if k not in ("run", "panel"):
+            if k != "run":
                 x.param.watch(lambda e: self._changed(), "value")
-        w["panel"].param.watch(lambda e: (self._show(), ed._fit_grid(), ed.request()), "value")
-        self.title = pn.pane.HTML("<b>Distribution</b>", margin=(6, 4, 0, 4))
-        self.panel, self.body = _fold(
-            [self.title, pn.Spacer(), self.rm],
-            [where_grid(self, w["run"], (w["time"], 2), w["hold"]),
-             _grid((w["field"], 2), w["vmode"], w["z"], w["z0"],
-                   w["z1"], w["region"], w["radius"], w["offx"], w["offy"], w["lo"], w["hi"],
-                   w["auto_color"], w["color"], (w["label"], 3)),
-             _hint("Every value of the field in the region at that time. Around the storm: "
-                   "a disc around each run's track. Automatic colour: the run's colour when "
-                   "each distribution of the panel is from another run, else the next "
-                   "colour.")])
+        self.body = card_body(
+            _grid(w["run"], (w["time"], 2), w["hold"]),
+            _grid((w["field"], 2), w["vmode"], w["z"], w["z0"],
+                  w["z1"], w["region"], w["radius"], w["offx"], w["offy"], w["lo"], w["hi"],
+                  w["auto_color"], w["color"], (w["label"], 3)),
+            _hint("Every value of the field in the region at that time. Around the storm: "
+                  "a disc around each run's track. Automatic colour: the run's colour when "
+                  "each distribution of the panel is from another run, else the next "
+                  "colour."))
         self._show()
 
     def _show(self):
@@ -77,9 +72,6 @@ class DistCard(TimeCard):
         w["z0"].visible = w["z1"].visible = not two and mode == "layer"
         show_region(w)
         w["color"].visible = not w["auto_color"].value
-        d = self.ed.fields[w["field"].value]
-        self.title.object = (f"<b>Distribution</b> · {d.label} · {self._when()} · panel "
-                             f"{panel_tag(w)}")
 
     def recipe(self):
         w, d = self.w, self.ed.fields[self.w["field"].value]
