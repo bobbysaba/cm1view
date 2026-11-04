@@ -280,7 +280,6 @@ class _Now:
 @pytest.fixture
 def shell(reg, monkeypatch):
     """The new layout showing the demo's example figure, drawing as it is asked."""
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)
@@ -333,9 +332,7 @@ def test_every_node_of_a_mixed_figure_shows(shell):
 
 
 def test_a_plan_view_joins_a_figure_of_soundings(shell):
-    shell.close()
-    shell.ed.kind.value = "sounding"
-    shell.open()
+    shell.ed.from_soundings()
     p = shell.inspector.grid.add_panel("plan", "new column")
     assert p["layers"] and p["section"] in shell.doc["sections"]
     assert p["opts"]["letters"]["loc"] == "lower left"
@@ -507,9 +504,7 @@ def test_a_panels_chips_say_which_of_two_settings_alike(shell):
 
 
 def test_a_figure_of_soundings_keeps_its_size_until_what_it_depends_on_changes(shell):
-    shell.close()
-    shell.ed.kind.value = "sounding"
-    shell.open()
+    shell.ed.from_soundings()
     shell.doc.update(size=[5.5, 5.5], size_auto=True)
     shell.select("panel:0")
     _named(shell, "Title").value = "x"

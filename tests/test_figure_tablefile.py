@@ -1,7 +1,6 @@
 """F6: table panels as CSV and LaTeX (figures/tablefile.py).  The text is made from the same
 arrays and table settings the figure draws (draw.tbl_grid), so these use arrays of the shape
 spec.tbl_panel makes and need no run."""
-import numpy as np
 
 from cm1view.figures import batch, draw as figdraw, tablefile
 from cm1view.figures.spec import tables as st

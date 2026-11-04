@@ -1,8 +1,7 @@
 """Layout logic: the tool rail and its panels, the Storm chip, the items tray, and the
 always-offered 3D workspace."""
-import os
 
-from conftest import tap, wait
+from conftest import tap
 
 
 def test_tool_opens_its_panel_and_reclick_closes(viewer):
@@ -93,4 +92,4 @@ def test_tray_figure_buttons_switch_to_figure(viewer):
     fig_btn = [w for w in snd.objects if getattr(w, "icon", "") == "photo"][0]
     fig_btn.clicks += 1
     assert v.workspace.value == "Figure"
-    assert v.figed.spec["kind"] == "sounding"
+    assert v.figed.shell.doc["panels"][0]["kind"] == "sounding"

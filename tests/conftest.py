@@ -90,16 +90,65 @@ def tap(v, x, y, shift=False):
 @pytest.fixture
 def ed(viewer):
     e = viewer.figed
-    e.auto.value = False  # renders only when a test asks
+    e.shell.auto.value = False  # renders only when a test asks
     return e
 
 
-def render(ed):
-    """Draw the editor's figure as the preview does (raises on errors)."""
+def doc_now(ed):
+    """A copy of the figure the editor holds, as a file has it."""
+    from cm1view.figures import spec as fg
+    return fg.plain_copy(ed.shell.doc)
+
+
+def new_spec(ed, kind="plan", rows=2, cols=3, vary="times"):
+    """The version-1 spec the New dialog starts a figure of a kind from (time series and
+    time-height: with two series, as nothing is computed without one)."""
+    from cm1view.figures import spec as fg
+    from cm1view.figures.kinds import KINDS
+    ed.open_quick()
+    ed.quick.hide()
+    ed.qs_kind.value = kind
+    ed.qs_vary.value = vary
+    ed.qs_rows.value, ed.qs_cols.value = rows, cols
+    s = ed._quick_spec()
+    if kind in ("th", "line"):
+        s["series"] = [dict(fg.series_defaults(ed.F, ed._new_recipe(), n),
+                            panel=n if kind == "th" else 0) for n in range(2)]
+        if kind == "th":
+            s.update(rows=2, cols=1)
+    size = KINDS[kind].size
+    if size:
+        s["size"] = [round(min(16.0, float(v)), 2) for v in size(s["rows"], s["cols"])]
+    return fg.plain_copy(ed.shell.new_form(s))
+
+
+def put(s, widget, value):
+    """Spec s with the setting of widget name `widget` (settings.py) as if typed there."""
+    from cm1view.figures import settings as table
+    st = next(x for x in table.SETTINGS if x.widget == widget)
+    block, _, key = st.key.rpartition(".")
+    held = s.setdefault(block, {}) if block else s
+    if key == "*":
+        held.update(st.as_.read(value))
+    else:
+        held[key] = st.as_.read(value)
+    return s
+
+
+def render(ed, figure=None):
+    """Draw a figure (default: the one the editor holds) as the preview does (raises on errors):
+    (the figure, its data, the matplotlib figure)."""
     from cm1view.figures import draw as figdraw
-    spec = ed.collect()
-    data = ed.panel_data(spec)
-    return spec, data, figdraw.draw(spec, data)
+    figure = doc_now(ed) if figure is None else figure
+    data = ed.panel_data(figure)
+    return figure, data, figdraw.draw(figure, data)
+
+
+def settled(ed, figure):
+    """What the figure's series need, computed."""
+    ed.panel_data(figure)
+    wait(lambda: not ed.series_pending(), 120, "the series")
+    return figure
 
 
 @pytest.fixture(scope="module")
@@ -115,21 +164,22 @@ def coarse_run(demo_root, tmp_path_factory):
     return str(d)
 
 
-def difference_layer(ed):
-    """The first fill as a difference: minus the run's first output."""
-    c = next(c for c in ed.cards if c.type == "fill")
-    c.w["minus_on"].value = True
-    c.w["minus_time"].value = next(v for v in c.w["minus_time"].options.values() if v != "")
-    return c
+def difference_layer(ed, s):
+    """Spec s's first fill as a difference: minus the run's first output, diverging about 0."""
+    from cm1view.figures.cards.layercard import _nice
+    lay = next(x for x in s["layers"] if x["type"] == "fill")
+    a = _nice(0.25 * (float(lay["vmax"]) - float(lay["vmin"])))
+    lay.update(minus=dict(run=None, time_s=float(ed.run.times[0]), grid="ask"), cmap="RdBu",
+               reverse=True, white_first=False, vmin=-a, vmax=a, scale="linear", mask_below=None)
+    return s
 
 
-def swath_layer(ed):
-    """The first fill as a swath: its maximum from the run's first output to each panel's
+def swath_layer(ed, s):
+    """Spec s's first fill as a swath: its maximum from the run's first output to each panel's
     time."""
-    c = next(c for c in ed.cards if c.type == "fill")
-    c.w["reduce_op"].value = "max"
-    c.w["reduce_t0"].value = next(v for v in c.w["reduce_t0"].options.values() if v != "")
-    return c
+    lay = next(x for x in s["layers"] if x["type"] == "fill")
+    lay["reduce"] = dict(op="max", t0=float(ed.run.times[0]), t1=None, every=1)
+    return s
 
 
 def edited_v1():

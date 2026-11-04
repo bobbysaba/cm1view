@@ -221,8 +221,9 @@ class FigureShell:
         else:
             self.node, self._stale = nodes.FIGURE, True
 
-    def new_doc(self, spec):
-        """The document of a new figure's version-1 spec, made here."""
+    def new_form(self, spec):
+        """A new figure's version-1 spec, as it goes into the document: what it doesn't name at
+        its default."""
         ed = self.ed
         s = table.filled(fg.normalize(spec, ed.run, ed._own_track()))
         if (s.get("letters") or {}).get("auto"):  # (one panel: no letter)
@@ -233,7 +234,11 @@ class FigureShell:
                                  == "horizontal" else "right")
         for k, r in enumerate(s["runs"]):
             r.setdefault("color", figdraw.RUN_COLORS[k % len(figdraw.RUN_COLORS)])
-        return fg.to_doc(s)
+        return s
+
+    def new_doc(self, spec):
+        """The document of a new figure's version-1 spec, made here."""
+        return fg.to_doc(self.new_form(spec))
 
     def open_new(self, spec, note=""):
         """A new figure, from a version-1 spec (what the viewer's tools make)."""

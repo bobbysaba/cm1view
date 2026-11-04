@@ -1,5 +1,4 @@
 """Legends: a block's legend on a panel or on the figure, and each panel's own."""
-import pytest
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
@@ -71,83 +70,12 @@ def test_outside_place_on_a_panel_falls_back():
     assert axs[0].get_legend() is not None
 
 
-def test_legend_settings_round_trip(ed):
-    ed.lg_where.value = "figure"
-    assert ed.lg_from.visible and not ed.lg_panel.visible
-    ed.lg_loc.value = "outside right center"
-    ed.lg_from.value = "1, 2"
-    ed.lg_title.value = " Layers "
-    ed.lg_ncol.value = 2
-    lg = ed.collect()["legend"]
-    assert (lg["where"], lg["loc"], lg["panels"], lg["title"], lg["ncol"]) == \
-        ("figure", "outside right center", [0, 1], "Layers", 2)
-    ed.lg_where.value = "panel"
-    assert ed.lg_panel.visible and "outside right center" not in ed.lg_loc.options
-
-
-def test_one_legend_block_writes_to_the_kind_shown(ed):
-    """Style → Legend holds the panels' own legend of the kind shown; other kinds' blocks
-    keep theirs, also through a change of kind and back and a round trip."""
-    ed.kind.value = "line"
-    assert ed.pl_on.visible and not ed.lg_panel.visible and not ed.lg_title.visible
-    ed.pl_ncol.value, ed.pl_frame.value, ed.pl_loc.value = 3, True, "lower left"
-    ed.pl_on.value = False
-    s = ed.collect()
-    assert (s["ts"]["legend"], s["ts"]["legend_loc"], s["ts"]["legend_ncol"],
-            s["ts"]["legend_frame"]) == (False, "lower left", 3, True)
-    assert s["dist"]["legend_ncol"] == 1 and s["dist"]["legend"] is True
-
-    ed.kind.value = "dist"  # (its own settings, not the time series')
-    assert ed.pl_ncol.value == 1 and ed.pl_on.value is True and ed.pl_loc.value == "best"
-    ed.pl_ncol.value = 2
-    s = ed.collect()
-    assert s["dist"]["legend_ncol"] == 2 and s["ts"]["legend_ncol"] == 3
-
-    ed.kind.value = "sounding"  # (its defaults differ, and the label says why)
-    assert ed.pl_on.name == "Legend (one sounding)"
-    assert ed.pl_on.value is False and ed.pl_frame.value is True
-    ed.kind.value = "plan"  # (no block: nothing written, and back)
-    assert not ed.pl_on.visible and ed.lg_panel.visible and ed.lg_title.visible
-    ed.kind.value = "line"
-    assert ed.pl_ncol.value == 3 and ed.pl_on.value is False
-
-    s = ed.collect()
-    ed.set_spec(s)
-    assert ed.collect()["ts"] == s["ts"] and ed.collect()["dist"] == s["dist"]
-    ed.set_spec(dict(s, kind="dist"))  # (another spec: not the widgets' old values)
-    assert ed.pl_ncol.value == 2 and ed.collect()["ts"]["legend_ncol"] == 3
-
-
-def test_legend_settings_follow_the_place_and_the_kind(ed):
-    ed.kind.value = "profile"
-    assert ed.lg_where.name == "Legends on" and ed.lg_own.visible and ed.pl_loc.visible
-    ed.lg_where.value = "figure"  # (one legend: its settings, and the panels' switch)
-    assert ed.lg_loc.visible and ed.lg_from.visible and ed.pl_on.visible
-    assert not ed.pl_loc.visible and not ed.lg_own.visible
-    ed.lg_where.value = "panel"
-    ed.kind.value = "dist"
-    assert ed.lg_sec.visible
-    ed.ds["plot"].value = "box"  # (draws no legend)
-    assert not ed.lg_sec.visible
-    ed.ds["plot"].value = "hist"
-    assert ed.lg_sec.visible
-    ed.kind.value = "th"  # (lists only legend entries of your own)
-    assert not ed.lg_sec.visible
-    ed.ann_kind.value = "legend"
-    ed._add_annotation()
-    assert ed.lg_sec.visible
-    ed._remove_ann(ed.ann_rows[-1])
-    assert not ed.lg_sec.visible
-    ed.kind.value = "scene"
-    assert ed.lg_sec.visible and not ed.lg_panel.visible and not ed.lg_from.visible
-
-
 def test_figure_legend_draws_from_the_editor(ed):
-    cont = next(c for c in ed.cards if c.type == "contour")
-    cont.w["legend"].value = "w"
-    ed.lg_where.value = "figure"
-    ed.lg_loc.value = "outside lower center"
-    spec, data, fig = render(ed)
+    from conftest import new_spec
+    s = new_spec(ed)
+    next(lay for lay in s["layers"] if lay["type"] == "contour")["legend"] = "w"
+    s["legend"] = dict(s["legend"], where="figure", loc="outside lower center")
+    spec, data, fig = render(ed, s)
     assert len(fig.legends) == 1
     assert [t.get_text() for t in fig.legends[0].get_texts()] == ["w"]
     assert all(ax.get_legend() is None for ax in fig.axes)
@@ -187,7 +115,6 @@ def test_panel_edit_legend_reaches_that_panel_alone():
     assert v2["panels"][1]["opts"] == {"ts": {"legend_ncol": 2}}
 
 
-
 def test_panel_edit_axis_labels_reach_that_panel_alone():
     from cm1view.figures.draw import upgrade, panel_view
     v1 = dict(kind="line", rows=1, cols=2, size=[6, 3], axes=dict(xlabel="t", ylabel=""),
@@ -199,17 +126,6 @@ def test_panel_edit_axis_labels_reach_that_panel_alone():
     assert v2["panels"][1]["opts"]["axes"] == {"xlabel": "time (min)", "ylabel": " "}
     ax = panel_view(v2, v2["panels"][1])["axes"]
     assert (ax["xlabel"], ax["ylabel"]) == ("time (min)", " ")
-
-def test_hodograph_key_settings_round_trip(ed):
-    ed.sk["layout"].value = "hodo"
-    assert ed.sk["hodo_key_loc"].visible
-    ed.sk["hodo_key_loc"].value, ed.sk["hodo_key_ncol"].value = "lower left", 3
-    ed.sk["hodo_key_frame"].value = True
-    sk = ed.collect()["skewt"]
-    assert (sk["hodo_key_loc"], sk["hodo_key_ncol"], sk["hodo_key_frame"]) == \
-        ("lower left", 3, True)
-    ed.sk["hodo_key"].value = False
-    assert not ed.sk["hodo_key_loc"].visible
 
 
 def _keeping(placed, i):
@@ -264,12 +180,6 @@ def test_anchor_text_round_trip():
     assert _xy_text([1.02, 1.0]) == "1.02, 1" and _xy_text(None) == ""
 
 
-def test_style_legend_anchor_and_own_round_trip(ed):
-    ed.lg_anchor.value, ed.lg_own.value = "1.02, 1", False
-    lg = ed.collect()["legend"]
-    assert lg["anchor"] == [1.02, 1.0] and lg["own"] is False
-
-
 def test_blank_label_has_no_legend_entry():
     from cm1view.figures.draw.base import panel_legend
     fig, axs, _ = _axes(2)
@@ -298,11 +208,3 @@ def test_legend_entry_annotations_join_the_panels_legend():
     assert [t for _, t in axs[0]._cv_entries] == ["run", "Obs", "Window"]
 
 
-def test_legend_entry_in_the_editor(ed):
-    """Added in Annotate, it reaches the legend; it draws nothing on the panel."""
-    ed.ann_kind.value = "legend"
-    ed._add_annotation()
-    a = ed.ann_rows[-1].collect()
-    assert a["kind"] == "legend" and a["text"] == "Entry" and "x" not in a
-    from cm1view.figures.draw.base import legend_handles
-    assert [t for t, _ in legend_handles([a], 0)] == ["Entry"]

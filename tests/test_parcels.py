@@ -458,35 +458,25 @@ def test_figure_from_map_and_section_bring_parcel_sets(pviewer, ed):
     _wait_sets(v, 2)
     v.par_window.value = "all"
     ed.from_map()
-    assert ed.add_btns["parcels"].visible
-    lays = [lay for lay in ed.collect()["layers"] if lay["type"] == "parcels"]
+    doc = ed.shell.doc
+    lids = [i["ref"] for i in doc["panels"][0]["layers"]]
+    lays = [doc["layers"][i] for i in lids if doc["layers"][i]["type"] == "parcels"]
     assert [lay["name"] for lay in lays] == ["near", "low"]
     assert lays[0]["rule"] == v.psets["near"]["set"].rule and lays[0]["tails"] == "all"
     assert lays[0]["cvar"] == v.par_color.value and lays[0]["color"] == v.psets["near"]["color"]
-    spec, data, _ = render(ed)
-    j = [lay["type"] for lay in spec["layers"]].index("parcels")
+    _, data, _ = render(ed)
+    j = [doc["layers"][i]["type"] for i in lids].index("parcels")
     assert len(data[0][f"L{j}_hx"]) and len(data[0][f"L{j}_px"])
-    # the card: another set of the viewer
-    c = [c for c in ed.cards if c.type == "parcels"][0]
-    assert "v:low" in c.w["pset"].options.values()
-    c.w["pset"].value = "v:low"
-    assert c.collect()["name"] == "low" and c.collect()["rule"] == v.psets["low"]["set"].rule
-    assert c.w["pset"].value == ""
-    # + Parcels: the next set not drawn yet
-    ed.cards = [c for c in ed.cards if c.type != "parcels"]
-    ed._add_layer("parcels")
-    ed._add_layer("parcels")
-    assert [c.collect()["name"] for c in ed.cards if c.type == "parcels"] == ["near", "low"]
     # the cross-section
     v.xs_pts = [(-15.0, -5.0), (10.0, -5.0)]
     ed.from_xsec()
-    spec, data, _ = render(ed)
-    assert spec["kind"] == "xsec"
-    lays = [lay for lay in spec["layers"] if lay["type"] == "parcels"]
+    doc = ed.shell.doc
+    assert doc["panels"][0]["kind"] == "xsec"
+    lays = [lay for lay in doc["layers"].values() if lay["type"] == "parcels"]
     assert len(lays) == 2 and lays[0]["within"] == v.par_xs_within.value
+    render(ed)
 
 
-# ------------------------------------------------------------------ 3D scenes (P4b)
 def _scene_par_spec(reg, **par):
     """A 3D scene figure of the demo at 4800 s over a box: no surfaces, two parcel sets
     (the second coloured by w)."""
@@ -566,48 +556,6 @@ def test_scene_figure_draws_parcels(reg, pcache):
     fig = figdraw.draw(s2, FigureData().panel_data(s2))
     ax = fig._cv_axes[0]
     assert len(fig.axes) == 1 and [t.get_text() for t in ax.get_legend().get_texts()] == ["low"]
-
-
-def test_scene_editor_parcels_from_the_viewer(pviewer, ed):
-    import json
-    from conftest import render
-    v = pviewer
-    v.request_parcels(dict(box=[-15.0, -5.0, -10.0, 0.0], z=[0.0, 1.0], cap=200), "low")
-    _wait_sets(v, 1)
-    v.request_parcels(dict(t=4800.0, near=[-8.0, -5.0, 3.0], cap=100), "near")
-    _wait_sets(v, 2)
-    v.par_3d.value = True
-    ed.from_3d()
-    assert ed._spar_section.visible
-    ps = ed.collect()["scene3d"]["parcels"]
-    assert [e["name"] for e in ps] == ["low", "near"]
-    assert ps[0]["rule"] == v.psets["low"]["set"].rule and ps[0]["type"] == "parcels"
-    # one removed, then added back from the viewer's sets; the round trip keeps them
-    ed._remove_row(ed.spar_rows, ed.spar_rows[0])
-    ed._add_spar()
-    ps = ed.collect()["scene3d"]["parcels"]
-    assert [e["name"] for e in ps] == ["near", "low"]
-    ed.spar_rows[0].w["cvar"].value = "w"
-    s = ed.collect()
-    assert s["scene3d"]["parcels"][0]["units"] == P.for_run(ed.run).units("w")
-    ed.set_spec(s)
-    dump = lambda x: json.dumps(x, sort_keys=True, default=float)  # noqa: E731
-    assert dump(ed.collect()["scene3d"]["parcels"]) == dump(s["scene3d"]["parcels"])
-    # another set picked in a row: its rule and colour
-    r = ed.spar_rows[1]
-    r.pset.value = "v:near"
-    e = r.collect()
-    assert e["name"] == "near" and e["rule"] == v.psets["near"]["set"].rule
-    assert e["color"] == v.psets["near"]["color"] and r.pset.value == ""
-    # not shown in the 3D view: none copied
-    v.par_3d.value = False
-    ed.from_3d()
-    assert ed.collect()["scene3d"]["parcels"] == []
-    pytest.importorskip("pyvista")
-    ed.sc_w["res"].value = 2
-    ed._add_spar()
-    spec, data, _ = render(ed)
-    assert len(data[0]["P0_hx"])
 
 
 # ------------------------------------------------------------------ parcel series (P4c)
@@ -695,49 +643,6 @@ def test_template_moves_the_parcel_series_rule(reg):
     e = out["series"][0]
     assert e["source"] == "parcels" and e["runs"] == [0]
     assert e["rule"]["t"] == pytest.approx(4200.0 + float(run.times[t]) - 4800.0)
-
-
-def test_editor_parcel_series_from_the_viewer(pviewer, ed):
-    """+ Parcels adds a card of a viewer set (the next one not drawn yet); its variable,
-    Plot (d/dt) and band go into the entry; the spec round trip keeps it; it stays a
-    time series when the figure turns time-height and back; drawn."""
-    import json
-    from conftest import render
-    from cm1view.figures.cards import ParcelSeriesCard
-    v = pviewer
-    v.request_parcels(dict(box=[-15.0, -5.0, -10.0, 0.0], z=[0.0, 1.0], cap=200), "low")
-    _wait_sets(v, 1)
-    v.request_parcels(dict(t=4800.0, near=[-8.0, -5.0, 3.0], cap=100), "near")
-    _wait_sets(v, 2)
-    ed.kind.value = "line"
-    assert ed.ser_par.visible
-    ed._add_parcel_series()
-    ed._add_parcel_series()
-    cs = [c for c in ed.ser_cards if isinstance(c, ParcelSeriesCard)]
-    es = [c.collect() for c in cs]
-    assert [e["name"] for e in es] == ["low", "near"]
-    assert es[0]["rule"] == v.psets["low"]["set"].rule and es[0]["var"] == "w"
-    assert es[0]["label"] == "low: w" and es[1]["color"] == v.psets["near"]["color"]
-    c = cs[0]
-    c.w["op"].value = "ddt"
-    c.w["ens"].value = "sd"
-    c.w["each"].value = 5
-    e = c.collect()
-    assert e["label"] == "low: w d/dt" and e["units"] == "m s$^{-2}$" and e["each"] == 5
-    assert c.w["members"].visible
-    c.w["var"].value = "b"
-    assert c.collect()["base_units"] == P.for_run(ed.run).units("b")
-    c.w["pset"].value = "v:near"
-    assert c.collect()["name"] == "near" and c.collect()["label"] == "near: b d/dt"
-    s = ed.collect()
-    ed.set_spec(s)
-    dump = lambda x: json.dumps(x, sort_keys=True, default=float)  # noqa: E731
-    assert dump(ed.collect()["series"]) == dump(s["series"])
-    ed.kind.value = "th"
-    ed.kind.value = "line"
-    assert sum(isinstance(c, ParcelSeriesCard) for c in ed.ser_cards) == 2
-    spec, data, fig = render(ed)
-    assert any(data[0].get(f"S{j}_ens") for j in range(data[0]["nlines"]))
 
 
 # ------------------------------------------------------------------ P5a: 3D fields along trajectories
@@ -1162,41 +1067,3 @@ def test_figure_w_budget(reg, pcache):
     figdraw.draw(si, {0: d})
 
 
-def test_editor_and_viewer_w_budget(pviewer, ed):
-    """+ w budget adds the four cards of a viewer set in a new panel (rates or
-    integrated, the card's Plot showing it); the viewer's plot draws the picked set's
-    budget with a legend."""
-    from conftest import render, wait
-    from cm1view.figures.cards import ParcelSeriesCard
-    v = pviewer
-    v.request_parcels(dict(t=4800.0, z=[0.5, 2.0], cap=150), "up")
-    _wait_sets(v, 1)
-    ed.kind.value = "line"
-    assert ed.ser_wb.visible
-    n0 = len(ed.ser_cards)
-    ed._add_w_budget("rates")
-    ed._add_w_budget("int")
-    cs = [c for c in ed.ser_cards[n0:] if isinstance(c, ParcelSeriesCard)]
-    es = [c.collect() for c in cs]
-    assert len(es) == 8 and {e["name"] for e in es} == {"up"}
-    assert [e["op"] for e in es[4:]] == ["delta", "int", "int", "int"]
-    assert es[0]["panel"] != es[4]["panel"] and len({e["panel"] for e in es[:4]}) == 1
-    assert cs[5].w["op"].value == "int" and "∫ dt" in cs[5].title.object
-    spec, data, fig = render(ed)
-    # the viewer's plot
-    assert "budget" in v.par_plot_kind.options.values()
-    v.par_plot_kind.value = "budget"
-    assert v.par_plot_int.visible and not v.par_plot_y.visible
-    wait(lambda: len(v.pp_bud["b"].data["y"]) == v.pf.nt, msg="the w budget drawn")
-    assert v.pp_fig.legend[0].visible and "w budget" in v.pp_fig.yaxis.axis_label
-    tr = v.pf.trajectories(v.psets["up"]["set"], ("b",))
-    with np.errstate(all="ignore"):
-        np.testing.assert_allclose(v.pp_bud["b"].data["y"], np.nanmean(tr["b"], axis=1),
-                                   rtol=1e-5)
-    v.par_plot_int.value = True
-    i0 = P.ref_index(v.pf, v.psets["up"]["set"].rule)
-    assert v.pp_bud["dwdt"].data["y"][i0] == pytest.approx(0.0, abs=1e-6)
-    assert v.pp_bud_items["dwdt"].label == "Δw"
-    assert v._par_state()["look"]["plot_int"] is True
-    v.par_plot_kind.value = "time"
-    assert not v.pp_fig.legend[0].visible and not len(v.pp_bud["b"].data["y"])

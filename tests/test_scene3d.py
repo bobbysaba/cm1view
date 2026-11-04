@@ -191,35 +191,6 @@ def test_camera_from_plotly_matches_the_presets():
 
 
 # ------------------------------------------------------------------ the editor (D4)
-def test_scene_editor_starts_from_the_3d_view_and_round_trips(ed):
-    import json
-    from cm1view.figures import spec as fg
-
-    v = ed.v
-    v.v3_exag.value = 3.0
-    ed.kind.value = "scene"
-    s = ed.collect()
-    sc = s["scene3d"]
-    assert s["kind"] == "scene" and sc["exag"] == 3.0
-    assert [(i["var"], i["on"]) for i in sc["isos"]] == [(d["var"].value, d["on"].value)
-                                                         for d in v.isos]
-    assert ed.scene_col in ed.layers_tab.objects
-    assert ed.plan_layers not in ed.layers_tab.objects
-    assert ed.times_sec.visible and not ed.rows.visible
-    # unticked surfaces are kept in the spec, not computed
-    req = fg.scene_request(ed.run, s, {}, 1)
-    assert len(req["isos"]) == sum(i["on"] for i in sc["isos"]) < len(sc["isos"])
-    # a spec back into the widgets gives the same block, with what has no widget kept
-    sc2 = dict(sc, camera=dict(sc["camera"], azimuth=200.0, position=[0.0, 0.0, 30.0],
-                               focal=[20.0, 20.0, 0.0]),
-               look=dict(sc["look"], peels=4, background="black"))
-    ed.set_spec(dict(s, scene3d=sc2))
-    dump = lambda x: json.dumps(x, sort_keys=True, default=float)  # noqa: E731
-    assert dump(ed.collect()["scene3d"]) == dump(fg.scene3d_of(dict(scene3d=sc2)))
-    # a camera edit: the explicit position no longer holds
-    ed.sc_c["zoom"].value = 2.0
-    cam = ed.collect()["scene3d"]["camera"]
-    assert cam["zoom"] == 2.0 and "position" not in cam and cam["azimuth"] == 200.0
 
 
 def test_figure_of_the_3d_view_takes_its_camera(ed):
@@ -227,14 +198,15 @@ def test_figure_of_the_3d_view_takes_its_camera(ed):
     v.plot3d.relayout_data = {"scene.camera": {"eye": {"x": 0.0, "y": -2.0, "z": 2.0},
                                                "projection": {"type": "orthographic"}}}
     ed.from_3d()
-    s = ed.collect()
-    cam = s["scene3d"]["camera"]
-    assert s["kind"] == "scene" and s["time_s"] == float(ed.run.times[v.t])
+    doc = ed.shell.doc
+    cam = doc["kinds"]["scene"]["scene3d"]["camera"]
+    p = doc["panels"][0]
+    assert p["kind"] == "scene" and p["time_s"] == float(ed.run.times[v.t])
     assert (cam["azimuth"], cam["elevation"], cam["projection"]) == (180.0, 45.0,
                                                                      "orthographic")
     v.v3_cam.value = "top"  # (a preset picked in the 3D view: the latest camera)
     ed.from_3d()
-    cam = ed.collect()["scene3d"]["camera"]
+    cam = ed.shell.doc["kinds"]["scene"]["scene3d"]["camera"]
     assert cam["preset"] == "top" and cam["azimuth"] is None
 
 

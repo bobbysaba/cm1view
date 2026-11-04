@@ -5,6 +5,8 @@ import os
 
 import numpy as np
 import pytest
+
+from conftest import new_spec
 from matplotlib.collections import QuadMesh
 from matplotlib.lines import Line2D
 
@@ -76,7 +78,7 @@ def test_only_series_dont_animate():
 
 
 def test_form_and_document_step_alike(ed):
-    form = ed.collect_all()
+    form = new_spec(ed)
     d = fg.to_doc(form)
     assert sorted(fg.time_refs(d)) == sorted(fg.time_refs(form))
     runs = {ed.run.path: ed.run}
@@ -118,7 +120,7 @@ def test_entries_of_another_run_go_and_every_run_stays_so():
 
 def test_applied_template_draws_like_the_forms(ed):
     from cm1view.figures import batch
-    form = ed.collect_all()
+    form = new_spec(ed)
     t = len(ed.run.times) - 1
     a = batch.finish(fg.from_template(fg.template(form, "x"), ed.run, t), ed.run, ed.F, t)
     b = batch.finish(fg.from_template(fg.template(fg.to_doc(form), "x"), ed.run, t), ed.run, ed.F, t)
@@ -138,7 +140,7 @@ def test_a_preset_sets_the_style_every_kind_and_what_a_panel_has_of_its_own():
 
 # ------------------------------------------------------------------ files
 def test_a_document_saves_as_version_2_and_opens_as_itself(ed, tmp_path):
-    d = fg.to_doc(ed.collect_all())
+    d = fg.to_doc(new_spec(ed))
     d["suptitle"] = "here"
     path = fg.save_spec(d, str(tmp_path / "f"))
     with open(path) as f:
@@ -151,7 +153,7 @@ def test_a_document_saves_as_version_2_and_opens_as_itself(ed, tmp_path):
 def test_a_bundle_of_a_document_redraws_alone(ed, tmp_path):
     import subprocess
     import sys
-    d = fg.to_doc(ed.collect_all())
+    d = fg.to_doc(new_spec(ed))
     out = fg.save_bundle(d, ed.panel_data(d), str(tmp_path / "f"))
     r = subprocess.run([sys.executable, out["script"]], capture_output=True, text=True,
                        env=dict(os.environ, MPLBACKEND="Agg"), timeout=120)
@@ -159,7 +161,7 @@ def test_a_bundle_of_a_document_redraws_alone(ed, tmp_path):
 
 
 def test_defaults_fill_what_a_document_lacks_and_keep_what_it_has(ed):
-    d = fg.to_doc(ed.collect_all())
+    d = fg.to_doc(new_spec(ed))
     d["style"]["font"] = dict(size=7.0)
     del d["style"]["spacing"]
     d["kinds"]["plan"].pop("domain")
@@ -170,7 +172,7 @@ def test_defaults_fill_what_a_document_lacks_and_keep_what_it_has(ed):
 
 def test_render_a_document(ed, tmp_path):
     from cm1view.figures.batch import main
-    d = fg.to_doc(ed.collect_all())
+    d = fg.to_doc(new_spec(ed))
     spec = fg.save_spec(d, str(tmp_path / "f"))
     assert main([spec, "--out", str(tmp_path / "again.png"), "--dpi", "50"]) == 0
     assert (tmp_path / "again.png").exists()
@@ -275,7 +277,6 @@ class _Now:
 
 @pytest.fixture
 def shell(reg, monkeypatch, tmp_path):
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     monkeypatch.setenv("CM1VIEW_CACHE_DIR", str(tmp_path / "cache"))
     from cm1view.viewer import app as A
     run, F = reg.get()

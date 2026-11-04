@@ -7,6 +7,8 @@ import sys
 import numpy as np
 import pytest
 
+from conftest import doc_now, new_spec
+
 from test_figure_render import _with_track_file, same
 
 
@@ -63,19 +65,17 @@ def test_render_on_runs_like_applying_a_template(ed, demo_root, tmp_path):
                   "--out", tmp_path / "same" / "refl") == 0
     same(_npz(data_path), _npz(tmp_path / "same" / "_src" / "refl_data.npz"))
     # a template, applied in the editor and here, at the editor's time
-    path = fg.save_template(ed.collect_all(), "render_test")
-    ed._list_templates()
-    ed.tpl_sel.value = path
-    ed._apply_template()
-    mine = _with_track_file(ed.collect_all(), demo_root)
+    path = fg.save_template(new_spec(ed), "render_test")
+    assert ed._apply_template(path)
+    mine = _with_track_file(doc_now(ed), demo_root)
     tpl, is_tpl, name, _ = batch.load_figure("render_test")
     assert is_tpl and name == "render_test"
     fd = FigureData()
     run, F = fd.open_run(ed.run.path)
     theirs = _with_track_file(batch.on_run(tpl, True, name, run, F,
                                            float(run.times[ed.v.t])), demo_root)
-    # (panels past the run's end: None here, dropped by the editor; empty in both)
-    assert [t for t in theirs["times_s"] if t is not None] == mine["times_s"]
+    # (panels past the run's end: None here, left out by the editor; empty in both)
+    assert [t for t in theirs["times_s"] if t is not None] == [p["time_s"] for p in mine["panels"]]
     same(ed.panel_data(mine), fd.panel_data(theirs))
 
 

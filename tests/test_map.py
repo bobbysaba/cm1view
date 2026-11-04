@@ -313,10 +313,10 @@ def test_map_difference_minus_another_time_or_run(viewer, reg, demo_root):
     np.testing.assert_allclose(v.img_src.data["image"][0], want, atol=1e-5)
     # into a figure: the other run added, the layer a difference with the map's colours
     v.figed.from_map()
-    s = v.figed.collect()
-    lay = s["layers"][0]
+    s = v.figed.shell.doc
+    lay = next(iter(s["layers"].values()))
     assert lay["minus"]["run"] is not None and lay["minus"]["time_s"] is None
-    assert s["runs"][lay["minus"]["run"]]["path"] == weak
+    assert next(r for r in s["runs"] if r["id"] == lay["minus"]["run"])["path"] == weak
     assert (lay["vmin"], lay["vmax"]) == tuple(round(x, 6) for x in v._last_range)
     # a time before the first output: an error, not a map
     v.tslider.value, d["run"].value, d["time"].value = 0, "", "prev"

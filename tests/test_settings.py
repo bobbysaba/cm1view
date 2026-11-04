@@ -174,10 +174,10 @@ def test_figure_bundle_runs_anywhere(fresh, reg, demo_root):
     v.main()
     try:
         ed = v.figed
-        ed.auto.value = False
-        spec = ed.collect()
-        paths = fg.save_bundle(spec, ed.panel_data(spec), os.path.join(ed._fig_dir, "refl"),
-                               run)
+        sh = ed.shell
+        sh.auto.value = False
+        doc = fg.plain_copy(sh.doc)
+        paths = fg.save_bundle(doc, ed.panel_data(doc), os.path.join(ed._fig_dir, "refl"))
         assert paths["data"] == os.path.join(ed._fig_dir, "_src", "refl_data.npz")
         assert all(os.path.isfile(p) for p in paths.values())
         os.remove(paths["image"])
@@ -188,20 +188,16 @@ def test_figure_bundle_runs_anywhere(fresh, reg, demo_root):
         assert r.returncode == 0, r.stderr[-500:]
         assert (copy / "refl.png").is_file()
 
-        ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
-        ed._add_run()
-        assert len(ed.run_rows) == 2 and ed.path.value == "" and ed.save_img.disabled
+        assert sh.add_run(os.path.join(demo_root, "demo", "supercell_weak")) == 1
+        sh.export.open()
+        sh.export.dlg.hide()
+        assert ed.path.value == "" and sh.export.save.disabled
         ed.path.value = str(fresh / "compare" / "tor_vs_ntor")
-        assert not ed.save_img.disabled
+        assert not sh.export.save.disabled
         ed._save(False)
         ed.v.pools["fig"].submit(lambda: None).result(timeout=600)
         assert C.state("last_multi_run_dir") == str(fresh / "compare")
         assert (fresh / "compare" / "tor_vs_ntor.png").is_file()
-        ed._remove_run(ed.run_rows[1])
-        assert ed.path.value == os.path.join(ed._fig_dir, "tor_vs_ntor")
-        ed.add_path.value = os.path.join(demo_root, "demo", "supercell_weak")
-        ed._add_run()
-        assert ed.path.value == str(fresh / "compare" / "tor_vs_ntor")
     finally:
         v.close()
 

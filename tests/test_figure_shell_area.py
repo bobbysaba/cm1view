@@ -94,7 +94,6 @@ class _Now:
 
 @pytest.fixture
 def shell(reg, monkeypatch):
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)
@@ -108,7 +107,6 @@ def shell(reg, monkeypatch):
     ed.open_quick()
     ed.qs_kind.value = "plan"
     ed._quick_make()
-    ed.shell.take_figure()
     ed.shell.inspector.grid.add_panel("plan", "new column")
     yield ed.shell
     v.close()

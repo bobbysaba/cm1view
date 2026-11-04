@@ -8,6 +8,8 @@ import os
 import numpy as np
 import pytest
 
+from conftest import new_spec
+
 from cm1view.figures import draw as figdraw
 from cm1view.figures.shell import docedit as de, looks
 
@@ -457,7 +459,6 @@ class _Now:
 
 @pytest.fixture
 def shell(reg, monkeypatch):
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)
@@ -651,14 +652,10 @@ def test_fill_panels_tool(shell):
 
 
 def test_fill_panels_by_heights_draws_as_the_old_grid_did(shell):
-    """The tool's panels against the same figure laid out in the old editor."""
+    """The tool's panels against a figure made with its panels at heights, in the New dialog."""
     ed = shell.ed
     base = de.plain(shell.doc)
-    shell.close()
-    ed.g_cols.value = "heights"
-    ed.pz.value = "1, 3, 6"
-    ed.rows.value, ed.cols.value = 1, 3
-    form = ed.collect_all()
+    form = new_spec(ed, "plan", 1, 3, "heights")
     doc = de.plain(base)
     de.fill_panels(doc, 1, 3, "none", "heights", dict(heights=[1.0, 3.0, 6.0]), run="r0",
                    time_s=form["time_s"])
@@ -686,8 +683,7 @@ def test_new_opens_over_the_shell_and_what_it_makes_comes_here(shell):
 
 def test_a_saved_figure_from_the_gallery_comes_here(shell, tmp_path):
     ed = shell.ed
-    form = ed.collect_all()
-    form = dict(form, suptitle="From the gallery")
+    form = dict(new_spec(ed), suptitle="From the gallery")
     path = tmp_path / "saved_spec.json"
     path.write_text(json.dumps(form, default=float))
     ed._quick_open(str(path))
@@ -698,10 +694,6 @@ def test_a_saved_figure_from_the_gallery_comes_here(shell, tmp_path):
 
 def test_the_quick_start_sits_outside_the_new_layout(shell):
     assert shell.ed.quick not in shell.ed.preview.objects
-
-
-def test_the_quick_start_stays_in_the_old_layout(viewer):
-    assert viewer.figed.quick in viewer.figed.preview.objects  # (off: where it always was)
 
 
 def test_look_sections_open_when_asked_and_write_at_their_scope(shell):

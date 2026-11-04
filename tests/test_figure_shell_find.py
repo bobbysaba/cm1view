@@ -20,7 +20,6 @@ class _Now:
 
 @pytest.fixture
 def shell(reg, monkeypatch):
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)
@@ -39,7 +38,6 @@ def _new_figure(shell, kind):
     ed.open_quick()
     ed.qs_kind.value = kind
     ed._quick_make()
-    shell.take_figure()
 
 
 def _section(shell, title):

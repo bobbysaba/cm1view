@@ -109,7 +109,6 @@ class _Now:
 def shell(reg, monkeypatch):
     """The new layout showing the demo's example figure, drawing as it is asked (not in the
     background)."""
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)
@@ -122,14 +121,15 @@ def shell(reg, monkeypatch):
     v.close()
 
 
-def test_it_is_off_unless_asked_for(viewer):
-    assert viewer.figed.shell is None
-    assert not viewer.figed.shell_btn.visible
-    assert not viewer.figed._in_shell()
+def _new_figure(shell, kind):
+    ed = shell.ed
+    ed.open_quick()
+    ed.qs_kind.value = kind
+    ed._quick_make()
 
 
 def test_open_shows_the_figure_there(shell):
-    assert shell.showing and shell.panel.visible and not shell.ed.panel.visible
+    assert shell.showing and shell.panel.visible
     assert shell.doc["version"] == 3
     assert shell.image.src.startswith("data:image/png")
     assert "6 panels" in shell.status.object
@@ -219,22 +219,10 @@ def test_add_and_remove_a_run(shell, demo_run):
     assert len(shell.doc["runs"]) == 1
 
 
-def test_going_back_and_returning_keeps_the_edits(shell):
+def test_leaving_the_workspace_and_returning_keeps_the_edits(shell):
     shell.edit(lambda d: d.update(suptitle="Kept"))
-    shell.close()
-    assert not shell.showing and shell.ed.panel.visible and not shell.panel.visible
     shell.open()
     assert shell.doc["suptitle"] == "Kept"
-
-
-def test_a_figure_changed_in_the_old_layout_comes_anew_and_undo_goes_back(shell):
-    shell.edit(lambda d: d.update(suptitle="Here"))
-    shell.close()
-    shell.ed.width.value = 5.5
-    shell.open()
-    assert shell.doc["size"][0] == 5.5 and not shell.doc.get("suptitle")
-    shell.undo()
-    assert shell.doc["suptitle"] == "Here"
 
 
 def test_while_it_shows_the_old_editor_draws_nothing(shell):
@@ -266,9 +254,7 @@ def test_panel_boxes_are_the_panels_places_in_the_image(shell):
 
 def test_every_kind_opens_and_every_node_shows(shell):
     for kind in ("xsec", "sounding", "profile", "dist", "joint", "azim", "table", "line", "th"):
-        shell.close()
-        shell.ed.kind.value = kind
-        shell.open()
+        _new_figure(shell, kind)
         assert shell.doc["panels"] or kind == "th", kind
         assert "Could not draw" not in shell.status.object, kind
         for row in shell.tree.items:

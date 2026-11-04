@@ -234,7 +234,6 @@ class _Now:
 @pytest.fixture
 def shell(reg, monkeypatch):
     """The new layout showing the demo's example figure, drawing as it is asked."""
-    monkeypatch.setenv("CM1VIEW_FIGURE_SHELL", "1")
     from cm1view.viewer import app as A
     run, F = reg.get()
     v = A.Viewer(run, F, reg=reg)

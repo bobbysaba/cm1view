@@ -7,7 +7,7 @@ import sys
 import numpy as np
 import pytest
 
-from conftest import wait
+from conftest import doc_now, new_spec, wait
 
 
 def same(a, b, where="data"):
@@ -52,12 +52,16 @@ MAKERS = {
 }
 
 
+def _figure(ed):
+    return doc_now(ed)
+
+
 @pytest.mark.parametrize("kind", list(MAKERS))
 def test_headless_data_match_the_editor(ed, demo_root, kind):
     from cm1view.figures import draw as figdraw
     from cm1view.figures.render import FigureData
     MAKERS[kind](ed)
-    spec = _with_track_file(ed.collect(), demo_root)
+    spec = _with_track_file(_figure(ed), demo_root)
     ed.panel_data(spec)  # (series: starts computing them in the background)
     wait(lambda: not ed.series_pending(), 120, "the series")
     mine = ed.panel_data(spec)
@@ -74,7 +78,7 @@ def test_headless_data_are_kept(ed, demo_root, monkeypatch):
     """Drawing the same figure again (restyled) reads nothing."""
     from cm1view.figures import spec as fg
     from cm1view.figures.render import FigureData
-    spec = _with_track_file(ed.collect(), demo_root)
+    spec = _with_track_file(new_spec(ed), demo_root)
     fd = FigureData()
     fd.panel_data(spec)
     n = len(fd.cache)
@@ -95,9 +99,8 @@ def test_headless_figure_of_parts_and_viewer_track(ed, demo_root):
     from cm1view.figures import spec as fg
     from cm1view.figures.combo import combine
     from cm1view.figures.render import FigureData
-    a = _with_track_file(ed.collect(), demo_root)
-    ed.from_dists()
-    b = _with_track_file(ed.collect(), demo_root)
+    a = _with_track_file(new_spec(ed), demo_root)
+    b = _with_track_file(new_spec(ed, "dist", 1, 1), demo_root)
     data = FigureData().panel_data(combine([a, b]))
     assert {i for i in data if i < 1000} == set(range(fg.npanels(a))) and 1000 in data
     entry = dict(a["runs"][0], track="viewer")

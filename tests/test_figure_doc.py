@@ -6,23 +6,17 @@ import json
 import numpy as np
 import pytest
 
+from conftest import new_spec
+
 
 @pytest.fixture
 def tools(ed):
     """(a synchronous FigureData, the plain spec of a new figure of a kind)."""
     from cm1view.figures.render import FigureData
     fd = FigureData(ed.data.run, ed.data.F, reg=ed.data.reg, viewer_fixes=ed.data.viewer_fixes)
-    ed.auto.value = False
 
     def quick(kind, rows=1, cols=2):
-        ed.open_quick()
-        ed.qs_kind.value = kind
-        ed.qs_rows.value, ed.qs_cols.value = rows, cols
-        ed._quick_make()
-        if kind in ("th", "line"):
-            ed._add_series()
-            ed._add_series()
-        return json.loads(json.dumps(ed.collect_all(), default=float))
+        return new_spec(ed, kind, rows, cols)
 
     return fd, quick
 
