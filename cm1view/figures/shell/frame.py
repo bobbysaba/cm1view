@@ -80,13 +80,14 @@ class FigureShell:
                                                      "or a template")
         self.update = pn.widgets.Button(name="Redraw", icon="refresh", height=32, margin=(4, 4),
                                         button_type="primary", button_style="outline")
-        self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(4, 8), align="center")
+        self.auto = pn.widgets.Checkbox(name="Auto-redraw", value=True, margin=(4, 8),
+                                       align="center")
         self.zoom = pn.widgets.RadioButtonGroup(
             options={"Fit": "fit", "Actual size": "actual"}, value="fit", height=32, margin=(4, 4),
             description="Actual size: as large as the printed figure (at 96 pixels per inch) to "
                         "judge the font sizes")
         self.vision = pn.widgets.Select(
-            name="", options=dict(vision.MODES), value="", width=210, height=32, margin=(4, 4),
+            name="", options=dict(vision.MODES), value="", width=170, height=32, margin=(4, 4),
             description="Preview only: how the picture reads in greyscale or with a colour-vision "
                         "deficiency (Machado et al. 2009, full loss of one cone type). The "
                         "figure, its document, undo and every export are unchanged.")
@@ -127,13 +128,25 @@ class FigureShell:
         self.placing = Placing(self)
         self.inspector = Inspector(self)
         self.export = ExportDialog(self)
-        toolbar = pn.FlexBox(self.tree_btn, self.exp_btn, self.update, self.auto, self.new_btn,
-                             self.undo_btn, self.redo_btn, self.zoom, self.vision, self.placing.mode, self.back,
-                             flex_wrap="wrap", align_items="center", sizing_mode="stretch_width",
+        # (the tree's button stays over the tree; the rest is right-aligned, Export last)
+        actions = pn.Row(self.back, self.new_btn, self.undo_btn, self.redo_btn, self.auto,
+                         self.update, self.exp_btn, margin=0, align="center")
+        toolbar = pn.FlexBox(self.tree_btn, actions, flex_wrap="wrap", align_items="center",
+                             justify_content="space-between", sizing_mode="stretch_width",
                              styles={"flex": "0 0 auto", "border-bottom": f"1px solid {GRID}"})
+
+        def label(text):
+            return pn.pane.HTML(f'<span class="cv-hint">{text}</span>', margin=(4, 2, 4, 10),
+                                align="center")
+
+        # (these change the preview alone, so they sit on it)
+        view_bar = pn.FlexBox(label("Size"), self.zoom, label("Colours"), self.vision,
+                              label("Mouse"), self.placing.mode, flex_wrap="wrap",
+                              align_items="center", sizing_mode="stretch_width",
+                              styles={"flex": "0 0 auto"})
         self.picture = pn.Column(self.image, margin=0, sizing_mode="stretch_both",
                                  styles={"flex": "1 1 0", "min-height": "0", "overflow": "auto"})
-        preview = pn.Column(self.placing.hint, self.picture, self.scrubber, self.status, margin=0,
+        preview = pn.Column(view_bar, self.placing.hint, self.picture, self.scrubber, self.status, margin=0,
                             sizing_mode="stretch_both",
                             styles={"flex": "1 1 0", "min-width": "0", "min-height": "0"})
         self.panes = pn.Row(self.tree_pane, preview, self.inspector.panel, margin=0,

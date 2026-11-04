@@ -300,11 +300,11 @@ class FigureExport:
         of parts in the widgets.  True when shown."""
         parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
         bases, ran = [], False
-        for part in parts:
-            base = self._with_defaults(part)
+        for one in parts:
+            base = self._with_defaults(one)
             bad = [lay.get("field") for lay in base["layers"]
                    if lay.get("field") and lay["field"] not in self.F]
-            if bad and len(base.get("runs") or part.get("runs") or []) <= 1:
+            if bad and len(base.get("runs") or one.get("runs") or []) <= 1:
                 self._msg("This run has no field " + ", ".join(bad), True)
                 return False
             code = base.get("code") or {}

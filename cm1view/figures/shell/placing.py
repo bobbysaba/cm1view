@@ -34,7 +34,8 @@ INSET_DRAGS = (NEW_INSET, INSET_AREA, INSET_PLACE)
 SMALLEST_INSET = 0.04  # (of a panel: a smaller drag is a slip)
 OWN_OF_THE_AREA = ("domain.mode", "domain.box")  # (a panel with these ignores the kind's box)
 # (the old editor's list has one area, which is the kind's; here, also a panel's)
-MODES = {("Drag: area of all plan views" if v == "area" else k): v for k, v in PLACE.items()}
+MODES = {("Drag: area of all plan views" if v == "area" else "Pick a panel" if not v else k): v
+         for k, v in PLACE.items()}
 MODES["Drag: area of one plan view"] = OWN_AREA
 MODES["Drag: new zoom inset"] = NEW_INSET
 MODES["Drag: what an inset zooms in on"] = INSET_AREA
@@ -51,7 +52,10 @@ class Placing:
         self.shell = shell
         self.place, self.origin, self.fractions = {}, {}, set()
         self.pending = None  # (panel, x, y) of a two-point item's first click
-        self.mode = pn.widgets.Select(options=MODES, value="", width=230, height=32, margin=(4, 4))
+        self.mode = pn.widgets.Select(
+            options=MODES, value="", width=200, height=32, margin=(4, 4),
+            description="What the mouse does in the preview: pick a panel, add an annotation, "
+                        "or drag out an area or a zoom inset")
         self.hint = pn.pane.HTML(margin=(0, 8), sizing_mode="stretch_width", visible=False,
                                  styles={"flex": "0 0 auto"})
         self.mode.param.watch(self._on_mode, "value")

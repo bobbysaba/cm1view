@@ -431,8 +431,9 @@ def test_a_cross_section_has_insets_too(shell):
     assert len(ins["view"]) == 4
     _drew(shell)
     assert -ins["id"] in shell._boxes
-    _in(_card(shell, "Area"), "To (km)").value = ins["view"][1] + 1.0
-    assert de.panel_by_id(shell.doc, pid)["insets"][0]["view"][1] == ins["view"][1] + 1.0
+    to = ins["view"][1] + 1.0
+    _in(_card(shell, "Area"), "To (km)").value = to
+    assert de.panel_by_id(shell.doc, pid)["insets"][0]["view"][1] == to
 
 
 def test_an_inset_saves_and_renders(shell, tmp_path):

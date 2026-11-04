@@ -149,7 +149,7 @@ def test_a_kinds_reset_goes_to_its_own_new_figure_and_skips_what_panels_set(shel
     _reset(card)[1].clicks += 1
     assert shell.doc["kinds"]["plan"]["axes"]["xlabel"] == "x (km)"
     assert shell.doc["panels"][1]["opts"]["axes"]["tickdir"] == "in"
-    assert "Panel b keeps what it set alone" in shell._said
+    assert "Panel b keeps what it set alone" in shell.status.object
 
 
 def test_a_panel_marks_its_own_and_goes_back_to_inheriting(shell):
@@ -161,7 +161,7 @@ def test_a_panel_marks_its_own_and_goes_back_to_inheriting(shell):
     assert card.header is None
     _in(card, "Ticks point").value = "in"
     assert "● 1" in card.header.object
-    assert _reset(card)[1].name == "↺ Back to what all panels have"
+    assert _reset(card)[1].name == "↺ Use the setting for all panels"
     _reset(card)[1].clicks += 1
     assert "opts" not in shell.doc["panels"][0]
 

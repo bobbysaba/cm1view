@@ -282,8 +282,10 @@ def test_one_per_run_and_your_own_profile_data(shell, demo_run):
     _click(shell, "One per run")
     assert [x["runs"] for x in de.panel_by_id(shell.doc, pid)["layers"]] == [["r0"], ["r1"]]
     _drew(shell)
+    shell._show(f"layer:{pid}:0")  # (two entries: folded in the panel)
     _click(shell, "One per run")
     assert "already" in shell.status.object
+    shell._show(f"panel:{pid}")
     _click(shell, "+ Your data")
     q = de.panel_by_id(shell.doc, pid)["layers"]
     assert q[-1]["source"] == "table" and q[-1]["type"] == "profile"

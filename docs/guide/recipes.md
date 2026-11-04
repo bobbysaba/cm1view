@@ -35,7 +35,7 @@ Short walkthroughs that combine the tools. Each uses only what the other pages d
    give each run a label and a colour. Check that each has a storm track.
 3. In *Panels → Grid and size*, set *Rows are* to *Runs* and *Columns are* to *Times*;
    pick both runs (*Runs, one per row*) and fill the times from the shown time. Set
-   *Plan-view area* to *Centred on tracked storm*.
+   *Plan-view area* to *Follow the tracked storm*.
 4. Put a reflectivity fill and a w contour in *Layers*, and set *Colorbars* to *One for
    the figure* in *Style*.
 5. Press **Export**, give **Save as** a name, choose the format and DPI, tick **Also the script

@@ -58,6 +58,34 @@ def _numbers(text):
     return [float(x) for x in text.replace(",", " ").split()]
 
 
+def main_kind(doc):
+    """The kind most of the figure's panels are (the first such: tied)."""
+    kinds = [p["kind"] for p in doc.get("panels") or []]
+    return max(kinds, key=kinds.count) if kinds else "plan"
+
+
+def kind_options(also=None):
+    """The kinds to choose from, by name (also: a kind not otherwise listed)."""
+    extra = (also,) if also and also not in ADDABLE else ()
+    return {KINDS[k].label: k for k in (*ADDABLE, *extra)}
+
+
+def moment_of(p):
+    """The run and time panel p shows: its own, else its first entry's that has them."""
+    items = [p, *(p.get("layers") or [])]
+    return (next((x["run"] for x in items if x.get("run") is not None), None),
+            next((x["time_s"] for x in items if x.get("time_s") is not None), None))
+
+
+def to_moment(p, run, time_s):
+    """New panel p, and its entries, show that run and time, where they have one."""
+    for x in (p, *(p.get("layers") or [])):
+        if run is not None and x.get("run") is not None:
+            x["run"] = run
+        if time_s is not None and x.get("time_s") is not None:
+            x["time_s"] = time_s
+
+
 def own_run(shell):
     """The run new panels start with: the viewer's, if in the figure, else the first."""
     runs = shell.doc["runs"]
@@ -109,23 +137,16 @@ class GridPane:
                                        placeholder="equal", description="Shares of the figure's "
                                        "height, one for each row")
         said = pn.pane.HTML(margin=(2, 4), sizing_mode="stretch_width")
-        quiet = []  # (a box being set back)
 
         def problem(text):
             said.object = f'<div class="cv-status" style="color:#f87171">{html.escape(text)}</div>'
 
         def on_shape(ev):
-            if quiet:
-                return
             r, c = int(nr.value or 1), int(nc.value or 1)
-            why = de.set_grid(de.plain(shell.doc), r, c)
-            if why:
-                problem(why)
-                quiet.append(1)
-                nr.value, nc.value = de.grid_shape(shell.doc)
-                quiet.clear()
-                return
-            shell.edit(lambda d: de.set_grid(d, r, c), node=nodes.FIGURE)
+
+            def apply(d):
+                shell._said = de.set_grid(d, r, c) or ""
+            shell.edit(apply, node=nodes.FIGURE)
 
         def on_shares(key, w):
             try:
@@ -143,37 +164,99 @@ class GridPane:
         nc.param.watch(on_shape, "value")
         widths.param.watch(lambda ev: on_shares("widths", widths), "value")
         heights.param.watch(lambda ev: on_shares("heights", heights), "value")
-        objs = [_grid(nr, nc, widths, heights, n=2), said, _note("Where the panels sit:"),
-                grid_map(doc), *self._add_objs(doc)]
+        objs = [_grid((self._type_widget(doc), 2), nr, nc, widths, heights, n=2), said,
+                _note("Where the panels sit:"), grid_map(doc), *self._aside_objs(doc),
+                *self._add_objs(doc)]
         if len({p["kind"] for p in doc.get("panels") or []}) > 1:
             objs.append(_note("Set the figure's size by hand: panels of several kinds have no "
                               "automatic one."))
         return objs
 
+    def _type_widget(self, doc):
+        """Which kind every panel of the figure is: choosing one changes them all."""
+        kinds = {p["kind"] for p in doc.get("panels") or []}  # (those set aside change with them)
+        one = next(iter(kinds)) if len(kinds) == 1 else None
+        options = kind_options(one)
+        if one is None:
+            options = {"Mixed": "", **options}
+        w = pn.widgets.Select(name="Figure type", options=options, value=one or "",
+                              description="Change every panel to this type, in the cell it is in. "
+                                          "What the panels showed is replaced; Undo takes it back. "
+                                          "To change only one, pick it in the tree.")
+
+        def on_type(ev):
+            if ev.new:
+                self.set_kind([p["id"] for p in self.shell.doc["panels"]], ev.new, nodes.FIGURE,
+                              aside=True)
+
+        w.param.watch(on_type, "value")
+        return w
+
+    def _aside_objs(self, doc):
+        """The panels with no room on the grid, if any: back, or gone."""
+        aside = doc.get(de.OFF_GRID) or []
+        if not aside:
+            return []
+        shell = self.shell
+        n = len(aside)
+        what = ", ".join(dict.fromkeys(html.escape(KINDS[p["kind"]].label) for p in aside))
+        back = pn.widgets.Button(name="Bring back", button_type="light", button_style="outline",
+                                 height=30, margin=(4, 4),
+                                 description="Into free cells; the grid grows if it has to")
+        drop = pn.widgets.Button(name="Remove", button_type="light", button_style="outline",
+                                 height=30, margin=(4, 4),
+                                 description="Out of the figure. Undo takes it back")
+        back.on_click(lambda e: shell.edit(de.bring_back, node=nodes.FIGURE))
+        drop.on_click(lambda e: shell.edit(de.forget_aside, node=nodes.FIGURE))
+        return [_note(f"<b>{n} panel{'s' if n > 1 else ''} set aside, not drawn</b> ({what}): no "
+                      "room on this grid. They return when the grid has room."),
+                pn.Row(back, drop, margin=0)]
+
     def _add_objs(self, doc):
-        kinds = {KINDS[k].label: k for k in ADDABLE}
+        kinds = kind_options()
         free = {f"Row {r + 1}, column {c + 1}": (r, c) for r, c in de.free_cells(doc)}
         where = {**free, "A new row": NEW_ROW, "A new column": NEW_COL}
-        kind = pn.widgets.Select(name="Add a panel of", options=kinds, value="plan")
+        mine = main_kind(doc)
+        kind = pn.widgets.Select(name="Add a panel of", options=kinds,
+                                 value=mine if mine in kinds.values() else "plan")
         place = pn.widgets.Select(name="At", options=where)
         go = pn.widgets.Button(name="Add the panel", button_type="primary", button_style="outline",
                                height=32, margin=(6, 4))
         go.on_click(lambda e: self.add_panel(kind.value, place.value))
-        return [_grid(kind, place, n=2), go]
+        if not free:
+            return [_grid(kind, place, n=2), go]
+        fill = pn.widgets.Button(
+            name=f"Fill {len(free)} empty cell{'s' if len(free) > 1 else ''}", button_type="light",
+            button_style="outline", height=32, margin=(6, 4),
+            description="A new panel of the type chosen in each empty cell")
+        fill.on_click(lambda e: self.fill_empty(kind.value))
+        return [_grid(kind, place, n=2), pn.Row(go, fill, margin=0)]
 
     def add_panel(self, kind, place=None):
         """A new panel of a kind at a cell (r, c), in a new row or column, or the first cell
         free; it is then what's picked.  Returns it."""
         shell = self.shell
-        spec = fg.default_spec(shell.ed.run, shell.ed.fields, shell.v.t)
-        rid = own_run(shell)
-        ts = shown_time(shell, rid)
-        scene3d = shell.ed.viewer_scene() if kind == "scene" else None
+        make = self._maker(kind)
         made = []
 
         def apply(d):
             grow = {NEW_ROW: "row", NEW_COL: "col"}.get(place)
-            at = place if isinstance(place, tuple) else de.next_cell(d, grow)
+            made.append(make(d, place if isinstance(place, tuple) else de.next_cell(d, grow)))
+
+        # (the node goes by id, known only once it is made)
+        shell.edit(apply)
+        shell._show(f"panel:{made[0]['id']}")
+        return made[0]
+
+    def _maker(self, kind):
+        """make(doc, cell): a new panel of a kind at a cell, as this moment's viewer starts it."""
+        shell = self.shell
+        spec = fg.default_spec(shell.ed.run, shell.ed.fields, shell.v.t)
+        rid = own_run(shell)
+        ts = shown_time(shell, rid)
+        scene3d = shell.ed.viewer_scene() if kind == "scene" else None
+
+        def make(d, at):
             start = {k: spec[k] for k in KIND_KEYS[kind] if k in spec}
             if kind == "scene":  # (the first shows what the 3D workspace does; seed_kind)
                 start = dict(axes=dict(start.get("axes") or {}, **de.SCENE_START_AXES),
@@ -191,13 +274,54 @@ class GridPane:
                 p = de.add_panel(d, kind, at, self.ins.panes[kind].first_entries())
             present = {KINDS[q["kind"]] for q in d["panels"]} | {KINDS[k] for k in ADDABLE}
             de.label_places(d, p, KINDS[kind], present)
-            made.append(p)
             shell.inspector.folds.setdefault(f"p:{p['id']}:own0", True)
+            return p
 
-        # (the node goes by id, known only once it is made)
-        shell.edit(apply)
-        shell._show(f"panel:{made[0]['id']}")
-        return made[0]
+        return make
+
+    def fill_empty(self, kind):
+        """A new panel of a kind in every empty cell."""
+        make = self._maker(kind)
+
+        def apply(d):
+            for at in de.free_cells(d):
+                make(d, at)
+        self.shell.edit(apply, node=nodes.FIGURE)
+
+    def set_kind(self, pids, kind, node=None, aside=False):
+        """Panels pids become new panels of a kind, each in the cell it holds (and what it
+        spans) and at the run and time it shows; what they showed goes, one undo step.  node:
+        what to show, else the last one made.  aside: those set aside change too.  Returns the
+        new panels."""
+        shell = self.shell
+        make = self._maker(kind)
+        made = []
+
+        def apply(d):
+            for pid in pids:
+                old = de.panel_by_id(d, pid)
+                if old["kind"] == kind:
+                    continue
+                cell, moment = list(_cell(old)), moment_of(old)
+                de.remove_panel(d, pid)
+                p = make(d, cell[:2])
+                p["cell"] = cell
+                to_moment(p, *moment)
+                made.append(p)
+            for n, old in enumerate(d.get(de.OFF_GRID) or [] if aside else []):
+                if old["kind"] != kind:
+                    p = make(d, _cell(old)[:2])
+                    p["cell"] = list(_cell(old))
+                    to_moment(p, *moment_of(old))
+                    d["panels"].remove(p)
+                    d[de.OFF_GRID][n] = p
+                    de.drop_annotations(d, {old["id"]})
+            if aside:
+                de.letters_in_order(d)
+        shell.edit(apply, node=node)
+        if node is None and made:
+            shell._show(f"panel:{made[-1]['id']}")
+        return made
 
     def titles_objs(self, kind):
         """Titles of a kind's panels from what each shows, and clearing them (plan views': Fill
@@ -233,6 +357,13 @@ class GridPane:
         tall = pn.widgets.IntInput(name="Rows tall", start=1, end=rows, value=rs)
         wide = pn.widgets.IntInput(name="Columns wide", start=1, end=cols, value=cs)
         said = pn.pane.HTML(margin=(2, 4), sizing_mode="stretch_width")
+        now_kind = de.panel_by_id(doc, pid)["kind"]
+        type_w = pn.widgets.Select(name="Panel type", options=kind_options(now_kind),
+                                   value=now_kind,
+                                   description="Change this panel to another type, in the same "
+                                               "cell. What it showed is replaced; Undo takes it "
+                                               "back.")
+        type_w.param.watch(lambda ev: self.set_kind([pid], ev.new), "value")
 
         quiet = []  # (the boxes being set back)
 
@@ -269,7 +400,7 @@ class GridPane:
         bar = panel_bar_card(self.ins, doc, pid)
         return [*([bar] if bar is not None else []), self.ins.annots.card(doc, pid),
                 pn.pane.HTML("<b>Place</b>", margin=(8, 4, 0, 4)),
-                _grid(row, col, tall, wide, n=2), said,
+                _grid((type_w, 2), row, col, tall, wide, n=2), said,
                 pn.Row(copy_btn, rm, margin=0, sizing_mode="stretch_width")]
 
     def copy_panel(self, pid):

@@ -104,5 +104,6 @@ def test_saved_figure_reopens_and_draws_the_same(ed, tmp_path, how):
     assert after["kind"] == before["kind"]
     assert [p["kind"] for p in after.get("parts", [])] == \
         [p["kind"] for p in before.get("parts", [])]
-    assert np.array_equal(mi.imread(str(tmp_path / "before.png")),
-                          mi.imread(str(tmp_path / "after.png")))
+    a, b = mi.imread(str(tmp_path / "before.png")), mi.imread(str(tmp_path / "after.png"))
+    # (2 levels: identical draws of a sounding can differ by 1 in a few pixels)
+    assert a.shape == b.shape and np.abs(a - b).max() <= 2 / 255

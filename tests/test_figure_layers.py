@@ -631,10 +631,10 @@ def test_blank_label_sizes_follow_the_base_font(ed):
     ed.label_fit.value = False
 
     def size():
+        from matplotlib.text import Text
         from cm1view.figures import draw as figdraw
         fig = figdraw.draw(ed.collect(), ed.panel_data(ed.collect()))
-        return next(t.get_fontsize() for t in fig.axes[0].findobj(
-            lambda a: getattr(a, "get_text", None) and a.get_text() == "a"))
+        return next(t.get_fontsize() for t in fig.axes[0].findobj(Text) if t.get_text() == "a")
     assert size() == pytest.approx(12.0)
     ed.fsize.value = 8.0
     assert size() == pytest.approx(9.6)

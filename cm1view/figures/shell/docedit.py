@@ -17,6 +17,7 @@ from ..spec.doc import ann_panels, drop_annotations  # noqa: F401  (de.drop_anno
 from ..spec.sections import describe as section_words, section_defaults
 
 MISSING = object()  # (a key a layer no longer has)
+OFF_GRID = "off_grid"  # (the document's panels with no room on the grid: not drawn; settle_grid)
 HEIGHT_KEYS = ("z", "mode")  # (what a panel's own height writes in its layers)
 
 
@@ -79,7 +80,7 @@ def remove_run(doc, rid):
     apply_edits), so those of the runs after it move with it."""
     k = run_index(doc, rid)
     doc["runs"] = [r for r in doc["runs"] if r["id"] != rid]
-    for p in doc.get("panels") or []:
+    for p in [*(doc.get("panels") or []), *(doc.get(OFF_GRID) or [])]:
         for item in p.get("layers") or []:
             if item.get("edits"):
                 item["edits"] = {str(int(n) - (int(n) > k)): v for n, v in item["edits"].items()
@@ -437,23 +438,117 @@ def _fit_ratios(vals, n):
     return vals[:n] + [sum(vals) / len(vals)] * (n - len(vals))
 
 
-def set_grid(doc, rows, cols):
-    """The grid's rows and columns (shares follow: set_shares).  Why it can't be (panels off
-    it, which stay), or None."""
-    from . import nodes
-    rows, cols = int(rows), int(cols)
-    names = nodes.letters(doc)
-    off = [names[p["id"]] for p in nodes.in_order(doc) if _cell(p)[0] + _cell(p)[2] > rows
-           or _cell(p)[1] + _cell(p)[3] > cols]
-    if off:
-        return (f"Panel{'s' if len(off) > 1 else ''} {', '.join(off)} would be off the grid: "
-                "move or remove them first.")
+def next_panel_id(doc):
+    """An id no panel has, on the grid or set aside."""
+    return 1 + max([p["id"] for p in [*(doc.get("panels") or []), *(doc.get(OFF_GRID) or [])]]
+                   or [-1])
+
+
+def _shape(doc, rows, cols):
+    """The grid's rows and columns; its shares follow (set_shares)."""
     grid = doc.setdefault("grid", {})
-    grid.update(rows=rows, cols=cols)
-    for key, n in (("widths", cols), ("heights", rows)):
+    grid.update(rows=int(rows), cols=int(cols))
+    for key, n in (("widths", int(cols)), ("heights", int(rows))):
         if grid.get(key):
             grid[key] = _fit_ratios(grid[key], n)
-    return None
+
+
+def _back_in(doc, p, cell):
+    """Panel p, set aside, into the figure at cell.  What went while it was aside is gone from
+    it: shared layers, its run."""
+    doc[OFF_GRID] = [q for q in doc[OFF_GRID] if q["id"] != p["id"]]
+    if not doc[OFF_GRID]:
+        del doc[OFF_GRID]
+    p["cell"] = list(cell)
+    p["layers"] = [x for x in p.get("layers") or [] if "ref" not in x
+                   or x["ref"] in (doc.get("layers") or {})]
+    if p.get("run") is not None and all(r["id"] != p["run"] for r in doc.get("runs") or []):
+        p["run"] = doc["runs"][0]["id"]
+    doc["panels"].append(p)
+
+
+def _take_back_aside(doc):
+    """Those set aside into the grid: to their own cells if free, then any free ones.  How many."""
+    rows, cols = grid_shape(doc)
+    n = 0
+    for p in list(doc.get(OFF_GRID) or []):
+        r, c, rs, cs = _cell(p)
+        taken = {x for q in doc["panels"] for x in _cells_of(q)}
+        if r + rs <= rows and c + cs <= cols and not _cells_of(p) & taken:
+            _back_in(doc, p, [r, c, rs, cs])
+            n += 1
+    for p in list(doc.get(OFF_GRID) or []):
+        free = free_cells(doc)
+        if free:
+            _back_in(doc, p, [*free[0], 1, 1])
+            n += 1
+    return n
+
+
+def settle_grid(doc):
+    """The panels and the grid as it now is.  A panel running over the edge is cut to it; one
+    starting past it takes a free cell; with none free it is set aside: kept in the document
+    under OFF_GRID, not drawn, until there is room.  Those aside return when a cell is free.
+    Returns what became of them, as a line, or None."""
+    from . import nodes
+    rows, cols = grid_shape(doc)
+    names = nodes.letters(doc)
+    off = []
+    for p in nodes.in_order(doc):
+        r, c, rs, cs = _cell(p)
+        if r >= rows or c >= cols:
+            off.append(p)
+            continue
+        if r + rs > rows or c + cs > cols:
+            p["cell"] = [r, c, min(rs, rows - r), min(cs, cols - c)]
+    if off:
+        gone = {p["id"] for p in off}
+        doc["panels"] = [p for p in doc["panels"] if p["id"] not in gone]
+    moved, aside = [], []
+    for p in off:
+        free = free_cells(doc)
+        if free:
+            p["cell"] = [*free[0], 1, 1]
+            doc["panels"].append(p)
+            moved.append(p)
+        else:
+            doc.setdefault(OFF_GRID, []).append(p)
+            aside.append(p)
+    back = 0 if aside else _take_back_aside(doc)
+    if off or back:
+        letters_in_order(doc)
+    said = []
+    if moved:
+        said.append("Moved to a free cell: panel " + ", ".join(names[p["id"]] for p in moved) + ".")
+    if aside:
+        said.append(f"No room for panel{'s' if len(aside) > 1 else ''} "
+                    + ", ".join(names[p["id"]] for p in aside) + ": set aside, not drawn, and "
+                    "back when the grid has room.")
+    if back:
+        said.append(f"Back on the grid: {back} panel{'s' if back > 1 else ''} set aside.")
+    return " ".join(said) or None
+
+
+def set_grid(doc, rows, cols):
+    """The grid's rows and columns.  Any size can be asked for: panels that no longer fit are
+    moved or set aside (settle_grid).  Returns what became of them, as a line, or None."""
+    _shape(doc, rows, cols)
+    return settle_grid(doc)
+
+
+def bring_back(doc):
+    """Every panel set aside onto the grid, which grows if it has to."""
+    while doc.get(OFF_GRID):
+        p = doc[OFF_GRID][0]
+        at = next_cell(doc)
+        _back_in(doc, p, [at[0], at[1], 1, 1])
+    letters_in_order(doc)
+
+
+def forget_aside(doc):
+    """The panels set aside gone for good."""
+    gone = {p["id"] for p in doc.pop(OFF_GRID, [])}
+    drop_annotations(doc, gone)
 
 
 def set_shares(doc, key, vals):
@@ -481,9 +576,9 @@ def next_cell(doc, grow=None):
     if grow is None:
         grow = "col" if rows == 1 else "row"
     if grow == "col":
-        set_grid(doc, rows, cols + 1)
+        _shape(doc, rows, cols + 1)
         return 0, cols
-    set_grid(doc, rows + 1, cols)
+    _shape(doc, rows + 1, cols)
     return rows, 0
 
 
@@ -569,7 +664,7 @@ def label_places(doc, p, kind_info, all_kinds):
 
 def add_panel(doc, kind, cell, layers=None, **keys):
     """A new panel at (row, col) in one cell, with its layers and other keys.  Returns it."""
-    pid = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    pid = next_panel_id(doc)
     p = dict(id=pid, kind=kind, cell=[int(cell[0]), int(cell[1]), 1, 1], run=None, time_s=None,
              title="", layers=list(layers or []), insets=[])
     p.update(keys)
@@ -582,7 +677,7 @@ def plan_panel(doc, cell, run, time_s, start_layers=(), section=None):
     """A new plan view at cell: as the last plan view is, but for its titles; the first draws
     the shared layers there are (none: start_layers, shared from now on)."""
     mine = panels_of(doc, "plan")
-    new_id = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    new_id = next_panel_id(doc)
     if mine:
         p = _new_panel(doc, new_id, mine[-1], "plan")
         doc["panels"].append(p)
@@ -608,7 +703,7 @@ def copy_panel(doc, pid, cell):
     """A copy of panel pid at (row, col), in one cell, without its row label.  Returns it."""
     new = copy.deepcopy(panel_by_id(doc, pid))
     new.pop("rowlabel", None)
-    new.update(id=1 + max(p["id"] for p in doc["panels"]), cell=[int(cell[0]), int(cell[1]), 1, 1])
+    new.update(id=next_panel_id(doc), cell=[int(cell[0]), int(cell[1]), 1, 1])
     _new_inset_ids(doc, new)
     doc["panels"].append(new)
     copy_annotations(doc, pid, new["id"])
@@ -745,7 +840,7 @@ def xsec_panel(doc, cell, run, time_s, start_layers=(), section=None):
     and every shared layer; none: start_layers, shared from now on), showing the first section
     of the figure (none: `section`)."""
     mine = panels_of(doc, "xsec")
-    new_id = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    new_id = next_panel_id(doc)
     if mine:
         p = _new_panel(doc, new_id, mine[-1], "xsec")
         p["section"] = add_section(doc, twin_section(doc["sections"][mine[-1]["section"]]))
@@ -803,7 +898,7 @@ def panel_per_run(doc, pid, times=None):
         new.pop("rowlabel", None)
         new.pop("letter", None)
         at = _cell_below(doc, *_cell(p)[:2])
-        new.update(id=1 + max(q["id"] for q in doc["panels"]), run=rid,
+        new.update(id=next_panel_id(doc), run=rid,
                    cell=[int(at[0]), int(at[1]), 1, 1])
         if kind == "th":
             for item in new.get("layers") or []:
@@ -1146,17 +1241,6 @@ def scene_take_back(doc, pid, key):
 
 
 # ------------------------------------------------------------ the grid: filling panels
-def fill_problem(doc, rows, cols, kind="plan"):
-    """Why the grid can't be rows x cols (panels of other kinds off it), or None."""
-    off = [p for p in doc.get("panels") or [] if p["kind"] != kind and (
-        _cell(p)[0] + _cell(p)[2] > rows or _cell(p)[1] + _cell(p)[3] > cols)]
-    if off:
-        from . import nodes
-        names = nodes.letters(doc)
-        return "These panels would be off the grid: " + ", ".join(names[p["id"]] for p in off)
-    return None
-
-
 def _taken(doc, kind):
     """The cells panels of other kinds hold."""
     out = set()
@@ -1262,7 +1346,7 @@ def fill_panels(doc, rows, cols, row_dim="none", col_dim="none", steps=None, run
             if place[n] is None and hit is not None:
                 place[n] = hit
                 pool.remove(hit)
-    next_id = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    next_id = next_panel_id(doc)
     runs = steps.get("runs") or []
     time_run = runs[0] if runs else run
     for n, (at, cell) in enumerate(targets):
@@ -1303,6 +1387,7 @@ def fill_panels(doc, rows, cols, row_dim="none", col_dim="none", steps=None, run
     letters = (doc.get("style") or {}).get("letters")
     if isinstance(letters, dict) and letters.get("auto"):  # (one panel: no letter)
         letters["on"] = len(doc["panels"]) > 1
+    settle_grid(doc)  # (panels of other kinds past the new edge)
     return len(targets), len(gone)
 
 

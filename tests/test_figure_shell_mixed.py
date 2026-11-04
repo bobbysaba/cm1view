@@ -8,7 +8,7 @@ import pytest
 
 from cm1view.figures import draw as figdraw
 from cm1view.figures.kinds import KINDS
-from cm1view.figures.shell import docedit as de, nodes
+from cm1view.figures.shell import docedit as de, gridview, nodes
 from cm1view.figures.shell.gridview import grid_map
 
 
@@ -40,12 +40,55 @@ def panel(doc, pid):
 
 
 # ------------------------------------------------------------------ the grid
-def test_a_grid_grows_and_wont_shrink_past_a_panel():
+def test_a_grid_grows_and_shrinks_past_a_panel():
     doc = mixed()
     assert de.set_grid(doc, 2, 3) is None
     assert de.free_cells(doc) == [(1, 0), (1, 1), (1, 2)]
-    why = de.set_grid(doc, 2, 2)
-    assert "c would be off the grid" in why and doc["grid"]["cols"] == 3
+    said = de.set_grid(doc, 2, 2)  # (c moves into the free row, it isn't refused)
+    assert "free cell" in said and doc["grid"]["cols"] == 2
+    assert len(doc["panels"]) == 3 and not doc.get(de.OFF_GRID)
+
+
+def test_panels_with_no_room_are_set_aside_and_come_back():
+    doc = mixed()
+    n = len(doc["panels"])
+    ids = {p["id"] for p in doc["panels"]}
+    said = de.set_grid(doc, 1, 1)
+    assert "set aside" in said and len(doc["panels"]) == 1 and len(doc[de.OFF_GRID]) == n - 1
+    assert de.next_panel_id(doc) > max(ids)  # (no new panel takes the id of one set aside)
+    said = de.set_grid(doc, 1, n)
+    assert "Back on the grid" in said and de.OFF_GRID not in doc
+    assert {p["id"] for p in doc["panels"]} == ids
+    assert len({tuple(p["cell"][:2]) for p in doc["panels"]}) == n
+
+
+def test_a_lone_panel_past_a_smaller_grid_moves_into_it():
+    doc = mixed()
+    doc["panels"] = doc["panels"][-1:]
+    r, c = de.grid_shape(doc)
+    doc["panels"][0]["cell"] = [r - 1, c - 1, 1, 1]
+    de.set_grid(doc, 1, 1)
+    assert doc["panels"][0]["cell"] == [0, 0, 1, 1] and de.OFF_GRID not in doc
+
+
+def test_a_panel_over_the_new_edge_is_cut_to_it():
+    doc = mixed()
+    doc["panels"] = doc["panels"][:1]
+    de.set_grid(doc, 2, 3)
+    doc["panels"][0]["cell"] = [0, 0, 2, 3]
+    de.set_grid(doc, 1, 2)
+    assert doc["panels"][0]["cell"] == [0, 0, 1, 2]
+
+
+def test_panels_set_aside_can_be_brought_back_or_removed():
+    doc = mixed()
+    n = len(doc["panels"])
+    de.set_grid(doc, 1, 1)
+    de.bring_back(doc)
+    assert len(doc["panels"]) == n and de.OFF_GRID not in doc
+    de.set_grid(doc, 1, 1)
+    de.forget_aside(doc)
+    assert len(doc["panels"]) == 1 and de.OFF_GRID not in doc
 
 
 def test_shares_are_checked_and_follow_the_grid():
@@ -316,11 +359,63 @@ def test_the_place_boxes_refuse_what_cant_be(shell):
     assert any("is there" in str(getattr(o, "object", "")) for o in shell.inspector.body.select())
 
 
+def test_changing_a_panels_type_keeps_its_cell(shell):
+    shell.select("figure")
+    pid = shell.doc["panels"][0]["id"]
+    was = list(de.panel_by_id(shell.doc, pid)["cell"])
+    n = len(shell.doc["panels"])
+    made = shell.inspector.grid.set_kind([pid], "sounding")
+    assert made[0]["kind"] == "sounding" and made[0]["cell"] == was
+    assert len(shell.doc["panels"]) == n
+    shell.undo()
+    assert de.panel_by_id(shell.doc, pid)["kind"] != "sounding"
+
+
+def test_the_figure_type_changes_every_panel(shell):
+    shell.select("figure")
+    n = len(shell.doc["panels"])
+    _named(shell, "Figure type").value = "sounding"
+    assert {p["kind"] for p in shell.doc["panels"]} == {"sounding"}
+    assert len(shell.doc["panels"]) == n
+    assert _named(shell, "Add a panel of").value == "sounding"
+    _named(shell, "Rows").value = shell.doc["grid"]["rows"] + 1  # (no error, no going back)
+    assert shell.doc["grid"]["rows"] == _named(shell, "Rows").value
+    k = len(de.free_cells(shell.doc))
+    shell.inspector.grid.fill_empty("sounding")
+    assert len(shell.doc["panels"]) == n + k and not de.free_cells(shell.doc)
+
+
+def test_the_figure_type_reaches_panels_set_aside_and_keeps_times(shell):
+    shell.select("figure")
+    n = len(shell.doc["panels"])
+    assert n > 1
+    last = max(shell.doc["panels"], key=lambda p: p["cell"][:2])
+    when = gridview.moment_of(last)[1]
+    _named(shell, "Rows").value = 1
+    _named(shell, "Columns").value = 1
+    assert shell.doc.get(de.OFF_GRID)
+    _named(shell, "Figure type").value = "sounding"
+    assert {p["kind"] for p in shell.doc[de.OFF_GRID]} == {"sounding"}
+    _named(shell, "Rows").value = n
+    assert de.OFF_GRID not in shell.doc and len(shell.doc["panels"]) == n
+    assert {p["kind"] for p in shell.doc["panels"]} == {"sounding"}
+    assert when in [gridview.moment_of(p)[1] for p in shell.doc["panels"]]
+
+
 def test_the_grid_boxes_on_the_figure_node(shell):
     shell.select("figure")
     n = len(shell._hist)
+    panels = len(shell.doc["panels"])
     _named(shell, "Columns").value = 1
-    assert shell.doc["grid"]["cols"] != 1 and len(shell._hist) == n  # (panels would be off it)
+    _named(shell, "Rows").value = 1
+    assert shell.doc["grid"] == dict(shell.doc["grid"], rows=1, cols=1)  # (it takes what's asked)
+    assert len(shell.doc["panels"]) == 1
+    assert len(shell.doc[de.OFF_GRID]) == panels - 1
+    assert "not drawn" in " ".join(str(getattr(o, "object", ""))
+                                   for o in shell.inspector.body.select())
+    while len(shell._hist) > n:
+        shell.undo()
+    assert len(shell.doc["panels"]) == panels
     cols = shell.doc["grid"]["cols"]
     _named(shell, "Columns").value = cols + 1
     assert shell.doc["grid"]["cols"] == cols + 1

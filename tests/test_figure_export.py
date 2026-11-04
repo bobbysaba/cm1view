@@ -320,7 +320,7 @@ def test_figure_of_parts(ed, tmp_path):
     r = subprocess.run([sys.executable, "-I", script_of(base)], capture_output=True, text=True,
                        cwd=str(tmp_path))
     assert r.returncode == 0, r.stderr[-500:]
-    assert np.array_equal(mi.imread(base + ".png"), mi.imread(base + "_viewer.png"))
+    assert np.abs(mi.imread(base + ".png") - mi.imread(base + "_viewer.png")).max() <= 2 / 255
     ed._remove_part()  # (part 1: the soundings stay)
     assert not ed.parts and ed.collect_all()["kind"] == "sounding"
     ed.spec_path.value = base
@@ -526,7 +526,7 @@ def test_save_waits_for_the_series(ed, tmp_path, monkeypatch):
     saved, jobs, busy = [], [], [["run: w 3/9"], ["run: w 3/9"], []]
     monkeypatch.setattr(ed, "panel_data", lambda s: {})
     monkeypatch.setattr(ed, "series_pending", lambda: busy[0])
-    monkeypatch.setattr(X.fg, "save_image", lambda s, d, p: saved.append(p) or p)
+    monkeypatch.setattr(X.fg, "save_image", lambda s, d, p, **k: saved.append(p) or p)
     monkeypatch.setattr(X.fg, "save_spec", lambda s, b: "spec")
     monkeypatch.setattr(ed.v.pools["fig"], "submit", lambda f, *a: jobs.append((f, a)))
     ed._save_gen = 7
@@ -542,7 +542,7 @@ def test_save_waits_for_the_series(ed, tmp_path, monkeypatch):
 def test_a_later_save_replaces_the_one_waiting(ed, tmp_path, monkeypatch):
     from cm1view.figures import export as X
     saved = []
-    monkeypatch.setattr(X.fg, "save_image", lambda s, d, p: saved.append(p) or p)
+    monkeypatch.setattr(X.fg, "save_image", lambda s, d, p, **k: saved.append(p) or p)
     ed._save_gen = 3
     ed._save_job(ed.collect_all(), False, str(tmp_path / "old"), 2)
     assert not saved

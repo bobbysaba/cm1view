@@ -996,6 +996,7 @@ def test_labels_shrink_to_fit_a_narrow_panel(ed):
 
 
 def test_labels_keep_their_size_with_room_or_when_told(ed):
+    from matplotlib.text import Text
     ed.rows.value, ed.cols.value = 1, 2
     fig = render(ed)[2]
     assert _label_sizes(fig) == {12.0}
@@ -1004,8 +1005,7 @@ def test_labels_keep_their_size_with_room_or_when_told(ed):
     ed.label_fit.value = False
     spec, data, fig = render(ed)
     assert not spec["label_fit"] and not _label_sizes(fig)
-    assert {t.get_fontsize() for t in fig.axes[0].findobj(
-        lambda a: getattr(a, "get_text", None) and a.get_text() == "a")} == {12.0}
+    assert {t.get_fontsize() for t in fig.axes[0].findobj(Text) if t.get_text() == "a"} == {12.0}
 
 
 def test_a_fit_that_shrinks_nothing_leaves_the_layout_alone(ed):

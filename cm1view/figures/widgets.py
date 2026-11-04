@@ -95,8 +95,11 @@ class FigureWidgets:
                                               button_style="outline")
         # ---- Panels: area
         self.dom = pn.widgets.Select(name="Plan-view area", options={
-            "Centred on tracked storm": "storm", "Fixed box": "box",
-            "Whole domain": "full"})
+            "Follow the tracked storm": "storm", "Fixed box": "box",
+            "Whole domain": "full"},
+            description="Follow the tracked storm: the panel stays centred on the storm track "
+                        "loaded for the run, moving with it from time to time. Fixed box: the "
+                        "same x and y at every time.")
         with self._redraws():
             self.half = _f("Half-width (km)", 12.5, step=0.5, start=0.5)
         self.box_x0 = _f("x min (km)", None, step=0.5)

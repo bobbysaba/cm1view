@@ -39,7 +39,7 @@ def test_a_failing_encoder_says_why(tmp_path):
 
 
 def test_no_encoder_is_a_clear_error(tmp_path, monkeypatch):
-    monkeypatch.setattr(fg, "video_encoder", lambda: None)
+    monkeypatch.setattr(fg.base, "video_encoder", lambda: None)
     with pytest.raises(RuntimeError, match="No video encoder"):
         fg.write_video([Image.new("RGB", (4, 4))], str(tmp_path / "a.mp4"))
 

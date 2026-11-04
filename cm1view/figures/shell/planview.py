@@ -458,9 +458,8 @@ class PlanPane:
 
         def on_go(e):
             nr, nc = int(rows.value or 1), int(cols.value or 1)
-            why = de.fill_problem(shell.doc, nr, nc)
-            if not why and row_dim.value == col_dim.value != "none":
-                why = "Rows and columns can't step through the same thing."
+            why = "Rows and columns can't step through the same thing." \
+                if row_dim.value == col_dim.value != "none" else None
             if why:
                 note.object = f'<div class="cv-status" style="color:#f87171">{why}</div>'
                 return
@@ -482,7 +481,9 @@ class PlanPane:
             shell.edit(apply, node=nodes.FIGURE)
             made, gone = done[0]
             self.ins.fill_said = f"{made} panel{'s' if made != 1 else ''} filled" + (
-                f"; {gone} no longer on the grid (Undo brings them back)." if gone else ".")
+                f"; {gone} no longer on the grid (Undo brings them back)." if gone else ".") + (
+                " Panels of other kinds with no room are set aside; see above."
+                if shell.doc.get(de.OFF_GRID) else "")
             self.ins.show(nodes.FIGURE)
 
         def on_titles(e):

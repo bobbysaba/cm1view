@@ -328,7 +328,6 @@ def test_fill_another_grid_shape_forgets_the_old_ratios():
 def test_fill_keeps_off_cells_other_kinds_hold():
     doc = small()
     doc["panels"].append(dict(id=7, kind="sounding", cell=[1, 0, 1, 1], layers=[]))
-    assert de.fill_problem(doc, 1, 3) is not None and de.fill_problem(doc, 2, 3) is None
     de.fill_panels(doc, 2, 1, "none", "times", dict(times=[0.0, 60.0]), run="r0")
     assert {tuple(p["cell"][:2]) for p in doc["panels"] if p["kind"] == "plan"} == {(0, 0)}
     assert panel(doc, 7)["cell"][:2] == [1, 0]
@@ -697,8 +696,11 @@ def test_a_saved_figure_from_the_gallery_comes_here(shell, tmp_path):
     assert not shell.doc.get("suptitle")
 
 
-def test_the_quick_start_sits_outside_both_layouts(shell, viewer):
+def test_the_quick_start_sits_outside_the_new_layout(shell):
     assert shell.ed.quick not in shell.ed.preview.objects
+
+
+def test_the_quick_start_stays_in_the_old_layout(viewer):
     assert viewer.figed.quick in viewer.figed.preview.objects  # (off: where it always was)
 
 

@@ -15,15 +15,15 @@ FILL = dict(type="fill", field="dbz", on=True, cmap="viridis", vmin=0.0, vmax=60
 
 
 def doc_of(*panels, **more):
-    return dict(version=3, size=[6.0, 4.0], grid=dict(rows=1, cols=max(len(panels), 1)),
-                style={}, kinds={}, layers={}, sections={}, annotations=[],
-                runs=[dict(id="r0", path="/x/one"), dict(id="r1", path="/x/two", t0_min=10.0)],
-                panels=list(panels), **more)
+    return {**dict(version=3, size=[6.0, 4.0], grid=dict(rows=1, cols=max(len(panels), 1)),
+                   style={}, kinds={}, layers={}, sections={}, annotations=[],
+                   runs=[dict(id="r0", path="/x/one"), dict(id="r1", path="/x/two", t0_min=10.0)],
+                   panels=list(panels)), **more}
 
 
 def plan(pid, c=0, run="r0", t=600.0, **more):
-    return dict(id=pid, kind="plan", cell=[0, c, 1, 1], run=run, time_s=t, title="", layers=[],
-                **more)
+    return {**dict(id=pid, kind="plan", cell=[0, c, 1, 1], run=run, time_s=t, title="", layers=[]),
+            **more}
 
 
 # ------------------------------------------------------------------ through time

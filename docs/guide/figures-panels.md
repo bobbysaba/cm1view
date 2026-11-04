@@ -35,7 +35,7 @@ several fields at one time, or plan views at several heights or model levels (e.
 and 6 km, or levels 5, 10 and 20; a layer can keep its own height, and *Style → Panel
 labels → Height label* names each panel's height or level).
 
-**Plan-view area** is *Centred on tracked storm* (with a *Half-width*, default 12.5 km),
+**Plan-view area** is *Follow the tracked storm* (with a *Half-width*, default 12.5 km),
 a *Fixed box* (x and y minimum and maximum, in grid km) or the *Whole domain*. *Axis
 coordinates* are the model grid's x, y or relative to the storm.
 

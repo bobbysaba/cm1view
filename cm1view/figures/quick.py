@@ -30,7 +30,7 @@ def _thumb_css(png=None):
     anywhere on the picture opens the figure."""
     pic = "none" if png is None else \
         f"url(data:image/png;base64,{base64.b64encode(png).decode()})"
-    return (f":host .bk-btn {{ background: #fff {pic} center 4px / calc(100% - 8px) "
+    return (f":host .bk-btn {{ display: block !important; background: #fff {pic} center 4px / calc(100% - 8px) "
             f"{_THUMB_BOX}px no-repeat !important; color: #1f2937 !important; "
             f"padding: {_THUMB_BOX + 6}px 6px 0 6px !important; height: 100% !important; "
             "font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; "

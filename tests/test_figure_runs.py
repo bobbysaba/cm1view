@@ -509,6 +509,7 @@ def test_templates_apply_to_another_run(ed, coarse_run):
     spec = ed.collect()
     ed.tpl_name.value = "two by three"
     ed._save_template()
+    assert "Saved" in txt(ed.msg.object), ed.msg.object
     path = ed.tpl_sel.value
     ed.tpl_sel.value = None  # as a page starts: the list picks one, as the browser shows
     ed._list_templates()
@@ -529,7 +530,6 @@ def test_templates_apply_to_another_run(ed, coarse_run):
     ed.quick.hide()
     with open(path, "w") as f:
         f.write(kept)
-    assert "Saved" in txt(ed.msg.object), ed.msg.object
     assert os.path.dirname(path) == fg.templates_dir() and not ed.tpl_go.disabled
     tpl = fg.load_template(path)
     assert "runs" not in tpl and tpl["template"]["time_s"] == spec["time_s"]

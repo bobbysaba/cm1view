@@ -187,7 +187,7 @@ def kind_block(block):
 class Scope:
     """Where the settings of a node live.  kind: its kind; pid: its panel."""
 
-    BACK = "Back to what all panels have"
+    BACK = "Use the setting for all panels"
     shares_range = True  # (axes.share reaches it)
 
     def __init__(self, kind=None, pid=None):
@@ -331,7 +331,7 @@ class Scope:
 class InsetScope(Scope):
     """An inset's: its own opts, over its panel's, which it inherits."""
 
-    BACK = "Back to its panel's"
+    BACK = "Use its panel's setting"
     shares_range = False  # (its axes are its own)
 
     def __init__(self, kind, pid, iid):
@@ -544,8 +544,8 @@ class Sections:
     def _reset_line(self, section, marks):
         """What is changed in a section, and its reset."""
         word = self.scope.BACK if self.scope.pid is not None else \
-            "Back to the figure's" if self.scope.kind is not None and section == "Colorbar" else \
-            "Back to a new figure's"
+            "Use the figure's setting" if self.scope.kind is not None and section == "Colorbar" else \
+            "Reset to default"
         reset = pn.widgets.Button(name=f"↺ {word}", height=26, margin=(2, 2), button_type="light",
                                   button_style="outline", align="center",
                                   description="Every setting of this section. Undo takes it back")
@@ -604,7 +604,7 @@ class Sections:
         for key, word in row_words(self.shell.ed, own).items():
             b = pn.widgets.Button(name=f"↺ {word}", height=26, margin=(2, 2),
                                   button_type="light", button_style="outline",
-                                  description="Back to what all panels have")
+                                  description="Use the setting for all panels again")
             b.on_click(lambda e, k=key: back(k))
             chips.append(b)
         return [pn.FlexBox(*chips, sizing_mode="stretch_width")]

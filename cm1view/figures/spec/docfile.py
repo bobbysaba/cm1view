@@ -199,6 +199,7 @@ def doc_template(doc, name=""):
     so are entries of another run, while what shows every run stays so.  Times stay relative to
     the first panel's."""
     s = _copy(doc)
+    s.pop("off_grid", None)  # (panels set aside are not part of the layout)
     refs = doc_time_refs(s) if s.get("runs") else []
     runs = s.get("runs") or []
     first = next((r["id"] for r in runs if refs and r["path"] == refs[0][0]),
