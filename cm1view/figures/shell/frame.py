@@ -21,7 +21,7 @@ from ..draw.base import _cell
 from ..runs import AllFields
 from ..times import _tlabel
 from ...viewer.ui import out_of_flow
-from . import docedit as de, nodes, scrub
+from . import docedit as de, nodes, scrub, vision
 from .exportview import ExportDialog
 from .inspector import Inspector
 from .placing import Placing
@@ -55,6 +55,7 @@ class FigureShell:
         self._req = 0
         self._boxes = {}  # panel -> where it is in the preview
         self._png = None
+        self._seen_key, self._seen_png = None, ""  # (the vision preview's last picture)
         self._frames = None  # (the scrubber's: key, offsets, labels, saved frame)
         self._dt = None  # (how far the preview is moved from the saved figure; None: not)
         self._syncing = False
@@ -84,6 +85,11 @@ class FigureShell:
             options={"Fit": "fit", "Actual size": "actual"}, value="fit", height=32, margin=(4, 4),
             description="Actual size: as large as the printed figure (at 96 pixels per inch) to "
                         "judge the font sizes")
+        self.vision = pn.widgets.Select(
+            name="", options=dict(vision.MODES), value="", width=210, height=32, margin=(4, 4),
+            description="Preview only: how the picture reads in greyscale or with a colour-vision "
+                        "deficiency (Machado et al. 2009, full loss of one cone type). The "
+                        "figure, its document, undo and every export are unchanged.")
         self.back = pn.widgets.Button(name="Old layout", icon="layout-columns", height=32,
                                       margin=(4, 4), button_type="light", button_style="outline",
                                       description="Back to the old editor and its figure: what "
@@ -122,7 +128,7 @@ class FigureShell:
         self.inspector = Inspector(self)
         self.export = ExportDialog(self)
         toolbar = pn.FlexBox(self.tree_btn, self.exp_btn, self.update, self.auto, self.new_btn,
-                             self.undo_btn, self.redo_btn, self.zoom, self.placing.mode, self.back,
+                             self.undo_btn, self.redo_btn, self.zoom, self.vision, self.placing.mode, self.back,
                              flex_wrap="wrap", align_items="center", sizing_mode="stretch_width",
                              styles={"flex": "0 0 auto", "border-bottom": f"1px solid {GRID}"})
         self.picture = pn.Column(self.image, margin=0, sizing_mode="stretch_both",
@@ -145,6 +151,7 @@ class FigureShell:
         self.update.on_click(lambda e: self.request(force=True, delay=False))
         self.auto.param.watch(lambda e: self.request() if e.new else None, "value")
         self.zoom.param.watch(lambda e: self._show_image(), "value")
+        self.vision.param.watch(lambda e: self._show_image(), "value")
         self.back.on_click(lambda e: self.close())
         self.scr_slider.param.watch(self._on_scrub, "value")
         self.scr_prev.on_click(lambda e: self._scrub_by(-1))
@@ -662,10 +669,25 @@ class FigureShell:
         self.say(f"{self._said} · {note}" if self._said else note)
         self._said = ""
 
+    def _seen(self, png):
+        """The drawn picture (base64 PNG) as the vision preview says (vision.py); the one just
+        made is kept for the next look at it."""
+        mode = self.vision.value
+        self.vision.styles = {"outline": "2px solid #f59e0b", "border-radius": "4px"} if mode \
+            else {}
+        if not mode:
+            return png
+        if self._seen_key != (png, mode):
+            self._seen_key = (png, mode)
+            self._seen_png = base64.b64encode(
+                vision.simulate_png(base64.b64decode(png), mode)).decode()
+        return self._seen_png
+
     def _show_image(self):
         if not self._png:
             return
         png, (w, _), dpi, bg = self._png
+        png = self._seen(png)
         back = ("background:repeating-conic-gradient(#d4d4d4 0% 25%, #fff 0% 50%) 50% / "
                 "16px 16px;" if bg == "none" else "")
         size = f"width:{w / dpi * 96:.0f}px;max-width:none;" if self.zoom.value == "actual" \
