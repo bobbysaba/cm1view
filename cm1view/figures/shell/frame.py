@@ -17,6 +17,7 @@ import panel as pn
 from .. import draw as figdraw, spec as fg
 from ...theme import GRID
 from ..click import ClickImage, panel_boxes, watch_tight
+from ..draw.base import _cell
 from ..runs import AllFields
 from ..times import _tlabel
 from . import docedit as de, nodes
@@ -200,8 +201,9 @@ class FigureShell:
         if self.doc is None:
             return
         self._keep()
+        snd = de.sounding_size(self.doc)
         fn(self.doc)
-        self._follow_size()
+        self._follow_size(snd)
         self._future = []
         self.tree.items = nodes.tree_items(self.doc, self.fields)
         self.undo_btn.disabled, self.redo_btn.disabled = False, True
@@ -209,10 +211,26 @@ class FigureShell:
             self._show(node if nodes.still_there(self.doc, node) else nodes.FIGURE)
         self.request()
 
-    def _follow_size(self):
-        """A figure of plan views with an automatic size: its height for its width and grid."""
+    def can_follow(self, doc=None):
+        """Whether the figure's size can follow its panels: plan views, or soundings, on a plain
+        grid (an estimate from one panel knows no spans, shares or other kinds)."""
+        doc = self.doc if doc is None else doc
+        grid = doc.get("grid") or {}
+        return {p["kind"] for p in doc["panels"]} in ({"plan"}, {"sounding"}) and \
+            not grid.get("widths") and not grid.get("heights") and \
+            all(_cell(p)[2:] == (1, 1) for p in doc["panels"])
+
+    def _follow_size(self, snd_was=None):
+        """A figure with an automatic size: the height of plan views for their width and grid;
+        soundings' size when what it depends on just changed (snd_was: what it gave before)."""
         doc = self.doc
-        if not doc.get("size_auto") or {p["kind"] for p in doc["panels"]} != {"plan"}:
+        if not doc.get("size_auto") or not self.can_follow():
+            return
+        if doc["panels"][0]["kind"] == "sounding":
+            now = de.sounding_size(doc)
+            if now != snd_was and now is not None:
+                doc["size"] = list(now)
+                self.inspector.size_followed(doc["size"])
             return
         try:
             h = self.fit_height(doc)

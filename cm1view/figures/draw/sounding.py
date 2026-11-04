@@ -114,6 +114,7 @@ def _sounding(fig, ax, d, spec, fs):
     cols = sounding_colors(spec, d)
     key_fs = font_size(spec, "legend") if spec.get("font", {}).get("legend") else None
     keys = [k for k in (o.get("table") or []) if k in [p[0] for p in SND_PARAMS]]
+    parts = []  # (the panel's other axes: where it is in the picture)
     if keys and n:  # a row per sounding, under the panel
         gs = ax.get_subplotspec().subgridspec(
             2, 1, height_ratios=[1.0, float(o.get("table_height", 0.08)) * (n + 1.5)],
@@ -122,8 +123,10 @@ def _sounding(fig, ax, d, spec, fs):
         ax, tx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
         _param_table(tx, d, n, [lk["T"]["color"] for lk in sounding_looks(spec, d, cols)],
                      keys, spec)
+        parts.append(tx)
     if lay == "hodo":
         _hodo(ax, d, n, cols, o, fs, full=True, key_fs=key_fs, styles=hodo_styles(spec, d))
+        ax._cv_parts = parts
         return ax
     if lay == "side":
         w = float(o.get("hodo_width", 0.62))  # hodograph width / skew-T width
@@ -133,8 +136,10 @@ def _sounding(fig, ax, d, spec, fs):
         _skewt(ax, d, spec, fs, cols, inset=False)
         _hodo(hx, d, n, cols, o, fs, full=True, key_fs=key_fs, styles=hodo_styles(spec, d))
         ax._cv_more = [hx]  # (its key goes into a figure legend with the skew-T's)
+        ax._cv_parts = parts + [hx]
         return ax
     _skewt(ax, d, spec, fs, cols, inset=lay == "inset")
+    ax._cv_parts = parts
     return ax
 
 

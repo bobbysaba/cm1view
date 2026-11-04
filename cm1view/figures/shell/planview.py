@@ -13,7 +13,6 @@ import panel as pn
 from .. import draw as figdraw, spec as fg
 from ..cards import GRID_DIMS, TYPE_LABEL, _grid
 from ..cards.base import SECTION, _near
-from ..draw.base import _cell
 from ..times import _heights, _nearest_t, _tlabel
 from . import docedit as de, nodes
 from .layerrow import InPanel, LayerRow, Shared, describe, own_time_widgets
@@ -144,6 +143,19 @@ class PlanPane:
 
         pick.param.watch(on_pick, "value")
         objs = [_note("Drawn in panels:"), pick]
+        others = de.other_kinds_with(doc, "plan", lid)
+        if others:
+            n = len(others)
+            apart = pn.widgets.Button(name="Keep apart", height=26, margin=(2, 4),
+                                      button_type="light", button_style="outline",
+                                      description="Plan views get a copy of this layer of their "
+                                                  "own; the other panels keep this one")
+            apart.on_click(lambda e: shell.edit(lambda d: de.split_shared(d, "plan", lid),
+                                                node=shell.node))
+            objs += [_note(f"<b>Panel{'s' if n > 1 else ''} "
+                           + ", ".join(names[p["id"]] for p in others)
+                           + f" of another kind draw{'' if n > 1 else 's'} this layer too:</b> "
+                           "changes here reach them."), apart]
         differ = de.differing(doc, lid, "plan")
         if differ:
             n = len(differ)
@@ -228,10 +240,6 @@ class PlanPane:
                                     next(iter(secs)), sizing_mode="stretch_width")
             sec.param.watch(lambda ev: set_keys(section=ev.new), "value")
             objs.append(sec)
-        r, c, rs, cs = _cell(p)
-        objs.append(_note(f"Row {r + 1}, column {c + 1}"
-                          + (f", {rs} × {cs} cells" if (rs, cs) != (1, 1) else "")
-                          + ". The figure's Fill panels tool sets rows and columns."))
         objs += [_head("Layers"),
                  _note("Changes here are for this panel alone; a shared layer's other settings "
                        "follow All plan views.")]
@@ -242,15 +250,7 @@ class PlanPane:
         if not lays:
             objs.append(_note("No layers here: add one above."))
         objs += self._panel_looks(doc, pid)
-        rm = pn.widgets.Button(name="Remove this panel", button_type="light",
-                               button_style="outline", height=30, margin=(8, 4),
-                               disabled=len(doc["panels"]) < 2,
-                               description="Its cell stays empty; the Fill panels tool can fill "
-                                           "it again")
-        rm.on_click(lambda e: shell.edit(
-            lambda d: d.update(panels=[q for q in d["panels"] if q["id"] != pid]),
-            node=nodes.KIND_PREFIX + "plan"))
-        objs.append(rm)
+        objs += self.ins.grid.place_objs(doc, pid)
         return f"Panel {letter}", objs
 
     def _times(self, rid, now):

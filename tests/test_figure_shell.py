@@ -33,7 +33,7 @@ def test_tree_rows_in_reading_order_under_their_kind():
     assert labels["panel:0"] == "a  one · 10 min · “Early”"
     assert labels["panel:1"].startswith("z  Two · 20 min")  # (its own letter)
     assert labels["layer:0:0"] == "Fill · w"  # (what differs in this panel)
-    assert labels["layer:7:0"] == "Inflow"
+    assert labels["layer:7:0"] == "Sounding · Inflow"
 
 
 def test_letters_follow_the_reading_order_not_the_list():

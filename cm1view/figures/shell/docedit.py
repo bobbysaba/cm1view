@@ -1,6 +1,7 @@
 """Changes to a figure document, without widgets: layers shared or of a panel, what differs in
-a panel, a panel's height, a run's time zero, titles, and filling panels.  Each takes the
-document and changes it in place; the shell keeps a copy first, for undo.
+a panel, a panel's height, a run's time zero, titles, the grid and where panels sit, and filling
+panels.  Each takes the document and changes it in place; the shell keeps a copy first, for
+undo.
 
 Layers are named by id (shared) or by place in their panel (j, as figdraw.panel_layers counts
 them), so nothing is renumbered when one moves or goes."""
@@ -352,17 +353,287 @@ def set_t0(doc, rid, t0_min):
     run["t0_min"] = float(t0_min or 0.0)
     if not dt or run.get("outputs_s"):
         return
-    timed = [p for p in sorted(doc.get("panels") or [], key=lambda p: _cell(p)[:2])
-             if p.get("time_s") is not None and p.get("run") is not None]
+    ordered = sorted(doc.get("panels") or [], key=lambda p: _cell(p)[:2])
+    _keep_moment([p for p in ordered if p.get("time_s") is not None and p.get("run") is not None],
+                 rid, dt)
+    for kind in dict.fromkeys(p["kind"] for p in ordered):
+        if kind not in ("line", "th"):  # (a series has no one time)
+            _keep_moment([x for p in ordered if p["kind"] == kind for x in p.get("layers") or []
+                          if "ref" not in x and x.get("time_s") is not None
+                          and x.get("run") is not None], rid, dt)
+
+
+def _keep_moment(timed, rid, dt):
+    """Items with a run and time (one list: a kind's soundings, say, or the panels) stay at
+    the moment they showed when run rid's time zero moves by dt s: measured from the first
+    one's run, whose items stay."""
     if not timed:
         return
     ref = timed[0]["run"]
-    for p in timed:
-        if p["run"] != ref:
-            if rid == ref:
-                p["time_s"] = float(p["time_s"]) - dt
-            elif p["run"] == rid:
-                p["time_s"] = float(p["time_s"]) + dt
+    for x in timed:
+        if x["run"] != ref:
+            for key in ("time_s", "time_s1"):
+                if x.get(key) is not None:
+                    if rid == ref:
+                        x[key] = float(x[key]) - dt
+                    elif x["run"] == rid:
+                        x[key] = float(x[key]) + dt
+
+
+# ------------------------------------------------------------ the grid: its shape
+def grid_shape(doc):
+    grid = doc.get("grid") or {}
+    return int(grid.get("rows", 1)), int(grid.get("cols", 1))
+
+
+def _cells_of(p):
+    r, c, rs, cs = _cell(p)
+    return {(r + a, c + b) for a in range(rs) for b in range(cs)}
+
+
+def free_cells(doc):
+    """The cells of the grid no panel covers, in reading order."""
+    rows, cols = grid_shape(doc)
+    taken = {x for p in doc.get("panels") or [] for x in _cells_of(p)}
+    return [(r, c) for r in range(rows) for c in range(cols) if (r, c) not in taken]
+
+
+def _fit_ratios(vals, n):
+    """A list of column or row shares for n of them: cut, or the new ones as wide as the
+    average."""
+    vals = [float(v) for v in vals]
+    return vals[:n] + [sum(vals) / len(vals)] * (n - len(vals))
+
+
+def set_grid(doc, rows, cols):
+    """The grid's rows and columns (shares follow: set_shares).  Why it can't be (panels off
+    it, which stay), or None."""
+    from . import nodes
+    rows, cols = int(rows), int(cols)
+    names = nodes.letters(doc)
+    off = [names[p["id"]] for p in nodes.in_order(doc) if _cell(p)[0] + _cell(p)[2] > rows
+           or _cell(p)[1] + _cell(p)[3] > cols]
+    if off:
+        return (f"Panel{'s' if len(off) > 1 else ''} {', '.join(off)} would be off the grid: "
+                "move or remove them first.")
+    grid = doc.setdefault("grid", {})
+    grid.update(rows=rows, cols=cols)
+    for key, n in (("widths", cols), ("heights", rows)):
+        if grid.get(key):
+            grid[key] = _fit_ratios(grid[key], n)
+    return None
+
+
+def set_shares(doc, key, vals):
+    """The columns' ("widths") or rows' ("heights") shares of the figure; none: equal.  Why it
+    can't be, or None."""
+    n = grid_shape(doc)[key == "widths"]
+    word = "column" if key == "widths" else "row"
+    grid = doc.setdefault("grid", {})
+    if not vals:
+        grid.pop(key, None)
+        return None
+    if len(vals) != n or min(vals) <= 0:
+        return f"That needs {n} numbers above 0, one for each {word}."
+    grid[key] = [float(v) for v in vals]
+    return None
+
+
+def next_cell(doc, grow=None):
+    """Where a new panel goes: the first free cell (grow "row" or "col": in a new row or
+    column, as also when none is free).  Grows the grid when it has to."""
+    rows, cols = grid_shape(doc)
+    free = free_cells(doc)
+    if free and grow is None:
+        return free[0]
+    if grow is None:
+        grow = "col" if rows == 1 else "row"
+    if grow == "col":
+        set_grid(doc, rows, cols + 1)
+        return 0, cols
+    set_grid(doc, rows + 1, cols)
+    return rows, 0
+
+
+def place_problem(doc, pid, cell):
+    """Why panel pid can't take cell [row, col, rowspan, colspan], or None (a panel of the
+    same shape exactly there is no problem: they swap)."""
+    from . import nodes
+    rows, cols = grid_shape(doc)
+    r, c, rs, cs = cell
+    if min(rs, cs) < 1 or r < 0 or c < 0 or r + rs > rows or c + cs > cols:
+        return f"That is off the grid of {rows} × {cols}: make the grid larger first."
+    p = panel_by_id(doc, pid)
+    wanted = {(r + a, c + b) for a in range(rs) for b in range(cs)}
+    names = nodes.letters(doc)
+    hit = [q for q in nodes.in_order(doc) if q["id"] != pid and wanted & _cells_of(q)]
+    if len(hit) == 1 and list(_cell(hit[0])) == list(cell) and _cell(p)[2:] == _cell(hit[0])[2:]:
+        return None
+    if hit:
+        return f"Panel{'s' if len(hit) > 1 else ''} {', '.join(names[q['id']] for q in hit)} " \
+               f"{'are' if len(hit) > 1 else 'is'} there."
+    return None
+
+
+def place_panel(doc, pid, cell):
+    """Panel pid at cell (a panel of its shape exactly there takes its place).  Why it can't
+    be, or None."""
+    why = place_problem(doc, pid, cell)
+    if why:
+        return why
+    p = panel_by_id(doc, pid)
+    for q in doc["panels"]:
+        if q["id"] != pid and list(_cell(q)) == [int(v) for v in cell]:
+            q["cell"] = list(_cell(p))
+    p["cell"] = [int(v) for v in cell]
+    letters_in_order(doc)
+    return None
+
+
+def letters_in_order(doc):
+    """Panels were added, moved or removed: letters go by reading order (a conversion's held
+    letters, kept to match the old drawing, no longer mean anything), and a figure whose
+    letters follow the count has them with more than one panel."""
+    for p in doc.get("panels") or []:
+        p.pop("letter", None)
+    letters = (doc.get("style") or {}).get("letters")
+    if isinstance(letters, dict) and letters.get("auto"):
+        letters["on"] = len(doc.get("panels") or []) > 1
+
+
+# ------------------------------------------------------------ panels of any kind
+AXES_LOOK = ("ticks", "ticklabels", "minor", "tickdir", "frame_lw", "title_bold", "title_loc")
+
+
+def seed_kind(doc, kind, start, labels=("", "")):
+    """A kind new to the figure: its settings from `start` (a new figure's, {key: settings}),
+    its axes looking like those of the kinds already there, with its own axis labels."""
+    kinds = doc.setdefault("kinds", {})
+    if kind in kinds:
+        return
+    have = next((k["axes"] for k in kinds.values() if isinstance(k.get("axes"), dict)), None)
+    new = copy.deepcopy(start)
+    axes = dict(new.get("axes") or {})
+    if have is not None:
+        axes.update({k: have[k] for k in AXES_LOOK if k in have})
+    axes.update(xlabel=labels[0], ylabel=labels[1])
+    new["axes"] = axes
+    kinds[kind] = new
+
+
+def label_places(doc, p, kind_info, all_kinds):
+    """A new panel's letter and time label go where its kind has them, unless the figure's were
+    moved by hand (they are at no kind's place): as its own settings, since style holds one
+    place for the whole figure."""
+    style = doc.get("style") or {}
+    places_of = dict(letters=("letter_at", "lower left"), time_label=("time_at", "lower right"))
+    for block, (attr, fallback) in places_of.items():
+        now = (style.get(block) or {}).get("loc", fallback)
+        want = getattr(kind_info, attr)
+        if now != want and now in {getattr(k, attr) for k in all_kinds}:
+            opts = p.setdefault("opts", {})
+            opts[block] = dict(opts.get(block) or {}, loc=want)
+
+
+def add_panel(doc, kind, cell, layers=None, **keys):
+    """A new panel at (row, col) in one cell, with its layers and other keys.  Returns it."""
+    pid = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    p = dict(id=pid, kind=kind, cell=[int(cell[0]), int(cell[1]), 1, 1], run=None, time_s=None,
+             title="", layers=list(layers or []), insets=[])
+    p.update(keys)
+    doc.setdefault("panels", []).append(p)
+    letters_in_order(doc)
+    return p
+
+
+def plan_panel(doc, cell, run, time_s, start_layers=(), section=None):
+    """A new plan view at cell: as the last plan view is, but for its titles; the first draws
+    the shared layers there are (none: start_layers, shared from now on)."""
+    mine = panels_of(doc, "plan")
+    new_id = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    if mine:
+        p = _new_panel(doc, new_id, mine[-1], "plan")
+        doc["panels"].append(p)
+    else:
+        if not doc.get("layers"):
+            for lay in start_layers:
+                doc.setdefault("layers", {})[new_layer_id(doc)] = copy.deepcopy(lay)
+        p = _new_panel(doc, new_id, None, "plan")
+        p.update(run=run, time_s=time_s)
+        doc["panels"].append(p)
+    p["cell"] = [int(cell[0]), int(cell[1]), 1, 1]
+    if p.get("section") is None:
+        secs = doc.setdefault("sections", {})
+        if not secs and section is not None:
+            secs["s0"] = copy.deepcopy(section)
+        if secs:
+            p["section"] = next(iter(secs))
+    letters_in_order(doc)
+    return p
+
+
+def copy_panel(doc, pid, cell):
+    """A copy of panel pid at (row, col), in one cell, without its row label.  Returns it."""
+    new = copy.deepcopy(panel_by_id(doc, pid))
+    new.pop("rowlabel", None)
+    new.update(id=1 + max(p["id"] for p in doc["panels"]), cell=[int(cell[0]), int(cell[1]), 1, 1])
+    doc["panels"].append(new)
+    letters_in_order(doc)
+    return new
+
+
+def remove_panel(doc, pid):
+    """Panel pid out of the figure; its cell stays empty.  Shared layers stay in the document
+    (a plan view added later finds them)."""
+    doc["panels"] = [p for p in doc["panels"] if p["id"] != pid]
+    letters_in_order(doc)
+
+
+def move_entry(doc, pid, j, other):
+    """Layer j of panel pid (one of its own) to the end of panel `other`'s."""
+    item = places(doc, panel_by_id(doc, pid))[j]
+    panel_by_id(doc, pid)["layers"].remove(item)
+    panel_by_id(doc, other).setdefault("layers", []).append(item)
+
+
+# ------------------------------------------------------------ a shared layer, other kinds
+def other_kinds_with(doc, kind, lid):
+    """The panels of other kinds drawing shared layer lid."""
+    return [p for p in doc.get("panels") or [] if p["kind"] != kind
+            and any(x.get("ref") == lid for x in p.get("layers") or [])]
+
+
+def split_shared(doc, kind, lid):
+    """A kind's panels get a copy of shared layer lid of their own, so changes to it stay among
+    them; what differs in a panel stays.  Returns the copy's id."""
+    new = new_layer_id(doc)
+    keys = list(doc["layers"])
+    keys.insert(keys.index(lid) + 1, new)
+    layers = dict(doc["layers"], **{new: copy.deepcopy(doc["layers"][lid])})
+    doc["layers"] = {k: layers[k] for k in keys}
+    for p in panels_of(doc, kind):
+        for item in p.get("layers") or []:
+            if item.get("ref") == lid:
+                item["ref"] = new
+    return new
+
+
+def sounding_size(doc):
+    """A figure of soundings alone, as its automatic size has it: (width, height) in, for its
+    layout, grid and how many soundings share a panel when each has a parameter table.  None:
+    other kinds are there."""
+    pans = doc.get("panels") or []
+    if not pans or {p["kind"] for p in pans} != {"sounding"}:
+        return None
+    rows, cols = grid_shape(doc)
+    res = figdraw.resolve(doc)
+    sk = figdraw.panel_view(res, res["panels"][0]).get("skewt", {})
+    lay = figdraw.sounding_layout(sk)
+    w = {"side": 8.2, "hodo": 4.5}.get(lay, 5.0) * cols + 0.5
+    h = (4.5 if lay == "hodo" else 5.0) * rows
+    if sk.get("table"):
+        h += rows * (0.45 + 0.25 * max(len(p.get("layers") or []) for p in pans))
+    return float(w), float(h)
 
 
 # ------------------------------------------------------------ the grid: filling panels

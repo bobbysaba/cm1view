@@ -32,12 +32,22 @@ def kind_name(kind, n):
 
 def layer_name(lay, fields=None):
     """A layer in words: its type and field, or an entry's label or field."""
+    if lay.get("type") == "sounding":
+        return sounding_name(lay)
     head = TYPE_LABEL.get(lay.get("type"), "")
     recipe = lay.get("recipe") if isinstance(lay.get("recipe"), dict) else {}
     field = lay.get("field") or recipe.get("field")
     what = fields[field].label if fields is not None and field in fields else field
     return " · ".join(str(x) for x in (head, lay.get("label") or what) if x) or \
         str(lay.get("type") or "entry")
+
+
+def sounding_name(lay):
+    """A sounding in words: its label, or where it is, and when."""
+    where = {"trk": "storm", "pt": "point", "mean": "domain mean"}.get(
+        (lay.get("where") or {}).get("kind"), "")
+    when = f"{float(lay['time_s']) / 60:g} min" if lay.get("time_s") is not None else ""
+    return " · ".join(x for x in ("Sounding", lay.get("label") or where, when) if x)
 
 
 def panel_name(doc, p, runs=None):

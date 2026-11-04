@@ -1,8 +1,9 @@
 """The inspector: the settings of the one thing picked in the tree, and what an edit reaches.
 Only what is shown exists as widgets: a node's are made when it is picked.
 
-Editable so far: the figure's size, title, look and panels (Fill panels), the runs, and plan
-views (planview).  Other kinds are shown, with a panel's title to edit, until they move here."""
+Editable so far: the figure's size, title, look, grid and panels, the runs, plan views
+(planview) and soundings (entryview).  Other kinds are shown, with a panel's title and place to
+edit, until they move here."""
 
 import html
 import os
@@ -13,10 +14,12 @@ from ... import config
 from .. import draw as figdraw
 from ..cards import SIZE_PRESETS, _hex, _row
 from ..cards.base import _f
-from ..draw.base import _cell
 from ..runs import TYPE_PATH, _track_options, _track_path
 from . import docedit as de, nodes
-from .looks import FIGURE_SECTIONS, Scope, Sections, key_layer_widget
+from .entryview import EntryPane
+from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure node)
+from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget,
+                    panels_differ)
 from .planview import PlanPane
 from ...theme import GRID
 
@@ -34,33 +37,13 @@ def _lines(rows):
                         margin=(4, 4), sizing_mode="stretch_width")
 
 
-def grid_map(doc):
-    """The grid with each panel's letter where it sits (a table: spans shown as spans)."""
-    grid, names = doc.get("grid") or {}, nodes.letters(doc)
-    rows, cols = int(grid.get("rows", 1)), int(grid.get("cols", 1))
-    at = {tuple(_cell(p)[:2]): p for p in doc.get("panels") or []}
-    covered, trs = set(), []
-    for r in range(rows):
-        tds = []
-        for c in range(cols):
-            if (r, c) in covered:
-                continue
-            p = at.get((r, c))
-            rs, cs = _cell(p)[2:] if p else (1, 1)
-            covered.update((r + a, c + b) for a in range(rs) for b in range(cs))
-            tds.append(f'<td rowspan="{rs}" colspan="{cs}" style="border:1px solid {GRID};'
-                       f'text-align:center;min-width:28px;height:24px;padding:2px">'
-                       f'{names[p["id"]] if p else "·"}</td>')
-        trs.append(f'<tr>{"".join(tds)}</tr>')
-    return pn.pane.HTML(f'<table style="border-collapse:collapse;font-size:12px">{"".join(trs)}'
-                        '</table>', margin=(4, 4))
-
-
 class Inspector:
     def __init__(self, shell):
         self.shell = shell
         self.folds = {}  # what is open: by layer id or section, so it outlasts undo and redo
         self.plan = PlanPane(self)
+        self.grid = GridPane(self)
+        self.panes = dict(plan=self.plan, sounding=EntryPane(self))  # (kinds moved here)
         self.head = pn.pane.HTML(margin=(4, 4, 0, 4), sizing_mode="stretch_width",
                                  styles={"flex": "0 0 auto"})
         self.body = pn.Column(margin=0, sizing_mode="stretch_width",
@@ -112,8 +95,10 @@ class Inspector:
                 return
             if "x" in ev.new:
                 size, auto = [float(v) for v in ev.new.split("x")], False
-            else:
-                size, auto = [float(ev.new), float(height.value or 6.0)], True
+            else:  # (only plan views' height follows a width)
+                size = [float(ev.new), float(height.value or 6.0)]
+                auto = self.shell.can_follow() and \
+                    self.shell.doc["panels"][0]["kind"] == "plan"
             self.shell.edit(lambda d: d.update(size=size, size_auto=auto), node=nodes.FIGURE)
 
         width.param.watch(on_size, "value")
@@ -121,10 +106,13 @@ class Inspector:
         preset.param.watch(on_preset, "value")
         fit.on_click(lambda ev: self.shell.edit(lambda d: d.update(size_auto=True),
                                                 node=nodes.FIGURE))
+        fit.disabled = not self.shell.can_follow(doc)
+        if fit.disabled:
+            fit.description = ("Only a figure of plan views or of soundings, in equal cells, "
+                               "has an automatic size")
         title.param.watch(lambda ev: self.shell.edit(
             lambda d: d.update(suptitle=ev.new.strip())), "value")
-        objs = [_row(width, height, preset, fit), title, _note("Where the panels sit:"),
-                grid_map(doc)]
+        objs = [_row(width, height, preset, fit), title, *self.grid.grid_objs(doc)]
         for text in doc.get("notes") or []:
             objs.append(_note(html.escape(str(text))))
         if any(p["kind"] == "plan" for p in doc.get("panels") or []):
@@ -136,6 +124,13 @@ class Inspector:
             "Maximum and minimum": lambda by: [key_layer_widget(
                 self.shell, doc, "extremes", figdraw.EXTREME_TYPES, "First fill")]})
         objs += [c for c in (looks.card(s) for s in FIGURE_SECTIONS) if c is not None]
+        own = {}
+        for kind in kinds:
+            if kind in PANEL_KEYS:
+                own.update(panels_differ(doc, kind, PANEL_KEYS[kind]["Panel labels"]))
+        if own:
+            objs.append(_note("Panel labels set in a panel alone, which changes here skip: panel"
+                              + ("s " if len(own) > 1 else " ") + ", ".join(own) + "."))
         if doc.get("groups"):
             objs.append(_note("This figure was made of parts: each part's colorbar, legend and "
                               "ticks stay its own, whatever is set here."))
@@ -274,8 +269,8 @@ class Inspector:
     # ------------------------------------------------------------ all panels of a kind
     def _kind(self, doc, node):
         kind = node.partition(":")[2]
-        if kind == "plan":
-            return self.plan.kind_objs(doc)
+        if kind in self.panes:
+            return self.panes[kind].kind_objs(doc)
         mine = [p for p in nodes.in_order(doc) if p["kind"] == kind]
         names, fields = nodes.letters(doc), self.shell.fields
         shared = {}  # (the shared layers these panels draw: how many of them)
@@ -293,12 +288,11 @@ class Inspector:
     # ------------------------------------------------------------ a panel
     def _panel(self, doc, node):
         p = nodes.panel_of(doc, node)
-        if p["kind"] == "plan":
-            return self.plan.panel_objs(doc, node)
+        if p["kind"] in self.panes:
+            return self.panes[p["kind"]].panel_objs(doc, node)
         pid = p["id"]
         letter = nodes.letters(doc)[pid]
         fields = self.shell.fields
-        r, c, rs, cs = _cell(p)
 
         def apply(d, value):
             next(x for x in d["panels"] if x["id"] == pid)["title"] = value
@@ -306,9 +300,7 @@ class Inspector:
         title = pn.widgets.TextInput(name="Title", value=p.get("title") or "",
                                      sizing_mode="stretch_width")
         title.param.watch(lambda ev: self.shell.edit(lambda d: apply(d, ev.new.strip())), "value")
-        rows = [("Kind", nodes.KINDS[p["kind"]].label if p["kind"] in nodes.KINDS else p["kind"]),
-                ("Place", f"row {r + 1}, column {c + 1}"
-                          + (f", {rs} × {cs} cells" if (rs, cs) != (1, 1) else ""))]
+        rows = [("Kind", nodes.KINDS[p["kind"]].label if p["kind"] in nodes.KINDS else p["kind"])]
         if p.get("run") is not None:
             rows.append(("Run", nodes.run_names(doc).get(p["run"], "no such run")))
         if p.get("time_s") is not None:
@@ -319,14 +311,15 @@ class Inspector:
             rows.append((f"Layer {j + 1}", nodes.layer_name(lay, fields)
                          + ("" if ref is None else " (shared)")))
         return f"Panel {letter}", [title, _lines(rows),
-                                   _note("Shown only, apart from the title: editing comes with "
-                                         "each kind's move here.")]
+                                   _note("Shown only, apart from the title and its place: "
+                                         "editing comes with each kind's move here."),
+                                   *self.grid.place_objs(doc, pid)]
 
     # ------------------------------------------------------------ a layer
     def _layer(self, doc, node):
         p = nodes.panel_of(doc, node)
-        if p["kind"] == "plan":
-            return self.plan.layer_objs(doc, node)
+        if p["kind"] in self.panes:
+            return self.panes[p["kind"]].layer_objs(doc, node)
         j = int(node.rsplit(":", 1)[1])
         ref, lay = figdraw.panel_layers(doc, p)[j]
         letter = nodes.letters(doc)[p["id"]]

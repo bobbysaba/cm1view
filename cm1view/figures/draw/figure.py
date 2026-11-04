@@ -299,10 +299,13 @@ def _block(fig, spec, k, bv, data, fs, ext):
 
     half = {}
     for name in names:
-        half[name] = gview(name).get("axes", {}).get("share", "none") != "none" and \
+        snd = [p for p in pans if p["kind"] == "sounding" and p.get("group") == name]
+        axes = gview(name).get("axes", {})
+        if snd and {p["kind"] for p in pans if p.get("group") == name} != {"sounding"}:
+            axes = panel_view(spec, snd[0], bv).get("axes", {})  # (kinds mixed: the soundings')
+        half[name] = axes.get("share", "none") != "none" and \
             shared_hodo_half([(data[p["id"]], panel_view(spec, p, bv).get("skewt", {}))
-                              for p in pans if p["kind"] == "sounding" and p["id"] in data
-                              and p.get("group") == name])
+                              for p in snd if p["id"] in data])
     for p in pans:
         r, c, rs, cs = _cell(p)
         d = data.get(p["id"]) if data is not None else None
@@ -348,16 +351,15 @@ def _block(fig, spec, k, bv, data, fs, ext):
                 ax.set_visible(False)
     for name in names:  # (tick labels, limits and legend within the group)
         gv, mine = gview(name), [x for x in placed if x[0].get("group") == name]
-        occ = {(r + a, c + e) for p, _, _ in mine for r, c, rs, cs in [_cell(p)]
-               for a in range(rs) for e in range(cs)}
-        first = min((_cell(p)[1] for p, _, _ in mine), default=0) if name in own else 0
-        cells = []
-        for p, ax, V in mine:
-            r, c, rs, cs = _cell(p)
-            cells.append((ax, c - first, r + rs >= rows or (r + rs, c) not in occ, p["kind"],
-                          V.get("axes", {})))
-        _share_limits(mine, data, gv.get("axes", {}).get("share", "none"))
-        _ticks(cells, [ax for _, ax, _ in mine], gv.get("axes", {}))
+        kinds = list(dict.fromkeys(x[0]["kind"] for x in mine))
+        if len(kinds) > 1:  # (each kind's ticks, limits and outer labels are its own)
+            for kind in kinds:
+                these = [x for x in mine if x[0]["kind"] == kind]
+                _axes_of(these, data, rows, min(_cell(x[0])[1] for x in these),
+                         these[0][2].get("axes", {}))
+        else:
+            _axes_of(mine, data, rows, min((_cell(p)[1] for p, _, _ in mine), default=0)
+                     if name in own else 0, gv.get("axes", {}))
         _legends(fig, gv, mine, entries)
     fig._cv_mappables = mappables
     where = {p["id"]: _cell(p)[:2] for p in pans}
@@ -368,7 +370,11 @@ def _block(fig, spec, k, bv, data, fs, ext):
                        [m for m in mappables if m[0] in mine],
                        [ax for p, ax, _ in placed if p["id"] in mine], lambda i: where[i])
     else:
-        _colorbars(fig, bv.get("colorbar", {}), mappables, used, lambda i: where[i])
+        drawn_by = {m[0] for m in mappables}  # (kinds mixed: room taken from those it speaks for)
+        mixed = not own and len({p["kind"] for p, _, _ in placed}) > 1
+        _colorbars(fig, bv.get("colorbar", {}), mappables,
+                   [ax for p, ax, _ in placed if p["id"] in drawn_by] if mixed else used,
+                   lambda i: where[i])
     for name in names:
         gv, mine = gview(name), [p for p in pans if p.get("group") == name]
         ck = gv.get("contour_key", {})
@@ -385,6 +391,20 @@ def _block(fig, spec, k, bv, data, fs, ext):
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
                  code["text"])
+
+
+def _axes_of(mine, data, rows, first, axes):
+    """Shared limits and tick labels of placed panels `mine` [(panel, axes, view)]: first, the
+    column their left edge counts from; axes: their axes settings."""
+    occ = {(r + a, c + e) for p, _, _ in mine for r, c, rs, cs in [_cell(p)]
+           for a in range(rs) for e in range(cs)}
+    cells = []
+    for p, ax, V in mine:
+        r, c, rs, cs = _cell(p)
+        cells.append((ax, c - first, r + rs >= rows or (r + rs, c) not in occ, p["kind"],
+                      V.get("axes", {})))
+    _share_limits(mine, data, axes.get("share", "none"))
+    _ticks(cells, [ax for _, ax, _ in mine], axes)
 
 
 def _row_label(ax, text, V, fs):

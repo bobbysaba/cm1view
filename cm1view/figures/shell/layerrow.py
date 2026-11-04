@@ -16,8 +16,9 @@ from .. import draw as figdraw
 from ..cards import LayerCard, TYPE_LABEL
 from ..cards.base import _BTN, CARD, GHOST, _chk, grid_columns
 from ..runs import FigureRuns
-from ..times import _tlabel
+from ..times import FigureTimes, _tlabel
 from ...theme import ACCENT
+from ...viewer.ui import held
 from . import docedit as de, nodes
 
 GROUPED = {"minus": "minus_on", "ens": "ens_on", "reduce": "reduce_op"}  # (key -> widget)
@@ -53,6 +54,14 @@ class CardHost:
 
     def _other_runs(self):
         return self.shell.other_runs()
+
+    _nearest = staticmethod(FigureTimes._nearest)
+
+    def _moved_time(self, ts, k0, k1):
+        return figdraw.moved_time(dict(runs=self.shell.doc["runs"]), ts, k0, k1)
+
+    def _fit_grid(self):
+        """(A card's Panel list isn't shown here.)"""
 
     def _time_opts(self, k):
         return self.shell.time_opts(k)
@@ -103,6 +112,8 @@ class InPanel:
 
 def describe(lay, fields=None, p=None):
     """A layer in a line: its type, field, height, what it does over time."""
+    if lay.get("type") == "sounding":
+        return nodes.sounding_name(lay)
     bits = []
     if lay.get("field"):
         bits.append(fields[lay["field"]].label if fields is not None and lay["field"] in fields
@@ -133,13 +144,16 @@ def describe(lay, fields=None, p=None):
 class LayerRow:
     """target: Shared or InPanel.  fixed: always open, with no moving it (a layer's own node).
     moves: {"up", "down", "copy", "remove"} -> what each button does, by document change;
-    extras(row): widgets above the settings, when open; opened: open unless folded by hand."""
+    extras(row): widgets above the settings, when open; opened: open unless folded by hand.
+    make_card: the card of an entry (a sounding's: host, entry; else a LayerCard); kind: its
+    panels'.  Only a map layer can be off (an entry has no such setting)."""
 
     def __init__(self, inspector, target, moves=None, fixed=False, by_height=False, extras=None,
-                 opened=False):
+                 opened=False, make_card=LayerCard, kind="plan"):
         self.ins, self.shell, self.target = inspector, inspector.shell, target
         self.moves, self.fixed, self.by_height = moves or {}, fixed, by_height
         self.extras = extras
+        self.make_card, self.card_kind = make_card, kind
         self.card, self.base = None, None
         doc = self.shell.doc
         lay = target.layer(doc)
@@ -149,7 +163,7 @@ class LayerRow:
                                       description="Show / hide the settings",
                                       stylesheets=[GHOST], visible=not fixed)
         self.on = pn.widgets.Checkbox(value=lay.get("on", True) is not False, width=20,
-                                      margin=(8, 2, 0, 4))
+                                      margin=(8, 2, 0, 4), visible=make_card is LayerCard)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4), sizing_mode="stretch_width")
         self.body = pn.Column(margin=0, sizing_mode="stretch_width")
         head = [self.chev, self.on, self.title]
@@ -183,10 +197,16 @@ class LayerRow:
 
     def _open(self):
         doc, shell = self.shell.doc, self.shell
-        host = CardHost(shell, self._on_card, self.by_height)
+        host = CardHost(shell, self._on_card, self.by_height, self.card_kind)
+        lay = de.plain(self.target.layer(doc))
         with grid_columns(2):
-            self.card = card = LayerCard(host, de.to_card(doc, de.plain(self.target.layer(doc))))
-        card.w["panels"].visible = False
+            self.card = card = self.make_card(host, de.to_card(doc, lay))
+        for key in ("panels", "panel"):
+            if key in card.w:
+                card.w[key].visible = False
+        if hasattr(card, "dup"):
+            card.dup.visible = False
+        self._keep_time(lay)
         self.base = de.plain(self._collect())
         for name, sec in self._sections():
             key = f"{self.target.key}/{name}"
@@ -199,6 +219,18 @@ class LayerRow:
         self.chev.icon = "chevron-down"
         self._show_marks()
 
+    def _keep_time(self, lay):
+        """An entry's time that is no output (time zero moved it): its list says so, as a
+        panel's does; it is kept until another is picked."""
+        w, now = self.card.w.get("time"), lay.get("time_s")
+        if w is None or now is None or not hasattr(self.card, "move_time") or \
+                float(now) in [float(v) for v in w.options.values()]:
+            return
+        with held(self.card.ed):
+            w.options = dict(w.options, **{_tlabel(now) + " · no output": float(now)})
+            w.value = float(now)
+        self.card._show()
+
     def _sections(self):
         card = self.card
         return [(n, getattr(card, f"{n}_sec")) for n in ("minus", "ens", "reduce")
@@ -206,7 +238,7 @@ class LayerRow:
 
     # ------------------------------------------------------------ changes
     def _collect(self):
-        return {k: v for k, v in self.card.collect().items() if k != "panels"}
+        return {k: v for k, v in self.card.collect().items() if k not in ("panels", "panel")}
 
     def _on_card(self):
         """The card changed: what it now says otherwise goes into the document."""

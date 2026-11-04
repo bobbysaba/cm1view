@@ -133,9 +133,10 @@ def panel_boxes(fig, spec, size_px, dpi):
     x0, y1, W, H = _saved_box(fig, spec, size_px, dpi)
     out = {}
     for i, ax in (getattr(fig, "_cv_axes", None) or {}).items():
-        e, f = ax.get_window_extent(), fig.dpi
-        out[i] = [(e.x0 / f - x0) / W, (e.x1 / f - x0) / W, (y1 - e.y1 / f) / H,
-                  (y1 - e.y0 / f) / H]
+        boxes = [a.get_window_extent() for a in (ax, *getattr(ax, "_cv_parts", ()))]
+        f = fig.dpi
+        out[i] = [(min(e.x0 for e in boxes) / f - x0) / W, (max(e.x1 for e in boxes) / f - x0) / W,
+                  (y1 - max(e.y1 for e in boxes) / f) / H, (y1 - min(e.y0 for e in boxes) / f) / H]
     return out
 
 

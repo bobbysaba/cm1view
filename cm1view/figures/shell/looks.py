@@ -20,7 +20,9 @@ from . import docedit as de, nodes
 
 FIGURE_SECTIONS = ("Text", "Panel labels", "Colorbar", "Legend", "Contour key",
                    "Maximum and minimum", "Spacing", "matplotlib style", "Your own code")
-KIND_SECTIONS = {"plan": ("Area", "Axes and ticks")}
+KIND_SECTIONS = {"plan": ("Area", "Axes and ticks"),
+                 "sounding": ("Sounding panels", "Skew-T", "Hodograph", "Legend in the panel",
+                              "Axes and ticks")}
 # (a plan panel's own look: what is drawn panel by panel, the rest being its grid's or the figure's)
 PANEL_KEYS = {
     "plan": {"Axes and ticks": ("axes.xlabel", "axes.ylabel", "axes.ticks", "axes.minor",
@@ -33,8 +35,37 @@ PANEL_KEYS = {
                               "run_label.size", "run_label.bold", "run_label.box",
                               "run_label.run_color", "z_label.on", "z_label.fmt", "z_label.loc",
                               "z_label.size", "z_label.bold", "z_label.box")}}
+AXES_OF_A_PANEL = ("axes.xlabel", "axes.ylabel", "axes.ticks", "axes.minor", "axes.tickdir",
+                   "axes.xstep", "axes.frame_lw", "axes.grid", "axes.grid_ls")
+LABELS_OF_A_PANEL = tuple(k for k in PANEL_KEYS["plan"]["Panel labels"]
+                          if not k.startswith(("run_label", "z_label")))
+# (a panel's soundings are read and drawn with its own view, so all of skewt reaches one panel)
+PANEL_KEYS["sounding"] = {
+    "Axes and ticks": AXES_OF_A_PANEL, "Panel labels": LABELS_OF_A_PANEL,
+    "Sounding panels": tuple(st.key for st in table.SETTINGS if st.section == "Sounding panels"),
+    "Skew-T": tuple(st.key for st in table.SETTINGS if st.section == "Skew-T"),
+    "Hodograph": tuple(st.key for st in table.SETTINGS if st.section == "Hodograph"),
+    "Legend in the panel": ("skewt.legend", "skewt.legend_loc", "skewt.legend_ncol",
+                            "skewt.legend_frame")}
+# (shown by the sounding pane, as the layout has them)
+LAYOUT_HIDES = {"Skew-T": ("hodo",), "Hodograph": ("skewt",)}
 LEFT_OUT = ("xsec.ztop", "xsec.coords",  # (a section's: with sections, M6)
             "legend.panel", "legend.panels")  # (panels by id: M9)
+
+
+def _legend_rows():
+    """A kind's own panel legend (the old editor's pl_ widgets, not in the table: they go with
+    the kind shown).  Only soundings use it so far."""
+    return tuple(table.Setting(f"skewt.{key}", attr, "Legend in the panel", ("sounding",), default)
+                 for key, attr, default in (
+                     ("legend", "pl_on", False), ("legend_loc", "pl_loc", "upper left"),
+                     ("legend_ncol", "pl_ncol", 1), ("legend_frame", "pl_frame", True)))
+
+
+LEGEND_ROWS = _legend_rows()
+OWN_NAMES = {"skewt.legend": "Legend (one sounding)"}
+BLOCK_WORDS = {"letters": "Letter", "time_label": "Time label", "run_label": "Run label",
+               "z_label": "Height label", "axes": "Axes", "skewt": "Sounding"}
 
 
 def _split(st):
@@ -81,6 +112,8 @@ class Scope:
                 held.update(d[block])
         if key == "*":
             return st.as_.show(held)
+        if block in table.PREPARED:  # (their saved form differs from their widgets')
+            held = table._prepared({block: held})[block]
         if key in held:
             return st.as_.show(held[key])
         return table.KEEP if st.default is table.KEEP else st.as_.show(st.default)
@@ -149,7 +182,7 @@ def rows_of(section, kinds, only=None):
     """The table's rows of a section reaching any of `kinds` (only: of those keys)."""
     out = []
     seen = set()
-    for st in table.SETTINGS:
+    for st in (*table.SETTINGS, *LEGEND_ROWS):
         if st.section != section or st.key in LEFT_OUT or st.key in seen:
             continue
         if only is not None and st.key not in only:
@@ -163,6 +196,8 @@ def rows_of(section, kinds, only=None):
 def make_widget(ed, st, shown, on_change):
     """A copy of the old editor's widget for setting st, showing `shown`, on its own."""
     w = table.widget_of(ed, st).clone(visible=True, disabled=False)
+    if st.key in OWN_NAMES:
+        w.name = OWN_NAMES[st.key]
     if shown is not table.KEEP:
         try:
             w.value = shown
@@ -174,14 +209,17 @@ def make_widget(ed, st, shown, on_change):
 
 class Sections:
     """The collapsible sections of look settings of one node.  extras: {section: widgets to
-    add (a function)}."""
+    add (a function)}; redraws: the keys that change which sections there are, so the node is
+    shown anew."""
 
-    def __init__(self, inspector, scope, kinds, extras=None):
+    def __init__(self, inspector, scope, kinds, extras=None, redraws=()):
         self.ins, self.shell, self.scope, self.kinds = inspector, inspector.shell, scope, kinds
         self.extras = extras or {}
+        self.redraws = redraws
 
     def _on_change(self, st, w):
-        self.shell.edit(lambda d: self.scope.write(d, st, w.value))
+        self.shell.edit(lambda d: self.scope.write(d, st, w.value),
+                        node=self.shell.node if st.key in self.redraws else None)
 
     def card(self, section, only=None):
         """The card of a section (None when it has no rows)."""
@@ -227,14 +265,19 @@ class Sections:
         own = self.scope.own_keys(self.shell.doc, keys)
         if not own:
             return []
-        names = {st.key: table.widget_of(self.shell.ed, st).name for st in table.SETTINGS}
+        names = {st.key: table.widget_of(self.shell.ed, st).name
+                 for st in (*table.SETTINGS, *LEGEND_ROWS)}
+        names.update(OWN_NAMES)
 
         def back(key):
             self.shell.edit(lambda d: self.scope.take_back(d, key), node=self.shell.node)
 
+        words = [names.get(k) or k for k in own]
         chips = []
-        for key in own:
-            b = pn.widgets.Button(name=f"↺ {names.get(key) or key}", height=26, margin=(2, 2),
+        for key, word in zip(own, words):
+            if words.count(word) > 1:  # (letter's and time label's "Where": which)
+                word = f"{BLOCK_WORDS.get(key.partition('.')[0], key.partition('.')[0])} {word}"
+            b = pn.widgets.Button(name=f"↺ {word}", height=26, margin=(2, 2),
                                   button_type="light", button_style="outline",
                                   description="Back to what all panels have")
             b.on_click(lambda e, k=key: back(k))
@@ -263,6 +306,40 @@ def key_layer_widget(shell, doc, block, types, first):
 
     w.param.watch(on_pick, "value")
     return w
+
+
+def sounding_extra(layout):
+    """What sounding settings show hangs on their neighbours and the layout, as the old editor's
+    _show_storm has it: {section: extra} for Sections."""
+    def extra(by_key):
+        def key(name):
+            return by_key.get(f"skewt.{name}")
+
+        def value(name):
+            return None if key(name) is None else key(name).value
+
+        def show(*ev):
+            inset, whole = layout == "inset", layout in ("side", "hodo")
+            for names, on in ((("storm_u", "storm_v"), value("storm") == "custom"),
+                              (("hodo_heights",), value("hodo_labels") is not False),
+                              (("hodo_key", "srh"), whole),
+                              (("hodo_key_loc", "hodo_key_ncol", "hodo_key_frame"),
+                               whole and value("hodo_key") is not False),
+                              (("hodo_cu", "hodo_cv"), value("hodo_center") == "custom"),
+                              (("hodo_max",), value("hodo_center") != "fit"),
+                              (("inset_loc", "inset_size"), inset),
+                              (("inset_x", "inset_y"), inset and value("inset_loc") == "custom")):
+                for n in names:
+                    if key(n) is not None:
+                        key(n).visible = on
+
+        for name in ("storm", "hodo_center", "inset_loc", "hodo_labels", "hodo_key"):
+            if key(name) is not None:
+                key(name).param.watch(show, "value")
+        show()
+        return []
+
+    return {"Sounding panels": extra, "Hodograph": extra}
 
 
 TYPE_NAME = {"fill": "Fill", "contour": "Contours", "shade": "Shading"}

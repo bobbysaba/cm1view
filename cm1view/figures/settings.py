@@ -259,6 +259,9 @@ SETTINGS = (
 )
 
 
+PREPARED = ("skewt", "dist")  # (_prepared's)
+
+
 def _prepared(spec):
     """The blocks whose saved form differs from their widgets', in the widgets' form."""
     sk = spec.get("skewt", {})
