@@ -103,9 +103,8 @@ SECTION_ROWS = ("xsec.ztop", "xsec.coords")  # (of cross-sections only: a plan v
 
 
 def _legend_rows():
-    """A kind's own panel legend (the old editor's pl_ widgets, not in the table: they go with
-    the kind shown), starting as the old editor's _legend_load does: soundings', then the
-    others'."""
+    """A kind's own panel legend (the pl_ widgets, not in the table: they go with the kind
+    shown): soundings', then the others'."""
     return tuple(
         table.Setting(f"{block}.{key}", attr, "Legend in the panel", (kind,), default)
         for block, kind, on, loc, frame in (("skewt", "sounding", False, "upper left", True),
@@ -119,10 +118,10 @@ def _legend_rows():
 
 
 LEGEND_ROWS = _legend_rows()
-# (the old editor's widget has one name at a time, its kind's)
+# (a widget has one name, whichever kind it is copied for)
 OWN_NAMES = {"skewt.legend": "Legend (one sounding)", "ts.legend": "Legend", "dist.legend": "Legend",
              "prof.legend": "Legend", "joint.legend": "Legend", "azim.legend": "Legend",
-             # (shorter than the old editor's: these sit in a column of two)
+             # (shorter: these sit in a column of two)
              "joint.cbar_label": "Colorbar label", "azim.cbar_label": "Colorbar label"}
 BLOCK_WORDS = {"letters": "Letter", "time_label": "Time label", "run_label": "Run label",
                "z_label": "Height label", "axes": "Axes", "skewt": "Sounding"}
@@ -378,7 +377,7 @@ def rows_of(section, kinds, only=None):
 
 
 def make_widget(ed, st, shown, on_change):
-    """A copy of the old editor's widget for setting st, showing `shown`, on its own."""
+    """A copy of the widget of setting st (settings.widget_of), showing `shown`, on its own."""
     w = table.widget_of(ed, st).clone(visible=True, disabled=False)
     if st.key in OWN_NAMES:
         w.name = OWN_NAMES[st.key]

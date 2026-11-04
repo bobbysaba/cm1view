@@ -1,20 +1,14 @@
-"""Figure editor: the runs panels can come from (adding, labelling, removing them,
-and their storm tracks).
+"""Figure editor: the runs a figure could add (found in the background), what a run's storm track
+gives, and the run lists of cards (RunLists: a card's host has them).
 
-A mixin of the FigureEditor (figures/editor.py)."""
+Mixins of the FigureEditor (figures/editor.py) and the shell's card host (shell/layerrow.py)."""
 
 import os
 import threading
 from collections import OrderedDict
 
-import panel as pn
-
 from .. import config, registry
-from . import draw as figdraw, spec as fg
 from ..core.fields import GROUP_ORDER, deriv_def, split_deriv
-from .cards import CARD, _hex, _row
-from .cards.base import _f
-from .kinds import ONE_RUN_CARDS, SEVERAL_RUN_CARDS, TIME_CARDS
 from ..viewer.ui import held
 
 
@@ -79,192 +73,58 @@ class AllFields:
 
 
 class FigureRuns:
-    # ------------------------------------------------------------ runs
-    def _build_runs(self, runs):
-        self.run_rows = [self._run_row(e, k) for k, e in enumerate(runs)]
-        self._ref_paths = set()  # (the runs something used; see _prune_runs)
-        self._gone_runs = {}  # (path -> settings of a run taken out: back if it is added again)
-        self._show_runs()
+    """The runs a figure could add, and storm tracks."""
 
-    def _run_row(self, e, k=0):
-        own = os.path.abspath(e["path"]) == self.run.path
-        r = dict(path=os.path.abspath(e["path"]))
-        r["label"] = pn.widgets.TextInput(name="Label", value=e.get("label", ""), width=130)
-        r["tab"] = pn.widgets.Checkbox(name="Viewer's track", value=e.get("track") == "viewer",
-                                       visible=own, margin=(5, 6, 12, 6))
-        r["track_pick"] = pn.widgets.Select(
-            name="Track file", sizing_mode="stretch_width", min_width=200,
-            options={"None": ""}, value="", disabled=e.get("track") == "viewer",
-            description="The track files in your track folders (Settings → Track folders), "
-                        "this run's first; or type the path of another")
-        r["track"] = pn.widgets.TextInput(
-            name="Track file path (blank: none)", sizing_mode="stretch_width", min_width=200,
-            value="" if e.get("track") == "viewer" else e.get("track", ""),
-            disabled=e.get("track") == "viewer", placeholder="storm_tracks/<run>.csv")
-        r["color"] = pn.widgets.ColorPicker(
-            name="Colour", width=70, value=_hex(e.get("color") or
-                                                 figdraw.RUN_COLORS[k % len(figdraw.RUN_COLORS)]))
-        r["t0"] = _f("Time zero (min)", float(e.get("t0_min") or 0.0), 110, step=1.0,
-                     description="The model time this run counts from, e.g. its initiation: "
-                                 "panels of several runs show them at the same time since "
-                                 "their time zeros, time series and time–height panels count "
-                                 "this run's times from it, and so do time labels and legends "
-                                 "(0: model time)")
-        r["rm"] = pn.widgets.Button(name="✕", description="Remove the run", width=32, height=28,
-                                    margin=(2, 1), button_type="default", button_style="outline")
-        r["info"] = pn.pane.HTML(margin=(0, 4))
-        r["head"] = pn.pane.HTML(margin=(6, 4, 0, 4))
+    _scanned, _scan_complete, _scan_new, _cands = [], True, False, []
 
-        def on_label(ev):
-            self._refresh_run_names()
-            self.request()
-
-        def on_track(ev):
-            r["track"].disabled = r["track_pick"].disabled = r["tab"].value
-            self._show_track_pick(r)
-            self._run_info(r)
-            self._show_sections()  # (through the storm: needs a track)
-            for c in getattr(self, "ser_cards", []):  # (their track rows)
-                c.refresh_tracks()
-            self.request()
-
-        def on_t0(ev):
-            if self._hold:
-                return
-            if self.time_match.value != "output":  # (else it doesn't pair the runs)
-                self._t0_moved_cards(r, ev.old, ev.new)
-            self._times_changed()
-
-        def on_pick(ev):
-            if r["track_syncing"]:
-                return
-            if ev.new != TYPE_PATH:
-                r["track"].value = ev.new
-            r["track"].visible = ev.new == TYPE_PATH  # (the path stays, to edit)
-
-        r["track_syncing"] = False
-        r["track_pick"].param.watch(on_pick, "value")
-        r["label"].param.watch(on_label, "value")
-        r["t0"].param.watch(on_t0, "value")
-        r["tab"].param.watch(on_track, "value")
-        r["track"].param.watch(on_track, "value")
-        r["color"].param.watch(lambda ev: self.request(), "value")
-        r["rm"].on_click(lambda ev: self._remove_run(r))
-        r["panel"] = pn.Column(
-            pn.Row(r["head"], pn.Spacer(), r["rm"], margin=0, sizing_mode="stretch_width"),
-            _row(r["label"], r["color"], r["t0"], r["tab"], r["track_pick"], r["track"]),
-            r["info"],
-            styles=CARD,
-            sizing_mode="stretch_width", margin=(2, 0))
-        self._show_track_pick(r, look=True)
-        self._run_info(r)
-        return r
-
-    def _show_track_pick(self, r, look=False):
-        """Run row r's track list follows its path (`look`: looks for the files again).
-        Its path box shows for a path that isn't listed, or when no files were found."""
-        pick, box = r["track_pick"], r["track"]
-        if look:
-            r["track_found"] = config.track_files(r["path"])
-        found = r["track_found"]
-        path = _track_path(box.value)
-        typing = pick.value == TYPE_PATH  # (stays so while the path is edited)
-        r["track_syncing"] = True
-        try:
-            if look:
-                pick.options = _track_options(found)
-            pick.value = TYPE_PATH if typing or (path and path not in found) else path
-        finally:
-            r["track_syncing"] = False
-        pick.visible = bool(found)
-        box.visible = not found or pick.value == TYPE_PATH
-
-    def _times_changed(self):
-        """How the runs line up changed: what shows the times it moved."""
-        if self._uses("runs"):  # (which times every run has)
-            self._build_times()
-        for c in self._several_run_cards():
-            if hasattr(c, "vals"):  # (their Values: at the times moved)
-                c.vals.refresh()
-            if hasattr(c, "time_note"):
-                c.time_note()
-        self.request()
-
-    def _on_time_match(self, ev):
-        """Runs lined up by time zero or output number: picked times stay as they are."""
-        if self._hold:
+    def _scan_roots(self):
+        """Look for the runs under the runs_root setting in the background (as the Open
+        dialog does); the run lists offer them when it is done."""
+        roots = list(config.get("runs_root") or [])
+        if not roots:
+            self._scanned = []
+            self._find_runs()
             return
-        self._show_time_match()
-        self._times_changed()
+        self._find_runs()  # (next to this run, and recent, meanwhile)
 
-    def _show_time_match(self):
-        """Only the first run's time zero counts when runs pair by output number."""
-        self.time_match.visible = len(self.run_rows) > 1
-        by_output = self.time_match.value == "output"
-        for k, r in enumerate(self.run_rows):
-            r["t0"].disabled = by_output and k > 0
+        def job():
+            runs, complete = config.scan_runs(roots)
 
-    def _run_entry(self, r):
-        tr = "viewer" if r["tab"].visible and r["tab"].value else r["track"].value.strip()
-        e = dict(path=r["path"], label=r["label"].value, track=tr, color=r["color"].value)
-        if self.time_match.value == "output":
-            try:
-                e["outputs_s"] = [float(t) for t in self.open_run(r["path"])[0].times]
-            except Exception:  # noqa: BLE001  (its row says why)
-                pass
-        return dict(e, t0_min=float(r["t0"].value)) if r["t0"].value else e
+            def done():
+                self._scanned, self._scan_complete = runs, complete
+                self._find_runs()
 
-    def _runs_collect(self):
-        return [self._run_entry(r) for r in self.run_rows]
+            if self.v.doc is not None:
+                self.v._schedule(done)
+            else:  # (picked up the next time the list is asked for)
+                self._scanned, self._scan_complete, self._scan_new = runs, complete, True
 
-    def _t0_moved_cards(self, r, old, new):
-        """Cards with times of their own (sections, soundings, distributions, profiles,
-        joint distributions, azimuthal means) keep their place in time when run row r's
-        time zero goes from old to new (min): in each list, measured from the first
-        card's run, whose cards stay."""
-        if r not in self.run_rows:
-            return
-        k = self.run_rows.index(r)
-        dt = 60.0 * (float(new or 0.0) - float(old or 0.0))
-        for key in TIME_CARDS:
-            cards = [c for c in getattr(self, key, []) if hasattr(c, "move_time")
-                     and isinstance(c._time_run(), int) and c.w["time"].value is not None]
-            first = cards[0]._time_run() if cards else None
-            for c in cards:
-                j = c._time_run()
-                if j != first and (k == first or j == k):
-                    c.move_time(-dt if k == first else dt)
+        threading.Thread(target=job, daemon=True, name="cm1view-runscan").start()
 
-    def _run_info(self, r):
-        k = self.run_rows.index(r) if r in self.run_rows else len(self.run_rows)
-        own = " (this viewer's run)" if r["path"] == self.run.path else ""
-        r["head"].object = (f'<b>{k + 1}.</b> <code>{r["path"]}</code>'
-                            f'<span class="cv-hint">{own}</span>')
-        try:
-            run, _ = self.open_run(r["path"])
-        except Exception as e:  # noqa: BLE001
-            r["info"].object = f'<div class="cv-status" style="color:#f87171">{e}</div>'
-            return
-        tnote = self._track_note(r, run)
-        try:
-            unused = k < len(self.run_rows) and k not in self._runs_used()
-        except AttributeError:  # (the editor is still being built)
-            unused = False
-        if unused:
-            tnote += " · <b>not used yet</b>: pick it in a Run list"
-        r["info"].object = (
-            f'<div class="cv-hint">{len(run.times)} outputs, {run.times[0] / 60:g}–'
-            f'{run.times[-1] / 60:g} min · {run.ni}×{run.nj}×{run.nk}, dx {run.dx:g} m · '
-            f'{tnote}</div>')
+    def _find_runs(self):
+        """Runs the figure could add: under runs_root, next to this run, and recent."""
+        out = []
+        for p in (list(self._scanned) + registry.sibling_runs(self.run.path)
+                  + registry.recent_runs()):
+            p = os.path.abspath(p)
+            if p not in out:
+                out.append(p)
+        self._cands = out
 
-    def _track_note(self, r, run=None):
-        """What run row r's storm track gives (HTML): its fixes and times, or why none."""
-        if run is None:
-            try:
-                run, _ = self.open_run(r["path"])
-            except Exception as e:  # noqa: BLE001
-                return f'<span style="color:#f87171">{e}</span>'
-        return self._track_words(self._run_entry(r), run)
+    def _other_runs(self, have):
+        """{label: path} of the runs not in the figure (have: the paths of the runs in it)."""
+        if self._scan_new:
+            self._scan_new = False
+            self._find_runs()
+        roots = [config.expand(r).rstrip("/") + "/" for r in config.get("runs_root") or []]
+        out = {}
+        for p in self._cands:
+            if p in have:
+                continue
+            lab = next((p[len(r):] for r in roots if p.startswith(r)), None) or \
+                "/".join(p.rstrip("/").split("/")[-2:])
+            out[lab if lab not in out else p] = p
+        return out
 
     def _track_words(self, e, run=None):
         """What a run entry's storm track gives (HTML): its fixes and times, or why none."""
@@ -286,75 +146,9 @@ class FigureRuns:
             note += f" ({run.times[ts[0]] / 60:g}–{run.times[ts[-1]] / 60:g} min)"
         return note
 
-    def _show_runs(self):
-        for r in self.run_rows:
-            r["rm"].visible = len(self.run_rows) > 1
-            self._show_track_pick(r, look=True)
-            self._run_info(r)
-        self.runs_box.objects = [r["panel"] for r in self.run_rows]
-        self._show_time_match()
-        self._show_sections()
-        self._find_runs()
-        self._refresh_run_names()
-        self._refresh_fields()
-        self._sync_save_path()
-        if self._scan_new:  # (a scan that finished without a page to tell)
-            self._scan_new = False
-            self.add_pick.set_known(self._scanned, self._scan_complete)
-        else:
-            self.add_pick._refresh()  # (without the runs added now)
 
-    # ------------------------------------------------------------ runs to add
-    _scanned, _scan_complete, _scan_new, _cands = [], True, False, []
-    _unused = set()
-
-    def _scan_roots(self):
-        """Look for the runs under the runs_root setting in the background (as the Open
-        dialog does); the run lists offer them when it is done."""
-        roots = list(config.get("runs_root") or [])
-        if not roots:
-            self._scanned = []
-            return
-
-        def job():
-            runs, complete = config.scan_runs(roots)
-
-            def done():
-                self._scanned, self._scan_complete = runs, complete
-                self._find_runs()
-                self.add_pick.set_known(runs, complete)
-                self._refresh_run_names()
-
-            if self.v.doc is not None:
-                self.v._schedule(done)
-            else:  # (picked up by the next change of the runs)
-                self._scanned, self._scan_complete, self._scan_new = runs, complete, True
-
-        threading.Thread(target=job, daemon=True, name="cm1view-runscan").start()
-
-    def _find_runs(self):
-        """Runs the figure could add: under runs_root, next to this run, and recent."""
-        out = []
-        for p in (list(self._scanned) + registry.sibling_runs(self.run.path)
-                  + registry.recent_runs()):
-            p = os.path.abspath(p)
-            if p not in out:
-                out.append(p)
-        self._cands = out
-
-    def _other_runs(self, have=None):
-        """{label: path} of the runs not in the figure (for the run lists; have: the paths
-        of the runs in it, if not the run rows')."""
-        have = {r["path"] for r in self.run_rows} if have is None else have
-        roots = [config.expand(r).rstrip("/") + "/" for r in config.get("runs_root") or []]
-        out = {}
-        for p in self._cands:
-            if p in have:
-                continue
-            lab = next((p[len(r):] for r in roots if p.startswith(r)), None) or \
-                "/".join(p.rstrip("/").split("/")[-2:])
-            out[lab if lab not in out else p] = p
-        return out
+class RunLists:
+    """A card's run lists; its host has _run_names, _other_runs and _add_run."""
 
     def _run_choices(self, names=None):
         """A run list's choices (Select keywords): the figure's runs, then under a
@@ -376,12 +170,6 @@ class FigureRuns:
             return dict(options={}, groups={"": first} | ch["groups"])
         return dict(groups=None, options=first | names)
 
-    def _set_runs_of(self, w, value):
-        """A run list's choices, keeping its run (else the first)."""
-        names = self._run_names()
-        w.param.update(**self._run_choices(names))
-        w.value = value if value in names.values() else 0
-
     def _series_run_opts(self, names=None):
         """Options of a series' Runs list (no groups in a multi-choice): the figure's
         runs, then the others, marked (picking one adds it to the figure)."""
@@ -398,225 +186,3 @@ class FigureRuns:
                 w.value = old if isinstance(old, int) else 0
                 return
         w.value = k  # (as if picked from the list: the panel's times follow)
-
-    def _run_names(self):
-        return {f"{k + 1}. {r['label'].value or os.path.basename(r['path'])}": k
-                for k, r in enumerate(self.run_rows)}
-
-    def _several_run_cards(self):
-        """The cards that may show several runs (run_list): series, profiles and tables."""
-        return [c for key in SEVERAL_RUN_CARDS for c in getattr(self, key, [])]
-
-    def _one_run_cards(self):
-        """The cards of one run each (w["run"]): soundings, distributions, and so on."""
-        return [c for _, key in ONE_RUN_CARDS for c in getattr(self, key)]
-
-    def _refresh_run_names(self):
-        names = self._run_names()
-        with held(self):
-            for w in [self.run_sel] + \
-                    [c.w["run"] for c in self._one_run_cards() + self.sec_cards]:
-                self._set_runs_of(w, w.value)
-            opts = self._series_run_opts(names)
-            v = [k for k in self.gg_runs.value if k in names.values()] or [0]
-            self.gg_runs.options = opts
-            self.gg_runs.value = v
-            for c in self._several_run_cards():
-                c.refresh_runs(names)
-            for c in self.cards + self.pf_cards:  # (a layer's run)
-                if "run" in c.w:
-                    v = c.w["run"].value
-                    c.w["run"].param.update(**self._layer_run_choices(names))
-                    c.w["run"].value = v if v in names.values() else -1
-            for c in self.cards + self.pf_cards:  # (a difference's Minus run)
-                if "minus_run" in c.w:
-                    v = c.w["minus_run"].value
-                    c.w["minus_run"].options = {"the layer's": -1} | names
-                    c.w["minus_run"].value = v if v in names.values() else -1
-                if "ens_runs" in c.w:  # (an ensemble's runs)
-                    v = [k for k in c.w["ens_runs"].value if k in names.values()]
-                    c.w["ens_runs"].options = opts
-                    c.w["ens_runs"].value = v
-        self.run_sel.visible = (len(names) > 1 or bool(self._other_runs())) and \
-            not self._uses("runs") and self.kind.value in ("plan", "scene")  # (sections: cards')
-
-    def _refresh_fields(self):
-        """The field lists offer the fields of every run of the figure."""
-        fields = [self.F]
-        for r in self.run_rows:
-            try:
-                fields.append(self.open_run(r["path"])[1])
-            except Exception:  # noqa: BLE001  (its card says why)
-                pass
-        self.fields = AllFields(fields)
-        g = self.fields.groups()
-        with held(self):
-            for w in ([c.w["field"] for c in self.cards + self.pf_cards if "field" in c.w]
-                      + [c.w["field"] for c in self.ser_cards if "field" in c.w]):
-                v = w.value
-                w.groups = g
-                w.value = v
-
-    def _add_run(self, path=None, grid=False):
-        """Add the run in `path` (default: the box) with its storm track (a
-        storm_tracks file found for it).  Returns its index, or None.  (`grid` is
-        kept for older callers: a grid of runs is Panels -> Rows / Columns are: Runs.)"""
-        path = config.expand((path or self.add_path.value).strip())
-        if not registry.is_run(path):
-            self._runs_msg(f"No cm1out_*.nc files in <code>{path}</code>", True)
-            return None
-        if path in {r["path"] for r in self.run_rows}:
-            self._runs_msg("That run is already in the list.", True)
-            return None
-        self._runs_msg('<span class="busy">● Opening…</span>')
-        try:
-            run, _ = self.open_run(path)
-        except Exception as e:  # noqa: BLE001
-            self._runs_msg(f"Could not open <code>{path}</code>: {e}", True)
-            return None
-        entry = self._gone_runs.pop(os.path.abspath(path), None) or fg.run_entry(run)
-        self.run_rows.append(self._run_row(entry, len(self.run_rows)))
-        self._show_runs()
-        self.add_pick.clear()
-        self._runs_msg(f"Added <code>{path}</code>")
-        return len(self.run_rows) - 1
-
-    def _edit_runs(self):
-        """The dicts of the panel tree's edits that name a run (a panel's, a layer's)."""
-        out = []
-        for e in self.edits.values():
-            out.append(e)
-            out += [lay for lay in list((e.get("layers") or {}).values())
-                    + list(e.get("extra") or []) if isinstance(lay, dict)]
-        return [e for e in out if e.get("run") is not None]
-
-    def _runs_used(self):
-        """Indices of the runs something in the figure draws from: the panels' run
-        (or the runs of a grid of runs), layers, difference runs, soundings, distributions,
-        profiles, joint distributions, azimuthal means, series (blank: every run) and the
-        panel tree's edits."""
-        n = len(self.run_rows)
-        used, maps = set(), self.kind.value in ("plan", "xsec")
-        if maps and self._uses("runs"):
-            used |= set(self._grid_runs())
-        elif self.kind.value == "xsec":  # (a card per panel)
-            used |= {c.w["run"].value or 0 for c in self.sec_cards}
-        elif maps or self.kind.value == "scene":
-            used.add(self.run_sel.value or 0)
-        for c in self.cards + self.pf_cards:
-            for key in ("run", "minus_run"):
-                v = c.w[key].value if key in c.w else None
-                if isinstance(v, int) and v >= 0:
-                    used.add(v)
-            if "ens_on" in c.w and c.w["ens_on"].value and c.w["on"].value:
-                ks = [int(k) for k in c.w["ens_runs"].value if not isinstance(k, str)]
-                used |= set(ks) if ks else set(range(n))
-        for c in self._one_run_cards():
-            used.add(c.w["run"].value or 0)
-        for c in self._several_run_cards():
-            ks = c.run_list()
-            used |= set(range(n)) if ks is None else set(ks)
-        used |= {int(e["run"]) for e in self._edit_runs()}
-        return {k for k in used if isinstance(k, int) and 0 <= k < n}
-
-    def _prune_runs(self):
-        """Drop the runs nothing uses any more (they were used, and a Run list now
-        picks another): the run list is built by picking runs where they are used."""
-        used = {self.run_rows[k]["path"] for k in self._runs_used()}
-        if not used:
-            return
-        gone = [r for r in self.run_rows if r["path"] in self._ref_paths
-                and r["path"] not in used]
-        self._ref_paths = used
-        unused = {r["path"] for r in self.run_rows} - used
-        if unused != self._unused:  # (the runs' "not used yet" notes)
-            self._unused = unused
-            for r in self.run_rows:
-                self._run_info(r)
-        for r in gone:
-            if len(self.run_rows) > 1 and r in self.run_rows:
-                self._remove_run(r)
-                self._runs_msg(f"Dropped <code>{r['path']}</code>: nothing uses it now.")
-
-    def _remove_run(self, r):
-        """Remove run k: panels, soundings, distributions, profiles, joint distributions,
-        azimuthal means and series of it go, and those of the runs after it follow their run to its new
-        number."""
-        k = self.run_rows.index(r)
-        self._gone_runs[r["path"]] = self._run_entry(r)  # (its label, time zero, colour, track)
-        self.run_rows.remove(r)
-        names = self._run_names()  # (the new numbering)
-        gone = []
-        with held(self):
-            if self.run_sel.value is not None and self.run_sel.value >= k:
-                self.run_sel.value = max(0, self.run_sel.value - (self.run_sel.value > k))
-            self.gg_runs.value = [j - (j > k) for j in self.gg_runs.value  # (a grid of runs)
-                                  if isinstance(j, int) and j != k]
-            for c in self.cards + self.pf_cards:  # (layers: the removed run's go back to the panel's)
-                for key in ("run", "minus_run"):
-                    if key in c.w and c.w[key].value is not None and c.w[key].value >= k:
-                        c.w[key].value = -1 if c.w[key].value == k else c.w[key].value - 1
-                if "ens_runs" in c.w:  # (an ensemble without the removed run)
-                    c.w["ens_runs"].options = self._series_run_opts(names)
-                    c.w["ens_runs"].value = [j - (j > k) for j in c.w["ens_runs"].value
-                                             if isinstance(j, int) and j != k]
-            for e in self._edit_runs():
-                if int(e["run"]) >= k:
-                    if int(e["run"]) == k:
-                        del e["run"]
-                    else:
-                        e["run"] = int(e["run"]) - 1
-            for what, key in ONE_RUN_CARDS:
-                cards, keep = getattr(self, key), []
-                for c in cards:
-                    j = int(c.w["run"].value or 0)
-                    if j == k:
-                        gone.append(what)
-                        continue
-                    if j > k:
-                        c.w["run"].value = j - 1
-                    keep.append(c)
-                cards[:] = keep
-            keep = []
-            for c in self.sec_cards:  # (a section figure's cards of it go)
-                j = int(c.w["run"].value or 0)
-                if j == k and self.kind.value == "xsec" and len(self.sec_cards) > 1:
-                    gone.append("section")
-                    continue
-                if j >= k:
-                    c.set_run(max(0, j - 1))
-                keep.append(c)
-            self.sec_cards = keep
-            for what, cards in (("series", self.ser_cards), ("profile", self.prof_cards),
-                                ("table value", self.table_cards)):
-                keep = []
-                for c in cards:
-                    old = c.run_list()
-                    new = None if old is None else [j - (j > k) for j in old if j != k]
-                    if old and not new:  # it was of that run only
-                        gone.append(what)
-                        continue
-                    c.refresh_runs(names)
-                    c.set_runs(new)
-                    keep.append(c)
-                cards[:] = keep
-        self._show_runs()
-        self._show_soundings()
-        self._show_dists()
-        self._show_profiles()
-        self._show_joints()
-        self._show_azims()
-        self._show_tables()
-        self._show_series()
-        self._show_sections()
-        if gone:
-            n = {w: gone.count(w) for w in dict.fromkeys(gone)}
-            self._runs_msg("Removed the run and its " + " and ".join(
-                f"{c} {w}{'s' if c > 1 and w != 'series' else ''}" for w, c in n.items()) + ".")
-        self._on_layout()
-
-    def _runs_msg(self, html, err=False):
-        col = ' style="color:#f87171"' if err else ""
-        self.runs_msg.object = f'<div class="cv-status"{col}>{html}</div>'
-        if self.kind.value in ("th", "line"):  # (Runs used is below the cards: the editor's line)
-            self._msg(html, err)

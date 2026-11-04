@@ -185,4 +185,3 @@ class ApplyRuns:
         head = (f"Stopped after {len(results)} of {n} runs. " if stopped else "") + \
             f"{len(results) - len(bad)} saved" + (f", {len(bad)} failed" if bad else "") + "."
         self._say(head + f"<ul style='margin:4px 0'>{''.join(lines)}</ul>", bool(bad))
-        self.ed._refresh_saved()

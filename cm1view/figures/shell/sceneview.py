@@ -26,7 +26,7 @@ def _note(text):
 
 
 def _copy(src, **kw):
-    """A widget of the old editor's, on its own."""
+    """A copy of one of the editor's scene widgets, on its own."""
     return src.clone(visible=True, disabled=False, **kw)
 
 

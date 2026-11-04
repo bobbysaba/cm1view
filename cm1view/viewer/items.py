@@ -84,7 +84,6 @@ class ItemsTray:
         def to_fig(make):
             def go():
                 make()
-                self.figed._quick_done()  # (the new layout takes it, when it is what shows)
                 self.workspace.value = "Figure"
             return go
 

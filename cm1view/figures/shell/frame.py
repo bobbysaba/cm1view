@@ -1,6 +1,5 @@
 """The three panes and what runs them: the document, the node picked, undo and the preview.
-The figure's data and pools are the FigureEditor's, so its caches are shared with the old
-layout."""
+The figure's data and pools are the FigureEditor's."""
 
 import base64
 import html
@@ -14,7 +13,7 @@ from functools import partial
 
 import panel as pn
 
-from .. import draw as figdraw, spec as fg
+from .. import draw as figdraw, settings as table, spec as fg
 from ...theme import GRID
 from ..click import ClickImage, panel_boxes, place_map, watch_tight
 from ..draw.base import _cell
@@ -42,12 +41,23 @@ def preview_dpi(doc):
                max(1100.0 / max(float(doc["size"][0]), 0.5), 192.0))
 
 
+def _code_waits(doc, note):
+    """Code in a figure read from a file stays off until ticked: `note`, saying so if it has any."""
+    code = doc.get("code") or {}
+    if code.get("on") and str(code.get("text") or "").strip():
+        doc["code"] = dict(code, on=False)
+        note += (". It has code of its own (<b>Your own code</b>): read it, then tick <b>Run the "
+                 "code</b>.")
+    return note
+
+
 class FigureShell:
     def __init__(self, ed):
         self.ed, self.v = ed, ed.v
         self.doc, self.node = None, nodes.FIGURE
-        self.showing = False
-        self._src = None  # (the old editor's figure the document came from)
+        self.showing = False  # (the Figure workspace has been opened: it draws from then on)
+        self._stale = True  # (the panes don't show the document yet)
+        self.made = False  # (a figure made or opened, not the example the page starts with)
         self._base = None  # (the document as it came, to tell whether it was edited)
         self._kept = None  # (the document as last autosaved)
         self._said = ""  # (a line for under the next preview)
@@ -91,10 +101,6 @@ class FigureShell:
             description="Preview only: how the picture reads in greyscale or with a colour-vision "
                         "deficiency (Machado et al. 2009, full loss of one cone type). The "
                         "figure, its document, undo and every export are unchanged.")
-        self.back = pn.widgets.Button(name="Old layout", icon="layout-columns", height=32,
-                                      margin=(4, 4), button_type="light", button_style="outline",
-                                      description="Back to the old editor and its figure: what "
-                                                  "was changed here stays here")
         self.status = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8),
                                    styles={"flex": "0 0 auto"})
         self.image = ClickImage(sizing_mode="stretch_both", margin=(4, 8), fit=True)
@@ -129,7 +135,7 @@ class FigureShell:
         self.inspector = Inspector(self)
         self.export = ExportDialog(self)
         # (the tree's button stays over the tree; the rest is right-aligned, Export last)
-        actions = pn.Row(self.back, self.new_btn, self.undo_btn, self.redo_btn, self.auto,
+        actions = pn.Row(self.new_btn, self.undo_btn, self.redo_btn, self.auto,
                          self.update, self.exp_btn, margin=0, align="center")
         toolbar = pn.FlexBox(self.tree_btn, actions, flex_wrap="wrap", align_items="center",
                              justify_content="space-between", sizing_mode="stretch_width",
@@ -153,8 +159,7 @@ class FigureShell:
                             sizing_mode="stretch_both",
                             styles={"flex": "1 1 0", "min-height": "0"})
         self.panel = pn.Column(toolbar, self.panes, out_of_flow(self.export.dlg), margin=0,
-                               sizing_mode="stretch_both",
-                               visible=False, styles={"min-height": "0"})
+                               sizing_mode="stretch_both", styles={"min-height": "0"})
         self.tree_btn.on_click(lambda e: setattr(self.tree_pane, "visible",
                                                  not self.tree_pane.visible))
         self.new_btn.on_click(lambda e: self.new_figure())
@@ -165,7 +170,6 @@ class FigureShell:
         self.auto.param.watch(lambda e: self.request() if e.new else None, "value")
         self.zoom.param.watch(lambda e: self._show_image(), "value")
         self.vision.param.watch(lambda e: self._show_image(), "value")
-        self.back.on_click(lambda e: self.close())
         self.scr_slider.param.watch(self._on_scrub, "value")
         self.scr_prev.on_click(lambda e: self._scrub_by(-1))
         self.scr_next.on_click(lambda e: self._scrub_by(1))
@@ -177,104 +181,93 @@ class FigureShell:
 
     # ------------------------------------------------------------ showing it
     def open(self):
-        """Show the old editor's figure here (as it was left here, if it hasn't changed)."""
-        ed = self.ed
-        why = self._take_old()
-        if why:
-            ed._msg(f"This figure could not be opened in the new layout: {why}", True)
-            return
+        """The Figure workspace is shown: the panes show the document and it is drawn."""
         self.showing = True
-        ed.panel.visible, self.panel.visible = False, True
-        self._show(self.node if nodes.still_there(self.doc, self.node) else nodes.FIGURE)
+        if self._stale:
+            self._show(self.node if nodes.still_there(self.doc, self.node) else nodes.FIGURE)
         self.request(force=True, delay=False)
 
-    def _take_old(self):
-        """The old editor's figure into the document, if it changed since (Undo goes back to
-        what was here).  Why it can't be, or None."""
-        try:
-            src = json.dumps(self.ed.collect_all(), sort_keys=True, default=float)
-            if src != self._src:
-                doc = fg.to_doc(json.loads(src))
-                if self.doc is not None:
-                    self._keep()
-                    self._future = []
-                self.doc, self._src = doc, src
-                self._came_as_it_is()
-                self._sync_fields()
-        except Exception as e:  # noqa: BLE001
-            traceback.print_exc()
-            return str(e)
-        return None
+    def start(self, spec):
+        """The example the page starts with, which isn't a figure of the user's to keep."""
+        self.doc = fg.to_doc(spec)
+        self._follow_size(de.kind_size(self.doc))
+        self._came_as_it_is()
+        self._sync_fields()
 
     def _came_as_it_is(self):
         self._base, self._kept = json.dumps(self.doc, sort_keys=True, default=float), None
 
-    def open_doc(self, doc, note="", save_as=None, show=True, render=True):
-        """A saved figure, template or session's document here (Undo goes back to what was here).
-        It stays while the old editor's figure is as it is now.  Code in it stays off until
-        ticked, as with any figure read from a file."""
+    def _take(self, doc, note="", save_as=None, render=True, fit=True):
+        """Document doc is now the figure (Undo goes back to what was here).  fit: an automatic
+        size follows its panels (a document as saved stays as it was)."""
         ed = self.ed
-        d = fg.doc_defaults(doc, ed.run, ed.F, self.v.t, ed._own_track())
-        code = d.get("code") or {}
-        if code.get("on") and str(code.get("text") or "").strip():
-            d["code"] = dict(code, on=False)
-            note += (". It has code of its own (<b>Your own code</b>): read it, then tick <b>Run "
-                     "the code</b>.")
-        self._src = json.dumps(ed.collect_all(), sort_keys=True, default=float)
         if self.doc is not None:
             self._keep()
             self._future = []
-        self.doc = d
-        self._came_as_it_is()
-        self._kept = self._base if not render else None  # (a session's: as it was left)
+        self.doc = doc
+        self.made = True
         self._said = note
         self._sync_fields()
+        if fit:
+            self._follow_size(de.kind_size(doc))
+        self._came_as_it_is()
+        self._kept = self._base if not render else None  # (a session's: as it was left)
         if save_as:
             ed.path.value = save_as
-        if not show:
-            return
-        if not self.showing:
-            self.showing = True
-            ed.panel.visible, self.panel.visible = False, True
-        self._show(nodes.FIGURE)
-        if render:
-            self.request(force=True, delay=False)
+        if self.showing:
+            self._show(nodes.FIGURE)
+            if render:
+                self.request(force=True, delay=False)
+        else:
+            self.node, self._stale = nodes.FIGURE, True
 
-    def edited(self, src=None):
-        """Whether the document has been changed here since it came (src: the old editor's figure
-        now, as JSON)."""
-        return self.doc is not None and self._holds_old(src) and \
-            json.dumps(self.doc, sort_keys=True, default=float) != self._base
+    def new_doc(self, spec):
+        """The document of a new figure's version-1 spec, made here."""
+        ed = self.ed
+        s = table.filled(fg.normalize(spec, ed.run, ed._own_track()))
+        if (s.get("letters") or {}).get("auto"):  # (one panel: no letter)
+            s["letters"] = dict(s["letters"], on=figdraw.npanels(s) > 1)
+        cb = s["colorbar"]
+        if not cb.get("location"):  # (its boxes say where it is)
+            s["colorbar"] = dict(cb, location="bottom" if cb.get("orientation", "horizontal")
+                                 == "horizontal" else "right")
+        for k, r in enumerate(s["runs"]):
+            r.setdefault("color", figdraw.RUN_COLORS[k % len(figdraw.RUN_COLORS)])
+        return fg.to_doc(s)
 
-    def _holds_old(self, src=None):
-        """Whether the old editor's figure is what the document came with (src: its JSON)."""
-        if self._src is None:
-            return False
-        return (src or json.dumps(self.ed.collect_all(), sort_keys=True, default=float)) == self._src
+    def open_new(self, spec, note=""):
+        """A new figure, from a version-1 spec (what the viewer's tools make)."""
+        self._take(self.new_doc(spec), note)
 
-    def state_of(self, spec):
-        """What a session or the autosave keeps of the document, beside the old editor's figure
-        `spec`: nothing, if the document is no longer that figure's."""
-        if self.doc is None or not self._holds_old(json.dumps(spec, sort_keys=True, default=float)):
-            return {}
-        return dict(doc=fg.plain_copy(self.doc), showing=self.showing)
+    def open_spec(self, spec, note="", save_as=None, render=True):
+        """A figure saved in the older form (with what it lacks from this version's defaults)."""
+        ed = self.ed
+        d = fg.older_to_doc(spec, ed.run, ed.F, self.v.t, ed._own_track())
+        self._take(d, _code_waits(d, note), save_as, render)
 
-    def take_state(self, state, render=True):
-        """A session's or the autosave's document back here, the old editor's figure having just
-        been put back."""
-        self.open_doc(state["doc"], save_as=state.get("save_as"), show=bool(state.get("showing")),
-                      render=render)
+    def open_doc(self, doc, note="", save_as=None, render=True):
+        """A saved figure, template or session's document."""
+        ed = self.ed
+        d = fg.doc_defaults(doc, ed.run, ed.F, self.v.t, ed._own_track())
+        self._take(d, _code_waits(d, note), save_as, render, fit=False)
+
+    def own_figure(self):
+        """Whether this is more than the example the page starts with."""
+        return self.made or json.dumps(self.doc, sort_keys=True, default=float) != self._base
+
+    def state(self):
+        """What a session or the autosave keeps of the figure."""
+        return dict(doc=fg.plain_copy(self.doc), save_as=self.ed.path.value)
 
     def _keep_figure(self):
         """The autosave: this figure for the next page on this run, if it has changed and is more
         than the example."""
         j = json.dumps(self.doc, sort_keys=True, default=float)
-        if j == self._kept or self._src is None:
+        if j == self._kept:
             return
         self._kept = j
-        spec = json.loads(self._src)
-        if j != self._base or self.ed.own_figure(self._src):
-            self.ed._autosave(spec)
+        if self.own_figure():
+            self.ed._autosave()
 
     def apply_style(self, name):
         """Style preset `name` on the whole figure, saying what it did beyond the look (Undo takes
@@ -295,30 +288,12 @@ class FigureShell:
         self.edit(apply, node=nodes.FIGURE)
 
     def new_figure(self):
-        """The quick start, over this figure: its gallery, templates and last figure."""
-        ed = self.ed
-        ed.open_quick()
-        grid = self.doc.get("grid") or {}
-        ed.qs_rows.value, ed.qs_cols.value = int(grid.get("rows", 1)), int(grid.get("cols", 1))
-
-    def take_figure(self):
-        """The quick start made or opened a figure, which it does in the old editor: here
-        now."""
-        why = self._take_old()
-        if why:
-            self.say(f"This figure could not be opened here: {html.escape(why)}", True)
-            return
-        self._show(nodes.FIGURE)
-        self.request(force=True, delay=False)
-
-    def close(self):
-        self.showing = False
-        self.panel.visible, self.ed.panel.visible = False, True
-        self.ed.request(force=True, delay=False)
+        """The New dialog, over this figure: its gallery, templates and last figure."""
+        self.ed.open_quick()
 
     def _show(self, node):
         """The tree, the outlines and the inspector for the document, with node picked."""
-        self.node = node
+        self.node, self._stale = node, False
         self.placing.pending = None  # (a first click: of what was showing)
         self.tree.param.update(items=nodes.tree_items(self.doc, self.fields), sel=node)
         self._mark()
@@ -419,7 +394,7 @@ class FigureShell:
         self.inspector.size_followed(doc["size"])
 
     def fit_height(self, doc):
-        """The old editor's estimate (fit_height), of the first panel's settings."""
+        """The estimate of the height (de.fit_height), of the first panel's settings."""
         res = figdraw.resolve(doc)
         q = res["panels"][0]
         grid = doc.get("grid") or {}
@@ -433,17 +408,17 @@ class FigureShell:
             cols = int(grid.get("cols", 1))
             s["tables"] = [dict(lay, panel=_cell(p)[0] * cols + _cell(p)[1])
                            for p in res["panels"] for lay in p["layers"]]
-        return self.ed.fit_height(s)
+        return de.fit_height(s, self.ed.run)
 
     def _mean_shape(self, res, grid, s):
         """Plan views with areas of their own: a row is as tall as its tallest panel, so the
         figure's height goes by the mean of those (a row with no panel: as the first panel)."""
         tall = {}
         for q in res["panels"]:
-            shape = self.ed._panel_shape(figdraw.panel_view(res, q))
+            shape = de.panel_shape(figdraw.panel_view(res, q), self.ed.run)
             r = _cell(q)[0]
             tall[r] = max(tall.get(r, 0.0), shape)
-        first = self.ed._panel_shape(s)
+        first = de.panel_shape(s, self.ed.run)
         rows = int(grid.get("rows", 1))
         return sum(tall.get(r, first) for r in range(rows)) / max(rows, 1)
 

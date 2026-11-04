@@ -16,8 +16,6 @@ from .. import config
 from ..core.run import temp_name
 from . import draw as figdraw, spec as fg
 
-PICK = "Pick a saved figure…"
-NONE_SAVED = "No saved figures yet"
 SERIES_RECHECK = 2.0  # seconds between looks at the series a save is waiting for
 AUTOSAVE, AUTOSAVE_LAST = "figure.json", "figure_earlier.json"  # (in the cache, by run)
 
@@ -47,14 +45,6 @@ def saved_list(own, root, extra=""):
         specs = sorted(((e.stat().st_mtime, e) for e in specs), key=lambda x: -x[0])
         head = f"This run ({os.path.basename(d)})" if d == own else os.path.basename(d)
         out += [(head, e.name[:-len("_spec.json")], e.path, when) for when, e in specs]
-    return out
-
-
-def saved_figures(own, root, extra=""):
-    """saved_list as Select groups {folder: {name: spec path}}."""
-    out = {}
-    for head, name, path, _ in saved_list(own, root, extra):
-        out.setdefault(head, {})[name] = path
     return out
 
 
@@ -120,32 +110,9 @@ def make_thumb(spec_path):
 
 
 class FigureExport:
+    _save_gen = 0  # (a save waiting for series goes on only if still the last)
+
     # ------------------------------------------------------------ export
-    def _set_dl_name(self):
-        self.dl.filename = f"{os.path.basename(self.path.value) or 'figure'}.{self.fmt.value}"
-        self.save_img.disabled = not self.path.value.strip()
-
-    def _sync_save_path(self):
-        """One run: <figures_dir>/<parent>_<run>/.  Several runs have no folder of their
-        own: the last folder used for one, else the user must choose."""
-        multi = len(self.run_rows) > 1
-        if multi == getattr(self, "_multi", False):
-            return
-        self._multi = multi
-        cur = config.expand(self.path.value.strip())
-        name = os.path.basename(cur) or "figure"
-        if multi and (not cur or os.path.dirname(cur) == self._fig_dir):
-            last = config.state("last_multi_run_dir")
-            self.path.value = os.path.join(last, name) if last else ""
-        elif not multi and (not cur or os.path.dirname(cur) == config.expand(
-                config.state("last_multi_run_dir"))):
-            self.path.value = os.path.join(self._fig_dir, name)
-        self.path.placeholder = ("Several runs: choose a folder and name, e.g. "
-                                 "~/figures/tor_vs_ntor/refl" if multi else "")
-        if multi and not self.path.value:
-            self._msg("This figure shows several runs: choose a folder for it in "
-                      "<b>Export</b> → “Save as”.", True)
-
     def config_changed(self):
         new = config.figures_dir(self.run.path)
         cur = config.expand(self.path.value.strip())
@@ -153,26 +120,10 @@ class FigureExport:
             self.path.value = os.path.join(new, os.path.basename(cur))
         self._fig_dir = new
         self._scan_roots()  # (the runs_root setting may have changed)
-        self._refresh_saved()
-
-    def _refresh_saved(self):
-        """The File tab's list of saved figures, keeping its pick."""
-        g = saved_figures(self._fig_dir, config.expand(config.get("figures_dir")),
-                          config.expand(config.state("last_multi_run_dir")))
-        ch = dict(options={}, groups={"": {PICK: ""}} | g) if g else \
-            dict(groups=None, options={NONE_SAVED: ""})
-        paths = {p for grp in g.values() for p in grp.values()}
-        w, keep = self.saved_pick, self.saved_pick.value
-        w.param.update(**ch)
-        w.value = keep if keep in paths else ""
-        w.disabled = not g
 
     def _figure_now(self):
-        """The figure to save: what the new layout holds, while it is what shows, else the
-        widgets'."""
-        if self._in_shell():
-            return json.loads(json.dumps(self.shell.doc, default=float))
-        return self.collect_all()
+        """The figure to save: a copy of the document."""
+        return json.loads(json.dumps(self.shell.doc, default=float))
 
     def _save(self, bundle=None):
         """Save what the Export dialog says; bundle (default: its tick): script and data
@@ -183,7 +134,6 @@ class FigureExport:
         if not base:
             self._msg("Choose where to save the figure (<b>Export</b> → “Save as”).", True)
             return
-        self.exp_dlg.hide()  # (progress is above the preview; "replace?" is a dialog too)
         out = fg.bundle_paths(spec, base)
         paths = list(out.values()) if bundle else [out["image"], out["spec"]]
 
@@ -226,7 +176,6 @@ class FigureExport:
                            spec=fg.save_spec(spec, base))
             html = "Saved " + ", ".join(f"<code>{p}</code>" for p in out.values())
             self.v._schedule(partial(self._msg, html))
-            self.v._schedule(self._refresh_saved)
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
             self.v._schedule(partial(self._msg, f"Could not save: {e}", True))
@@ -260,14 +209,10 @@ class FigureExport:
         buf.seek(0)
         return buf
 
-    def _with_defaults(self, spec):
-        """A saved figure (or part) with what it lacks from this version's defaults."""
-        return fg.with_defaults(spec, self.run, self.F, self.v.t, self._own_track())
-
-    def _load_spec(self, path=None):
-        """Open a saved figure: its _spec.json, or the image / script saved with it
-        (default: the path in the File tab).  True when it opened."""
-        path = config.expand((path or self.spec_path.value).strip())
+    def _load_spec(self, path):
+        """Open a saved figure: its _spec.json, or the image / script saved with it.  True when
+        it opened."""
+        path = config.expand((path or "").strip())
         if path and not path.lower().endswith(".json"):
             path = fg.bundle_paths({}, path)["spec"]
         try:
@@ -279,99 +224,53 @@ class FigureExport:
             f". <b>Note:</b> the namelist.input of <code>{p}</code> changed since "
             "the figure was saved, so its data may differ" for p in fg.changed_runs(spec))
         if fg.is_doc(spec):
-            return self._open_doc(spec, note, saved_base(path))
-        if not self._open_spec(spec, note):
-            return False
-        self.path.value = saved_base(path)  # (after the runs' sync of the save path)
-        return True
+            self.quick.hide()
+            self.shell.open_doc(spec, note, saved_base(path))
+            return True
+        return self._open_spec(spec, note, saved_base(path))
 
-    def _open_doc(self, doc, note, save_as=None):
-        """Show a figure saved in the new layout's form, which only it can: True when shown."""
-        if self.shell is None:
-            self._msg("This figure was made in the new layout, which this page does not have "
-                      "(it needs the CM1VIEW_FIGURE_SHELL setting).", True)
-            return False
-        self.quick.hide()
-        self.shell.open_doc(doc, note, save_as)
-        return True
-
-    def _open_spec(self, spec, note, part=0):
-        """Show a saved figure (or an applied template) in the editor, `part` of a figure
-        of parts in the widgets.  True when shown."""
-        parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
-        bases, ran = [], False
-        for one in parts:
-            base = self._with_defaults(one)
-            bad = [lay.get("field") for lay in base["layers"]
+    def _open_spec(self, spec, note, save_as=None, render=True):
+        """Show a figure saved in the older form (or an applied template of it).  True when
+        shown."""
+        for one in spec["parts"] if spec.get("kind") == "combo" else [spec]:
+            bad = [lay.get("field") for lay in one.get("layers") or []
                    if lay.get("field") and lay["field"] not in self.F]
-            if bad and len(base.get("runs") or one.get("runs") or []) <= 1:
+            if bad and len(one.get("runs") or []) <= 1:
                 self._msg("This run has no field " + ", ".join(bad), True)
                 return False
-            code = base.get("code") or {}
-            if code.get("on") and str(code.get("text") or "").strip():
-                base["code"] = dict(code, on=False)  # (code from a file runs once read)
-                ran = True
-            bases.append(base)
-        self.set_parts(dict(spec, parts=bases) if spec.get("kind") == "combo" else bases[0],
-                       part)
-        self._msg(note + (
-            ". It has code of its own (<b>Annotate → Your own code</b>): read it, then tick "
-            "<b>Run the code</b>." if ran else ""))
+        self.quick.hide()
+        self.shell.open_spec(spec, note, save_as, render)
         return True
 
     # ------------------------------------------------------------ session and autosave
-    def own_figure(self, j=None):
-        """Is the figure in the editor more than the example it starts with?  j: its
-        JSON (_remember's), when already made."""
-        if self.shell is not None and self.shell.edited(j):
-            return True
-        if self._made or self._example is None:
-            return self._made
-        if j is None:
-            j = json.dumps(self.collect_all(), sort_keys=True, default=float)
-        return j != self._example
+    def own_figure(self):
+        """Is the figure more than the example the page starts with?"""
+        return self.shell.own_figure()
 
-    def figure_state(self, spec=None):
-        """The figure as a session or the autosave keeps it: its settings, the part in
-        the widgets and where it would be saved; with the new layout, what it holds, if that came
-        from those settings ("doc", "showing"; a page without it opens "spec")."""
-        state = dict(spec=self.collect_all() if spec is None else spec, part=self.part_i,
-                     save_as=self.path.value)
-        if self.shell is not None:
-            state.update(self.shell.state_of(state["spec"]))
-        return state
+    def figure_state(self):
+        """The figure as a session or the autosave keeps it: the document and where it would be
+        saved."""
+        return self.shell.state()
 
     def open_state(self, state, note, render=True):
-        """Show a figure_state (its code stays off until ticked, as with any figure
-        read from a file).  render=False: no preview until the workspace asks for one.
-        The reason when it cannot be shown, else None."""
-        spec = state["spec"]
+        """Show a figure_state (its code stays off until ticked, as with any figure read from a
+        file); one from an earlier version holds "spec" instead.  render=False: no preview until
+        the workspace asks for one.  The reason when it cannot be shown, else None."""
+        form = state.get("doc") or state["spec"]
         try:
-            fg.check_runs(spec)
+            fg.check_runs(form)
         except (KeyError, TypeError, ValueError) as e:
             return str(e)
-        live = self.auto.value
-        if not render:
-            self.auto.value = False
-        try:
-            if not self._open_spec(spec, note, int(state.get("part") or 0)):
-                return self.msg.object
-        finally:
-            self.auto.value = live
-        if state.get("save_as"):
-            self.path.value = state["save_as"]
-        if state.get("doc") and self.shell is not None:
-            try:
-                fg.check_runs(state["doc"])
-            except (KeyError, TypeError, ValueError) as e:
-                return str(e)
-            self.shell.take_state(state, render)
+        if state.get("doc"):
+            self.shell.open_doc(form, note, state.get("save_as"), render)
+        elif not self._open_spec(form, note, state.get("save_as"), render):
+            return self.msg.object
         return None
 
     def _auto_path(self, name=AUTOSAVE):
         return config.cache_dir("autosave", config.run_key(self.run.path), name)
 
-    def _autosave(self, spec):
+    def _autosave(self):
         """Keep the figure for the next page on this run.  This page's first write moves
         the last page's to one side, so making a new figure does not lose it."""
         path = self._auto_path()
@@ -379,7 +278,7 @@ class FigureExport:
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp, "w") as f:
-                json.dump(self.figure_state(spec), f, default=float)
+                json.dump(self.figure_state(), f, default=float)
             if not self._auto_wrote and os.path.exists(path):
                 os.replace(path, self._auto_path(AUTOSAVE_LAST))
             os.replace(tmp, path)
@@ -400,7 +299,7 @@ class FigureExport:
         try:
             with open(path) as f:
                 state = json.load(f)
-            return (state, os.path.getmtime(path)) if isinstance(state.get("spec"), dict) \
-                else None
+            return (state, os.path.getmtime(path)) \
+                if isinstance(state.get("doc") or state.get("spec"), dict) else None
         except (OSError, ValueError, AttributeError):
             return None

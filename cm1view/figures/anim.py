@@ -14,7 +14,7 @@ import panel as pn
 from .. import config
 from . import draw as figdraw, spec as fg
 from .batch import MAX_FRAMES, anim_frame, auto_ends, frame_image
-from .cards import _chk, _f, _grid, _hint, _section
+from .cards import _chk, _f
 
 END = "End of run"
 IMAGE_EXTS = (".gif", ".png", ".pdf", ".svg", ".eps", ".jpg", ".jpeg", ".tif", ".tiff")
@@ -58,32 +58,13 @@ class FigureAnimation:
         self.an_stop = pn.widgets.Button(name="Stop", button_type="light",
                                          button_style="outline", height=32, disabled=True)
         self.an_msg = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8))
-        self.an_go.on_click(lambda e: self._on_anim())
-        self.an_stop.on_click(lambda e: self._stop_anim())
         self.an_step.param.watch(lambda e: self._anim_refresh(), "value")
         self.an_end.param.watch(lambda e: self._anim_count(), "value")
-        self.anim_sec = _section(
-            "Animation (GIF)",
-            _hint("The figure redrawn at successive output times from the panels' own "
-                  "times: every panel steps forward together, and storm-centred panels "
-                  "and soundings follow the storm (a 3D scene: its box and camera orbit, "
-                  "Layers → Animation). Time–height plots and time series show every time "
-                  "already: they stay as they are in a figure of parts, and cannot be "
-                  "animated alone. Saved at "
-                  "<i>GIF path</i>, or <code>&lt;Save as&gt;.gif</code> if it is blank "
-                  "(frames in <code>&lt;name&gt;_frames/</code>). Its settings are saved in "
-                  "<code>_src/&lt;name&gt;_spec.json</code>, so it can be reopened."),
-            _grid((self.an_path, 3)),
-            _grid(self.an_step, self.an_end, self.an_fps), self.an_count,
-            _grid(self.an_dpi, self.an_loop, self.an_frames),
-            pn.Row(self.an_go, self.an_stop, margin=0), self.an_msg)
-        self.anim_sec.param.watch(lambda e: e.new or self._anim_refresh(), "collapsed")
 
     def _anim_msg(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""
         self.an_msg.object = f'<div class="cv-status"{col}>{html}</div>'
-        if self._in_shell():
-            self.shell.say(html, err)
+        self.shell.say(html, err)
 
     def _anim_runs(self, spec):
         return {p: self.open_run(p)[0] for p in {p for p, _ in fg.time_refs(spec)}}
@@ -92,11 +73,8 @@ class FigureAnimation:
         return fg.frame_offsets(spec, self._anim_runs(spec), int(self.an_step.value or 1),
                                 self.an_end.value, limit)
 
-    def _anim_refresh(self, spec=None, force=False):
-        """The End time choices (the frames' times through the run's end) and the
-        frame count, while the Animation section is open (force: the new layout's is)."""
-        if self.anim_sec.collapsed and not force:
-            return
+    def _anim_refresh(self, spec=None):
+        """The End time choices (the frames' times through the run's end) and the frame count."""
         self._an_times, opts = [], {END: None}
         try:
             spec = self._figure_now() if spec is None else spec
@@ -132,13 +110,12 @@ class FigureAnimation:
         spec = self._figure_now()
         if not fg.animated(spec):
             self._anim_msg("Time–height plots and time series show every time already, "
-                           "so they have nothing to step (the panels' kind in "
-                           "<b>Panels</b>; in a figure of parts, at least one part of "
-                           "another kind).", True)
+                           "so they have nothing to step: a figure needs a panel of another "
+                           "type.", True)
             return
         base = config.expand(self.an_path.value.strip() or self.path.value.strip())
         if not base:
-            self._anim_msg("Choose where to save it (“GIF path” or “Save as”).", True)
+            self._anim_msg("Choose where to save it (“Save path” or “Save as”).", True)
             return
         stem, ext = os.path.splitext(base)
         base = stem if ext.lower() in IMAGE_EXTS + (".mp4",) else base
@@ -244,7 +221,6 @@ class FigureAnimation:
             else:
                 path = fg.write_gif(images, base + ".gif", opts["fps"], opts["loop"])
             spec_path = fg.save_spec(spec, base)
-            self.v._schedule(self._refresh_saved)
             mb = os.path.getsize(path) / 1e6
             note = (f" · {missing} frame{'s' if missing != 1 else ''} with an empty panel"
                     if missing else "")

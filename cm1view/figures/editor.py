@@ -1,97 +1,40 @@
 """Figure workspace: build a publication figure from panels and layers (from one run or
 several, e.g. tornadic vs non-tornadic), preview it at its final size, and export the
-image, a stand-alone script, the data and the spec.
+image, a stand-alone script, the data and the document.
 
-The editor has six tabs: Panels (what the grid shows: kind, size, times, titles,
-area), Layers (what each panel draws, and the runs), Tree (each panel alone), Style (fonts,
-axes, labels, colorbar, legend, spacing), Annotate and File (animated GIFs, opening saved
-figures, templates).  Export, above the preview, opens the dialog that saves the image.
-
-The FigureEditor is here (putting the widgets together, wiring them, the layer cards
-and rendering the preview); the rest are mixins, one module each: the widgets
-(widgets), spec <-> widgets and undo (specio), the panels' times and titles (times),
-the Panels tab's reactions (panelopts), runs (runs), sources and lists (sources),
-export (export), animations (anim), figures of several parts (combo), placing by
-clicking the preview (click), the panel tree (tree), style (style), the quick start
-(quick) and 3D scenes (scene).  Constants, helpers and cards are in the cards package;
-what differs between the kinds of panel is in the table in kinds, and the figure-level
-settings in the table in settings.
+What is on the page is the shell (figures/shell): the tree, the preview and the inspector, on
+the figure document.  The FigureEditor holds what the shell works with, one mixin a module: the
+widgets its settings are copied from (widgets, style, scene), the runs a figure could add (runs),
+new figures from the viewer's tools (sources, scene), saving and autosave (export), animations
+(anim), templates (style) and the New dialog (quick).
 The data behind a figure (reading the runs, the caches) is FigureData's (render), which
 works without the editor."""
 
-import base64
 import html
-import io
-import json
-import os
-import struct
-import time as _time
-import traceback
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-import panel as pn
-
-from . import draw as figdraw, spec as fg
-from ..theme import GRID
-from .cards import LayerCard, kept_cards
 from .anim import FigureAnimation
-from .click import ClickImage, FigureClick, place_map, watch_tight
-from .combo import FigureCombo
 from .export import FigureExport
-from .kinds import KINDS
-from .runs import AllFields, FigureRuns
-from .sources import FigureSources
-from .style import FigureStyle
-from .panelopts import FigurePanelOpts
-from .render import FigureData, panel_name
 from .quick import FigureQuick
+from .render import FigureData
+from .runs import AllFields, FigureRuns
 from .scene import FigureScene
 from .shell import FigureShell
-from .specio import FigureSpecIO
-from .times import FigureTimes
-from .tree import FigureTree, layer_copied, layers_moved
+from .sources import FigureSources
+from .style import FigureStyle
 from .widgets import FigureWidgets
-from ..viewer.ui import held, out_of_flow
 
 
-def _load_layer(card, lay, folded):
-    """kept_cards: layer lay shown in the card of its place, if of its type."""
-    if card.type != lay["type"]:
-        return False
-    card.load(lay, folded, keep_open=True)
-    return True
-
-
-class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, FigureRuns,
-                   FigureSources, FigureExport, FigureAnimation, FigureCombo, FigureClick,
-                   FigureTree, FigureStyle, FigureQuick, FigureScene):
-    shell = None  # (the new layout: __init__, when asked for)
+class FigureEditor(FigureWidgets, FigureRuns, FigureSources, FigureExport, FigureAnimation,
+                   FigureStyle, FigureQuick, FigureScene):
+    shell = None  # (made last: what builds the widgets asks whether there is one)
 
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
         self.fields = AllFields([self.F])  # the field lists: the fields of every run
-        self._hold = False  # widgets being set from a spec: no re-render per widget
-        self._req = 0
-        self.cards = []
-        self._live_ws = []  # (the widgets that redraw the preview: _redraws, _wire)
-        self._pf_base = None  # a 'field' figure's fill (Panels → Time and fields), not a card
-        self.ser_cards, self.snd_cards, self.dist_cards, self.ann_rows = [], [], [], []
-        self.prof_cards, self.joint_cards, self.azim_cards, self.table_cards = [], [], [], []
-        self.sec_cards = []
-        self._sec_spare = []  # (section cards a new figure left over: _sec_cards)
-        self.tm_rows, self.title_ws, self.row_ws = [], [], []
-        self.parts, self.part_i = [], 0  # a figure of parts (figcombo)
-        # undo / redo: (figure JSON with all its parts, part in the widgets) before each
-        # change, and the ones undone
-        self._hist, self._future, self._last, self._restoring = [], [], None, False
-        self._undoing, self._same_runs = False, False  # (_restore: the cards stay as they are)
-        self._png = None  # (width, height) px and dpi of the shown preview
-        self._save_gen = 0  # (a save waiting for series goes on only if still the last)
-        self._made, self._example = False, None  # (own_figure)
         self._auto_wrote = self._auto_failed = False  # (this page's autosave: _autosave)
-        self._lims = {}  # panel -> (xlim, ylim) of the last preview, to place annotations
-        from concurrent.futures import ThreadPoolExecutor
         viewer.pools["figser"] = ThreadPoolExecutor(1, thread_name_prefix="cm1view-figser")
         viewer.gen["figser"] = 0
         # the figure's data and its caches (figures/render.py), the series filled in
@@ -102,333 +45,30 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
                 self._status, f'<span class="busy">● {html.escape(text)}</span>')),
             viewer.pools["figser"], lambda: viewer._schedule(partial(self.request, False, False)),
             lambda: viewer.gen["figser"])
-        self._build()
-        self.set_spec(self._default())
-        self._started = False  # (the example: the quick start opens over it)
-        self._made = False  # (nor is it a figure of the user's, to keep: own_figure)
-        self._example = json.dumps(self.collect_all(), sort_keys=True, default=float)
-        self._scan_roots()
-        # the new layout, while it is being built: only when asked for
-        self.shell = FigureShell(self) if os.environ.get("CM1VIEW_FIGURE_SHELL") else None
-        self.shell_btn.visible = self.shell is not None
-        if self.shell is not None:  # (the quick start shows over either layout: viewer.layout)
-            self.preview.objects = [o for o in self.preview.objects if o is not self.quick]
-
-    # ------------------------------------------------------------ widgets
-    def _build(self):
-        ib = dict(name="", button_type="light", button_style="outline", width=36, height=32,
-                  margin=(4, 2))
-        self.new_btn = pn.widgets.Button(
-            icon="file-plus", description="New figure: what the panels show, the grid, "
-                                          "field and width (Undo takes it back)", **ib)
-        self.undo_btn = pn.widgets.Button(icon="arrow-back-up", description="Undo", **ib)
-        self.redo_btn = pn.widgets.Button(icon="arrow-forward-up", description="Redo", **ib)
-        self.shell_btn = pn.widgets.Button(  # (CM1VIEW_FIGURE_SHELL: __init__)
-            name="Three panes", icon="layout-columns", height=32, button_type="light",
-            button_style="outline", margin=(4, 4), visible=False,
-            description="Try this figure in the new layout: tree, preview, inspector")
         self._build_panel_widgets()
         self._build_layer_widgets()
         self._build_scene()
-        with self._redraws():
-            self._build_text()
+        self._build_text()
         self._build_more()
-        self._build_export()
         self._build_anim()
         self._build_style()
         self._build_quick()
-        self.plan_layers.append(self.look_row)
-        # ---- preview
-        self.auto = pn.widgets.Checkbox(name="Live", value=True, margin=(4, 8))
-        self.update = pn.widgets.Button(name="Redraw", icon="refresh", height=32,
-                                        button_type="primary", button_style="outline",
-                                        margin=(4, 4))
-        self.zoom = pn.widgets.RadioButtonGroup(
-            options={"Fit": "fit", "Actual size": "actual"}, value="fit", height=32,
-            margin=(4, 4), description="Actual size: as large as the printed figure "
-                                       "(at 96 pixels per inch) to judge the font sizes")
-        self.status = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8))
-        self.image = ClickImage(sizing_mode="stretch_width", margin=(4, 8))
-        self._build_click()
+        self._scan_roots()
+        self.shell = FigureShell(self)
+        self.shell.start(self._default())
 
-        panels_tab = self._panels_tab()
-        # (the Layers tab holds the figure kind's columns only: _keep_tabs)
-        self.layers_all = [self.xsec_col, self.plan_layers, self.series_col, self.snd_col,
-                           self.dist_col, self.prof_col, self.joint_col, self.azim_col,
-                           self.table_col, self.scene_col, self.ext_sec, self.runs_sec]
-        self.layers_tab = layers_tab = pn.Column(*self.layers_all,
-                                                 sizing_mode="stretch_width")
-        style_tab = self._style_tab()
-        annotate_tab, file_tab = self._more_tabs()
-        # a tab is sent to the browser the first time it is opened, and then kept (not
-        # dynamic: that sends it again at each switch)
-        self.tab_list = [("Panels", panels_tab), ("Layers", layers_tab),
-                         ("Tree", self.tree_tab), ("Style", style_tab),
-                         ("Annotate", annotate_tab), ("File", file_tab)]
-        self.tabs = pn.Tabs(*[(n, o if i == 0 else pn.Spacer())
-                              for i, (n, o) in enumerate(self.tab_list)],
-                            dynamic=False, sizing_mode="stretch_width")
-        self.tabs.param.watch(lambda e: self._open_tab(e.new), "active")
-        self.tabs.param.watch(lambda e: self._tree_sync(force=True) if e.new == 2 else None,
-                              "active")
-        self.tabs.param.watch(lambda e: self._refresh_saved() if e.new == 5 else None,
-                              "active")
-        self.editor = pn.Column(
-            self.tabs, scroll="y-auto", sizing_mode="stretch_height", width=580,
-            styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
-                    "overflow-x": "hidden"})
-        self.status.styles = {"flex": "1 1 230px"}  # (narrow: on a line of its own)
-        view_bar = pn.FlexBox(self.exp_btn, self.update, self.auto, self.new_btn, self.undo_btn,
-                              self.redo_btn, self.zoom, self.place_mode, self.shell_btn,
-                              self.status,
-                              flex_wrap="wrap", align_items="center",
-                              sizing_mode="stretch_width")
-        self.preview = pn.Column(
-            view_bar, self.msg, self.place_hint, self.image, out_of_flow(self.quick),
-            out_of_flow(self.exp_dlg),
-            scroll="y-auto",
-            sizing_mode="stretch_both", styles={"min-width": "0"})
-        self.panel = pn.Row(self.preview, self.editor, sizing_mode="stretch_both", margin=0)
-        self._keep_tabs()
-        self._wire()
+    @property
+    def panel(self):
+        """What goes on the page."""
+        return self.shell.panel
 
-    def _letters_by_hand(self, ev):
-        if not self._hold:
-            self._let_auto = False
-
-    def _open_tab(self, i):
-        """Tab i's widgets into the tabs (the first time it is opened)."""
-        name, obj = self.tab_list[i]
-        if self.tabs.objects[i] is not obj:
-            self.tabs[i] = (name, obj)
-
-    def _wire(self):
-        rq = lambda *e: self.request()  # noqa: E731
-        for w in self._live_ws:
-            w.param.watch(rq, "value")
-        self.let_on.param.watch(self._letters_by_hand, "value")
-        self.run_sel.param.watch(self._on_run_sel, "value")
-        self.cb_mode.param.watch(lambda e: self._show_cbar(), "value")
-        self.lg_where.param.watch(lambda e: self._show_legend(), "value")
-        for w in (self.rows, self.cols):
-            w.param.watch(lambda e: self._on_layout(), "value")
-        self.g_rows.param.watch(lambda e: self._on_axis(self.g_cols, e.new), "value")
-        self.g_cols.param.watch(lambda e: self._on_axis(self.g_rows, e.new), "value")
-        self.pz.param.watch(lambda e: self._on_heights(), "value")
-        self.pz_mode.param.watch(lambda e: self._on_zmode(), "value")
-        self.sk["storm"].param.watch(lambda e: self._show_storm(), "value")
-        self.sk["layout"].param.watch(lambda e: self._show_storm(), "value")
-        self.sk["inset_loc"].param.watch(lambda e: self._show_storm(), "value")
-        self.sk["hodo_center"].param.watch(lambda e: self._show_storm(), "value")
-        self.sk["hodo_key"].param.watch(lambda e: self._show_storm(), "value")
-        self.sk["hodo_labels"].param.watch(lambda e: self._show_storm(), "value")
-        self.code_plain.param.watch(lambda e: self._sync_code(e.new), "value")
-        self.code.param.watch(lambda e: self._sync_code(e.new), "value")
-        self.code_box.param.watch(lambda e: self._show_code(True), "value")
-        self.gg_runs.param.watch(self._on_gg_runs, "value")
-        self.size_preset.param.watch(self._on_preset, "value")
-        self.fit_btn.on_click(lambda e: self._refit())
-        self.kind.param.watch(lambda e: self._on_kind(), "value")
-        self.dom.param.watch(self._on_dom, "value")
-        for w in (self.box_x0, self.box_x1, self.box_y0, self.box_y1):
-            w.param.watch(lambda e: self._on_box(), "value")
-        self.sec_add.on_click(lambda e: self._add_section())
-        self.sec_new.on_click(lambda e: self._add_section())
-        self.tfill.on_click(lambda e: self._fill_times())
-        self.auto_titles.on_click(lambda e: self._auto_titles())
-        self.clear_titles.on_click(lambda e: self._set_titles([]))
-        for k, b in self.add_btns.items():
-            b.on_click(partial(self._add_layer, k))
-        self.new_btn.on_click(lambda e: self.open_quick())
-        for w in (self.width, self.height):
-            w.param.watch(lambda e: self._size_by_hand(), "value")
-        self.dist_tab.on_click(lambda e: self._add_tab_dists())
-        self.dist_new.on_click(lambda e: self._add_dist())
-        for k in ("plot", "stats_at"):
-            self.ds[k].param.watch(lambda e: self._show_dist_opts(), "value")
-        self.prof_tab.on_click(lambda e: self._add_tab_profiles())
-        self.prof_new.on_click(lambda e: self._add_profile())
-        self.prof_data.on_click(lambda e: self._add_prof_data())
-        self.joint_new.on_click(lambda e: self._add_joint())
-        self.azim_new.on_click(lambda e: self._add_azim())
-        self.table_new.on_click(lambda e: self._add_table())
-        self.jo["plot"].param.watch(lambda e: self._show_joint_opts(), "value")
-        self.ser_add.on_click(lambda e: self._add_series_from_tab())
-        self.ser_new.on_click(lambda e: self._add_series())
-        self.ser_data.on_click(lambda e: self._add_data())
-        self.ser_par.on_click(lambda e: self._add_parcel_series())
-        self.ser_wb.on_click(lambda e: self._add_w_budget(e.new))
-        self.snd_tab.on_click(lambda e: self._add_tab_soundings())
-        for k in ("layout", "table"):
-            self.sk[k].param.watch(lambda e: self._fit_size(), "value")
-        self.snd_new.on_click(lambda e: self._add_sounding())
-        self.ann_add.on_click(lambda e: self._add_annotation())
-        for w in (*self.sk.values(), *self.ds.values(), *self.po.values(), *self.jo.values(),
-                  *self.ao.values(), *self.to.values(), self.code):
-            w.param.watch(rq, "value")
-        self.update.on_click(lambda e: self.request(force=True, delay=False))
-        self.shell_btn.on_click(lambda e: self.shell.open())
-        self.undo_btn.on_click(lambda e: self.undo())
-        self.redo_btn.on_click(lambda e: self.redo())
-        self.zoom.param.watch(lambda e: self._show_image(), "value")
-        self.image.param.watch(self._on_click, "click")
-        self.image.param.watch(self._on_drag, "drag")
-        self.save_img.on_click(lambda e: self._save())
-        self.load_btn.on_click(lambda e: self._load_spec())
-        self.saved_pick.param.watch(
-            lambda e: setattr(self.spec_path, "value", e.new) if e.new else None, "value")
-        for w in (self.fmt, self.path):
-            w.param.watch(lambda e: self._set_dl_name(), "value")
-        self.fmt.param.watch(rq, "value")
-        self.dpi.param.watch(rq, "value")
-
-    # ------------------------------------------------------------ layers
-    def _build_cards(self, layers):
-        # a long list starts folded: the first layer open, the rest by their titles; a
-        # card of the same type in the same place is kept (the browser has its widgets)
-        old, self.cards = self.cards, []
-        if self._undoing:
-            self.cards = kept_cards(old, layers, self._card, self._same_runs, _load_layer)
-            self._show_cards()
-            return
-        for j, lay in enumerate(layers):
-            fold = len(layers) > 2 and j > 0
-            if j < len(old) and old[j].type == lay["type"]:
-                old[j].load(lay, fold)
-                self.cards.append(old[j])
-            else:
-                self.cards.append(self._card(lay, collapsed=fold))
-        self._show_cards()
-
-    def _card(self, lay, collapsed=False):
-        c = LayerCard(self, lay, collapsed)
-        c.up.on_click(lambda e: self._move(c, -1))
-        c.down.on_click(lambda e: self._move(c, 1))
-        c.dup.on_click(lambda e: self._dup_layer(c))
-        c.rm.on_click(lambda e: self._remove(c))
-        return c
-
-    def _show_cards(self, moved=None):
-        """The cards and the lists of them.  moved: the cards just moved, (old spec layer
-        -> new, panel fills before): the contour key and Maximum / minimum stay on their
-        layers."""
-        self.layer_box.objects = [c.panel for c in self.cards] or [pn.pane.HTML(
-            '<div class="cv-empty">No layers: add one above.</div>')]
-        self._show_region()
-        self._look_opts()
-        opts = {"First contours": -1} | {
-            f"{j + 1}. {self.fields[c.w['field'].value].label}": j
-            for j, c in enumerate(self.cards) if c.type == "contour"}
-        ex_opts = {"First fill": -1} | {
-            f"{j + 1}. {self.fields[c.w['field'].value].label}": j
-            for j, c in enumerate(self.cards) if c.type in figdraw.EXTREME_TYPES}
-        with held(self):
-            for w, o in ((self.ck_layer, opts), (self.ex_layer, ex_opts)):
-                v = w.value
-                if moved is not None and v >= 0:
-                    v = moved[0].get(v + moved[1], -1) - self._pf_count()
-                w.options = o
-                w.value = v if v in o.values() else -1
-
-    def _pf_count(self):
-        """How many spec layers come before the cards: a 'field' figure's fill."""
-        return 0 if self._pf_base is None else 1
-
-    def _layers_moved(self, new_of, pf=None):
-        """The layers have moved (new_of: {old spec layer: new}; missing: gone; pf: panel
-        fills before, default as now): what names a layer by its number follows it."""
-        layers_moved(self.edits, new_of)
-        self._show_cards((new_of, self._pf_count() if pf is None else pf))
-
-    def _add_layer(self, kind, ev=None):
-        F = self.fields
-        field = None
-        if kind in ("fill", "contour", "shade"):
-            field = {"fill": "dbz", "contour": "winterp", "shade": "winterp"}[kind]
-            if field not in F:
-                field = next(iter(F.defs))
-        lay = fg.layer_defaults(kind, F, field, 1.0)
-        if kind == "vectors" and self.kind.value == "xsec":
-            lay.update(spacing=0.75, scale=400.0, width=0.0015)
-        if kind == "parcels":  # (the viewer's first set not drawn yet, as it draws it)
-            have = {c.lay.get("name") for c in self.cards if c.type == "parcels"}
-            lays = self._parcel_layers()
-            lay = next((x for x in lays if x["name"] not in have), lays[0] if lays else lay)
-        self.cards.append(self._card(lay))
-        self._show_cards()
-        self.request()
-
-    def _move(self, c, d):
-        i = self.cards.index(c)
-        j = min(max(i + d, 0), len(self.cards) - 1)
-        self.cards[i], self.cards[j] = self.cards[j], self.cards[i]
-        pf = self._pf_count()
-        new_of = {k: k for k in range(len(self.cards) + pf)}
-        new_of[i + pf], new_of[j + pf] = j + pf, i + pf
-        self._layers_moved(new_of)
-        self.request()
-
-    def _dup_layer(self, c):
-        """A copy of layer card c just after it, open, with c's changes in single panels."""
-        i = self.cards.index(c)
-        pf = self._pf_count()
-        n = len(self.cards) + pf
-        self.cards.insert(i + 1, self._card(json.loads(json.dumps(c.collect(), default=float))))
-        self._layers_moved({k: k + (k > i + pf) for k in range(n)})
-        layer_copied(self.edits, i + pf, i + pf + 1)
-        self.request()
-
-    def _remove(self, c):
-        i, pf = self.cards.index(c) + self._pf_count(), self._pf_count()
-        n = len(self.cards) + pf
-        self.cards.remove(c)
-        self._layers_moved({k: k - (k > i) for k in range(n) if k != i})
-        self.request()
-
-    # ------------------------------------------------------------ rendering
     def request(self, force=False, delay=True):
-        """Re-render the preview (shortly: several quick changes give one render)."""
-        if self._in_shell():  # (a series coming in, the workspace opened)
+        """Draw the preview again, once the workspace has been opened (a series coming in)."""
+        if self.shell is not None and self.shell.showing:
             self.shell.request(force, delay)
-            return
-        if self._hold or not (force or self.auto.value):
-            return
-        self._req += 1
-        n = self._req
-        doc = self.v.doc
-        if delay and doc is not None:
-            doc.add_timeout_callback(partial(self._fire, n), 400)
-        else:
-            self._fire(n)
-
-    def _in_shell(self):
-        """Whether the new layout is what is showing (self.shell)."""
-        return getattr(self, "shell", None) is not None and self.shell.showing
-
-    def _fire(self, n):
-        if n != self._req or self._in_shell():
-            return
-        try:
-            self._prune_runs()
-            self._follow_size()
-            spec = self.collect_all()  # (several parts: the figure of them)
-        except Exception as e:  # noqa: BLE001
-            self._status(f"Incomplete settings: {e}", True)
-            return
-        try:
-            self._tree_sync()
-        except Exception as e:  # noqa: BLE001  (the panel list must not stop the figure)
-            self._msg(f"The panel tree could not show this figure: {e}", True)
-        self._remember(spec)
-        self._anim_refresh(spec)  # (the frames follow the panels' times)
-        self.v.gen["fig"] += 1
-        g = self.v.gen["fig"]
-        self._status('<span class="busy">● Rendering…</span>')
-        self._preview_waiting = True  # (a GIF being saved lets it in after a frame)
-        self.v.pools["fig"].submit(self._job, g, spec)
 
     def panel_data(self, spec, progress=None, cancelled=None):
-        """{panel: arrays} of the spec, from the cache where possible."""
+        """{panel: arrays} of the figure, from the cache where possible."""
         return self.data.panel_data(spec, progress, cancelled)
 
     def open_run(self, path):
@@ -437,126 +77,17 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
         return self.data.open_run(path)
 
     def run_fixes(self, entry, run):
-        """Track fixes {t: fix} of a spec["runs"] entry ({} without a track)."""
+        """Track fixes {t: fix} of a run entry ({} without a track)."""
         return self.data.run_fixes(entry, run)
 
     def series_pending(self):
         return self.data.series_pending()
 
-    def _job(self, g, spec):
-        t0 = _time.time()
-        self._preview_waiting = False
+    def _status(self, text, err=False):
+        if self.shell is not None:
+            self.shell.say(text, err)
 
-        def cancelled():
-            return g != self.v.gen["fig"]
-
-        def progress(i, n):
-            what = KINDS[spec["kind"]].one if spec["kind"] in KINDS else "panel"
-            self.v._schedule(partial(self._status, f'<span class="busy">● Reading {what} '
-                                                   f'{i + 1}/{n}…</span>'))
-
-        try:
-            self.data.ser_touch = set()
-            data = self.panel_data(spec, progress, cancelled)
-            if data is None:
-                return
-            self.data.ser_live = self.data.ser_touch  # (a series no longer shown: stops)
-            self._lims = {i: (d["xlim"], d["ylim"]) for i, d in data.items()
-                          if "xlim" in d and "ylim" in d and not d.get("missing")}
-            # sharp at the page's size, and on screen at 96 px per inch when actual size
-            dpi = min(float(spec["export"]["dpi"]), max(1100.0 / max(spec["size"][0], 0.5),
-                                                         192.0))
-            # (a 3D scene's picture rendered at the preview's resolution, not the export's)
-            fig = figdraw.draw(dict(spec, scene3d=dict(spec["scene3d"], dpi=dpi))
-                               if spec["kind"] == "scene" else spec, data)
-            code_err = getattr(fig, "_cv_code_error", None)
-            watch_tight(fig)  # (where the panels are in the image, for clicks)
-            buf = io.BytesIO()
-            figdraw.save(spec, fig, buf, format="png", **fg.save_kw(spec, dpi))
-            raw = buf.getvalue()
-            wh = struct.unpack(">II", raw[16:24])  # the PNG header's width and height
-            place = place_map(fig, spec, wh, dpi)
-            origin = {int(i) % 1000: tuple(d["origin"]) for i, d in data.items()
-                      if "origin" in d and (spec["kind"] != "combo" or
-                                            int(i) // 1000 == self.part_i)}
-            png = base64.b64encode(raw).decode()
-            miss = [i for i, d in data.items() if d.get("missing")]
-            w_in, h_in = wh[0] / dpi, wh[1] / dpi  # as saved (after trimming)
-            note = (f"{len(data)} panel{'s' if len(data) != 1 else ''} · "
-                    f"{w_in:.2f} × {h_in:.2f} in as saved "
-                    f"({w_in * float(spec['export']['dpi']):.0f} × "
-                    f"{h_in * float(spec['export']['dpi']):.0f} px at "
-                    f"{spec['export']['dpi']} dpi) · {_time.time() - t0:.1f} s")
-            kinds = {p["kind"] for p in spec.get("parts", [spec])}
-            pend = self.series_pending() if kinds & {"th", "line"} else []
-            scene_notes = list(dict.fromkeys(str(d["notes"]) for d in data.values()
-                                             if d.get("notes")))
-            if scene_notes:  # (3D scenes: surfaces not found, ...; parcels: none chosen)
-                note += " · " + html.escape("; ".join(scene_notes))
-            if pend:
-                note += (' · <span class="busy">● computing series '
-                         + "; ".join(p for p in pend if p) + "</span>")
-            if code_err:
-                note += (' · <span style="color:#f87171">your code stopped at '
-                         f'{html.escape(code_err)}</span>')
-            if miss:
-                note += (f" · no data in panel{'s' if len(miss) > 1 else ''} "
-                         + ", ".join(panel_name(spec, i) for i in miss))
-                storm = (spec["kind"] == "plan" and spec["domain"]["mode"] == "storm") or \
-                    (spec["kind"] == "xsec" and any(fg.is_storm(fg.panel_section(spec, i)[1])
-                                                    for i in miss))
-                if storm and any(not e.get("track") for e in spec["runs"]):
-                    note += (" · storm-centred panels need a track for each run (see "
-                             "<b>Layers → Runs used</b>)")
-                elif storm and not self.v.fixes and any(e.get("track") == "viewer"
-                                                        for e in spec["runs"]):
-                    note += (" · storm-centred panels need a track: follow the storm in "
-                             "the <b>Track</b> tab (Map), or pick another area in "
-                             "<b>Area</b>")
-            self.v._schedule(partial(self._apply, g, png, note, (wh, dpi,
-                                                                 spec.get("background")),
-                                     (place, spec, origin)))
-        except Exception as e:  # noqa: BLE001
-            traceback.print_exc()
-            self.v._schedule(partial(self._status, f"Could not draw: {e}", True))
-
-    def _apply(self, g, png, note, info=None, place=None):
-        if g != self.v.gen["fig"]:
-            return
-        self._png = (png,) + tuple(info or ((None, None), 100.0, "white"))
-        if place is not None:
-            self._place, self._place_spec, self._place_origin = place
-        self._show_image()
-        self._status(note)
-
-    def _show_image(self):
-        """The preview: the whole figure in view (within the width and the height left
-        under the bars, no scrolling), or at its printed size (96 px per inch)."""
-        if not self._png:
-            return
-        png, (w, h), dpi, bg = self._png
-        # a transparent background shows as a checkerboard
-        back = ("background:repeating-conic-gradient(#d4d4d4 0% 25%, #fff 0% 50%) 50% / "
-                "16px 16px;" if bg == "none" else "")
-        if self.zoom.value == "actual" and w:
-            size = f"width:{w / dpi * 96:.0f}px;max-width:none;"
-        else:
-            size = "max-width:100%;max-height:calc(100vh - 230px);width:auto;height:auto;"
-        mode = self.place_mode.value
-        cursor = "cursor:move;" if mode == "move" else "cursor:crosshair;" if mode else ""
-        self.image.param.update(src=f"data:image/png;base64,{png}",
-                                css=f"{size}{back}{cursor}display:block;margin:auto;"
-                                    "box-shadow:0 4px 18px rgba(0,0,0,.5)")
-
-    def _status(self, html, err=False):
-        if self._in_shell():
-            self.shell.say(html, err)
-            return
+    def _msg(self, text, err=False):
         col = ' style="color:#f87171"' if err else ""
-        self.status.object = f'<div class="cv-status"{col}>{html}</div>'
-
-    def _msg(self, html, err=False):
-        col = ' style="color:#f87171"' if err else ""
-        self.msg.object = f'<div class="cv-status"{col}>{html}</div>'
-        if self._in_shell():  # (what the old layout's line above its preview says)
-            self.shell.say(html, err)
+        self.msg.object = f'<div class="cv-status"{col}>{text}</div>'
+        self._status(text, err)

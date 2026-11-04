@@ -1,11 +1,10 @@
 """The figure-level settings, one row each: where a setting lives in the spec, its widget,
-its section of the editor, the kinds of figure it reaches and its value when a spec has
-none.  set_spec and collect (specio) go through this table.
+its section of the inspector, the kinds of figure it reaches and its value when a spec has
+none.  The inspector's sections (shell/looks.py) go through this table.
 
-Left to them, because a table row can't say it: what gives the figure its structure (kind,
-grid, size, runs, times, titles, cards), the layers the contour key and Maximum / minimum
-name (their lists come from the cards), the fixed box (written as it is typed: _on_box) and
-the panel legend's widgets (they change block with the kind: _legend_follow)."""
+Left out, because a table row can't say it: what gives the figure its structure (grid, size,
+runs, times, titles, layers), the layers the contour key and Maximum / minimum name, the fixed
+box and a kind's panel legend (shell/looks.py has rows of its own for those)."""
 
 from collections import namedtuple
 from dataclasses import dataclass
@@ -16,8 +15,6 @@ from .cards import FONTS, LETTERS, MATH_FONTS, TICKDIR, _num, _panels_loose, _pa
 from .kinds import KINDS
 
 KEEP = object()  # (a spec without it leaves the widget as it is)
-REPLACED = ("font", "letters", "time_label", "run_label", "z_label", "spacing", "export", "code")
-# (the blocks written whole; the others keep the keys that have no widget)
 
 As = namedtuple("As", "show read")  # spec value -> widget value, and back
 
@@ -272,42 +269,20 @@ def _prepared(spec):
         dist=dict(dd, stats=figdraw.dist_stat_keys(dd), bar_labels=dd.get("bar_labels") or ""))
 
 
+def filled(spec):
+    """A new figure's spec with the settings it doesn't name at their defaults, in place, so a new
+    figure says what it was made with."""
+    for st in SETTINGS:
+        block, _, key = st.key.rpartition(".")
+        if key == "*" or st.default is KEEP:
+            continue
+        held = spec.setdefault(block, {}) if block else spec
+        if key not in held:
+            held[key] = st.as_.read(st.as_.show(st.default))
+    return spec
+
+
 def widget_of(ed, st):
     """The widget of setting st in editor ed."""
     attr, _, key = st.widget.partition(".")
     return getattr(ed, attr)[key] if key else getattr(ed, attr)
-
-
-def load(ed, spec, only=None):
-    """Show spec's settings (or those with the keys `only`) in editor ed's widgets."""
-    prepared = _prepared(spec)
-    for st in SETTINGS:
-        if only is not None and st.key not in only:
-            continue
-        block, _, key = st.key.rpartition(".")
-        held = spec if not block else prepared.get(block, spec.get(block) or {})
-        if key == "*":
-            value = st.as_.show(held)
-        elif key in held:
-            value = st.as_.show(held[key])
-        elif st.default is KEEP:
-            continue
-        else:
-            value = st.as_.show(st.default)
-        widget_of(ed, st).value = value
-
-
-def store(ed, spec):
-    """Editor ed's widgets into spec (a dict that is the editor's to change)."""
-    blocks = {}
-    for st in SETTINGS:
-        block, _, key = st.key.rpartition(".")
-        value = st.as_.read(widget_of(ed, st).value)
-        if not block:
-            spec[key] = value
-        elif key == "*":
-            blocks.setdefault(block, {}).update(value)
-        else:
-            blocks.setdefault(block, {})[key] = value
-    for block, values in blocks.items():
-        spec[block] = values if block in REPLACED else dict(spec.get(block) or {}, **values)

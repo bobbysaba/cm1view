@@ -15,6 +15,7 @@ from ..kinds import KINDS
 from ..spec.arrays import scene3d_of
 from ..spec.doc import ann_panels, drop_annotations  # noqa: F401  (de.drop_annotations)
 from ..spec.sections import describe as section_words, section_defaults
+from ..spec.tables import tbl_points
 
 MISSING = object()  # (a key a layer no longer has)
 OFF_GRID = "off_grid"  # (the document's panels with no room on the grid: not drawn; settle_grid)
@@ -1037,6 +1038,59 @@ def kind_size(doc):
         return None
     w, h = KINDS[pans[0]["kind"]].size(*grid_shape(doc))
     return min(16.0, float(w)), min(16.0, float(h))
+
+
+def panel_shape(s, run):
+    """Height / width of a panel's plotting area, of its settings s (one_panel's): the plan-view
+    area at equal scale, else a usual shape for the kind of panel."""
+    if s["kind"] == "plan" and s["axes"].get("equal", True):
+        d = s["domain"]
+        if d["mode"] == "box" and d.get("box"):
+            x0, x1, y0, y1 = d["box"]
+        elif d["mode"] == "full":
+            x0, x1, y0, y1 = run.xh[0], run.xh[-1], run.yh[0], run.yh[-1]
+        else:
+            return 1.0
+        return abs(y1 - y0) / max(abs(x1 - x0), 1e-6)
+    return KINDS[s["kind"]].shape
+
+
+def fit_height(s, run):
+    """A figure height (in) that fits the panels at the figure's width, of its settings s: their
+    shape plus room for tick labels, titles and colorbars (an estimate: the layout engine does
+    the rest)."""
+    w, r, c = float(s["size"][0]), int(s["rows"]), int(s["cols"])
+    line = float(s["font"].get("size", 10)) / 72.0  # a line of text (in)
+    outer = s["axes"].get("ticklabels", "all") != "all"
+    left, right, bottom, top = 4.5 * line, 0.15, 3.6 * line, 0.15
+    gx, gy = (0.15, 0.15) if outer else (4.2 * line, 3.6 * line)
+    above = any(s[k].get("on") and str(s[k].get("loc", "")).startswith("above")
+                for k in ("letters", "time_label"))
+    if s.get("titles") or above or (s["letters"].get("on") and s["kind"] == "table"):  # (always)
+        top += 1.6 * line
+        gy += 1.6 * line
+    if s.get("suptitle"):
+        top += 2.2 * line
+    if s["kind"] == "table":
+        gap = 1.6 * line if top > 0.15 else 0.15  # (no tick labels: only what is above it)
+        tall = tbl_points(s) / 72.0 / figdraw.TBL_FILL
+        return round(max(1.0, top + 0.05 + r * tall + (r - 1) * gap), 2)
+    if s.get("row_titles"):
+        left += 1.6 * line
+    cb = s["colorbar"]
+    mode = cb.get("mode", "shared") if s["kind"] in ("plan", "xsec", "th") else "none"
+    side = (cb.get("location") or ("bottom" if cb.get("orientation", "horizontal")
+                                   == "horizontal" else "right")) in ("left", "right")
+    if mode != "none":
+        if side:
+            right += 0.9
+            gx += 0.9 if mode in ("each", "col") else 0.0
+        else:
+            bottom += 0.8
+            gy += 0.8 if mode in ("each", "row") else 0.0
+    pw = max(0.3, (w - left - right - (c - 1) * gx) / c)
+    shape = s.get("shape") or panel_shape(s, run)  # (given: panels of several shapes)
+    return round(max(1.0, bottom + top + r * pw * shape + (r - 1) * gy), 2)
 
 
 # ------------------------------------------------------------ annotations

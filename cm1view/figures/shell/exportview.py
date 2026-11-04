@@ -1,7 +1,6 @@
-"""The Export dialog of the new layout: where and how the image is saved, an animation, and the
-figure as a template.  The saving itself is the FigureEditor's (FigureExport, FigureAnimation,
-FigureStyle), which takes what the shell holds while it is what shows: its widgets here are copies
-that write to the editor's.  The image's settings (format, DPI, background, fit, margin) are the
+"""The Export dialog: where and how the image is saved, an animation, and the figure as a template.
+The saving itself is the FigureEditor's (FigureExport, FigureAnimation, FigureStyle), which takes
+the document: its widgets here are copies that write to the editor's.  The image's settings (format, DPI, background, fit, margin) are the
 document's, written with its other edits, so Undo takes them back."""
 
 import html
@@ -14,7 +13,7 @@ from ... import config
 from .. import spec as fg, tablefile
 from ..cards import _grid, _hint
 from ..cards.base import SECTION
-from ..widgets import DIALOG_DARK
+from ...theme import DIALOG_DARK
 from .looks import Scope, make_widget, rows_of
 from .multirun import ApplyRuns
 
@@ -92,7 +91,7 @@ class ExportDialog:
             _grid(self._copy(ed.an_dpi), self.an_loop, self._copy(ed.an_frames)),
             pn.Row(self.an_go, self.an_stop, margin=0), title="Animation (GIF or video)", collapsed=True,
             **SECTION)
-        self.anim.param.watch(lambda ev: ev.new or ed._anim_refresh(force=True), "collapsed")
+        self.anim.param.watch(lambda ev: ev.new or ed._anim_refresh(), "collapsed")
         self.tpl_go = pn.widgets.Button(name="Save as template", button_type="light",
                                         button_style="outline", height=32, align="end")
         self.tpl_go.on_click(lambda e: self._template())
@@ -142,12 +141,12 @@ class ExportDialog:
         self.tb_said.object = ""
         self.runs.refresh()
         if not self.anim.collapsed:
-            self.ed._anim_refresh(force=True)
+            self.ed._anim_refresh()
         self.dlg.show()
 
     def _default_path(self):
-        """Where to save: as the old layout says for a figure of several runs, which has no folder
-        of its own: the last folder used for one, else the user chooses."""
+        """Where to save: a figure of several runs has no folder of its own: the last folder used
+        for one, else the user chooses."""
         ed = self.ed
         cur = config.expand(ed.path.value.strip())
         if len(self.shell.doc.get("runs") or []) > 1 and \

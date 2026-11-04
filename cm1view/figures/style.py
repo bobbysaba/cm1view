@@ -1,7 +1,6 @@
-"""Figure editor: the Style tab's widgets (text, axes and ticks, panel labels,
-colorbar, legend, contour key, spacing, matplotlib style), copying one layer's look to
-others, and figure templates (a figure's layout and look, applied to another
-run).
+"""Figure editor: the widgets of the look settings (text, axes and ticks, panel labels, colorbar,
+legend, spacing, matplotlib style), and figure templates (a figure's layout and look, applied to
+another run).
 
 A mixin of the FigureEditor (figures/editor.py)."""
 
@@ -11,38 +10,15 @@ import os
 import panel as pn
 
 from . import spec as fg
-from .cards import (
-    CB_LOCS, CB_MODES, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS, TICKDIR, TYPE_LABEL,
-    _auto, _checks, _f, _grid, _hint, _label, _retired, _row, _section, _when, _when_shown,
-    panel_select,
-)
-from .kinds import KINDS
-from ..viewer.ui import held
+from .cards import (CB_LOCS, CB_MODES, FONTS, LABEL_LOCS, LETTERS, LOCS, MATH_FONTS, TICKDIR, _auto,
+                    _f, _retired, panel_select)
 
 STYLE_LABELS = {"default": "Default", "ams": "AMS journal", "talk": "Talk", "dark": "Dark"}
 
 
 class FigureStyle:
-    def _apply_style(self, name):
-        """Style preset `name` on the whole figure, saying what it did beyond the look
-        (Undo takes it all back)."""
-        old = self.collect_all()
-        new = fg.apply_style(old, name)
-        self.set_parts(new, self.part_i)
-        said = []
-        if new["size"][0] != old["size"][0]:
-            said.append(f"width {old['size'][0]:g} → {new['size'][0]:g} in")
-        e0, e1 = old.get("export") or {}, new.get("export") or {}
-        if (e0.get("format"), e0.get("dpi")) != (e1.get("format"), e1.get("dpi")):
-            said.append(f"saves as {str(e1.get('format')).upper()} at {e1.get('dpi')} DPI")
-        said = f": {', '.join(said)}" if said else ""
-        self.style_note.object = (f'<div class="cv-status">{STYLE_LABELS[name]} applied'
-                                  f'{said}. ↶ takes it back.</div>')
-        self.request()
-
     def _build_text(self):
-        """Style tab: text, axes and ticks, panel labels, colorbar, legend, spacing (each
-        widget here redraws the preview: _build wraps this in _redraws)."""
+        """The look settings' widgets (settings.py)."""
         # ---- Style: text
         self.font = pn.widgets.Select(name="Font", options=FONTS)
         self.math = pn.widgets.Select(name="Math & units font", options=MATH_FONTS,
@@ -144,8 +120,6 @@ class FigureStyle:
         self.lg_ncol = pn.widgets.IntInput(name="Columns", start=1, end=8, value=1)
         self.lg_frame = pn.widgets.Checkbox(name="Frame")
         self.lg_own = pn.widgets.Checkbox(name="Panels' own legends", value=True)
-        # (a kind's panels' own legend: the widgets hold its spec block, _legend_follow)
-        self._leg_block = ""
         self.pl_on = pn.widgets.Checkbox(name="Legend", value=True)
         self.pl_loc = pn.widgets.Select(name="At", options=["best"] + LOCS)
         self.pl_ncol = pn.widgets.IntInput(name="Columns", start=1, end=8, value=1)
@@ -158,172 +132,14 @@ class FigureStyle:
                           description="Padding around each panel and its labels (inches)")
         self.sp_hpad = _f("Around panels, y (in)", 0.04, step=0.01, start=0.0)
 
-    def _style_tab(self):
-        """The Style tab."""
-        def label(on, loc, size, bold, box, *more):
-            """One row of a label: its switch, then what it shows; below, its text or style
-            (more).  on shows them (it hides where it does nothing: _show_style; zl_on:
-            _show_vary)."""
-            _when_shown(on, loc, size, bold, box, *[m[0] if isinstance(m, tuple) else m
-                                                    for m in more])
-            return _grid(on, loc, size, bold, box, *more, n=5)
-        titles = _grid(_label("Panel titles"), self.title_loc, pn.Spacer(), self.title_bold, n=5)
-        let = label(self.let_on, self.let_loc, self.let_size, self.let_bold, self.let_box,
-                    self.let_fmt)
-        tl = label(self.tl_on, self.tl_loc, self.tl_size, self.tl_bold, self.tl_box,
-                   (self.tl_fmt, 5))
-        zl = label(self.zl_on, self.zl_loc, self.zl_size, self.zl_bold, self.zl_box,
-                   (self.zl_fmt, 5))
-        rl = label(self.rl_on, self.rl_loc, self.rl_size, self.rl_bold, self.rl_box,
-                   (self.rl_color, 2))
-        _when_shown(self.grid, self.grid_ls)
-        self.ck_opts = _grid(self.ck_layer, self.ck_label, self.ck_x, self.ck_y,
-                             self.ck_size, self.ck_fs, self.ck_frame)
-        _when(self.ck_on, self.ck_opts)
-        self.cb_opts = _grid(self.cb_loc, self.cb_shrink, self.cb_fraction, (self.cb_label, 2),
-                             self.cb_lbold, self.cb_lside, self.cb_lsize, self.cb_pad,
-                             self.cb_ticks, self.cb_fmt, self.cb_tsize)
-        self.cb_sec = _section("Colorbar", _grid(self.cb_mode), self.cb_opts, _hint(
-            "A colorbar's own label and ticks are set where its colours are: the fill "
-            "layer (Layers), each time–height series (Layers → Series) or each panel's "
-            "field (Panels, when panels differ in field). A bar shared by several panels "
-            "takes the first label among them. The label and ticks here are for bars with "
-            "none, so they don't replace a card's."))
-        self.axes_hint = _hint(
-            "Labels take matplotlib math, e.g. <code>w (m s$^{-1}$)</code>. Tick "
-            "labels on outer panels only when the panels share their ranges.")
-        self.ck_sec = _section("Contour key", _grid((self.ck_on, 3)), _hint(
-            "Nested circles labelled with a contour layer's levels (a key for unlabelled "
-            "contours), placed in figure fractions from the lower left."), self.ck_opts)
-        self.ck_on.param.watch(lambda e: self._show_style(), "value")
-        self.lg_sec = _section(
-            "Legend",
-            _grid(self.lg_where, self.pl_loc, self.pl_ncol, self.lg_loc, self.lg_anchor,
-                  self.lg_panel, self.lg_from, self.lg_ncol, self.lg_title),
-            _checks(self.pl_on, self.pl_frame, self.lg_frame, self.lg_own),
-            _hint("A plan view or section has one legend of its layers with a legend entry "
-                  "(contours, shading, track, section line), once for all the panels. Other "
-                  "panels each have their own, with these settings; for one panel alone, use "
-                  "Tree. On the figure, one legend gathers the panels' and hodograph keys, "
-                  "listing an entry shared by panels once (<i>Legend</i> still turns a panel's "
-                  "entries on or off); the <i>outside</i> places make room beside the panels. "
-                  "A legend on the figure, or <i>Panels' own legends</i> off, hides the "
-                  "panels' own, except a panel whose Tree <i>Legend</i> is Yes."))
-        style_tab = pn.Column(
-            _section("Style preset", _grid(self.style_menu), self.style_note, _hint(
-                "Sets the fonts, labels and frame lines at once; AMS journal and Talk also "
-                "set the width and the export. Change anything afterwards here.")),
-            _section("Text", _grid(self.font, self.math, self.fsize, self.fs_tick,
-                                   self.fs_label, self.fs_title, self.fs_sup, self.fs_legend),
-                     _hint("Blank sizes follow the base size.")),
-            _section("Axes and ticks", _grid(
-                self.xlabel, self.ylabel, self.ticklabels, self.share, self.xstep, self.ystep,
-                self.tickdir, self.frame_lw, self.grid, self.grid_ls),
-                _checks(self.ticks, self.minor, self.equal),
-                self.axes_hint),
-            _section("Panel labels", titles, let, tl, _grid(self.tl_t0), zl, rl,
-                     _grid((self.label_fit, 3)),
-                     _hint("Run name: for figures of several runs. A blank size is 1.2 × the "
-                           "base size. Shrinking stops at 6 pt; off, each label keeps its "
-                           "size.")),
-            self.cb_sec,
-            self.lg_sec,
-            self.ck_sec,
-            _section("Spacing", _grid(self.sp_w, self.sp_h, self.sp_wpad, self.sp_hpad)),
-            _section("matplotlib style", _grid((self.mplstyle, 3))),
-            sizing_mode="stretch_width")
-        self._show_style()
-        return style_tab
-
-    def _show_style(self):
-        """The Style settings that reach this kind's picture (kinds.py).  A contour key stays
-        shown while on, to turn off: a figure can draw one from layers it holds but no
-        longer shows."""
-        if not hasattr(self, "ck_sec"):  # (the Style tab is built after the Panels tab)
-            return
-        has = KINDS[self.kind.value].style
-        axes = "axes" in has
-        for w in (self.xlabel, self.ylabel, self.ticklabels, self.share, self.xstep, self.ticks,
-                  self.minor, self.grid, self.axes_hint):
-            w.visible = axes
-        self.ystep.visible = "y_step" in has
-        self.cb_sec.visible = "colorbar" in has
-        self.ck_sec.visible = "contour_key" in has or bool(self.ck_on.value)
-        self.tl_on.visible = "time_label" in has
-        self.rl_on.visible = "run_label" in has
-        self._show_legend()
-
     def _build_style(self):
-        lt = dict(button_type="light", button_style="outline", height=32)
-        # ---- matplotlib style (Style tab)
-        with self._redraws():
-            self.mplstyle = pn.widgets.TextInput(
-                name="matplotlib style (blank: none)", placeholder="e.g. dark_background",
-                description="A matplotlib style name or a .mplstyle file on the server: its "
-                            "colours and lines (fonts and sizes stay those above)")
-        # ---- style presets (Style tab; applied once, so no redraw of their own)
-        self.style_menu = pn.widgets.MenuButton(
-            name="Apply a style", button_type="light", button_style="outline", height=32,
-            items=[(label, key) for key, label in STYLE_LABELS.items()])
-        self.style_menu.on_click(lambda e: self._apply_style(e.new))
-        self.style_note = pn.pane.HTML("", sizing_mode="stretch_width", margin=(0, 4))
-        # ---- copy look (Layers tab)
-        self.look_from = pn.widgets.Select(name="Copy the look of", options={})
-        self.look_to = pn.widgets.MultiChoice(name="To layers", options={})
-        self.look_go = pn.widgets.Button(name="Copy", **lt)
-        self.look_go.on_click(lambda e: self._copy_look())
-        self.look_row = _section(
-            "Copy a layer's look", _hint(
-                "Colours, lines, style and colorbar of one layer onto others of its kind; "
-                "the colour range, levels and labels too when they show the same field."),
-            _grid(self.look_from, (self.look_to, 2)), _row(self.look_go))
-        # ---- templates (File tab)
+        self.mplstyle = pn.widgets.TextInput(
+            name="matplotlib style (blank: none)", placeholder="e.g. dark_background",
+            description="A matplotlib style name or a .mplstyle file on the server: its "
+                        "colours and lines (fonts and sizes stay those above)")
         self.tpl_name = pn.widgets.TextInput(name="Template name", placeholder="e.g. 2x3 dbz w")
-        self.tpl_save = pn.widgets.Button(name="Save as template", **lt)
         self.tpl_sel = pn.widgets.Select(name="Template", options={})
-        self.tpl_go = pn.widgets.Button(name="Apply to this run", **lt)
-        self.tpl_save.on_click(lambda e: self._save_template())
-        self.tpl_go.on_click(lambda e: self._apply_template())
-        self.tpl_sec = _section(
-            "Templates", _hint(
-                "A template keeps the figure's panels, layers and look without its runs: "
-                "apply it to the run shown, its times moved to the map's time (as far "
-                "apart as they were). What only another run had is left out. Saved in "
-                f"<code>{html.escape(fg.templates_dir())}</code>."),
-            _grid((self.tpl_name, 2), self.tpl_save), _grid((self.tpl_sel, 2), self.tpl_go))
         self._list_templates()
-
-    # ------------------------------------------------------------ copy look
-    def _look_opts(self):
-        """The layer choices (after the layer cards change)."""
-        opts = {}
-        for j, c in enumerate(self.cards):
-            name = f"{j + 1}. {TYPE_LABEL[c.type]}"
-            if "field" in c.w:
-                name += f": {self.fields[c.w['field'].value].label}"
-            opts[name] = j
-        with held(self):
-            v, to = self.look_from.value, self.look_to.value
-            self.look_from.options = opts
-            self.look_from.value = v if v in opts.values() else next(iter(opts.values()), None)
-            self.look_to.options = opts
-            self.look_to.value = [j for j in to or [] if j in opts.values()]
-
-    def _copy_look(self):
-        i, to = self.look_from.value, [j for j in self.look_to.value if j != self.look_from.value]
-        if i is None or not to:
-            self._msg("Choose a layer to copy from and layers to copy to", True)
-            return
-        src = self.cards[i].collect()
-        skipped = [j + 1 for j in to if self.cards[j].type != src["type"]]
-        for j in to:
-            if self.cards[j].type == src["type"]:
-                self.cards[j] = self._card(fg.copy_look(src, self.cards[j].collect()))
-        self.look_to.value = []
-        self._show_cards()
-        self.request()
-        self._msg("Copied" + (f"; not to layer(s) {', '.join(map(str, skipped))} (another "
-                              "kind)" if skipped else ""), bool(skipped))
 
     # ------------------------------------------------------------ templates
     def _list_templates(self):
@@ -334,7 +150,6 @@ class FigureStyle:
         keep = self.tpl_sel.value
         self.tpl_sel.options = tpls  # (a Select does not take a value from new options)
         self.tpl_sel.value = keep if keep in tpls.values() else next(iter(tpls.values()), None)
-        self.tpl_go.disabled = not tpls
 
     def _save_template(self):
         try:
@@ -346,10 +161,8 @@ class FigureStyle:
         self.tpl_sel.value = path
         self._msg(f"Saved the template <code>{html.escape(path)}</code>")
 
-    def _apply_template(self, path=None):
-        """Open a template (default: the one picked in the File tab) on this run.  True
-        when it opened."""
-        path = path or self.tpl_sel.value
+    def _apply_template(self, path):
+        """Open a template on this run.  True when it opened."""
         try:
             spec = fg.from_template(fg.load_template(path), self.run, self.v.t)
         except (OSError, ValueError) as e:
@@ -357,4 +170,8 @@ class FigureStyle:
                       f"{html.escape(str(e))}", True)
             return False
         note = f"Applied the template <b>{html.escape(os.path.basename(path)[:-5])}</b> to this run"
-        return self._open_doc(spec, note) if fg.is_doc(spec) else self._open_spec(spec, note)
+        if fg.is_doc(spec):
+            self.quick.hide()
+            self.shell.open_doc(spec, note)
+            return True
+        return self._open_spec(spec, note)

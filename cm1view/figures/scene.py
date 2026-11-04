@@ -1,14 +1,7 @@
-"""Figure editor: a 3D scene figure's settings (the Layers tab of kind "scene"): its
-isosurfaces, floor, vectors, streamlines and parcels, the region and resolution, the
-camera and the look; copying the viewer's 3D view (from_3d, and its camera as the user left
-it).
-
-The scene's run and time are the Panels tab's (Time); the picture is rendered at the
-preview's resolution while editing and at the export's when saved.
+"""Figure editor: what a 3D scene figure takes from the viewer (from_3d, its camera as the user left
+it, its parcel sets), and the widgets the shell's scene settings are copied from.
 
 A mixin of the FigureEditor (figures/editor.py)."""
-
-import copy
 
 import numpy as np
 import panel as pn
@@ -16,11 +9,9 @@ import panel as pn
 from . import draw as figdraw, spec as fg
 from ..core import parcels as P
 from ..viewer.numinput import FloatInput
-from .cards import (FRAMES, IsoRow, ParRow, SCENE_ARROWS, SCENE_BARS, SCENE_BG,
-                    SCENE_FLOOR_CMAPS, SCENE_FLOOR_RANGE, SCENE_LIGHTS, SCENE_PROJ, SCENE_RES,
-                    SCENE_STREAM_BY, SCENE_STREAM_DIR, SCENE_VIEWS, VecRow, _auto, _checks,
-                    _chk, _dark, _f, _grid, _hex, _hint, _row, _section, parcel_pick)
-from ..viewer.ui import held
+from .cards import (FRAMES, SCENE_ARROWS, SCENE_BARS, SCENE_BG, SCENE_FLOOR_CMAPS,
+                    SCENE_FLOOR_RANGE, SCENE_LIGHTS, SCENE_PROJ, SCENE_RES, SCENE_STREAM_BY,
+                    SCENE_STREAM_DIR, SCENE_VIEWS, _auto, _chk, _dark, _f, _hex, parcel_pick)
 
 ISO_MAX = VEC_MAX = PAR_MAX = 6
 
@@ -44,12 +35,11 @@ def next_vec(run, vecs):
 
 
 class FigureScene:
-    """The widgets of a 3D scene figure, and the spec's "scene3d" block."""
+    """The widgets of a 3D scene figure, and what it takes from the viewer."""
 
     def _build_scene(self):
         F, run = self.fields, self.run
         floor0 = "cref" if "cref" in F else ("dbz" if "dbz" in F else next(iter(F.defs)))
-        btn = dict(height=32, button_type="light", button_style="outline")
         # (keys: the spec's; scene3d, ground, stream, camera and look)
         self.sc_w = dict(
             ztop=_f("Top (km)", min(15.0, float(np.floor(run.z[-1]))), step=0.5, start=0.5),
@@ -62,8 +52,6 @@ class FigureScene:
             "Whole domain": "full", "Fixed box": "box"})
         self.sc_box = [_f(n, None, step=0.5) for n in ("x min (km)", "x max (km)",
                                                        "y min (km)", "y max (km)")]
-        self.sc_box_btn = pn.widgets.Button(name="The map's 3D box", **btn,
-                                            description="The box drawn on the map (3D tool)")
         self.sc_g = dict(
             on=_chk("Floor", True),
             var=pn.widgets.Select(name="Field", groups=F.groups(), value=floor0),
@@ -81,12 +69,6 @@ class FigureScene:
             dir=pn.widgets.Select(name="Direction", options=SCENE_STREAM_DIR),
             frame=pn.widgets.Select(name="Frame", options=FRAMES, value="storm"),
             color_by=pn.widgets.Select(name="Colour by", options=SCENE_STREAM_BY))
-        self._sc_seed = None  # the streamlines' seed box (x0, x1, y0, y1 km), or None
-        self.sc_seed_btn = pn.widgets.Button(name="The map's seed box", **btn,
-                                             description="Seed inside the box picked on "
-                                                         "the map (3D tool → Seed box on map)")
-        self.sc_seed_clear = pn.widgets.Button(name="Whole region", **btn)
-        self.sc_seed_html = pn.pane.HTML(margin=(2, 4))
         self.sc_c = dict(
             preset=pn.widgets.Select(name="View", options=SCENE_VIEWS, value="oblique"),
             azimuth=_auto("Azimuth (°)", description="The compass bearing the camera "
@@ -99,10 +81,6 @@ class FigureScene:
             projection=pn.widgets.Select(name="Projection", options=SCENE_PROJ),
             view_angle=_f("View angle (°)", 30.0, step=5.0, start=5.0, end=120.0,
                           description="Perspective only: smaller is flatter (a long lens)"))
-        self._cam_fixed = {}  # (a spec's explicit position / focal / up: kept until edited)
-        self.sc_cam_btn = pn.widgets.Button(
-            name="Camera of the 3D view", **btn,
-            description="The direction and distance the 3D workspace is seen from now")
         self.sc_l = dict(
             lighting=pn.widgets.Select(name="Lighting", options=SCENE_LIGHTS),
             background=pn.widgets.Select(name="Background", options=SCENE_BG, value=""),
@@ -132,96 +110,6 @@ class FigureScene:
                                  "way)"))
         self.sc_labels = [pn.widgets.TextInput(name=f"{a} axis label", value=f"{a} (km)")
                           for a in "xyz"]
-        self.sc_from = pn.widgets.Button(
-            name="Copy the 3D view", button_type="primary", button_style="outline",
-            height=32, description="Everything the 3D workspace shows now (its box, "
-                                   "surfaces, floor, vectors, streamlines and camera)")
-        self.iso_rows, self.svec_rows, self.spar_rows = [], [], []
-        self.iso_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.svec_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.spar_box = pn.Column(sizing_mode="stretch_width", margin=0)
-        self.iso_add = pn.widgets.Button(name="+ Isosurface", **btn)
-        self.svec_add = pn.widgets.Button(name="+ Vectors", **btn)
-        self.spar_add = pn.widgets.Button(name="+ Parcels", **btn,
-                                          description="The next parcel set of the viewer's "
-                                                      "Parcels tab (or a saved one)")
-
-        g, s, c, lk, w = self.sc_g, self.sc_s, self.sc_c, self.sc_l, self.sc_w
-        self._spar_section = _section(
-            "Parcels", self.spar_box, _row(self.spar_add),
-            _hint("Parcel sets as the viewer's Parcels tab chose them (by their rule, from "
-                  "this run's parcel output): tails as lines, heads at the scene's time as "
-                  "balls, inside the region. Coloured by a variable, the first such set "
-                  "gets the parcel colorbar (Look)."))
-        self._spar_section.visible = self.v.pf is not None
-        self.scene_col = pn.Column(
-            _hint("One 3D picture, rendered off-screen (pyvista) at the preview's "
-                  "resolution here and at the export's DPI when saved. Its run and time: "
-                  "<b>Panels → Time</b>. <b>Copy the 3D view</b> takes everything the 3D "
-                  "workspace shows."),
-            _row(self.sc_from),
-            _section("Isosurfaces", self.iso_box, _row(self.iso_add),
-                     _hint("Untick a surface to leave it out (it is kept). Storm-relative "
-                           "fields use the run's track."), collapsed=False),
-            _section("Floor", _grid((g["var"], 2), g["z"], g["cmap"], g["range"], g["lo"],
-                                    g["hi"]),
-                     _checks(g["on"], g["rev"])),
-            _section("Vectors", self.svec_box, _row(self.svec_add),
-                     _hint("Arrows in a plane at a height; <b>Arrows across</b>: across the "
-                           "region's width.")),
-            _section("Streamlines", _grid(s["z"], s["n"], s["length"], s["dir"], s["frame"],
-                                          s["color_by"]),
-                     _checks(s["on"]),
-                     _row(self.sc_seed_btn, self.sc_seed_clear), self.sc_seed_html),
-            self._spar_section,
-            _section("Region and resolution",
-                     _grid(self.sc_region, w["ztop"], w["exag"]),
-                     _grid(*self.sc_box, n=2), _row(self.sc_box_btn),
-                     _grid(w["smooth"], w["res"]),
-                     _hint("The exaggeration only stretches the picture (nothing is read "
-                           "again); the region, top, smoothing and resolution compute the "
-                           "surfaces again.")),
-            _section("Camera", _grid(c["preset"], c["azimuth"], c["elevation"], c["zoom"],
-                                     c["projection"], c["view_angle"]),
-                     _row(self.sc_cam_btn),
-                     _hint("A view, turned by the azimuth and elevation typed (blank: the "
-                           "view's own), at the distance where the region fits, divided by "
-                           "the zoom. <b>Camera of the 3D view</b>: as you left the 3D "
-                           "workspace (rotate it there, then click)."), collapsed=False),
-            _section("Look", _grid(lk["lighting"], lk["background"], lk["arrows"],
-                                   lk["shine"], lk["ambient"], lk["tube"],
-                                   lk["floor_bar"], lk["stream_bar"], lk["parcel_bar"],
-                                   lk["outline_color"]),
-                     _grid(*self.sc_labels),
-                     _checks(lk["outline"], lk["ticks"], lk["legend"], lk["seed_box"])),
-            _section("Animation", _grid(self.sc_anim["follow"], self.sc_anim["orbit"]),
-                     _hint("For <b>File → Animation (GIF)</b>: each frame steps the "
-                           "scene's time. A box following the track needs a <b>Fixed "
-                           "box</b> and the run's track; the orbit is shared out evenly, "
-                           "so a looping 360° turn does not repeat a frame.")),
-            sizing_mode="stretch_width", margin=0)
-
-        rq = lambda *e: self.request()  # noqa: E731
-        for d in (self.sc_w, self.sc_g, self.sc_s, self.sc_l, self.sc_anim):
-            for x in d.values():
-                x.param.watch(rq, "value")
-        for x in self.sc_labels:
-            x.param.watch(rq, "value")
-        for x in self.sc_c.values():
-            x.param.watch(self._on_camera_edit, "value")
-        self.sc_region.param.watch(lambda e: (self._scene_show(), self.request()), "value")
-        for x in self.sc_box:
-            x.param.watch(lambda e: self.request(), "value")
-        for x in (g["var"], g["range"]):
-            x.param.watch(self._on_floor, "value")
-        self.sc_box_btn.on_click(lambda e: self._scene_map_box())
-        self.sc_seed_btn.on_click(lambda e: self._scene_seed(True))
-        self.sc_seed_clear.on_click(lambda e: self._scene_seed(False))
-        self.sc_cam_btn.on_click(lambda e: self._scene_camera_from_3d())
-        self.sc_from.on_click(lambda e: self._scene_copy_3d())
-        self.iso_add.on_click(lambda e: self._add_iso())
-        self.svec_add.on_click(lambda e: self._add_svec())
-        self.spar_add.on_click(lambda e: self._add_spar())
         # the 3D workspace's camera as the user leaves it (plotly's relayout after a drag)
         self._cam3d = None
         v = self.v
@@ -229,50 +117,6 @@ class FigureScene:
             v.plot3d.param.watch(self._on_3d_relayout, "relayout_data")
         if hasattr(v, "v3_cam"):  # (a preset picked there: the latest camera)
             v.v3_cam.param.watch(lambda e: setattr(self, "_cam3d", None), "value")
-        self._scene_show()
-
-    # ------------------------------------------------------------ rows
-    def _iso_row(self, e):
-        r = IsoRow(self, e)
-        r.rm.on_click(lambda ev: self._remove_row(self.iso_rows, r))
-        return r
-
-    def _svec_row(self, e):
-        r = VecRow(self, e)
-        r.rm.on_click(lambda ev: self._remove_row(self.svec_rows, r))
-        return r
-
-    def _spar_row(self, e):
-        r = ParRow(self, e)
-        r.rm.on_click(lambda ev: self._remove_row(self.spar_rows, r))
-        return r
-
-    def _remove_row(self, rows, r):
-        rows.remove(r)
-        self._scene_rows()
-        self.request()
-
-    def _scene_rows(self):
-        self.iso_box.objects = [r.panel for r in self.iso_rows] or [pn.pane.HTML(
-            '<div class="cv-empty">No isosurfaces: add one.</div>')]
-        self.svec_box.objects = [r.panel for r in self.svec_rows]
-        self.spar_box.objects = [r.panel for r in self.spar_rows]
-        self.iso_add.disabled = len(self.iso_rows) >= ISO_MAX
-        self.svec_add.disabled = len(self.svec_rows) >= VEC_MAX
-        self.spar_add.disabled = len(self.spar_rows) >= PAR_MAX
-        self._spar_section.visible = self.v.pf is not None or bool(self.spar_rows)
-
-    def _add_iso(self):
-        self.iso_rows.append(self._iso_row(next_iso(self.fields, [
-            dict(var=r.w["var"].value, val=r.w["val"].value) for r in self.iso_rows])))
-        self._scene_rows()
-        self.request()
-
-    def _add_svec(self):
-        self.svec_rows.append(self._svec_row(next_vec(self.run, [
-            dict(level=r.w["level"].value) for r in self.svec_rows])))
-        self._scene_rows()
-        self.request()
 
     def next_parcels(self, have, say):
         """A new parcel set of a scene holding the sets named `have`: the viewer's next one,
@@ -289,143 +133,11 @@ class FigureScene:
         src = parcel_pick(self, "f:" + saved[0])
         return None if src is None else dict(fg.layer_defaults("parcels", self.F), lw=1.5, **src)
 
-    def _add_spar(self):
-        """The viewer's next parcel set not in the scene yet, else the run's first
-        saved set."""
-        e = self.next_parcels({r.e.get("name") for r in self.spar_rows}, self._msg)
-        if e is None:
-            return
-        self.spar_rows.append(self._spar_row(e))
-        self._scene_rows()
-        self.request()
-
     def _scene_parcels(self):
         """The viewer's parcel sets as entries of a scene (as its 2D layers, lines a
         little wider)."""
         return [dict(lay, lw=round(1.5 * float(self.v.par_width.value or 1.0), 3))
                 for lay in self._parcel_layers()]
-
-    # ------------------------------------------------------------ what is shown
-    def _scene_show(self, *e):
-        box = self.sc_region.value == "box"
-        for x in self.sc_box:
-            x.visible = box
-        g = self.sc_g
-        d = self.fields[g["var"].value] if g["var"].value in self.fields else None
-        g["z"].visible = d is not None and d.ndim == 3
-        g["lo"].visible = g["hi"].visible = g["range"].value == "custom"
-        self.sc_seed_clear.visible = self._sc_seed is not None
-        sb = self._sc_seed
-        self.sc_seed_html.object = (
-            '<div class="cv-hint">Seeded over the whole region.</div>' if sb is None else
-            f'<div class="cv-hint">Seeded in x {sb[0]:.1f} to {sb[1]:.1f}, y {sb[2]:.1f} '
-            f'to {sb[3]:.1f} km.</div>')
-
-    def _on_floor(self, ev):
-        """A floor field or range: its height only for 3D fields; a custom range
-        starts at the field's display range."""
-        g = self.sc_g
-        if not self._hold and g["range"].value == "custom" and ev.obj is g["range"]:
-            d = self.fields[g["var"].value] if g["var"].value in self.fields else None
-            if d is not None and d.vrange:
-                with held(self):
-                    g["lo"].value, g["hi"].value = (float(v) for v in d.vrange)
-        self._scene_show()
-
-    def _on_camera_edit(self, ev):
-        """A camera setting changed: an explicit position (from a spec) no longer holds."""
-        if self._hold:
-            return
-        self._cam_fixed = {}
-        self.request()
-
-    # ------------------------------------------------------------ spec <-> widgets
-    def _scene_set(self, sc):
-        """Show scene block sc (fg.scene3d_of's) in the widgets (no render)."""
-        with held(self):
-            for k, x in self.sc_w.items():
-                x.value = sc[k] if k == "res" else float(sc[k])
-            box = sc.get("box")
-            self.sc_region.value = "box" if box else "full"
-            for x, b in zip(self.sc_box, box or [None] * 4):
-                x.value = None if b is None else float(b)
-            self.sc_anim["follow"].value = "track" if sc["follow"] == "track" else "fixed"
-            self.sc_anim["orbit"].value = float(sc["orbit"] or 0.0)
-            _put(self.sc_g, sc["ground"])
-            _put(self.sc_s, sc["stream"])
-            sb = sc["stream"].get("seed_box")
-            self._sc_seed = tuple(float(v) for v in sb) if sb else None
-            cam = figdraw.camera_of(sc)
-            _put(self.sc_c, cam)
-            self._cam_fixed = {k: cam[k] for k in ("position", "focal", "up")
-                               if cam.get(k) is not None}
-            lk = figdraw.look_of(sc)
-            _put(self.sc_l, dict(lk, background=lk["background"] or ""))
-            for x, t in zip(self.sc_labels, list(lk["labels"]) + ["", "", ""]):
-                x.value = str(t)
-            self._sc_extra = {k: copy.deepcopy(sc[k]) for k in sc
-                              if k not in fg.SCENE3D}  # (kept as they were)
-            self._sc_look_extra = {k: v for k, v in (sc.get("look") or {}).items()
-                                   if k not in self.sc_l and k != "labels"}
-            self.iso_rows = [self._iso_row(e) for e in sc["isos"]]
-            self.svec_rows = [self._svec_row(e) for e in sc["vecs"]]
-            self.spar_rows = [self._spar_row(e) for e in sc["parcels"]]
-        self._scene_rows()
-        self._scene_show()
-
-    def _scene_collect(self):
-        """The spec's scene3d block of the widgets."""
-        w = self.sc_w
-        box = [x.value for x in self.sc_box]
-        ok = self.sc_region.value == "box" and None not in box and box[1] > box[0] \
-            and box[3] > box[2]
-        cam = dict(_get(self.sc_c), **self._cam_fixed)
-        cam["zoom"] = cam["zoom"] or 1.0
-        cam["view_angle"] = cam["view_angle"] or 30.0
-        look = dict(getattr(self, "_sc_look_extra", {}), **_get(self.sc_l),
-                    labels=[x.value for x in self.sc_labels])
-        look["background"] = look["background"] or None
-        for k, v in (("tube", 1.0), ("shine", 0.3), ("ambient", 0.25)):
-            if look[k] is None:
-                look[k] = v
-        return dict(getattr(self, "_sc_extra", {}),
-                    box=[float(v) for v in box] if ok else None,
-                    ztop=float(w["ztop"].value or 15.0), exag=float(w["exag"].value or 1.0),
-                    smooth=float(w["smooth"].value or 0.0), res=int(w["res"].value or 0),
-                    isos=[r.collect() for r in self.iso_rows],
-                    vecs=[r.collect() for r in self.svec_rows],
-                    parcels=[r.collect() for r in self.spar_rows],
-                    stream=dict(_get(self.sc_s), seed_box=list(self._sc_seed)
-                                if self._sc_seed else None),
-                    ground=_get(self.sc_g), camera=cam, look=look,
-                    follow=self.sc_anim["follow"].value,
-                    orbit=float(self.sc_anim["orbit"].value or 0.0))
-
-    # ------------------------------------------------------------ from the viewer
-    def _scene_map_box(self):
-        b = getattr(self.v, "box", None)
-        if b is None:
-            self._msg("Draw a 3D box on the map first (3D tool), or type one.", True)
-            return
-        with held(self):
-            self.sc_region.value = "box"
-            for x, v in zip(self.sc_box, b):
-                x.value = round(float(v), 2)
-        self._scene_show()
-        self.request()
-
-    def _scene_seed(self, use):
-        if use:
-            sb = getattr(self.v, "seed_box", None)
-            if sb is None:
-                self._msg("Pick a seed box on the map first (3D tool → <b>Seed box on "
-                          "map</b>).", True)
-                return
-            self._sc_seed = tuple(float(v) for v in sb)
-        else:
-            self._sc_seed = None
-        self._scene_show()
-        self.request()
 
     def _on_3d_relayout(self, ev):
         d = ev.new or {}
@@ -440,13 +152,6 @@ class FigureScene:
         cam = dict(figdraw.CAMERA, preset=preset)
         cam.update(figdraw.camera_from_plotly(self._cam3d))
         return cam
-
-    def _scene_camera_from_3d(self):
-        cam = self._view_camera()
-        with held(self):
-            _put(self.sc_c, cam)
-        self._cam_fixed = {}
-        self.request()
 
     def viewer_scene(self):
         """The scene block of what the 3D workspace shows (its box, top, exaggeration,
@@ -486,11 +191,6 @@ class FigureScene:
                 e.pop("ref")
         return fg.scene3d_of(dict(scene3d=dict(sc, camera=self._view_camera(), look={})))
 
-    def _scene_copy_3d(self):  # (the animation settings stay)
-        self._scene_set(dict(self.viewer_scene(), **{k: x.value
-                                                     for k, x in self.sc_anim.items()}))
-        self.request()
-
     def from_3d(self):
         """A 3D scene figure of the 3D workspace (its box, settings and camera) at the
         shown time."""
@@ -501,9 +201,8 @@ class FigureScene:
                  vary="time", scene3d=self.viewer_scene())
         s["axes"] = dict(s["axes"], xlabel="", ylabel="", ticklabels="all", equal=False)
         s["colorbar"] = dict(s["colorbar"], mode="none")
-        s["letters"] = dict(s["letters"], on=self._multi_part())
-        self.set_spec(s)
-
+        s["letters"] = dict(s["letters"], on=False)
+        self.shell.open_new(s)
 
 def _put(ws, d):
     """Widgets ws take the values of d (by key; blank-able numbers may be None; a
@@ -527,6 +226,3 @@ def _put(ws, d):
                 continue
         x.value = v
 
-
-def _get(ws):
-    return {k: x.value for k, x in ws.items()}

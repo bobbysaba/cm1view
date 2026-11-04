@@ -15,9 +15,9 @@ import panel as pn
 from .. import draw as figdraw
 from ..cards import LayerCard, TYPE_LABEL
 from ..cards.base import _BTN, CARD, GHOST, _chk, grid_columns
-from ..runs import FigureRuns
+from ..runs import RunLists
 from ..spec.sections import describe as section_words
-from ..times import FigureTimes, _tlabel
+from ..times import _tlabel, nearest
 from ...theme import ACCENT
 from ...viewer.ui import held
 from . import docedit as de, nodes
@@ -26,14 +26,9 @@ GROUPED = {"minus": "minus_on", "ens": "ens_on", "reduce": "reduce_op"}  # (key 
 PANELS_TIME = "the panel's"
 
 
-class CardHost:
+class CardHost(RunLists):
     """What a LayerCard asks of its editor: the kind, the field and run lists of the
     document, and request(), which records the card's settings."""
-
-    _run_choices = FigureRuns._run_choices
-    _layer_run_choices = FigureRuns._layer_run_choices
-    _series_run_opts = FigureRuns._series_run_opts
-    _pick_other = FigureRuns._pick_other
 
     def __init__(self, shell, changed, by_height=False, kind="plan"):
         self.shell, self.v, self.fields = shell, shell.v, shell.fields
@@ -79,7 +74,7 @@ class CardHost:
     def _other_runs(self):
         return self.shell.other_runs()
 
-    _nearest = staticmethod(FigureTimes._nearest)
+    _nearest = staticmethod(nearest)
 
     def _moved_time(self, ts, k0, k1):
         return figdraw.moved_time(dict(runs=self.shell.doc["runs"]), ts, k0, k1)

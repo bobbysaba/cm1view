@@ -11,10 +11,11 @@ import numpy as np
 
 from .. import draw as figdraw
 from ..kinds import KINDS
-from .base import OutputStep, STEP_ENTRIES, _window_ends, default_spec, run_entry, time_refs
-from .bundle import OLDER
+from .base import OutputStep, STEP_ENTRIES, _window_ends, default_spec, normalize, run_entry, \
+    time_refs
+from .bundle import OLDER, with_defaults
 from .doc import (ANY_KIND_KEYS, FIGURE_KEYS, KIND_KEYS, MAPPED, NOT_STYLE, drop_annotations,
-                  one_panel)
+                  one_panel, to_doc)
 from .templates import STYLES
 
 TEMPLATE_RUN = "r0"  # (the one run of a template: the figure's first, on whatever it is applied to)
@@ -351,25 +352,45 @@ def doc_defaults(doc, run, F, t=0, track=None):
     return d
 
 
+def older_to_doc(spec, run, F, t=0, track=None):
+    """The document of a figure saved in the older form (or of a figure of parts), with what it
+    lacks from this version's defaults."""
+    if spec.get("kind") != "combo":
+        return to_doc(normalize(with_defaults(spec, run, F, t, track), run, track or "viewer"))
+    parts = [with_defaults(one, run, F, t, track) for one in spec["parts"]]
+    for p in parts:
+        normalize(p, run, track or "viewer")
+        if (p.get("letters") or {}).get("auto"):  # (letters run on from part to part)
+            p["letters"] = dict(p["letters"], on=True)
+    return to_doc(dict(spec, parts=parts))
+
+
 # ------------------------------------------------------------ what a new figure looks like
+def kind_look(s, kind):
+    """A new figure's spec s, with the look its panels' kind starts with, in place: its axis labels,
+    its colorbar and where its letters and time go."""
+    k = KINDS[kind]
+    s["axes"] = dict(s["axes"], xlabel=k.labels[0], ylabel=k.labels[1])
+    s["letters"] = dict(s["letters"], loc=k.letter_at)
+    s["time_label"] = dict(s["time_label"], loc=k.time_at,
+                           on=s["time_label"]["on"] and kind not in ("th", "line"))
+    if k.colorbar:
+        s["colorbar"] = dict(s["colorbar"], mode=k.colorbar[0])
+    if k.colorbar[1:]:
+        s["colorbar"] = dict(s["colorbar"], location=k.colorbar[1], orientation=(
+            "horizontal" if k.colorbar[1] in ("bottom", "top") else "vertical"))
+    return s
+
+
 def fresh_look(run, F, t, kind, tracked=True):
     """The look settings a new figure of panels of `kind` starts with, placed as in a document
     (style, kinds[kind], the figure's own keys): what the inspector calls the default.  The
     settings table's defaults are what a spec without a key shows, which is not this.  tracked:
     the viewer has a storm track, which a new plan view centres on."""
     base = default_spec(run, F, t)
-    k = KINDS[kind]
     if not tracked:
         base["domain"] = dict(base["domain"], mode="full")
-    base["axes"] = dict(base["axes"], xlabel=k.labels[0], ylabel=k.labels[1])
-    base["letters"] = dict(base["letters"], loc=k.letter_at)
-    base["time_label"] = dict(base["time_label"], loc=k.time_at,
-                              on=base["time_label"]["on"] and kind not in ("th", "line"))
-    if k.colorbar:
-        base["colorbar"] = dict(base["colorbar"], mode=k.colorbar[0])
-    if k.colorbar[1:]:
-        base["colorbar"] = dict(base["colorbar"], location=k.colorbar[1], orientation=(
-            "horizontal" if k.colorbar[1] in ("bottom", "top") else "vertical"))
+    kind_look(base, kind)
     doc = dict(style={}, kinds={kind: {}})
     for key, val in base.items():
         if key in FIGURE_KEYS:

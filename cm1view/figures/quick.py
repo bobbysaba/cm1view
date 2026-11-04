@@ -1,7 +1,7 @@
-"""Figure editor: the quick start.  Opening the Figure workspace the first time (with no
+"""Figure editor: the New dialog.  Opening the Figure workspace the first time (with no
 figure made from the viewer yet), and the new-figure button, ask for the few settings a
 figure starts from: what the panels show, how they differ, the grid, the main field
-and the width.  Everything else is the editor's tabs.  Or it starts from a template, or
+and the width.  Everything else is the panes'.  Or it starts from a template, or
 from a saved figure, shown as a gallery of thumbnails, newest first.
 
 A mixin of the FigureEditor (figures/editor.py)."""
@@ -17,11 +17,15 @@ from . import spec as fg
 from ..theme import DIALOG_DARK
 from .cards import QUICK_VARY, SIZE_PRESETS, _grid, _hint
 from .export import make_thumb, saved_list, saved_thumb
-from .kinds import KINDS, MAPS
+from .times import _nearest_t
+from .kinds import KIND_LABELS, KINDS, MAPS
+from .shell import docedit as de
+from .shell.gridview import main_kind
 
 ALL_FOLDERS = "Newest first, all folders"
 GALLERY_STEP = 12  # thumbnails shown at a time
 NO_TEMPLATES = "No templates yet"
+NEW_STEP = 5  # outputs between a new figure's panels, past the times it starts with
 _THUMB_BOX = 104  # px of a gallery button given to the picture; the name is below it
 
 
@@ -39,11 +43,10 @@ def _thumb_css(png=None):
 
 class FigureQuick:
     _started = False  # a figure has been made (here, from the viewer, or loaded)
-    _quick_xsec = False  # (making sections: no cards from the plan views' grid)
     _gallery_gen = 0  # (a thumbnail still being made for a closed dialog is dropped)
 
     def _build_quick(self):
-        self.qs_kind = pn.widgets.Select(name="Panels show", options=dict(self.kind.options),
+        self.qs_kind = pn.widgets.Select(name="Panels show", options=dict(KIND_LABELS),
                                          value="plan")
         self.qs_vary = pn.widgets.Select(name="Panels differ in", options=QUICK_VARY,
                                          value="times")
@@ -56,7 +59,7 @@ class FigureQuick:
         self.qs_go = pn.widgets.Button(name="Make the figure", button_type="primary",
                                        width=160)
         self.qs_skip = pn.widgets.Button(
-            name="Keep the example", button_type="light", button_style="outline", width=150,
+            name="Keep this figure", button_type="light", button_style="outline", width=150,
             description="Close: the figure stays as it is")
         self.qs_tpl = pn.widgets.Select(name="Or start from a template")
         self.qs_tpl_go = pn.widgets.Button(name="Apply to this run", button_type="primary",
@@ -69,6 +72,10 @@ class FigureQuick:
             "gap": "4px"})
         self.qs_more = pn.widgets.Button(name="Show more", button_type="light",
                                          button_style="outline", width=120, visible=False)
+        self.qs_path = pn.widgets.TextInput(name="Or open one by its path",
+                                            placeholder="…/_src/figure_spec.json, or its image")
+        self.qs_open = pn.widgets.Button(name="Open", button_type="primary",
+                                         button_style="outline", align="end")
         self.qs_load_note = _hint("")
         self.qs_load_note.visible = False
         self.qs_earlier = pn.widgets.Button(
@@ -85,17 +92,17 @@ class FigureQuick:
             self.qs_earlier_row,
             _grid(self.qs_kind, self.qs_vary, self.qs_field),
             _grid(self.qs_rows, self.qs_cols, self.qs_size), self.qs_note,
-            _hint("Everything else (times, layers, style, labels) is in the editor's tabs; "
-                  "the new-figure button above the preview shows this again."),
+            _hint("Everything else (times, layers, style, labels) is in the tree and the "
+                  "inspector; the new-figure button above the preview shows this again."),
             pn.Row(self.qs_go, self.qs_skip),
             pn.layout.Divider(margin=(6, 4)),
             _grid((self.qs_tpl, 2), self.qs_tpl_go),
-            _hint("Saved in File → Templates: its panels and look on this run, its times "
+            _hint("Saved from Export → Template: its panels and look on this run, its times "
                   "moved to the map's time."),
             pn.layout.Divider(margin=(6, 4)),
             self.qs_where, self.qs_none, self.qs_load_note, self.qs_gallery, self.qs_more,
-            _hint("Figures saved in the Figures folder (⚙ Settings); the File tab opens "
-                  "any other."), width=680, margin=10,
+            _hint("Figures saved in the Figures folder (⚙ Settings)."),
+            _grid((self.qs_path, 2), self.qs_open), width=680, margin=10,
             stylesheets=[DIALOG_DARK])
         self.qs_kind.param.watch(lambda e: self._quick_show(), "value")
         self.qs_vary.param.watch(lambda e: self._quick_show(), "value")
@@ -107,27 +114,33 @@ class FigureQuick:
         # (closed: the thumbnails leave the page)
         self.quick.param.watch(lambda e: None if e.new else self._gallery_clear(), "open")
         self.qs_earlier.on_click(lambda e: self._quick_earlier())
+        self.qs_open.on_click(lambda e: self._quick_open(self.qs_path.value))
 
     def opened(self):
-        """The Figure workspace is shown: the quick start, the first time."""
-        if not self._started and not self._in_shell():
+        """The Figure workspace is shown: its panes, and the New dialog the first time (with no
+        figure made from the viewer yet)."""
+        self.shell.open()
+        if not self._started and not self.shell.made:
             self._started = True
             self.open_quick()
 
     def open_quick(self):
-        """Show the quick start, set as the figure in the editor."""
+        """Show the New dialog, set as the figure is."""
+        doc = self.shell.doc
+        kind = main_kind(doc)
         g = self.fields.groups()
-        fill = (self._pf_base or {}).get("field") or next(
-            (c.collect()["field"] for c in self.cards if c.type == "fill"), None)
+        fills = de.guess_fill(doc, kind)["fields"] if kind in MAPS else []
         self.qs_field.groups = g
         names = [v for grp in g.values() for v in grp.values()]
-        self.qs_field.value = fill if fill in names else (names[0] if names else None)
-        self.qs_kind.value = self.kind.value
+        self.qs_field.value = fills[0] if fills and fills[0] in names else (
+            names[0] if names else None)
+        self.qs_kind.value = kind
         self._quick_show()  # (the panels' choices of this kind first)
-        dims = [d for d in self._axes() if d != "none"]
+        guess = de.guess_fill(doc, kind)
+        dims = [d for d in (guess["row_dim"], guess["col_dim"]) if d != "none"]
         vary = dims[0] if len(dims) == 1 else "times"
         self.qs_vary.value = vary if vary in self.qs_vary.options.values() else "times"
-        self.qs_rows.value, self.qs_cols.value = int(self.rows.value), int(self.cols.value)
+        self.qs_rows.value, self.qs_cols.value = guess["rows"], guess["cols"]
         self._list_templates()
         tpls, keep = dict(self.tpl_sel.options), self.qs_tpl.value
         self.qs_tpl.options = tpls or {NO_TEMPLATES: ""}
@@ -146,17 +159,17 @@ class FigureQuick:
         kind, vary = self.qs_kind.value, self.qs_vary.value
         maps = kind in MAPS
         self.qs_field.visible = maps
-        self.qs_vary.visible = kind == "plan"  # (sections: a card per panel)
+        self.qs_vary.visible = kind == "plan"
         # (time-height: its cards'; a 3D scene: one picture)
         self.qs_rows.visible = self.qs_cols.visible = KINDS[kind].quick_grid
         note = KINDS[kind].note or (maps and {
             "fields": "Every panel starts with this fill: pick each panel's field in "
-                      "Panels → Time and fields.",
-            "heights": "Pick each panel's height in Panels → Time and heights.",
-            "runs": "A panel per run: add runs in Layers → Runs used.  For a grid such "
-                    "as runs × times, set Panels → Grid and size → Rows are / "
-                    "Columns are.",
-            "none": "Every panel is alike: change one in the panel tree (its run, time, "
+                      "the tree.",
+            "heights": "Pick each panel's height in the tree, or use Fill panels on the Plan "
+                       "views node.",
+            "runs": "A panel per run: add runs on the tree's Runs node.  For a grid such as "
+                    "runs × times, use Fill panels on the Plan views node.",
+            "none": "Every panel is alike: pick one in the tree to change it (its run, time, "
                     "height …)."}.get(vary)) or ""
         self.qs_note.object = f'<div class="cv-hint">{note}</div>'
         self.qs_note.visible = bool(note)
@@ -227,25 +240,16 @@ class FigureQuick:
         self.qs_load_note.object = html
         self.qs_load_note.visible = True
 
-    def _quick_done(self):
-        """A figure is in the widgets: the new layout takes it, when it is what shows."""
-        if self._in_shell():
-            self.shell.take_figure()
-
     def _quick_open(self, path):
-        """Open a saved figure (it closes the dialog); if it cannot be opened, say why in
-        the dialog."""
-        if self._load_spec(path):
-            self._quick_done()
-        else:
+        """Open a saved figure (it closes the dialog); if it cannot be opened, say why in the
+        dialog."""
+        if not self._load_spec(path):
             self._quick_note(self.msg.object)
 
     def _quick_template(self):
-        """Apply the template picked (it closes the dialog); if it cannot be applied, say
-        why in the dialog."""
-        if self._apply_template(self.qs_tpl.value):
-            self._quick_done()
-        else:
+        """Apply the template picked (it closes the dialog); if it cannot be applied, say why in
+        the dialog."""
+        if not self._apply_template(self.qs_tpl.value):
             self._quick_note(self.msg.object)
 
     def _quick_earlier(self):
@@ -254,11 +258,28 @@ class FigureQuick:
         if why:
             self._quick_note(f'<div class="cv-status">{why}</div>')
         else:
-            self._quick_done()
+            self.quick.hide()
 
     def _quick_make(self):
-        """A new figure (Undo takes it back) with the quick start's settings."""
+        """A new figure (Undo takes it back) with the dialog's settings."""
         self.quick.hide()
+        kind = self.qs_kind.value
+        doc = self.shell.new_doc(self._quick_spec())
+        r, c = de.grid_shape(doc)
+        size = de.kind_size(doc) or (KINDS[kind].size(r, c) if KINDS[kind].size else None)
+        if size:
+            doc["size"] = [round(min(16.0, float(v)), 2) for v in size]
+        preset = self.qs_size.value
+        if preset and "x" in preset:
+            doc["size"], doc["size_auto"] = [float(v) for v in preset.split("x")], False
+        elif preset:
+            doc["size"] = [float(preset), doc["size"][1]]
+            if doc["panels"] and kind not in MAPS:
+                doc["size"][1] = self.shell.fit_height(doc)
+        self.shell._take(doc)
+
+    def _quick_spec(self):
+        """The version-1 spec of a new figure with the dialog's settings."""
         kind, vary = self.qs_kind.value, self.qs_vary.value
         s = self._default()
         f = self.qs_field.value
@@ -267,48 +288,82 @@ class FigureQuick:
             if fill is not None and fill.get("field") != f:
                 s["layers"][s["layers"].index(fill)] = fg.layer_defaults(
                     "fill", self.fields, f, 1.0)
-        live, self.auto.value = self.auto.value, False  # (one render: one undo step)
-        try:
-            self.set_parts(s)
-            self._quick_xsec = True  # (_quick_spread makes the section cards, once)
-            try:
-                self.kind.value = kind  # (its own labels, colorbar and cards)
-            finally:
-                self._quick_xsec = False
-            if kind == "plan":
-                self.g_rows.value, self.g_cols.value = "none", vary
-            if KINDS[kind].quick_grid:
-                self.rows.value = int(self.qs_rows.value)
-                self.cols.value = int(self.qs_cols.value)
-            if KINDS[kind].spread:
-                self._quick_spread(kind)
-            if self.qs_size.value:
-                self.size_preset.value = self.qs_size.value
-        finally:
-            self.auto.value = live
-        self._quick_done()
-        self.request()  # (shortly: the dialog closes and the editor shows first)
-
-    def _quick_spread(self, kind):
-        """Sounding / distribution / profile / joint distribution / azimuthal mean cards
-        one per panel of the grid: more cards than panels wrap (sharing panels), panels left over get a copy
-        of the last card."""
-        n = int(self.rows.value or 1) * int(self.cols.value or 1)
-        if kind == "xsec":  # (x–z, y–z, x–z ... at the shown time; no track: fixed)
-            track = bool(self.v.fixes) or any(r.get("track") for r in self._runs_collect())
-            e = fg.section_defaults(run=self._own_index(), time_s=self._shown_s(),
-                                    pos="storm" if track else "fixed")
-            self.sec_cards = self._sec_cards([dict(e, orient="xy"[i % 2], panel=i)
-                                              for i in range(n)])
-            self._show_sections()
-            self._build_titles()
-            return
         k = KINDS[kind]
-        ents = [c.collect() for c in getattr(self, k.cards)]
-        if not ents:
-            return
-        ents = [dict(e, panel=i % n) for i, e in enumerate(ents)] + \
-            [dict(ents[-1], panel=i) for i in range(len(ents), n)]
-        setattr(self, k.cards, [getattr(self, k.card)(e) for e in ents])
-        getattr(self, k.show)()
-        self._build_titles()
+        s["kind"] = kind
+        if kind != "plan":
+            fg.kind_look(s, kind)
+        r, c = (int(self.qs_rows.value), int(self.qs_cols.value)) if k.quick_grid else (1, 1)
+        if kind == "plan":
+            r, c = self._plan_grid(s, vary, r, c)
+        else:
+            s["grid"] = dict(rows="none", cols="none", runs=[])
+        s.update(rows=r, cols=c)
+        if kind == "xsec":
+            track = bool(self.v.fixes) or any(e.get("track") for e in s["runs"])
+            e = fg.section_defaults(run=s["run"], time_s=float(self.run.times[self.v.t]),
+                                    pos="storm" if track else "fixed")
+            s["sections"] = [dict(e, orient="xy"[i % 2], panel=i) for i in range(r * c)]
+        elif kind == "scene":
+            s["scene3d"] = self.viewer_scene()
+        elif k.entries:  # (one per panel: more wrap and share panels, a copy of the last fills)
+            ents = self._first_entries(kind, s["run"])
+            n = r * c
+            s[k.entries] = [dict(e, panel=i % n) for i, e in enumerate(ents)] + \
+                [dict(ents[-1], panel=i) for i in range(len(ents), n)]
+        return s
+
+    def _plan_grid(self, s, vary, r, c):
+        """A new plan-view figure's panels step through vary: spec s's lists for it, in place;
+        its grid, for the lists that set their own number."""
+        s["grid"] = dict(rows="none", cols=vary, runs=[])
+        s["vary"] = fg.legacy_vary("none", vary)
+        n = dict(runs=len(s["runs"]), heights=len(s["panel_z"])).get(vary)
+        if n and (r * c < n or r * c - n >= c):
+            r, c = (1, n) if n <= 4 else (-(-n // 3), 3)
+        if vary == "runs":
+            s["grid"]["runs"] = list(range(len(s["runs"])))
+        if vary == "times":
+            s["times_s"] = self._more_times(s["times_s"], r * c)
+            s["times"] = [None if t is None else fg.tindex(self.run, t) for t in s["times_s"]]
+        else:
+            s["times_s"], s["times"] = [], []
+        if vary == "fields":
+            base = next((lay for lay in s["layers"] if lay["type"] == "fill"), None)
+            if base is not None:
+                fill = {k: v for k, v in base.items() if k not in ("type", "on", "panels")}
+                fill.setdefault("z_fixed", False)
+                s["panel_fills"] = [dict(fill) for _ in range(r * c)]
+            if s["colorbar"].get("mode") == "shared":  # (a colorbar a field)
+                s["colorbar"] = dict(s["colorbar"], mode="each")
+        return r, c
+
+    def _more_times(self, times, n):
+        """n times: those given, then going on every NEW_STEP outputs (None past the run's end;
+        trailing ones dropped)."""
+        out, tl = list(times[:n]), [float(t) for t in self.run.times]
+        while len(out) < n:
+            q = tl.index(_nearest_t(tl, out[-1])) + NEW_STEP if out and out[-1] is not None \
+                else len(tl)
+            out.append(tl[q] if q < len(tl) else None)
+        while out and out[-1] is None:
+            out.pop()
+        return out
+
+    def _first_entries(self, kind, own):
+        """The entries a new figure of a kind starts with: the viewer's tool's, or one new, at the
+        shown time in run `own`."""
+        ts = float(self.run.times[self.v.t])
+        track = bool(self.v.fixes) or any(e.get("track") for e in self.shell.doc["runs"])
+        if kind == "sounding":
+            return self.tab_soundings() or [fg.sounding_defaults(
+                own, ts, dict(kind="trk", x=0.0, y=0.0, avg=0.0), 0)]
+        if kind == "dist":
+            return self.tab_dists() or [fg.dist_defaults(self._new_dist_recipe(), own, ts, 0)]
+        if kind == "profile":
+            return self.tab_profiles() or [fg.profile_defaults(self._new_recipe(), own, ts, 0)]
+        if kind == "joint":
+            return [fg.joint_defaults(self._new_joint_recipe(), own, ts, 0)]
+        if kind == "azim":
+            return [fg.azim_defaults(self._new_azim_recipe(), own, ts, 0)]
+        return [fg.tbl_defaults(self._new_dist_recipe(), own, ts,
+                                dict(kind="trk" if track else "mean", x=0.0, y=0.0, avg=0.0))]

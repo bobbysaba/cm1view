@@ -10,15 +10,13 @@ A mixin of the FigureEditor (figures/editor.py), and the clickable image."""
 
 import math
 
-import panel as pn
 import param
 from panel.reactive import ReactiveHTML
 
-from .cards import ANN_FIELDS, _hint, _panel_tok
+from .cards import ANN_FIELDS
 from .draw.base import ann_on
 from .kinds import LINEAR
 from .spec.doc import is_doc
-from ..viewer.ui import held
 
 PLACE = {"Click: nothing": "", "Click to add text": "text",
          "Click to add a marker": "marker", "Click twice: arrow (text, then tip)": "arrow",
@@ -280,170 +278,6 @@ def watch_tight(fig):
         return b
 
     fig.get_tightbbox = spy
-
-
-class FigureClick:
-    _place = {}  # data key -> panel box and axis ranges in the shown preview
-    _place_spec = None  # the spec the preview was drawn from
-    _pending = None  # (panel, x, y) of a two-click placement's first click
-
-    def _build_click(self):
-        self.place_mode = pn.widgets.Select(options=PLACE, value="", width=230,
-                                            margin=(4, 4))
-        self.place_mode.param.watch(lambda e: self._on_place_mode(), "value")
-        self.place_hint = _hint("", margin=(0, 8))
-        self.place_hint.visible = False
-
-    def _on_place_mode(self):
-        self._pending = None
-        mode = self.place_mode.value
-        self.place_hint.visible = bool(mode)
-        self.image.band = mode in ("box", "area")
-        if mode == "section":
-            text = ("Click A, then B, in a plan view (or drag from A to B): the figure's "
-                    "section line (a Section line layer shows it).")
-        elif mode == "move":
-            text = ("Drag an annotation in the preview: from its text, marker, centre or "
-                    "middle to move it all, from an end to move that end.")
-        elif mode == "area":
-            text = ("Drag a box in a plan view: the panels show that area (<b>Area</b> → "
-                    "Fixed box).")
-        else:
-            text = ("Click in a panel of the preview" + (" twice, or drag from the first "
-                                                          "point to the second"
-                                                          if mode in TWO else "")
-                    + "; the new item is in <b>Annotate</b>, to fine-tune. In a skew-T, "
-                      "positions are temperature (°C) and pressure (hPa).")
-        self.place_hint.object = f'<div class="cv-hint">{text}</div>'
-        self._show_image()
-
-    def _locate(self, fx, fy):
-        """(panel j, its place_map entry, u, w) of a point of the preview (u, w:
-        fractions of the panel from the left and bottom), or None (the status line
-        says why)."""
-        hit = locate(self._place, fx, fy)
-        if hit is None:
-            self._status("Click inside a panel (plan views, sections, time–height, "
-                         "time series or skew-Ts)." if self._place else
-                         "Clicks place things in plan views, sections, time–height, "
-                         "time-series and skew-T panels.", True)
-            return None
-        i, b, u, w = hit
-        k, j = divmod(int(i), 1000) if (self._place_spec or {}).get("kind") == "combo" \
-            else (0, int(i))
-        if self._multi_part() and k != self.part_i:
-            self._status(f"That panel is in part {k + 1}: pick it in <b>Figure parts</b> "
-                         "to place things there.", True)
-            return None
-        return j, b, u, w
-
-    def _on_click(self, ev):
-        if not ev.new or not self.place_mode.value:
-            return
-        if self.place_mode.value in DRAG:
-            self._status("Drag (press, move, release) in the preview to "
-                         + ("move an annotation." if self.place_mode.value == "move" else
-                            "draw the plan-view area."), True)
-            return
-        got = self._locate(float(ev.new[0]), float(ev.new[1]))
-        if got is not None:
-            j, b, u, w = got
-            x, y = to_data(b, u, w)
-            self._placed(j, round(x, 2), round(y, 2))
-
-    def _on_drag(self, ev):
-        if not ev.new or not self.place_mode.value:
-            return
-        mode = self.place_mode.value
-        got = self._locate(float(ev.new[0]), float(ev.new[1]))
-        if got is None:
-            return
-        j, b, u0, w0 = got
-        u1, w1 = dragged_to(b, u0, w0, [float(v) for v in ev.new[:2]],
-                            [float(v) for v in ev.new[2:4]])
-        if mode == "move":
-            self._move_annotation(j, b, (u0, w0), (u1, w1))
-            return
-        (x0, y0), (x1, y1) = to_data(b, u0, w0), to_data(b, u1, w1)
-        if mode == "area":
-            self._place_area(j, (x0, y0), (x1, y1))
-            return
-        self._pending = None  # (a drag: both points of a two-point item)
-        self._placed(j, round(x0, 2), round(y0, 2))
-        if mode in TWO:
-            self._placed(j, round(x1, 2), round(y1, 2))
-
-    def _placed(self, j, x, y):
-        mode = self.place_mode.value
-        if mode in TWO and (self._pending is None or self._pending[0] != j):
-            self._pending = (j, x, y)
-            self._status(f"First point ({x:g}, {y:g}): now click the second.")
-            return
-        if mode == "section":
-            self._place_section(j, self._pending[1:], (x, y))
-            self._pending = None
-            return
-        first = None
-        if mode in TWO:
-            (_, *first), self._pending = self._pending, None
-        a = placed_item(mode, j, first, x, y)
-        self.ann_rows.append(self._ann_row(a))
-        self._show_anns()
-        self._status(f"Added {mode} in panel {_panel_tok(j)}: see <b>Annotate</b>.")
-        self.request()
-
-    def _place_section(self, j, p1, p2):
-        """A–B from two clicks in a plan view (in its axis units: grid or storm km)."""
-        if self.kind.value != "plan":
-            self._status("Click the section's ends in a plan view.", True)
-            return
-        d = self._place_origin.get(j, (0.0, 0.0))
-        a = [round(p1[0] + d[0], 2), round(p1[1] + d[1], 2)]
-        b = [round(p2[0] + d[0], 2), round(p2[1] + d[1], 2)]
-        self._ab_card().set_ab(a, b)  # (the first A–B section, or a new one)
-        self._show_region()
-        line = any(c.type == "line" and c.w["on"].value for c in self.cards)
-        self._status(f"Section A ({a[0]:g}, {a[1]:g}) → B ({b[0]:g}, {b[1]:g}) km."
-                     + ("" if line else " Add a <b>Section line</b> layer to draw it here."))
-        self.request()
-
-    def _place_area(self, j, p1, p2):
-        """The plan-view area from a box dragged in a plan view (grid km)."""
-        if self.kind.value != "plan":
-            self._status("Drag the area in a plan view.", True)
-            return
-        d = self._place_origin.get(j, (0.0, 0.0))
-        xs = sorted((p1[0] + d[0], p2[0] + d[0]))
-        ys = sorted((p1[1] + d[1], p2[1] + d[1]))
-        self._set_box([*xs, *ys])
-        box = self.spec["domain"]["box"]
-        with held(self):
-            self.dom.value = "box"
-        self._show_region()
-        self._status("Area x {:g} – {:g}, y {:g} – {:g} km.".format(*box))
-        self.request()
-
-    def _move_annotation(self, j, b, start, end):
-        """Move the annotation of panel j grabbed at `start` (panel fractions) to `end`:
-        all of it, or the end grabbed."""
-        anns = [r.collect() for r in self.ann_rows]
-        best = grab_annotation(anns, j, b, start)
-        if best is None:
-            self._status("No annotation there: start the drag on one (its text, marker, "
-                         "centre, middle or an end).", True)
-            return
-        n, grip = best
-        row, a = self.ann_rows[n], anns[n]
-        new = moved_annotation(a, b, start, end, grip)
-        with held(self):
-            for k, v in new.items():
-                row.w[k].value = v
-        row._show()
-        self._status(f"Moved the {a['kind']}" + (" (one end)" if grip in ("1", "2") else "")
-                     + ": see <b>Annotate</b>.")
-        self.request()
-
-    _place_origin = {}  # panel -> grid km of the axes' (0, 0) (storm-relative plan views)
 
 
 def _grips(a, b, start):
