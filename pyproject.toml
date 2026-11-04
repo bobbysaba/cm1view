@@ -40,6 +40,9 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "websocket-client>=1.8"]
+# MP4 export of animations: carries an ffmpeg binary. Not needed if ffmpeg is on PATH
+# (e.g. module load ffmpeg); without either, animations save as GIF only.
+video = ["imageio-ffmpeg>=0.5"]
 
 [project.urls]
 Homepage = "https://github.com/bobbysaba/cm1view"

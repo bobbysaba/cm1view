@@ -742,5 +742,62 @@ def write_gif(images, path, fps=4.0, loop=True):
     return path
 
 
+VIDEO_HELP = ("No video encoder found. Install ffmpeg (on a cluster: <code>module load "
+              "ffmpeg</code>, or <code>conda install -c conda-forge ffmpeg</code>) or "
+              "<code>pip install imageio-ffmpeg</code> (<code>pip install cm1view[video]</code>), "
+              "then restart the viewer. GIF still works.")
+
+
+def video_encoder():
+    """The ffmpeg executable that writes videos, or None: the one on PATH, else the copy
+    the optional imageio-ffmpeg package carries.  Nothing is installed or assumed."""
+    import shutil
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001  (not installed, or its binary is missing)
+        return None
+
+
+def write_video(images, path, fps=4.0, encoder=None):
+    """An H.264 MP4 of PIL images (frames of different sizes are padded to the largest,
+    on white; the size is made even, as yuv420p needs).  Unlike a GIF, no 256-colour
+    palette: every frame keeps its colours.  Raises RuntimeError with the encoder's
+    message when none is installed or it fails."""
+    import subprocess
+    from PIL import Image
+    exe = encoder or video_encoder()
+    if not exe:
+        raise RuntimeError(VIDEO_HELP.replace("<code>", "").replace("</code>", ""))
+    path = _abs(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    w = max(im.width for im in images)
+    h = max(im.height for im in images)
+    w, h = w + w % 2, h + h % 2
+    err = ""
+    for codec in (["libx264", "-crf", "16", "-preset", "medium"], ["mpeg4", "-q:v", "2"]):
+        cmd = [exe, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24",
+               "-s", f"{w}x{h}", "-framerate", f"{float(fps):g}", "-i", "-",
+               "-c:v", codec[0], *codec[1:], "-pix_fmt", "yuv420p",
+               "-movflags", "+faststart", path]
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL)
+        try:
+            for im in images:
+                canvas = Image.new("RGB", (w, h), "white")
+                canvas.paste(im, (0, 0), im if im.mode == "RGBA" else None)
+                proc.stdin.write(canvas.tobytes())
+            proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass  # the encoder stopped early: its message is below
+        err = proc.stderr.read().decode(errors="replace").strip()
+        if proc.wait() == 0:
+            return path
+    raise RuntimeError(f"the video encoder failed: {err[-300:] or 'no message'}")
+
+
 def _abs(path):
     return os.path.abspath(os.path.expanduser(os.path.expandvars(path)))

@@ -84,7 +84,13 @@ later one's settings (you're asked first). Reopen it from the saved-figure list,
 path of the spec or the GIF. *Step*, *Frames per second* and the other settings above are not
 kept in it, and neither is a script or data: an animation has no one set of arrays.
 
-To make a video from the frames, e.g.
+**Format** (new layout's Export dialog) chooses GIF or MP4. An MP4 keeps every colour
+(a GIF has 256 per frame, chosen separately for each) and is much smaller, but needs an
+encoder: `ffmpeg` on your `PATH` (on a cluster, often `module load ffmpeg`), or the
+optional package `imageio-ffmpeg` (`pip install cm1view[video]`, which carries its own
+copy). With neither, the dialog says so and GIF still works. The video is `<name>.mp4`
+(H.264, `Loop` does not apply); frames start from the saved time, not the preview
+scrubber's. With the old layout, or to make a video yourself from the saved frames:
 `ffmpeg -framerate 4 -i name_%03d.png -pix_fmt yuv420p name.mp4`. **Stop** abandons a
 running animation.
 

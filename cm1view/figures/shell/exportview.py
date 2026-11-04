@@ -61,6 +61,12 @@ class ExportDialog:
         """The widgets that aren't the image's: made the first time the dialog opens."""
         ed = self.ed
         self.an_end = self._copy(ed.an_end)
+        self.an_fmt = self._copy(ed.an_fmt)
+        self.an_path = self._copy(ed.an_path)
+        self.an_path.name = "Save path"
+        self.an_path.placeholder = "blank: <Save as>.gif or .mp4"
+        self.an_fmt.param.watch(lambda ev: setattr(self.an_loop, "visible", ev.new == "gif"),
+                                "value")
         ed.an_end.param.watch(lambda ev: setattr(self.an_end, "options", ev.new), "options")
         self.an_go = pn.widgets.Button(name="Save animation", icon="movie", button_type="primary",
                                        height=32)
@@ -70,16 +76,18 @@ class ExportDialog:
         self.an_stop.on_click(lambda e: ed._stop_anim())
         for src, w in ((ed.an_go, self.an_go), (ed.an_stop, self.an_stop)):
             src.param.watch(lambda ev, w=w: setattr(w, "disabled", ev.new), "disabled")
+        self.an_loop = self._copy(ed.an_loop)
         self.anim = pn.Card(
             _hint("The figure redrawn at successive output times from the panels' own times: every "
                   "panel steps forward together, storm-centred panels and soundings follow the "
                   "storm, and each 3D scene turns by its own orbit. Time–height plots and time "
-                  "series show every time already, so they stay as they are. Saved at <i>GIF "
-                  "path</i>, or <code>&lt;Save as&gt;.gif</code> if it is blank."),
-            _grid((self._copy(ed.an_path), 3)),
+                  "series show every time already, so they stay as they are. The frames start "
+                  "from the saved time, not the preview scrubber's. Saved at <i>Save path</i>, "
+                  "or <code>&lt;Save as&gt;.gif</code> / <code>.mp4</code> if it is blank."),
+            _grid((self.an_path, 3)), _grid(self.an_fmt), self._echo(ed.an_fmt_note),
             _grid(self._copy(ed.an_step), self.an_end, self._copy(ed.an_fps)), self._echo(ed.an_count),
-            _grid(self._copy(ed.an_dpi), self._copy(ed.an_loop), self._copy(ed.an_frames)),
-            pn.Row(self.an_go, self.an_stop, margin=0), title="Animation (GIF)", collapsed=True,
+            _grid(self._copy(ed.an_dpi), self.an_loop, self._copy(ed.an_frames)),
+            pn.Row(self.an_go, self.an_stop, margin=0), title="Animation (GIF or video)", collapsed=True,
             **SECTION)
         self.anim.param.watch(lambda ev: ev.new or ed._anim_refresh(force=True), "collapsed")
         self.tpl_go = pn.widgets.Button(name="Save as template", button_type="light",

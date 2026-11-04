@@ -43,6 +43,15 @@ class FigureAnimation:
                                           description="Lower than for print: a GIF grows "
                                                       "quickly with its size")
         self.an_loop = _chk("Loop", True)
+        have = fg.video_encoder() is not None
+        self.an_fmt = pn.widgets.Select(
+            name="Format", width=150, value="gif",
+            options={"GIF": "gif", "MP4 video" if have else "MP4 (no encoder)": "mp4"},
+            description="A GIF has 256 colours per frame; an MP4 keeps them all and is far "
+                        "smaller, but needs ffmpeg")
+        self.an_fmt_note = pn.pane.HTML(
+            "" if have else f'<div class="cv-hint" style="color:#f87171">{fg.VIDEO_HELP}</div>',
+            sizing_mode="stretch_width", margin=(0, 8))
         self.an_frames = _chk("Also save the frames (PNG)", False)
         self.an_go = pn.widgets.Button(name="Save animation", icon="movie",
                                        button_type="primary", height=32)
@@ -132,7 +141,11 @@ class FigureAnimation:
             self._anim_msg("Choose where to save it (“GIF path” or “Save as”).", True)
             return
         stem, ext = os.path.splitext(base)
-        base = stem if ext.lower() in IMAGE_EXTS else base
+        base = stem if ext.lower() in IMAGE_EXTS + (".mp4",) else base
+        fmt = self.an_fmt.value
+        if fmt == "mp4" and fg.video_encoder() is None:
+            self._anim_msg(fg.VIDEO_HELP, True)
+            return
         try:
             offsets = self._anim_offsets(spec)
         except Exception as e:  # noqa: BLE001
@@ -147,8 +160,9 @@ class FigureAnimation:
                            "earlier end time.", True)
             return
         opts = dict(fps=float(self.an_fps.value or 4.0), dpi=int(self.an_dpi.value or 110),
-                    loop=bool(self.an_loop.value), frames=bool(self.an_frames.value))
-        paths = [base + ".gif"] + ([base + "_frames"] if opts["frames"] else []) + \
+                    loop=bool(self.an_loop.value), frames=bool(self.an_frames.value),
+                    fmt=fmt)
+        paths = [base + "." + fmt] + ([base + "_frames"] if opts["frames"] else []) + \
             [fg.bundle_paths(spec, base)["spec"]]
 
         def go():
@@ -223,7 +237,12 @@ class FigureAnimation:
                     self.v.pools["fig"].submit(self._anim_job, g, spec, offsets, base,
                                                opts, images, missing, ends, len(offsets))
                     return
-            path = fg.write_gif(images, base + ".gif", opts["fps"], opts["loop"])
+            if opts.get("fmt") == "mp4":
+                self.v._schedule(partial(self._anim_msg, '<span class="busy">● Encoding '
+                                                         'the video…</span>'))
+                path = fg.write_video(images, base + ".mp4", opts["fps"])
+            else:
+                path = fg.write_gif(images, base + ".gif", opts["fps"], opts["loop"])
             spec_path = fg.save_spec(spec, base)
             self.v._schedule(self._refresh_saved)
             mb = os.path.getsize(path) / 1e6
