@@ -4,12 +4,14 @@ FigureStyle), which takes what the shell holds while it is what shows: its widge
 that write to the editor's.  The image's settings (format, DPI, background, fit, margin) are the
 document's, written with its other edits, so Undo takes them back."""
 
+import html
 import os
+from functools import partial
 
 import panel as pn
 
 from ... import config
-from .. import spec as fg
+from .. import spec as fg, tablefile
 from ..cards import _grid, _hint
 from ..cards.base import SECTION
 from ..widgets import DIALOG_DARK
@@ -102,6 +104,21 @@ class ExportDialog:
                   f"<code>{fg.templates_dir()}</code>."),
             _grid((self._copy(ed.tpl_name), 2), self.tpl_go), self.tpl_said,
             title="Template", collapsed=True, **SECTION)
+        self.tb_csv = pn.widgets.Checkbox(name="CSV", value=True, margin=(8, 8))
+        self.tb_tex = pn.widgets.Checkbox(name="LaTeX", value=True, margin=(8, 8))
+        self.tb_go = pn.widgets.Button(name="Save tables", icon="table", button_type="light",
+                                       button_style="outline", height=32, align="end")
+        self.tb_go.on_click(lambda e: self._tables())
+        self.tb_said = pn.pane.HTML(margin=(0, 8), sizing_mode="stretch_width")
+        self.tables = pn.Card(
+            _hint("The figure's table panels as text, with the numbers the figure shows (rounded as "
+                  "drawn, same rows and columns). Saved beside the image as <code>&lt;Save "
+                  "as&gt;_table.csv</code> and <code>.tex</code> (a letter is added when there are "
+                  "several tables). The LaTeX is a <code>tabular</code> that needs "
+                  "<code>booktabs</code>; <code>cm1view render --tables</code> does the same "
+                  "without the viewer."),
+            pn.Row(self.tb_csv, self.tb_tex, self.tb_go, margin=0), self.tb_said,
+            title="Tables (CSV, LaTeX)", collapsed=True, visible=False, **SECTION)
         self.runs = ApplyRuns(self.shell)
         self.body.objects = [
             pn.pane.HTML('<div class="cv-maptitle" style="font-size:16px"><b>Export the figure'
@@ -111,7 +128,7 @@ class ExportDialog:
             self.more,
             _hint("The script (<code>scripts/&lt;name&gt;.py</code>) redraws the figure without the "
                   "viewer, from the data and drawing code it adds to <code>_src/</code>."),
-            pn.Row(self.save, self.dl), self.anim, self.template, self.runs.card]
+            pn.Row(self.save, self.dl), self.anim, self.tables, self.template, self.runs.card]
         self._built = True
 
     # ------------------------------------------------------------ opening it
@@ -121,6 +138,8 @@ class ExportDialog:
         self.shell.ed.path.value = self._default_path()
         self._show_rows()
         self._names()
+        self.tables.visible = any(p["kind"] == "table" for p in self.shell.doc["panels"])
+        self.tb_said.object = ""
         self.runs.refresh()
         if not self.anim.collapsed:
             self.ed._anim_refresh(force=True)
@@ -177,3 +196,45 @@ class ExportDialog:
         ed = self.ed
         ed._save_template()
         self.tpl_said.object = ed.msg.object
+
+    def _tables(self):
+        """Save the table panels as CSV / LaTeX beside the image (the document as it is saved)."""
+        ed = self.ed
+        base = config.expand(self.path.value.strip())
+        want = (self.tb_csv.value, self.tb_tex.value)
+        if not base or not any(want):
+            self.tb_said.object = "Choose where to save (Save as) and at least one format."
+            return
+        doc = ed._figure_now()
+
+        def say(text, err=False):
+            col = ' style="color:#f87171"' if err else ""
+            self.tb_said.object = f"<span{col}>{text}</span>"
+            ed._msg(text, err)
+
+        def job():
+            try:
+                data = ed.panel_data(doc)
+                if data is None:
+                    return
+                files = tablefile.table_paths(doc, data, base, *want)
+                if not files:
+                    ed.v._schedule(partial(say, "No table panel with values to save.", True))
+                    return
+                ed.v._schedule(partial(confirmed, list(files)))
+            except Exception as e:  # noqa: BLE001
+                ed.v._schedule(partial(say, f"Could not save tables: {html.escape(str(e))}", True))
+
+        def confirmed(paths):
+            ed.v.confirm.ask(paths, lambda: ed.v.pools["fig"].submit(write))
+
+        def write():
+            try:
+                done = tablefile.save_tables(doc, ed.panel_data(doc), base, *want)
+                ed.v._schedule(partial(say, "Saved " + ", ".join(
+                    f"<code>{html.escape(p)}</code>" for p in done)))
+            except Exception as e:  # noqa: BLE001
+                ed.v._schedule(partial(say, f"Could not save tables: {html.escape(str(e))}", True))
+
+        say('<span class="busy">● Reading the tables…</span>')
+        ed.v.pools["fig"].submit(job)

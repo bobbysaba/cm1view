@@ -26,7 +26,7 @@ import traceback
 import numpy as np
 
 from .. import config
-from . import draw as figdraw, spec as fg
+from . import draw as figdraw, spec as fg, tablefile
 from .export import saved_base
 
 MAX_FRAMES = 300  # (every frame of a GIF is held in memory until it is written)
@@ -328,6 +328,9 @@ def parser():
                     help="resolution (default: the figure's; 110 for --gif)")
     ap.add_argument("--bundle", action="store_true",
                     help="also save the script, data and spec (as “Also the script and data” in the Export dialog)")
+    ap.add_argument("--tables", action="store_true",
+                    help="also save the figure's table panels as CSV and LaTeX "
+                         "(<name>_table.csv / .tex), the numbers the figure shows")
     ap.add_argument("--gif", action="store_true",
                     help="an animated GIF from the figure's times on (plan views, "
                          "sections and 3D scenes step in time)")
@@ -360,6 +363,9 @@ def main(argv=None):
     for name, flag in (("cache_gb", "--cache-gb"), ("workers", "--workers")):
         if getattr(args, name) is not None:
             config.override(name, getattr(args, name), flag)
+    if args.gif and args.tables:
+        print("cm1view render: --gif and --tables: one or the other", file=sys.stderr)
+        return 2
     if args.gif and args.bundle:
         print("cm1view render: --gif and --bundle: one or the other", file=sys.stderr)
         return 2
@@ -456,6 +462,18 @@ def main(argv=None):
                     out = list(fg.save_bundle(s, data, base, run).values())
                 else:
                     out = [save_image(s, data, base)]
+                if args.tables:
+                    if not fg.is_doc(s):
+                        say("note: --tables needs a figure saved by the new editor; none written")
+                    else:
+                        files = tablefile.table_paths(s, data, base)
+                        there = [p for p in files if os.path.exists(p)]
+                        if there and not args.overwrite:
+                            raise ValueError("already there (--overwrite replaces them): "
+                                             + ", ".join(there))
+                        out += tablefile.save_tables(s, data, base)
+                        if not files:
+                            say("note: the figure has no table panel with values")
             for path, err in fd.track_err.items():
                 say(f"note: storm track {path}: {err}")
             say(f"saved {', '.join(out)} [{_time.time() - t0:.1f}s]")
