@@ -3,7 +3,11 @@
 What changed in each release, newest first. The version is in `pyproject.toml`; a release
 has a matching git tag.
 
-## Unreleased (since v0.4.0)
+## 0.5.0 (2026-11-04)
+
+A new three-pane figure editor that replaces the old tabs, with panels of any kinds on one grid,
+zoom insets, MP4 video and publication 3D scenes; also parcel trajectories, derived diagnostics,
+live differences and run time alignment.
 
 ### Figures
 
