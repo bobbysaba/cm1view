@@ -319,6 +319,8 @@ class FigureShell:
         self.undo_btn.disabled, self.redo_btn.disabled = False, True
         if node is not None:
             self._show(node if nodes.still_there(self.doc, node) else nodes.FIGURE)
+        else:
+            self.inspector.refresh_marks()
         self.request()
 
     def can_follow(self, doc=None):

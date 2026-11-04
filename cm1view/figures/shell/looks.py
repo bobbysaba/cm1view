@@ -6,12 +6,19 @@ Look resolves style, then kinds[kind], then the panel's opts (spec/doc.py), so:
 
   Figure   writes style (a kind's block: every kind in the figure), or the figure's own keys
   Kind     writes kinds[kind] (a block no kind holds: the same as Figure)
-  Panel    writes the panel's opts, and shows what it inherits otherwise"""
+  Panel    writes the panel's opts, and shows what it inherits otherwise
+
+A section says what is changed in it (a count on its header; open, the settings' names, a bar by
+each and a reset).  Changed means what a reset would undo: at a panel, and for a kind's own
+colorbar, a value of its own over what it inherits; otherwise, a value other than a new figure's
+of that kind (spec.fresh_look), which is not the settings table's default."""
 
 import copy
+import html
 
 import panel as pn
 
+from ...theme import ACCENT
 from .. import draw as figdraw, settings as table
 from ..cards import _grid, _hint
 from ..cards.base import FIG_LOCS, LOCS, SECTION
@@ -116,9 +123,55 @@ BLOCK_WORDS = {"letters": "Letter", "time_label": "Time label", "run_label": "Ru
                "z_label": "Height label", "axes": "Axes", "skewt": "Sounding"}
 
 
+# (shown by a section's extras, not its table rows: they count as changed and reset with it)
+EXTRA_ROWS = (table.Setting("contour_key.layer", "", "Contour key", table.KEY, -1),
+              table.Setting("extremes.layer", "", "Maximum and minimum", table.ALL, -1),
+              table.Setting("legend.panel", "", "Legend", table.ALL, 0),
+              table.Setting("legend.panels", "", "Legend", table.ALL, None),
+              table.Setting("domain.box", "", "Area", ("plan",), None))
+ROW_WORDS = {"contour_key.layer": "Of the layer", "extremes.layer": "Of the layer",
+             "legend.panel": "In panel", "legend.panels": "From panels",
+             "domain.box": "Fixed box", "code.text": "The code"}
+NO_RESET = ("Your own code",)  # (someone's work, not a look: it can be blanked by hand)
+MARK = {"box-shadow": f"-4px 0 0 0 {ACCENT}"}  # (a row changed: outside it, so nothing moves)
+FOUND = {"outline": f"2px solid {ACCENT}", "outline-offset": "2px"}  # (the row Find went to)
+
+
 def _split(st):
     block, _, key = st.key.rpartition(".")
     return block, key
+
+
+def _same(a, b):
+    """Whether two widget values read the same: every blank is one, a number whatever its type."""
+    blank = (None, "", [], ())
+    if a in blank or b in blank:
+        return a in blank and b in blank
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        pass
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return list(a) == list(b)
+    return a == b
+
+
+def row_words(ed, keys):
+    """{setting's key: its name in words}, saying which label a "Where" or "Bold" is of when `keys`
+    has several of a name."""
+    names = {st.key: table.widget_of(ed, st).name for st in (*table.SETTINGS, *LEGEND_ROWS)}
+    names.update(OWN_NAMES, **ROW_WORDS)
+    words = [names.get(k) or k for k in keys]
+    out = {}
+    for key, word in zip(keys, words):
+        if words.count(word) > 1:
+            head = key.partition(".")[0]
+            word = f"{BLOCK_WORDS.get(head, head)} {word}"
+        out[key] = word
+    return out
+
+
+_DOMAIN_MODE = table.Setting("domain.mode", "", "Area", ("plan",), "storm")
 
 
 def kind_block(block):
@@ -217,6 +270,45 @@ class Scope:
         if not opts:
             p.pop("opts", None)
 
+    def inherits(self, st):
+        """Whether setting st here is a value of its own over what is above, rather than the top."""
+        block, key = _split(st)
+        return self.pid is not None or (self.kind is not None and (block or key) in OF_A_KIND)
+
+    def _own_block(self, doc):
+        if self.pid is not None:
+            return de.panel_by_id(doc, self.pid).get("opts") or {}
+        return (doc.get("kinds") or {}).get(self.kind) or {}
+
+    @staticmethod
+    def _names_in(st):
+        """The keys of its block setting st writes."""
+        key = _split(st)[1]
+        return list(st.as_.read(st.as_.show({}))) if key == "*" else [key]
+
+    def has_own(self, doc, st):
+        """Whether this panel or kind has setting st of its own (inherits)."""
+        block, key = _split(st)
+        held = self._own_block(doc)
+        if not block:
+            return key in held
+        sub = held.get(block)
+        return isinstance(sub, dict) and any(k in sub for k in self._names_in(st))
+
+    def take_own(self, doc, st):
+        """Its own setting st gone: it inherits again."""
+        block, key = _split(st)
+        held = self._own_block(doc)
+        if not block:
+            held.pop(key, None)
+        elif isinstance(held.get(block), dict):
+            for k in self._names_in(st):
+                held[block].pop(k, None)
+            if not held[block]:
+                held.pop(block)
+        if self.pid is not None and not held:
+            de.panel_by_id(doc, self.pid).pop("opts", None)
+
 
 def panels_differ(doc, kind, keys):
     """The panels of a kind with a setting of `keys` of their own: {letter: [keys]}."""
@@ -268,6 +360,8 @@ class Sections:
         self.ins, self.shell, self.scope, self.kinds = inspector, inspector.shell, scope, kinds
         self.extras = extras or {}
         self.redraws = redraws
+        self.live = {}  # section -> what its marks are on
+        inspector.live.append(self)
 
     def _on_change(self, st, w):
         self.shell.edit(lambda d: self.scope.write(d, st, w.value),
@@ -284,10 +378,15 @@ class Sections:
         title = next((SECTION_NAMES[(k, section)] for k in self.kinds
                       if (k, section) in SECTION_NAMES), section)
         card = pn.Card(title=title, collapsed=True, **SECTION)
+        mark_rows = [*rows, *(st for st in EXTRA_ROWS if st.section == section and only is None
+                              and any(k in st.kinds for k in self.kinds))]
+        marks = self.live[section] = dict(card=card, rows=mark_rows, widgets={}, line=None,
+                                          note=None, header=None)
+        self._mark(marks)
 
         def fill():
             if not card.objects:
-                card.objects = self._body(section, rows, extra)
+                card.objects = self._body(section, rows, extra, marks)
 
         def on_fold(ev):
             folds[key] = not ev.new
@@ -299,38 +398,169 @@ class Sections:
             card.collapsed = False
         return card
 
-    def _body(self, section, rows, extra):
+    def _body(self, section, rows, extra, marks):
         doc, ed = self.shell.doc, self.shell.ed
         out = []
         by_key = {}
+        found = self.ins.pin_key()
         for st in rows:
             if st.key == "time_label.t0_min" and not self.scope.value(doc, st):
                 continue  # (an older figure's: run time zeros do this now)
             w = make_widget(ed, st, self.scope.value(doc, st), self._on_change)
             by_key[st.key] = w
             out.append(w)
+            if st.key == found:
+                w.styles = dict(w.styles or {}, **FOUND)
         objs = [_grid(*out, n=2)] if out else []
         if extra is not None:
             objs += extra(by_key)
+        marks["widgets"] = by_key
+        if section not in NO_RESET:
+            objs.insert(0, self._reset_line(section, marks))
+        self._mark(marks)
         return objs
+
+    # ------------------------------------------------------------ changed, and back
+    def _kinds(self):
+        return list(self.kinds) or ["plan"]
+
+    def _start_of(self, doc, kind, st):
+        """Setting st's value in a new figure of `kind` (table.KEEP: it has none)."""
+        if st.key == "letters.on":  # (they follow the count, until set by hand)
+            return len(doc.get("panels") or []) > 1
+        return Scope(kind).value(self.ins.fresh(kind), st)
+
+    def _is_changed(self, doc, st):
+        """Whether a reset would undo setting st here.  Marks only say: a value that can't be read
+        (an older figure's oddity) is no reason to fail."""
+        scope = self.scope
+        try:
+            if scope.inherits(st):
+                return scope.has_own(doc, st)
+            if st.key == "letters.on" and ((doc.get("style") or {}).get("letters") or {}).get("auto"):
+                return False
+            if st.key == "domain.box" and scope.value(doc, _DOMAIN_MODE) != "box":
+                return False
+            for kind, at in self._reach(st):
+                now, start = at.value(doc, st), self._start_of(doc, kind, st)
+                if now is not table.KEEP and start is not table.KEEP and not _same(now, start):
+                    return True
+        except (AttributeError, KeyError, TypeError, ValueError):
+            pass
+        return False
+
+    def _reach(self, st):
+        """[(kind, Scope)] where setting st is read and written at this scope: all the figure's
+        kinds for a block each kind holds, else the one kind or the figure."""
+        scope = self.scope
+        if scope.kind is not None:
+            return [(scope.kind, scope)]
+        if kind_block(_split(st)[0] or _split(st)[1]):
+            return [(k, Scope(k)) for k in self._kinds()]
+        return [(self._kinds()[0], scope)]
+
+    def _mark(self, marks):
+        """A section's marks, from the document."""
+        doc = self.shell.doc
+        changed = [st for st in marks["rows"] if self._is_changed(doc, st)]
+        self._header(marks, len(changed))
+        keys = {st.key for st in changed}
+        for key, w in marks["widgets"].items():
+            on = key in keys
+            if on != ("box-shadow" in (w.styles or {})):
+                styles = {k: v for k, v in (w.styles or {}).items() if k != "box-shadow"}
+                w.styles = dict(styles, **MARK) if on else styles
+        if marks["line"] is not None:
+            marks["line"].visible = bool(changed)
+            words = row_words(self.shell.ed, [st.key for st in changed])
+            marks["note"].object = '<div class="cv-hint">Changed: ' + html.escape(
+                ", ".join(words.values())) + "</div>" if changed and self.scope.pid is None else ""
+
+    @staticmethod
+    def _header(marks, n):
+        """The count on a section's header (its title stays what it is)."""
+        card = marks["card"]
+        if not n:
+            if card.header is not None:
+                card.header = None
+            marks["header"] = None
+            return
+        tip = f"{n} setting{'s' if n > 1 else ''} changed"
+        text = (f'<h3>{html.escape(card.title)} <span title="{tip}" style="color:{ACCENT};'
+                f'font-weight:400">● {n}</span></h3>')
+        if marks["header"] is None:
+            marks["header"] = pn.pane.HTML(text, css_classes=card.title_css_classes, margin=(5, 0),
+                                           styles={"color": card.header_color})
+            card.header = marks["header"]
+        else:
+            marks["header"].object = text
+
+    def refresh(self):
+        """Every section's marks, the document having changed under its widgets."""
+        for marks in self.live.values():
+            self._mark(marks)
+
+    def _reset_line(self, section, marks):
+        """What is changed in a section, and its reset."""
+        word = "Back to what all panels have" if self.scope.pid is not None else \
+            "Back to the figure's" if self.scope.kind is not None and section == "Colorbar" else \
+            "Back to a new figure's"
+        reset = pn.widgets.Button(name=f"↺ {word}", height=26, margin=(2, 2), button_type="light",
+                                  button_style="outline", align="center",
+                                  description="Every setting of this section. Undo takes it back")
+        reset.on_click(lambda e: self.reset(section))
+        marks["note"] = pn.pane.HTML(margin=(2, 4), sizing_mode="stretch_width")
+        marks["line"] = pn.Row(marks["note"], reset, margin=0, sizing_mode="stretch_width")
+        return marks["line"]
+
+    def reset(self, section):
+        """A section back: one undo step."""
+        marks = self.live[section]
+        title = marks["card"].title
+        rows = marks["rows"]
+        scope = self.scope
+
+        def apply(d):
+            changed = [st for st in rows if self._is_changed(d, st)]
+            # (what isn't marked goes too: a fixed box the area doesn't use now)
+            for st in rows:
+                if st not in changed and st not in EXTRA_ROWS:
+                    continue
+                if scope.inherits(st):
+                    scope.take_own(d, st)
+                    continue
+                for kind, at in self._reach(st):
+                    start = self._start_of(d, kind, st)
+                    if start is not table.KEEP:
+                        at.write(d, st, start)
+            if any(st.key == "letters.on" for st in changed) and scope.pid is None:
+                letters = d.setdefault("style", {}).setdefault("letters", {})
+                letters.update(auto=True, on=len(d.get("panels") or []) > 1)
+            n = len(changed)
+            said = f"{title}: {n} setting{'s' if n != 1 else ''} back. Undo takes it back."
+            if scope.pid is None:
+                keys = [st.key for st in rows]
+                keep = {x for k in self._kinds() if k in PANEL_KEYS
+                        for x in panels_differ(d, k, keys)}
+                if keep:
+                    said += (" Panel" + ("s " if len(keep) > 1 else " ")
+                             + ", ".join(sorted(keep)) + (" keep what they" if len(keep) > 1
+                                                          else " keeps what it") + " set alone.")
+            self.shell._said = said
+
+        self.shell.edit(apply, node=self.shell.node)
 
     def chips(self, keys):
         """A panel's own settings of `keys`, each to take back (↺)."""
         own = self.scope.own_keys(self.shell.doc, keys)
         if not own:
             return []
-        names = {st.key: table.widget_of(self.shell.ed, st).name
-                 for st in (*table.SETTINGS, *LEGEND_ROWS)}
-        names.update(OWN_NAMES)
 
         def back(key):
             self.shell.edit(lambda d: self.scope.take_back(d, key), node=self.shell.node)
 
-        words = [names.get(k) or k for k in own]
         chips = []
-        for key, word in zip(own, words):
-            if words.count(word) > 1:  # (letter's and time label's "Where": which)
-                word = f"{BLOCK_WORDS.get(key.partition('.')[0], key.partition('.')[0])} {word}"
+        for key, word in row_words(self.shell.ed, own).items():
             b = pn.widgets.Button(name=f"↺ {word}", height=26, margin=(2, 2),
                                   button_type="light", button_style="outline",
                                   description="Back to what all panels have")

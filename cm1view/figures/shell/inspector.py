@@ -4,7 +4,8 @@ Only what is shown exists as widgets: a node's are made when it is picked.
 The figure's size, title, look, grid and panels, the runs, plan views (planview), soundings
 (entryview), cross-sections (xsecview), time-height panels and time series (seriesview),
 distributions, profiles, joint distributions, azimuthal means and tables (statsview), 3D scenes
-(sceneview), and annotations (annotview).  Every kind has a pane in `panes`."""
+(sceneview), and annotations (annotview).  Every kind has a pane in `panes`.  Above them, Find
+(findview), which comes here with a section to pin at the top."""
 
 import html
 import os
@@ -12,7 +13,7 @@ import os
 import panel as pn
 
 from ... import config
-from .. import draw as figdraw
+from .. import draw as figdraw, spec as fg
 from ..cards import SIZE_PRESETS, _hex, _row
 from ..cards.base import _f
 from ..runs import TYPE_PATH, _track_options, _track_path
@@ -20,6 +21,7 @@ from ..style import STYLE_LABELS
 from . import docedit as de, nodes
 from .annotview import AnnotPane
 from .entryview import EntryPane
+from .findview import Finder
 from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure node)
 from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget, kind_bar_rows,
                     legend_extra, legend_reaches, panels_differ)
@@ -40,6 +42,9 @@ class Inspector:
     def __init__(self, shell):
         self.shell = shell
         self.folds = {}  # what is open: by layer id or section, so it outlasts undo and redo
+        self.live = []  # the Sections of what is shown
+        self.pin = None  # what Find went to: {node, section, key}, while that node is picked
+        self._fresh = {}  # (kind, a track or not) -> a new figure's look
         self.plan = PlanPane(self)
         self.grid = GridPane(self)
         self.annots = AnnotPane(self)
@@ -55,7 +60,8 @@ class Inspector:
         self.body = pn.Column(margin=0, sizing_mode="stretch_width",
                               styles={"flex": "0 0 auto", "height": "max-content",
                                       "max-height": "none"})
-        self.panel = pn.Column(self.head, self.body, width=440, scroll="y-auto",
+        self.finder = Finder(self)
+        self.panel = pn.Column(self.finder.panel, self.head, self.body, width=440, scroll="y-auto",
                                sizing_mode="stretch_height",
                                styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
                                        "overflow-x": "hidden", "flex": "0 0 auto"})
@@ -63,6 +69,10 @@ class Inspector:
     def show(self, node):
         """The settings of node, from the document."""
         doc = self.shell.doc
+        self.live = []
+        if self.pin is not None and self.pin["node"] != node:
+            self.pin = None
+            self.finder.said("")
         title = {nodes.FIGURE: "Figure", nodes.RUNS: "Runs"}.get(node)
         if node.startswith("kind:"):
             title, objs = self._kind(doc, node)
@@ -74,7 +84,49 @@ class Inspector:
             objs = self._figure(doc) if node == nodes.FIGURE else self._runs(doc)
         self.head.object = (f'<div class="cv-h" style="margin:0">{html.escape(title)}</div>'
                             f'<div class="cv-hint">{html.escape(nodes.scope(doc, node))}</div>')
-        self.body.objects = objs
+        self.body.objects = self._pinned(objs)
+
+    def _pinned(self, objs):
+        """What is shown, with the section Find went to first and open, so it needs no looking
+        for: the browser's scrolling isn't reachable from here, and this reads the same at any
+        size.  It keeps its place until another node is picked."""
+        section = (self.pin or {}).get("section")
+        if not section:
+            return objs
+        hit = next((c for c in objs if isinstance(c, pn.Card) and (
+            c.title == section or c.title.startswith(f"{section} ("))), None)
+        if hit is None:
+            self.pin["key"] = None
+            self.finder.said(f"{html.escape(section)} isn't shown here now: what the panels are "
+                             "set to leaves it out.")
+            return objs
+        hit.collapsed = False
+        self.pin["key"] = None  # (marked once: not on later showings of the node)
+        return [hit, *(c for c in objs if c is not hit)]
+
+    def pin_key(self):
+        """The setting Find went to, while its section is being made."""
+        return (self.pin or {}).get("key")
+
+    def go_to(self, node, section=None, key=None):
+        """A node shown with a section of it first, open, and a setting in it marked (Find)."""
+        self.pin = dict(node=node, section=section, key=key)
+        self.shell._show(node)
+        self.panel.scroll_position = 1  # (twice: the server's last value may be 0 already)
+        self.panel.scroll_position = 0
+
+    def fresh(self, kind):
+        """A new figure's look with panels of `kind`: what changed marks and resets go by."""
+        v, ed = self.shell.v, self.shell.ed
+        key = (kind, bool(v.fixes))
+        if key not in self._fresh:
+            self._fresh[key] = fg.fresh_look(ed.run, ed.fields, v.t, kind, tracked=key[1])
+        return self._fresh[key]
+
+    def refresh_marks(self):
+        """An edit from what is shown: each section's marks say so."""
+        for looks in self.live:
+            looks.refresh()
 
     # ------------------------------------------------------------ the figure
     def _figure(self, doc):

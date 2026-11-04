@@ -10,6 +10,7 @@ import json
 import numpy as np
 
 from .. import draw as figdraw
+from ..kinds import KINDS
 from .base import OutputStep, STEP_ENTRIES, _window_ends, default_spec, run_entry, time_refs
 from .bundle import OLDER
 from .doc import (ANY_KIND_KEYS, FIGURE_KEYS, KIND_KEYS, MAPPED, NOT_STYLE, drop_annotations,
@@ -340,6 +341,36 @@ def doc_defaults(doc, run, F, t=0, track=None):
     d.setdefault("sections", {})
     d.setdefault("annotations", [])
     return d
+
+
+# ------------------------------------------------------------ what a new figure looks like
+def fresh_look(run, F, t, kind, tracked=True):
+    """The look settings a new figure of panels of `kind` starts with, placed as in a document
+    (style, kinds[kind], the figure's own keys): what the inspector calls the default.  The
+    settings table's defaults are what a spec without a key shows, which is not this.  tracked:
+    the viewer has a storm track, which a new plan view centres on."""
+    base = default_spec(run, F, t)
+    k = KINDS[kind]
+    if not tracked:
+        base["domain"] = dict(base["domain"], mode="full")
+    base["axes"] = dict(base["axes"], xlabel=k.labels[0], ylabel=k.labels[1])
+    base["letters"] = dict(base["letters"], loc=k.letter_at)
+    base["time_label"] = dict(base["time_label"], loc=k.time_at,
+                              on=base["time_label"]["on"] and kind not in ("th", "line"))
+    if k.colorbar:
+        base["colorbar"] = dict(base["colorbar"], mode=k.colorbar[0])
+    if k.colorbar[1:]:
+        base["colorbar"] = dict(base["colorbar"], location=k.colorbar[1], orientation=(
+            "horizontal" if k.colorbar[1] in ("bottom", "top") else "vertical"))
+    doc = dict(style={}, kinds={kind: {}})
+    for key, val in base.items():
+        if key in FIGURE_KEYS:
+            doc[key] = val
+        elif key in KIND_KEYS.get(kind, ()):
+            doc["kinds"][kind][key] = val
+        elif key not in NOT_STYLE and key not in ANY_KIND_KEYS:
+            doc["style"][key] = val
+    return doc
 
 
 # ------------------------------------------------------------ a style preset
