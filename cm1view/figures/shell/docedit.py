@@ -376,9 +376,11 @@ def set_t0(doc, rid, t0_min):
                  rid, dt)
     for kind in dict.fromkeys(p["kind"] for p in ordered):
         if kind not in ("line", "th"):  # (a series has no one time)
+            # (a profile of your own has no time; a table's times are its first run's, as
+            # the other runs' follow by time zero: both stay, as in the old editor)
             _keep_moment([x for p in ordered if p["kind"] == kind for x in p.get("layers") or []
                           if "ref" not in x and x.get("time_s") is not None
-                          and x.get("run") is not None], rid, dt)
+                          and x.get("run") is not None and x.get("source") != "table"], rid, dt)
 
 
 def _keep_moment(timed, rid, dt):
@@ -848,6 +850,44 @@ def series_per_run(doc, p, j):
     return len(new)
 
 
+def profile_per_run(doc, p, j):
+    """Profile j of a panel, an entry per run in the panel, at the same time since each run's time
+    zero: of several runs (or every run), it splits, each in its run's colour; of one, a copy for
+    each other run, coloured automatically (a run with the same profile there already is
+    skipped).  Returns how many are new."""
+    items = places(doc, p)
+    lay = items[j]
+    view = dict(runs=doc.get("runs") or [])
+    ids = [r["id"] for r in doc.get("runs") or []]
+    mine = lay.get("runs")
+
+    def moved(rid, a, **more):
+        out = dict(copy.deepcopy(lay), run=rid, runs=[rid], **more)
+        for key in ("time_s", "time_s1"):
+            if out.get(key) is not None:
+                out[key] = _moved(doc, float(lay[key]), a, rid)
+        return out
+
+    at = p["layers"].index(lay)
+    if mine is None or len(mine) > 1:
+        runs = mine or ids
+        if len(runs) < 2:
+            return 0
+        p["layers"][at:at + 1] = [moved(rid, runs[0], ens="", color=figdraw.run_color(
+            view, run_index(doc, rid))) for rid in runs]
+        return len(runs)
+
+    def what(x):
+        return (x["runs"][0] if x.get("runs") else None, x.get("time_s"), x.get("time_s1"),
+                json.dumps(x.get("recipe"), sort_keys=True, default=float))
+
+    have = {what(x) for x in items}
+    new = [moved(rid, mine[0], label="", color="") for rid in ids if rid != mine[0]]
+    new = [x for x in new if what(x) not in have]
+    p["layers"][at + 1:at + 1] = new
+    return len(new)
+
+
 def entry_titles(doc, kind):
     """Titles of a kind's panels from what each shows, as the old editor's: a cross-section's
     section (with several runs: its run first), a time-height panel's run and series, a time
@@ -875,13 +915,14 @@ def entry_titles(doc, kind):
 
 
 def kind_size(doc):
-    """A figure of soundings, or of time series or time-height panels alone, as its automatic
-    size has it: (width, height) in, as the old editor's _fit_size; None: otherwise."""
+    """A figure of one kind with a size of its own (not plan views or cross-sections, whose height
+    goes by their shape), as its automatic size has it: (width, height) in, as the old editor's
+    _fit_size; None: otherwise."""
     pans = doc.get("panels") or []
     kinds = {p["kind"] for p in pans}
     if kinds == {"sounding"}:
         return sounding_size(doc)
-    if kinds not in ({"th"}, {"line"}):
+    if len(kinds) != 1 or KINDS[pans[0]["kind"]].size is None:
         return None
     w, h = KINDS[pans[0]["kind"]].size(*grid_shape(doc))
     return min(16.0, float(w)), min(16.0, float(h))

@@ -8,6 +8,8 @@ from ..draw.base import _cell
 from ..kinds import KINDS
 
 FIGURE, RUNS, KIND_PREFIX = "figure", "runs", "kind:"
+ENTRY_WORDS = {"dist": "Distribution", "profile": "Profile", "joint": "Joint",
+               "azim": "Azimuthal", "table": "Values"}  # (entry_name's)
 
 
 def in_order(doc):
@@ -36,6 +38,8 @@ def layer_name(lay, fields=None):
         return sounding_name(lay)
     if lay.get("type") == "series":
         return series_name(lay, fields)
+    if lay.get("type") in ENTRY_WORDS:
+        return entry_name(lay, fields)
     head = TYPE_LABEL.get(lay.get("type"), "")
     recipe = lay.get("recipe") if isinstance(lay.get("recipe"), dict) else {}
     field = lay.get("field") or recipe.get("field")
@@ -59,6 +63,38 @@ def series_name(lay, fields=None):
     field = recipe.get("field")
     what = fields[field].label if fields is not None and field in fields else field
     return " · ".join(str(x) for x in (head, lay.get("label") or what) if x)
+
+
+def _field_word(field, fields=None):
+    return fields[field].label if fields is not None and field in fields else field
+
+
+def _when_word(lay):
+    """An entry's time or time window, in minutes."""
+    if lay.get("time_s") is None:
+        return ""
+    start = float(lay["time_s"]) / 60
+    if lay.get("time_s1") is not None:
+        return f"{start:g}–{float(lay['time_s1']) / 60:g} min"
+    return f"{start:g} min"
+
+
+def entry_name(lay, fields=None):
+    """A distribution, profile, joint distribution, azimuthal mean or table's values in words:
+    its label or field, and when."""
+    kind = lay["type"]
+    recipe = lay.get("recipe") if isinstance(lay.get("recipe"), dict) else {}
+    if lay.get("source") == "table":  # (a profile of your own)
+        return " · ".join(str(x) for x in ("Your data", lay.get("label")) if x)
+    if kind == "table":
+        what = "Sounding" if lay.get("what", "sounding") == "sounding" else \
+            _field_word(recipe.get("field"), fields)
+        return " · ".join(str(x) for x in ("Values", lay.get("label") or what) if x)
+    what = _field_word(recipe.get("field"), fields)
+    if kind == "joint":
+        what = f"{_field_word(recipe.get('yfield'), fields)} vs {what}"
+    return " · ".join(str(x) for x in (ENTRY_WORDS[kind], lay.get("label") or what,
+                                       _when_word(lay)) if x)
 
 
 def panel_name(doc, p, runs=None):

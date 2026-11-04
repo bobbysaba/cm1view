@@ -15,7 +15,8 @@ from ..spec.doc import KIND_KEYS
 from ..times import _nearest_t
 from . import docedit as de, nodes
 
-ADDABLE = ("plan", "sounding", "xsec", "th", "line")  # (the kinds edited here: M7 adds its)
+# (the kinds edited here)
+ADDABLE = ("plan", "sounding", "xsec", "th", "line", "dist", "profile", "joint", "azim", "table")
 NEW_ROW, NEW_COL = "new row", "new column"
 
 
@@ -179,7 +180,7 @@ class GridPane:
                 p = de.xsec_panel(d, at, rid, ts, spec["layers"], fg.card_section(
                     spec["sections"][0]))
             else:
-                p = de.add_panel(d, kind, at, self._first_entries(kind))
+                p = de.add_panel(d, kind, at, self.ins.panes[kind].first_entries())
             present = {KINDS[q["kind"]] for q in d["panels"]} | {KINDS[k] for k in ADDABLE}
             de.label_places(d, p, KINDS[kind], present)
             made.append(p)
@@ -189,11 +190,6 @@ class GridPane:
         shell.edit(apply)
         shell._show(f"panel:{made[0]['id']}")
         return made[0]
-
-    def _first_entries(self, kind):
-        """A new panel's entries (a series panel: none, so nothing is computed until one is
-        added)."""
-        return [new_sounding(self.shell)] if kind == "sounding" else []
 
     def titles_objs(self, kind):
         """Titles of a kind's panels from what each shows, and clearing them (plan views': Fill

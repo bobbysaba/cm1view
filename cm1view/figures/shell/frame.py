@@ -216,24 +216,26 @@ class FigureShell:
         plain grid (an estimate from one panel knows no spans, shares or other kinds)."""
         doc = self.doc if doc is None else doc
         grid = doc.get("grid") or {}
-        return {p["kind"] for p in doc["panels"]} in (
-            {"plan"}, {"xsec"}, {"sounding"}, {"th"}, {"line"}) and \
+        kinds = {p["kind"] for p in doc["panels"]}
+        return len(kinds) == 1 and not kinds & {"scene"} and \
             not grid.get("widths") and not grid.get("heights") and \
             all(_cell(p)[2:] == (1, 1) for p in doc["panels"])
 
     def _follow_size(self, snd_was=None):
         """A figure with an automatic size: the height of plan views or cross-sections for their
-        width and grid; the size of soundings or series when what it depends on just changed
-        (snd_was: what it gave before)."""
+        width and grid; the size of the other kinds when what it depends on just changed
+        (snd_was: what it gave before), and then a table's height, for its rows."""
         doc = self.doc
         if not doc.get("size_auto") or not self.can_follow():
             return
-        if doc["panels"][0]["kind"] in ("sounding", "th", "line"):
+        kind = doc["panels"][0]["kind"]
+        if kind not in ("plan", "xsec"):
             now = de.kind_size(doc)
             if now != snd_was and now is not None:
                 doc["size"] = list(now)
                 self.inspector.size_followed(doc["size"])
-            return
+            if kind != "table":
+                return
         try:
             h = self.fit_height(doc)
         except (KeyError, TypeError, ValueError):  # (settings it can't estimate from)
@@ -251,6 +253,10 @@ class FigureShell:
                  size=doc["size"], suptitle=doc.get("suptitle") or "",
                  titles=[p["title"] for p in doc["panels"] if p.get("title")],
                  row_titles=[p["rowlabel"] for p in doc["panels"] if p.get("rowlabel")])
+        if q["kind"] == "table":  # (its tallest table's rows: entries by their panel's place)
+            cols = int(grid.get("cols", 1))
+            s["tables"] = [dict(lay, panel=_cell(p)[0] * cols + _cell(p)[1])
+                           for p in res["panels"] for lay in p["layers"]]
         return self.ed.fit_height(s)
 
     # ------------------------------------------------------------ the document's runs

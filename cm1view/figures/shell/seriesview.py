@@ -39,6 +39,10 @@ class SeriesPane(EntryPane):
         super().__init__(inspector)
         self.kind = kind
 
+    def first_entries(self):
+        """None: nothing is computed until one is added."""
+        return []
+
     # ------------------------------------------------------------ what a section shows
     def _looks(self, doc, scope):
         return Sections(self.ins, scope, [self.kind])

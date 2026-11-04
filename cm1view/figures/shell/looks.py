@@ -12,7 +12,7 @@ import copy
 
 import panel as pn
 
-from .. import settings as table
+from .. import draw as figdraw, settings as table
 from ..cards import _grid
 from ..cards.base import SECTION
 from ..spec.doc import FIGURE_KEYS, KIND_KEYS
@@ -24,7 +24,12 @@ KIND_SECTIONS = {"plan": ("Area", "Axes and ticks"),
                  "sounding": ("Sounding panels", "Skew-T", "Hodograph", "Legend in the panel",
                               "Axes and ticks"),
                  "xsec": ("Area", "Axes and ticks"), "th": ("Plot", "Axes and ticks"),
-                 "line": ("Plot", "Legend in the panel", "Axes and ticks")}
+                 "line": ("Plot", "Legend in the panel", "Axes and ticks"),
+                 "dist": ("Plot", "Statistics", "Legend in the panel", "Axes and ticks"),
+                 "profile": ("Plot", "Legend in the panel", "Axes and ticks"),
+                 "joint": ("Plot", "Statistics", "Legend in the panel", "Axes and ticks"),
+                 "azim": ("Plot", "Legend in the panel", "Axes and ticks"),
+                 "table": ("Table",)}
 SECTION_NAMES = {("xsec", "Area"): "Height and x axis"}  # (a kind's words for a section)
 # (a plan panel's own look: what is drawn panel by panel, the rest being its grid's or the figure's)
 PANEL_KEYS = {
@@ -58,6 +63,25 @@ PANEL_KEYS["line"] = {
     "Plot": ("ts.ymin", "ts.ymax", "ts.zero_line", "ts.mark", "ts.mark_legend", "ts.mark_edited"),
     "Legend in the panel": ("ts.legend", "ts.legend_loc", "ts.legend_ncol", "ts.legend_frame"),
     **PANEL_KEYS["plan"]}
+
+
+def _own_rows(kind, block, *sections):
+    """{section: its rows' keys}, with the kind's panel legend: a panel of these kinds is read
+    and drawn with its own view, so all of its block reaches one panel."""
+    out = {s: tuple(st.key for st in table.SETTINGS if st.section == s and kind in st.kinds)
+           for s in sections}
+    if kind in figdraw.LEGEND_OPTS:
+        out["Legend in the panel"] = tuple(f"{block}.{k}" for k in (
+            "legend", "legend_loc", "legend_ncol", "legend_frame"))
+    return out
+
+
+PANEL_KEYS["dist"] = {**_own_rows("dist", "dist", "Plot", "Statistics"), **PANEL_KEYS["plan"]}
+PANEL_KEYS["profile"] = {**_own_rows("profile", "prof", "Plot"), **PANEL_KEYS["plan"]}
+PANEL_KEYS["joint"] = {**_own_rows("joint", "joint", "Plot", "Statistics"), **PANEL_KEYS["plan"]}
+PANEL_KEYS["azim"] = {**_own_rows("azim", "azim", "Plot"), **PANEL_KEYS["plan"]}
+PANEL_KEYS["table"] = {**_own_rows("table", "table", "Table"),
+                       "Panel labels": PANEL_KEYS["plan"]["Panel labels"]}
 # (shown by the sounding pane, as the layout has them)
 LAYOUT_HIDES = {"Skew-T": ("hodo",), "Hodograph": ("skewt",)}
 LEFT_OUT = ("legend.panel", "legend.panels")  # (panels by id: M9)
@@ -66,18 +90,26 @@ SECTION_ROWS = ("xsec.ztop", "xsec.coords")  # (of cross-sections only: a plan v
 
 def _legend_rows():
     """A kind's own panel legend (the old editor's pl_ widgets, not in the table: they go with
-    the kind shown), starting as the old editor's _legend_load does: soundings', then a time
-    series'.  M7 adds its kinds."""
+    the kind shown), starting as the old editor's _legend_load does: soundings', then the
+    others'."""
     return tuple(
         table.Setting(f"{block}.{key}", attr, "Legend in the panel", (kind,), default)
         for block, kind, on, loc, frame in (("skewt", "sounding", False, "upper left", True),
-                                            ("ts", "line", True, "best", False))
+                                            ("ts", "line", True, "best", False),
+                                            ("dist", "dist", True, "best", False),
+                                            ("prof", "profile", True, "best", False),
+                                            ("joint", "joint", True, "best", False),
+                                            ("azim", "azim", True, "best", False))
         for key, attr, default in (("legend", "pl_on", on), ("legend_loc", "pl_loc", loc),
                                    ("legend_ncol", "pl_ncol", 1), ("legend_frame", "pl_frame", frame)))
 
 
 LEGEND_ROWS = _legend_rows()
-OWN_NAMES = {"skewt.legend": "Legend (one sounding)"}
+# (the old editor's widget has one name at a time, its kind's)
+OWN_NAMES = {"skewt.legend": "Legend (one sounding)", "ts.legend": "Legend", "dist.legend": "Legend",
+             "prof.legend": "Legend", "joint.legend": "Legend", "azim.legend": "Legend",
+             # (shorter than the old editor's: these sit in a column of two)
+             "joint.cbar_label": "Colorbar label", "azim.cbar_label": "Colorbar label"}
 BLOCK_WORDS = {"letters": "Letter", "time_label": "Time label", "run_label": "Run label",
                "z_label": "Height label", "axes": "Axes", "skewt": "Sounding"}
 
@@ -358,6 +390,60 @@ def sounding_extra(layout):
         return []
 
     return {"Sounding panels": extra, "Hodograph": extra}
+
+
+def dist_extra():
+    """What a distribution's settings show hangs on the kind of plot, as the old editor's
+    _show_dist_opts has it: {section: extra} for Sections."""
+    def plot(by_key):
+        def key(name):
+            return by_key[f"dist.{name}"]
+
+        def show(*ev):
+            kind = key("plot").value
+            hist, cum, boxy = kind == "hist", kind == "ecdf", kind in ("box", "violin")
+            for name in ("norm", "bins", "width", "hstyle", "bar_labels"):
+                key(name).visible = hist
+            key("cum").visible = cum
+            for name in ("whis", "means", "horizontal"):
+                key(name).visible = boxy
+            for name, end in (("ymin", "from"), ("ymax", "to")):
+                key(name).visible = not boxy
+                key(name).name = f"{'Fraction' if cum else 'Count'} axis {end}"
+
+        key("plot").param.watch(show, "value")
+        show()
+        return []
+
+    def stats(by_key):
+        def show(*ev):
+            by_key["dist.stats_loc"].visible = by_key["dist.stats_at"].value == "box"
+
+        by_key["dist.stats_at"].param.watch(show, "value")
+        show()
+        return []
+
+    return {"Plot": plot, "Statistics": stats}
+
+
+def joint_extra():
+    """... and a joint distribution's: the old editor's _show_joint_opts."""
+    def plot(by_key):
+        def key(name):
+            return by_key[f"joint.{name}"]
+
+        def show(*ev):
+            kind = key("plot").value
+            for name in ("norm", "cmap", "cbar_label", "log", "reverse", "colorbar"):
+                key(name).visible = kind == "hist"
+            key("ms").visible = key("alpha").visible = kind == "scatter"
+            key("contours").visible = kind != "contour"
+
+        key("plot").param.watch(show, "value")
+        show()
+        return []
+
+    return {"Plot": plot}
 
 
 TYPE_NAME = {"fill": "Fill", "contour": "Contours", "shade": "Shading"}

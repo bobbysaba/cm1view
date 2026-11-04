@@ -3,8 +3,8 @@ Only what is shown exists as widgets: a node's are made when it is picked.
 
 Editable so far: the figure's size, title, look, grid and panels, the runs, plan views
 (planview), soundings (entryview), cross-sections (xsecview), time-height panels and time series
-(seriesview).  Other kinds are shown, with a panel's title and place to edit, until they move
-here."""
+(seriesview), distributions, profiles, joint distributions, azimuthal means and tables (statsview).
+A 3D scene is shown, with a panel's title and place to edit, until it moves here."""
 
 import html
 import os
@@ -23,6 +23,7 @@ from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widg
                     panels_differ)
 from .planview import PlanPane
 from .seriesview import SeriesPane
+from .statsview import AzimPane, DistPane, JointPane, ProfilePane, TablePane
 from .xsecview import XsecPane
 from ...theme import GRID
 
@@ -47,7 +48,9 @@ class Inspector:
         self.plan = PlanPane(self)
         self.grid = GridPane(self)
         self.panes = dict(plan=self.plan, sounding=EntryPane(self), xsec=XsecPane(self),
-                          th=SeriesPane(self, "th"), line=SeriesPane(self, "line"))  # (moved here)
+                          th=SeriesPane(self, "th"), line=SeriesPane(self, "line"),
+                          dist=DistPane(self), profile=ProfilePane(self), joint=JointPane(self),
+                          azim=AzimPane(self), table=TablePane(self))  # (moved here)
         self.head = pn.pane.HTML(margin=(4, 4, 0, 4), sizing_mode="stretch_width",
                                  styles={"flex": "0 0 auto"})
         # (taller than the pane: it scrolls.  Its height is what it holds: Bokeh's max-height 100%
@@ -102,17 +105,25 @@ class Inspector:
                 return
             if "x" in ev.new:
                 size, auto = [float(v) for v in ev.new.split("x")], False
-            else:  # (only plan views' and sections' height follows a width)
+            else:  # (only plan views' and sections' height follows a width, and tables' rows)
                 size = [float(ev.new), float(height.value or 6.0)]
                 auto = self.shell.can_follow() and \
-                    self.shell.doc["panels"][0]["kind"] in ("plan", "xsec")
+                    self.shell.doc["panels"][0]["kind"] in ("plan", "xsec", "table")
             self.shell.edit(lambda d: d.update(size=size, size_auto=auto), node=nodes.FIGURE)
 
         width.param.watch(on_size, "value")
         height.param.watch(on_size, "value")
         preset.param.watch(on_preset, "value")
-        fit.on_click(lambda ev: self.shell.edit(lambda d: d.update(size_auto=True),
-                                                node=nodes.FIGURE))
+
+        def on_fit(ev):
+            def apply(d):
+                d["size_auto"] = True
+                now = de.kind_size(d)  # (a kind with a size of its own: now, not at its next change)
+                if now is not None:
+                    d["size"] = list(now)
+            self.shell.edit(apply, node=nodes.FIGURE)
+
+        fit.on_click(on_fit)
         fit.disabled = not self.shell.can_follow(doc)
         if fit.disabled:
             fit.description = "Only a figure of one kind of panel, in equal cells, has an " \

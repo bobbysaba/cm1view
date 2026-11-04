@@ -5,8 +5,9 @@ time and place), rather than shared map layers.  Where you click says what an ed
   a panel         its soundings, its title and place, and its own look
   a sounding      that sounding
 
-Nothing here is sounding-only but `make_card`, the look's hooks and the buttons that add them:
-the other kinds of entries (seriesview; M7) take the same pane, overriding those."""
+Nothing here is sounding-only but its words, `make_card`, the look's hooks and what a new entry is
+(_new_entry, _tool_entries): the other kinds of entries (seriesview, statsview) take the same pane,
+overriding those."""
 
 import html
 
@@ -41,7 +42,12 @@ def _button(name, on_click, tip="", primary=False):
 class EntryPane:
     kind = "sounding"
     head = "Soundings"
+    one = "Sounding"  # (one of them, on its buttons)
     make_card = SoundingCard
+    panel_note = "Soundings of one panel share its skew-T (colour = sounding)."
+    tool = "+ The map's soundings"  # (the viewer's tool has them; "": it has none)
+    tool_tip = "A panel for each sounding marked in the viewer's Sounding tool"
+    tool_none = "No soundings yet: click the map with the Sounding tool first."
 
     def __init__(self, inspector):
         self.ins, self.shell = inspector, inspector.shell
@@ -79,21 +85,33 @@ class EntryPane:
         return f"All {nodes.kind_name(self.kind, len(mine))}", objs
 
     def _kind_tools(self):
-        return [pn.Row(_button("+ Sounding panel", self.add_panel, primary=True,
-                               tip="In the first free cell, or a new row or column"),
-                       _button("+ The map's soundings", self.add_map_panels,
-                               tip="A panel for each sounding marked in the viewer's Sounding "
-                                   "tool"), margin=0)]
+        tools = [_button(f"+ {self.one} panel", self.add_panel, primary=True,
+                         tip="In the first free cell, or a new row or column")]
+        if self.tool:
+            tools.append(_button(self.tool, self.add_map_panels, tip=self.tool_tip))
+        return [pn.Row(*tools, margin=0)]
 
     def add_panel(self):
         return self.ins.grid.add_panel(self.kind)
 
+    def _new_entry(self):
+        """A new entry of the kind."""
+        return new_sounding(self.shell)
+
+    def _tool_entries(self):
+        """The entries the viewer's tool for the kind has."""
+        return map_soundings(self.shell)
+
+    def first_entries(self):
+        """A new panel's entries."""
+        return [self._new_entry()]
+
     def add_map_panels(self):
-        """Each of the viewer's soundings in a panel of its own."""
+        """Each of the viewer's tool's entries in a panel of its own."""
         shell = self.shell
-        new = map_soundings(shell)
+        new = self._tool_entries()
         if not new:
-            shell.say("No soundings yet: click the map with the Sounding tool first.", True)
+            shell.say(self.tool_none, True)
             return
 
         def apply(d):
@@ -134,18 +152,23 @@ class EntryPane:
     def _panel_tools(self, doc, p):
         """What a panel has above its entries."""
         pid = p["id"]
-        objs = [_note("Soundings of one panel share its skew-T (colour = sounding)."),
-                pn.Row(_button("+ Sounding", lambda: self.add_entry(pid), primary=True),
-                       _button("+ The map's soundings", lambda: self.add_map_entries(pid)),
-                       margin=0)]
+        tools = [_button(f"+ {self.one}", lambda: self.add_entry(pid), primary=True)]
+        if self.tool:
+            tools.append(_button(self.tool, lambda: self.add_map_entries(pid)))
+        objs = [_note(self.panel_note),
+                pn.FlexBox(*tools, *self._more_tools(pid), sizing_mode="stretch_width")]
         if not figdraw.panel_layers(doc, p):
-            objs.append(_note("No soundings here: add one above."))
+            objs.append(_note(f"No {self.head.lower()} here: add one above."))
         return objs
 
+    def _more_tools(self, pid):
+        """A kind's other ways to add to a panel."""
+        return []
+
     def add_entry(self, pid):
-        """A new sounding in a panel, open."""
+        """A new entry in a panel, open."""
         shell = self.shell
-        new = new_sounding(shell)
+        new = self._new_entry()
 
         def apply(d):
             p = de.panel_by_id(d, pid)
@@ -154,11 +177,11 @@ class EntryPane:
         shell.edit(apply, node=shell.node)
 
     def add_map_entries(self, pid):
-        """The viewer's soundings into this panel."""
+        """The viewer's tool's entries into this panel."""
         shell = self.shell
-        new = map_soundings(shell)
+        new = self._tool_entries()
         if not new:
-            shell.say("No soundings yet: click the map with the Sounding tool first.", True)
+            shell.say(self.tool_none, True)
             return
         shell.edit(lambda d: [de.add_own(de.panel_by_id(d, pid), de.plain(e)) for e in new],
                    node=shell.node)

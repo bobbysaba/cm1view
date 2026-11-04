@@ -155,6 +155,8 @@ def describe(lay, fields=None, p=None, kind="plan"):
         return nodes.sounding_name(lay)
     if lay.get("type") == "series":
         return nodes.series_name(lay, fields)
+    if lay.get("type") in nodes.ENTRY_WORDS:
+        return nodes.entry_name(lay, fields)
     if "orient" in lay:
         return " · ".join(x for x in (lay.get("label"), section_words(lay)) if x)
     bits = []
@@ -269,16 +271,21 @@ class LayerRow:
         self._show_marks()
 
     def _keep_time(self, lay):
-        """An entry's time that is no output (time zero moved it): its list says so, as a
-        panel's does; it is kept until another is picked."""
-        w, now = self.card.w.get("time"), lay.get("time_s")
-        if w is None or now is None or not hasattr(self.card, "move_time") or \
-                float(now) in [float(v) for v in w.options.values()]:
+        """An entry's time, or a time window's end, that is no output (time zero moved it): its
+        list says so, as a panel's does; it is kept until another is picked."""
+        if not hasattr(self.card, "move_time"):
             return
-        with held(self.card.ed):
-            w.options = dict(w.options, **{_tlabel(now) + " · no output": float(now)})
-            w.value = float(now)
-        self.card._show()
+        moved = False
+        for name, key in (("time", "time_s"), ("time1", "time_s1")):
+            w, now = self.card.w.get(name), lay.get(key)
+            if w is None or now is None or float(now) in w.options.values():
+                continue
+            with held(self.card.ed):
+                w.options = dict(w.options, **{_tlabel(now) + " · no output": float(now)})
+                w.value = float(now)
+            moved = True
+        if moved:
+            self.card._show()
 
     def _sections(self):
         card = self.card
