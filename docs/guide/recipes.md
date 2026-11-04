@@ -29,15 +29,14 @@ Short walkthroughs that combine the tools. Each uses only what the other pages d
 
 ## A storm-centred comparison of two runs
 
-1. In the Figure workspace, use the quick start: *Plan views*, *Time*, 2 rows × 3
+1. In the Figure workspace, use the New dialog: *Plan views*, *Time*, 2 rows × 3
    columns. Press **Make the figure**.
-2. In *Layers → Runs used*, add the second run (type to filter, or paste a folder) and
-   give each run a label and a colour. Check that each has a storm track.
-3. In *Panels → Grid and size*, set *Rows are* to *Runs* and *Columns are* to *Times*;
-   pick both runs (*Runs, one per row*) and fill the times from the shown time. Set
+2. On the tree's **Runs** node, add the second run and give each run a label and a colour. Check that each has a storm track.
+3. On the **Plan views** node, open **Fill panels**: set *Rows are* to *Runs* and *Columns are* to
+   *Times*, the time to start from and *Every nth output*, then **Fill the panels**. In *Area*, set
    *Plan-view area* to *Follow the tracked storm*.
-4. Put a reflectivity fill and a w contour in *Layers*, and set *Colorbars* to *One for
-   the figure* in *Style*.
+4. Put a reflectivity fill and a w contour in the node's layers, and set *Colorbars* to *One for
+   the figure* in *Colorbar* on the Figure node.
 5. Press **Export**, give **Save as** a name, choose the format and DPI, tick **Also the script
    and data** to keep the data and a script that redraws the figure, and **Save**
    ([Figures](figures.md)).
@@ -54,14 +53,14 @@ Short walkthroughs that combine the tools. Each uses only what the other pages d
 ## An animation
 
 1. Build a 1 × 1 plan-view figure centred on the storm.
-2. In *File → Animation (GIF)* set the *End time*, a *Step (outputs)* that gives under
+2. In *Export → Animation* set the *End time*, a *Step (outputs)* that gives under
    300 frames, a low DPI (about 100) and the frames per second.
-3. Press **Save animation**. Tick *Also save the frames (PNG)* if you want a video made
-   with `ffmpeg` ([Export, animations and the script](figures-export.md#animations)).
+3. Press **Save animation**. Choose *MP4 video* as the *Format* for a smaller file with every colour (it needs `ffmpeg`), or
+   tick *Also save the frames (PNG)* ([Export, animations and the script](figures-export.md#animations)).
 
 ## The same figure for another run
 
-1. Make the figure for the first run and, in *File → Templates*, **Save as template**.
+1. Make the figure for the first run and, in *Export → Template*, **Save as template**.
 2. Open the other run (click its name in the top bar), go to the Figure workspace, choose
-   the template and press **Apply to this run**. The times move to the shown time of the
+   the template in the New dialog and press **Apply to this run**. The times move to the shown time of the
    new run, keeping their spacing.

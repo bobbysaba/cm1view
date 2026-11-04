@@ -87,7 +87,7 @@ def _finish_doc(doc, run, F, t, code, track):
 def finish(spec, run, F, t, code=False):
     """`spec` as the editor would show it on `run` at output t (fg.with_defaults, then
     fg.normalize, part by part; a part without runs takes `run` with its storm_tracks
-    file, if any; a document: fg.doc_defaults).  Its own code (Annotate → Your own code) stays
+    file, if any; a document: fg.doc_defaults).  Its own code (Your own code) stays
     off unless `code`."""
     track = fg.run_entry(run)["track"]
     if fg.is_doc(spec):
@@ -344,7 +344,7 @@ def parser():
     ap.add_argument("--frames", action="store_true",
                     help="GIF: also save each frame as a PNG (in <name>_frames/)")
     ap.add_argument("--code", action="store_true",
-                    help="run the figure's own code (Annotate → Your own code), which "
+                    help="run the figure's own code (Your own code), which "
                          "the editor asks before running")
     ap.add_argument("--overwrite", action="store_true",
                     help="replace files that are already there (default: stop)")

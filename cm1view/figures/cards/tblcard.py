@@ -84,7 +84,7 @@ class TableCard(SeveralRuns):
                    w["lo"], w["hi"], (w["label"], 3)),
              w["params"], w["stats"],
              _hint("Each value is read from every run here at every time here (the other runs "
-                   "at the same time since their time zeros). Cards with the same Panel add "
+                   "at the same time since their time zeros). More entries in a panel add "
                    "columns to one table, so it can hold both parameters and statistics. "
                    "Statistics take every value of the field in the region at that time.")])
         self._show()

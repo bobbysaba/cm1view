@@ -7,13 +7,22 @@ has a matching git tag.
 
 ### Figures
 
+- **A new figure editor**: three panes, a tree of what the figure holds, the preview, and an
+  inspector of what is picked ([The editor](guide/figures.md#the-editor)). Where you pick says what an
+  edit reaches: the figure, all panels of a kind, or one panel. It replaces the tabs and the panel
+  tree, and panels of any kinds now share one grid in place of figure parts. Figures, templates and
+  sessions saved earlier open in it, and figures with parts open as one grid. Exported scripts keep
+  working.
+- **Also new in it**: panels with an area of their own, zoom insets, a time slider on the preview,
+  MP4 video, saving the figure for several runs, tables as CSV and LaTeX, a colour-vision preview,
+  Find for any setting, and a mark on settings that have changed.
 - **Copy a layer**: a layer's card has a copy button, for a second contour field or a fill with
   another range ([What a layer is](guide/figures-layers.md#what-a-layer-is)).
 - **Undo keeps the cards**: undo and redo leave cards folded or open as they were, and cards the
   step did not change are left alone instead of being built again.
 - **A gallery of saved figures**: the new-figure dialog shows saved figures as thumbnails, newest
   first, in place of a list, and a click opens one. It can also apply a template
-  ([The quick start](guide/figures.md#the-quick-start)). Saving writes the thumbnail to
+  ([The New dialog](guide/figures.md#the-new-dialog)). Saving writes the thumbnail to
   `_src/<name>_thumb.png`.
 - **Apply to this run** works straight away: it failed on a template listed when the page opened
   until you picked one from the list.

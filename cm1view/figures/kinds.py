@@ -14,8 +14,8 @@ class Kind:
     one: str = "panel"  # one of what it draws, in words
     head: str = ""  # a panel tree row's heading
     size: object = None  # (rows, columns) -> a figure (width, height), in
-    note: str = ""  # what the quick start says of it
-    quick_grid: bool = True  # the quick start sets its rows and columns
+    note: str = ""  # what the New dialog says of it
+    quick_grid: bool = True  # the New dialog sets its rows and columns
     entries: str = ""  # the spec's list of what its panels hold, one per panel in a new figure
     style: tuple = ("axes", "y_step", "time_label")  # the Style settings it draws (below)
     letter_at: str = "lower left"  # where a new figure's panel letters go

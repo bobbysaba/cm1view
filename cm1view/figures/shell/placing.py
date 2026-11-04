@@ -1,7 +1,7 @@
 """Placing by clicking the preview: while a mode is picked, a click or a drag in a panel of the
 preview makes or moves an annotation, sets a section's A-B or the area of the plan views or of one
-of them, as it does in the old editor, which has no panel's own area (click.py holds what both use).  Positions are the panel's axis units; in a 3D scene
-or a table, which have none to click on, fractions of the panel."""
+of them (click.py holds the geometry).  Positions are the panel's axis units; in a 3D scene or a
+table, which have none to click on, fractions of the panel."""
 
 import panel as pn
 
@@ -33,7 +33,7 @@ NEW_INSET, INSET_AREA, INSET_PLACE = "inset", "inset_area", "inset_place"
 INSET_DRAGS = (NEW_INSET, INSET_AREA, INSET_PLACE)
 SMALLEST_INSET = 0.04  # (of a panel: a smaller drag is a slip)
 OWN_OF_THE_AREA = ("domain.mode", "domain.box")  # (a panel with these ignores the kind's box)
-# (the old editor's list has one area, which is the kind's; here, also a panel's)
+# (an area of the kind's, and of a panel's)
 MODES = {("Drag: area of all plan views" if v == "area" else "Pick a panel" if not v else k): v
          for k, v in PLACE.items()}
 MODES["Drag: area of one plan view"] = OWN_AREA

@@ -391,7 +391,7 @@ def set_t0(doc, rid, t0_min):
     for kind in dict.fromkeys(p["kind"] for p in ordered):
         if kind not in ("line", "th"):  # (a series has no one time)
             # (a profile of your own has no time; a table's times are its first run's, as
-            # the other runs' follow by time zero: both stay, as in the old editor)
+            # the other runs' follow by time zero: both stay)
             _keep_moment([x for p in ordered if p["kind"] == kind for x in p.get("layers") or []
                           if "ref" not in x and x.get("time_s") is not None
                           and x.get("run") is not None and x.get("source") != "table"], rid, dt)
@@ -1001,7 +1001,7 @@ def profile_per_run(doc, p, j):
 
 
 def entry_titles(doc, kind):
-    """Titles of a kind's panels from what each shows, as the old editor's: a cross-section's
+    """Titles of a kind's panels from what each shows: a cross-section's
     section (with several runs: its run first), a time-height panel's run and series, a time
     series panel's labels.  Titles that name the runs turn the run labels off."""
     mine = panels_of(doc, kind)
@@ -1028,8 +1028,7 @@ def entry_titles(doc, kind):
 
 def kind_size(doc):
     """A figure of one kind with a size of its own (not plan views or cross-sections, whose height
-    goes by their shape), as its automatic size has it: (width, height) in, as the old editor's
-    _fit_size; None: otherwise."""
+    goes by their shape), as its automatic size has it: (width, height) in; None: otherwise."""
     pans = doc.get("panels") or []
     kinds = {p["kind"] for p in pans}
     if kinds == {"sounding"}:
@@ -1122,7 +1121,7 @@ def copy_annotations(doc, pid, new):
 
 
 def new_annotation(kind, panel, lims=None):
-    """A new annotation of a kind, as the old editor starts one: in the middle of the panel, so it
+    """A new annotation of a kind: in the middle of the panel, so it
     shows.  lims: the (xlim, ylim) of the axis units; None: as fractions of the panel."""
     if lims is None:
         coords, (x, y), dx, dy = "axes", (0.5, 0.5), 0.15, 0.15

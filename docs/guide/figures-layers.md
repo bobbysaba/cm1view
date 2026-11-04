@@ -1,8 +1,13 @@
 # Figure layers
 
-The **Layers** tab holds what is drawn in the panels. Each kind of layer is a card with
-its own settings, and the last card of a section lists what it shows or leaves out
+A panel's layers are what is drawn in it. In the tree they sit under a panel; each is a row in the
+inspector with its own settings, and the end of a section lists what it shows or leaves out
 (*Show*, one list of checkboxes).
+
+On a kind's node, such as **Plan views**, the layers are **shared**: changing one reaches every
+panel drawing it, except for what a panel has set for itself. Picking a layer under a panel changes
+it there alone. *In panels* says which panels draw a shared layer, and **Keep apart** gives a panel
+its own copy. A panel can add layers of its own too.
 
 ## What a layer is
 
@@ -15,14 +20,14 @@ On plan views and cross-sections the layer types are
 | **Shading** | A translucent colour over the area where a field is above (or below) a *threshold*, with its own colour and opacity and an optional outline at the threshold. Its *Pattern* hatches, cross-hatches or stipples the area instead (in the layer's colour, over the fields below), e.g. where a difference is significant. |
 | **Vectors** | Arrows, wind barbs (plan views; in knots or m/s: half barb 5, full 10, flag 50) or streamlines of the wind, horizontal vorticity or baroclinic generation ([The map](map.md#vectors)). |
 | **Storm track** | The run's track (needs a track). |
-| **Section line** | The lines of the figure's sections on a plan view (cards alike but for their run, time or panel: one line), labelled in turn from *End labels* (A–A′, B–B′, …; a longer label is numbered), or with *Sections: The panel's own* only the panel's (dashed edges: the strip a strip-averaged section averages). |
+| **Section line** | The lines of the figure's sections on a plan view (one line for each section, however many panels show it), labelled in turn from *End labels* (A–A′, B–B′, …; a longer label is numbered), or with *Sections: The panel's own* only the panel's (dashed edges: the strip a strip-averaged section averages). |
 | **Sector** | The sector of an [azimuthal mean](figures-panels.md#azimuthal-means) on a plan view: azimuths clockwise from the storm's motion or north, out to a radius, around the track (with an offset) or a fixed point, at each panel's time. |
 
 Time–height and time-series figures have **Series** layers; sounding figures have
 **Soundings** layers and distribution figures **Distributions** ([Figure
-panels](figures-panels.md)). *Layers* also has *Runs used* ([Runs](figures-panels.md#runs)).
+panels](figures-panels.md)). The runs are on the tree's **Runs** node ([Runs](figures-panels.md#runs)).
 
-The buttons on a layer's card move it, remove it, or **copy** it: the copy is drawn just above
+The buttons on a layer's row move it, remove it, or **copy** it: the copy is drawn just above
 it, with any changes the layer has in single panels.
 
 A figure made from the map keeps the map's fill, more fills, contours and vectors as
@@ -70,7 +75,7 @@ restyling reads nothing again.
 
 ## Copying a look
 
-*Copy a layer's look* puts one layer's colours, lines, style and colorbar onto others of
+*Copy a layer's look*, on a kind's node, puts one shared layer's colours, lines, style and colorbar onto others of
 its kind (its range, levels and labels too when they show the same field).
 
 ## Maxima and minima
@@ -81,10 +86,9 @@ plan views, cross-sections and time–height panels.
 
 ## Series layers
 
-Under *Layers → Series* (time–height and time-series figures): each card starts with its
-run and panel (as the sounding and section cards), then the series' field, height
-or layer, region and reduction; *Duplicate* and *One per run* copy it (time–height: one
-card per panel). **A series from the
+On a time–height or time-series panel: each series has its run, then its field, height or
+layer, region and reduction; *One per run* splits or copies it for the figure's other runs. A
+time–height panel has one series. **A series from the
 Series tool** copies one of the viewer's computed series (the shown one is picked), and
 **+ New series** starts from the maximum updraft in 0–10 km. Series are computed once for
 the figure and cached, so restyling is instant; the figure waits for any that are still
@@ -105,7 +109,7 @@ when the run's time zero changes. They are on the plotted values (after
 Everything drawn from the line uses them: ensemble bands, maxima and minima, axis
 ranges. An edit at a time the run no longer has is not drawn; the section lists those,
 and **Drop those** forgets them. An edited line's legend label ends in "(edited)" unless
-*Layers → Plot → Mark edited lines* is off.
+*Plot → Mark edited lines* is off.
 
 Edits belong to a run by its place in the card's *Run* list: reordering or removing the
 card's runs moves them to another run, so reset them first.
@@ -146,5 +150,5 @@ colour, line and markers, and gives the value axis its label only if you set one
 ## Soundings and distributions
 
 The soundings (Skew-T, hodograph, parameter table) and distributions (plot type, bins,
-statistics, bar labels) are set in their own cards under *Layers*, shown only for the
-panel kinds that use them ([Figure panels](figures-panels.md#soundings)).
+statistics, bar labels) are set on the panel and its kind's node
+ ([Figure panels](figures-panels.md#soundings)).

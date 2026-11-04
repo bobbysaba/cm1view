@@ -1,4 +1,4 @@
-"""A section's geometry in the inspector: a row over the old editor's SectionCard, without its
+"""A section's geometry in the inspector: a row over a SectionCard, without its
 run, time and panel, which are the panel's here.  Sections are shared: every cross-section showing
 one and the Section line layers of plan views follow it."""
 

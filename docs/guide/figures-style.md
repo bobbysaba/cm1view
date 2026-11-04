@@ -2,13 +2,16 @@
 
 ## Style
 
-The **Style** tab sets the look shared by every panel, in folding sections.
+Look settings are in folding sections of the inspector. **Where you pick says what they reach**: the
+**Figure** node holds what the whole figure shares (text, panel labels, colorbar, legend, contour key,
+spacing), a kind's node what its panels share (axes and ticks, its plot), and a panel what it
+alone changes. A panel's own value stays when the shared one changes, until you pick *Use the setting
+for all panels*. *Find*, above the inspector, goes to any setting by name.
 
-The tab shows only what reaches the figure kind's picture, so a few settings are not there
-for every kind:
+Each shows only what reaches that kind's picture, so a few settings are not there for every kind:
 
 - **Colorbar**: plan views, cross-sections and time–height panels. Joint distributions and
-  azimuthal means have their own *Colorbar* switch in *Layers → Plot*.
+  azimuthal means have their own *Colorbar* switch in *Plot*.
 - **Contour key**: plan views and cross-sections, or any figure while the key is on.
 - **Axes and ticks** on a 3D scene: only *Ticks point* and *Frame width*, which reach its
   colorbars. The scene's own labels and ticks are under *Look*.
@@ -19,7 +22,7 @@ for every kind:
 
 ### Style preset
 
-**Apply a style** at the top of the tab sets the look of the whole figure, every part of it, in one
+**Apply a style**, on the Figure node, sets the look of the whole figure in one
 go. It applies once: anything you change afterwards stays changed, and ↶ takes it back.
 
 | Preset | Fonts and labels | Frame lines | Export and width |
@@ -29,7 +32,7 @@ go. It applies once: anything you change afterwards stays changed, and ↶ takes
 | **Talk** | 14 pt sans-serif; labels 15 pt bold | 1.2 pt | PNG at 200 DPI; 10 in |
 | **Dark** | As Talk, on black with light text and axes | 1.2 pt | As Talk |
 
-The tab says what changed when a preset changes the width or the export. On *Dark*, whatever
+The line under the preview says what changed when a preset changes the width or the export. On *Dark*, whatever
 is drawn in black (contours, wind barbs, the first run's line, text) is drawn in white, and a
 hodograph stays a light card.
 
@@ -53,7 +56,7 @@ across; **x tick every** and **y tick every**; **Frame width**; **Grid style** (
 dashed, solid); and checkboxes for *Tick marks*, *Minor ticks*, *Grid lines* and *Equal x/y
 scale*.
 
-One panel can have labels of its own: in the **Tree** tab pick the panel and fill in *x
+One panel can have labels of its own: pick the panel in the tree and fill in *x
 label* or *y label* (blank: the labels here; a single space: no label).
 
 ### Panel labels
@@ -66,7 +69,7 @@ or above its left or right corner), *Size* (blank: 1.2 × the base size), *Bold*
   (a figure of one panel starts without one) until you tick or untick them yourself.
 - **Time label**: *Text* with `{min}` (minutes from time zero), `{model}` (model minutes),
   `{s}` (seconds) or `{hms}` (h:mm:ss), e.g. `t = {min:g} min`. Time zero is set for each
-  run, in [*Layers → Runs used*](figures-panels.md#runs). A figure saved with a *Minutes
+  run, on the tree's [**Runs** node](figures-panels.md#runs). A figure saved with a *Minutes
   counted from* still shows that box, which adds to the runs' time zeros; at 0 it goes away.
 - **Height label** (for panels at several heights): *Text* with `{z}` (the height, km)
   or `{k}` (the model level), e.g. `{z:g} km AGL`; blank gives `z = … km` or `k = …`.
@@ -95,22 +98,19 @@ Hidden for time series, soundings, distributions and vertical profiles, which ha
 | **Tick format**, **Tick size** | e.g. `%.1f`, `%d`, `%.0e`. |
 
 With several colorbars each takes its own label and ticks from where its colours are set:
-a fill layer (*Layers*), a time–height series (*Layers → Series*) or a panel's field
-(*Panels*, when the panels differ in field). A bar shared by several panels, such as one per
-row across two columns, takes the first label among them, whichever card it is on. The Style
-tab's label and ticks are for the bars that have none of their own.
+a fill layer or a time–height series. A bar shared by several panels, such as one per
+row across two columns, takes the first label among them, whichever layer it is on. The label and ticks here are for the bars that have none of their own.
 
 ### Legend
 
 What this section offers follows the panels. Time series, soundings, distributions,
 profiles, joint distributions and azimuthal means each draw their own legend: **Legends on**
 *Each panel* gives *Legend* (for soundings, *Legend (one sounding)*: several soundings always
-have one), *At*, *Columns* and *Frame*. These belong to the kind of panel shown, so a part
-that changes kind and back finds its settings again. Box plots and violins have no legend,
+have one), *At*, *Columns* and *Frame*. These belong to the kind of panel, on its node or on one panel. Box plots and violins have no legend,
 and a time–height panel lists only your own [legend entries](#legend-entries), so the section
 is hidden without them.
 
-Plan views, sections and 3D scenes have **Layer legend on** a panel or on the figure (this part), with its position (*At*, and
+Plan views, sections and 3D scenes have **Layer legend on** a panel or on the figure, with its position (*At*, and
 *Anchor x, y* to place it anywhere: the *At* corner of the legend sits at that point, in
 fractions of the panel, or of the figure for a figure legend; below 0 or above 1 is
 outside, e.g. *At: upper left*, *Anchor: 1.02, 1* just right of the panel), the panel
@@ -121,12 +121,11 @@ time-series, distribution and sounding panels (each panel's own *Legend* setting
 its entries on or off), and the key of a hodograph of its own, listing an entry shared by
 panels once (three hodographs with the same runs give one legend). A legend on the
 figure turns off every panel's own legend, also those of panels it does not list; on a
-panel, unticking *Panels' own legends* does the same. Either way a panel whose **Tree**
+panel, unticking *Panels' own legends* does the same. Either way a panel whose own
 *Legend* is *Yes* keeps its own (and a figure legend gathers it only when listed in
 *From panels*), so one panel can have a legend and the others none. The *outside*
 positions make room beside the panels. A hodograph's key has its own settings
-(*Hodograph → Key at*, *Key columns*, *Key frame*). For one panel alone, use the **Tree**
-tab: pick the panel, then *Legend of
+(*Hodograph → Key at*, *Key columns*, *Key frame*). For one panel alone, pick it in the tree, then *Legend of
 this panel* (shown or not, where and its anchor, columns, frame; a sounding's apply to
 both its skew-T legend and its hodograph key).
 
@@ -149,8 +148,9 @@ colours and lines. The fonts and sizes stay the editor's. For a dark figure also
 
 ## Annotate
 
-The **Annotate** tab adds text, markers, arrows, lines, boxes and circles. Each goes in
-every panel (leave *Panels* blank) or in the panels listed (e.g. `1, 3-4`).
+**Annotations**, on the Figure node or on a panel, adds text, markers, arrows, lines, boxes and
+circles. On the Figure node, each goes in every panel or in the panels listed; on a panel, in that
+panel. Annotations follow a panel that is copied or removed.
 
 ### Legend entries
 
@@ -162,13 +162,13 @@ after the panel's own entries, and shows even beside one line alone (unless the 
 *Legend* is off); in a plan view or section it goes in the layer legend. A figure legend
 gathers it with the rest, listing the same entry of several panels once.
 
-To leave a line out of the legend, clear its card's *Label*: a line without a label has
+To leave a line out of the legend, clear its *Label*: a line without a label has
 no legend entry. (A series of several runs keeps its run names, which tell its lines
 apart.)
 
 ### Placing by clicking
 
-Instead of typing positions, pick an item from the *Click …* list above the preview and
+Instead of typing positions, pick an item from the *Mouse* list above the preview and
 click the figure:
 
 - in a skew-T, a click gives a temperature and pressure;

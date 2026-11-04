@@ -81,7 +81,7 @@ browser without internet shows nothing. Tick *Plain text box*.
 only after you tick *Run the code*.
 
 **A figure of another run is missing its storm.** Each run has its own track. Set it in
-*Layers → Runs used* (its *Track file* lists the files cm1view finds), or put
+the tree's **Runs** node (its *Track file* lists the files cm1view finds), or put
 `storm_tracks/<run>.csv` where cm1view looks
 (`track_dirs`, `track_patterns`).
 

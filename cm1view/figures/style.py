@@ -67,8 +67,8 @@ class FigureStyle:
         self.tl_box = pn.widgets.Checkbox(name="White box")
         self.tl_t0 = _retired(_f(
             "Minutes counted from", 0.0, step=10,
-            description="From an older figure: adds to each run's time zero (Layers → Runs "
-                        "used), which is the place to set it. At 0 this box goes away"))
+            description="From an older figure: adds to each run's time zero (on the Runs "
+                        "node), which is the place to set it. At 0 this box goes away"))
         self.zl_on = pn.widgets.Checkbox(name="Height label")
         self.zl_fmt = pn.widgets.TextInput(name="Text (blank: z = … km / k = …)",
                                            description="{z}: the height (km), {k}: the "

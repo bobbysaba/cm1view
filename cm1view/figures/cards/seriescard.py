@@ -156,8 +156,8 @@ class SeriesCard(SeveralRuns):
         look_widgets(w, ent, ls=LINE_STYLES, lw=1.5, marker=True, axis=True)  # (time series)
         w["t0"] = _retired(_f(
             "Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
-            description="From an older figure: adds to its run's time zero (Layers → Runs "
-                        "used), which is the place to set it. At 0 this box goes away"))
+            description="From an older figure: adds to its run's time zero (on the Runs "
+                        "node), which is the place to set it. At 0 this box goes away"))
         w["panel"] = panel_widget(ent)
         w["runs"] = pn.widgets.MultiChoice(name="Runs", options=ed._series_run_opts(),
                                            value=[int(k) for k in (runs or [])]
@@ -217,7 +217,7 @@ class SeriesCard(SeveralRuns):
 
     def refresh_tracks(self):
         """Around the tracked storm: what the track of each of the card's runs gives (they
-        are set in Layers → Runs used)."""
+        are set on the Runs node)."""
         rows = getattr(self.ed, "run_rows", [])
         self.trk_note.visible = self.w["region"].value == "track" and bool(rows)
         if not self.trk_note.visible:
@@ -228,7 +228,7 @@ class SeriesCard(SeveralRuns):
         notes = [f"{html.escape(os.path.basename(rows[k]['path'].rstrip('/')))}: "
                  f"{self.ed._track_note(rows[k])}" for k in ks]
         self.trk_note.object = (f'<div class="cv-hint">{"; ".join(notes)}. Set a run\'s track '
-                                'in <b>Layers → Runs used</b>.</div>')
+                                'on the <b>Runs</b> node.</div>')
 
     # ---- run
     def _several(self):  # (a time-height card: one run)
@@ -372,7 +372,7 @@ class SoundingCard(TimeCard):
              _grid(w["kind"], w["x"], w["y"], w["avg"], w["auto_color"], w["color"],
                    (w["label"], 3), w["own_looks"]),
              _grid(*[w[f"{k}_{x}"] for k, *_ in SND_LINES for x in ("color", "ls", "lw")]),
-             _hint("Automatic colour: the run's colour (<b>Layers → Runs used</b>) when each "
+             _hint("Automatic colour: the run's colour (the <b>Runs</b> node) when each "
                    "sounding of the panel is from another run, else the next colour. Own line "
                    "looks set the temperature, dewpoint and parcel lines (a blank width: "
                    "automatic); the colour above stays on the barbs and hodograph marks. Keep "

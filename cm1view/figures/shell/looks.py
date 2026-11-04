@@ -1,5 +1,5 @@
 """The look settings in the inspector, from the settings table (figures/settings.py): each row's
-widget is a copy of the old editor's, shown from and written to the document at the scope of
+widget is a copy of the editor's, shown from and written to the document at the scope of
 the node picked.  A section's widgets are made when it is opened.
 
 Look resolves style, then kinds[kind], then the panel's opts (spec/doc.py), so:
@@ -19,6 +19,7 @@ import html
 import panel as pn
 
 from ...theme import ACCENT
+from ... import config
 from .. import draw as figdraw, settings as table
 from ..cards import _grid, _hint
 from ..cards.base import FIG_LOCS, LOCS, SECTION
@@ -633,8 +634,8 @@ def key_layer_widget(shell, doc, block, types, first):
 
 
 def sounding_extra(layout):
-    """What sounding settings show hangs on their neighbours and the layout, as the old editor's
-    _show_storm has it: {section: extra} for Sections."""
+    """What sounding settings show hangs on their neighbours and the layout: {section: extra} for
+    Sections."""
     def extra(by_key):
         def key(name):
             return by_key.get(f"skewt.{name}")
@@ -668,7 +669,7 @@ def sounding_extra(layout):
 
 def legend_reaches(doc):
     """Whether a figure-level legend has anything to list: not with only box plots, nor only
-    time-height panels without legend annotations (the old editor's _show_legend)."""
+    time-height panels without legend annotations ."""
     kinds = {p["kind"] for p in doc.get("panels") or []}
     if kinds == {"th"}:
         return any(a.get("kind") == "legend" for a in doc.get("annotations") or [])
@@ -676,6 +677,41 @@ def legend_reaches(doc):
         return Scope("dist")._layers_up(doc, "dist")[-1].get("dist", {}).get("plot") \
             not in ("box", "violin")
     return True
+
+
+def code_extra(by_key):
+    """A plain box beside the code's highlighted editor, for a browser without internet (the
+    editor comes from a CDN): both hold the same text, and which shows is remembered."""
+    editor = by_key["code.text"]
+    plain = pn.widgets.TextAreaInput(
+        name="Python, run after the figure is drawn", value=editor.value, height=200,
+        sizing_mode="stretch_width",
+        placeholder="e.g.\nax = axs[0]\nax.plot([-5, 5], [0, 0], 'w--', lw=1)\n"
+                    "ax.text(0.5, 1.02, 'my note', transform=ax.transAxes)",
+        stylesheets=["textarea { font-family: ui-monospace, Menlo, Consolas, monospace;"
+                     " font-size: 12px; }"])
+    box = pn.widgets.Checkbox(name="Plain text box (if the highlighted editor stays blank, e.g. "
+                                   "without internet)",
+                              value=config.state("figure_code_plain") == "1")
+
+    def show():
+        editor.visible, plain.visible = not box.value, bool(box.value)
+
+    def on_box(ev):
+        show()
+        config.set_state("figure_code_plain", "1" if ev.new else "")
+
+    def copy_to(other):
+        def put(ev):
+            if other.value != ev.new:
+                other.value = ev.new
+        return put
+
+    plain.param.watch(copy_to(editor), "value")
+    editor.param.watch(copy_to(plain), "value")
+    box.param.watch(on_box, "value")
+    show()
+    return [plain, box]
 
 
 def legend_extra(shell, kinds):
@@ -766,8 +802,7 @@ def panel_bar_card(ins, doc, pid):
 
 
 def dist_extra():
-    """What a distribution's settings show hangs on the kind of plot, as the old editor's
-    _show_dist_opts has it: {section: extra} for Sections."""
+    """What a distribution's settings show hangs on the kind of plot: {section: extra} for Sections."""
     def plot(by_key):
         def key(name):
             return by_key[f"dist.{name}"]
@@ -800,7 +835,7 @@ def dist_extra():
 
 
 def joint_extra():
-    """... and a joint distribution's: the old editor's _show_joint_opts."""
+    """... and a joint distribution's."""
     def plot(by_key):
         def key(name):
             return by_key[f"joint.{name}"]

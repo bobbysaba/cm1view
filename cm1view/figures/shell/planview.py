@@ -34,7 +34,7 @@ def _head(text):
 
 
 def new_layer(shell, kind):
-    """A new layer of a type, as the old editor starts one (a parcels one: the viewer's set
+    """A new layer of a type (a parcels one: the viewer's set
     not drawn yet; None if there is none)."""
     F = shell.fields
     field = None
@@ -121,6 +121,8 @@ class PlanPane:
             objs.append(_note("Panel" + ("s " if len(own) > 1 else " ") + ", ".join(own)
                               + " also draw" + ("" if len(own) > 1 else "s")
                               + " layers of their own: see the panel."))
+        if len(ids) > 1:
+            objs.append(self._look_card(doc, ids))
         objs += self._kind_sections(doc)
         looks = Sections(self.ins, Scope(kind), [kind], self._look_extras())
         objs += [c for c in (looks.card(s) for s in KIND_SECTIONS[kind]) if c is not None]
@@ -129,6 +131,41 @@ class PlanPane:
             objs.append(_note("Set in a panel alone, so changes here skip it: panel"
                               + ("s " if len(differ) > 1 else " ") + ", ".join(differ) + "."))
         return f"All {nodes.kind_name(kind, len(mine))}", objs
+
+    def _look_card(self, doc, ids):
+        """Copying one shared layer's look onto others."""
+        fields = self.shell.fields
+
+        def name(n, lid):
+            lay = doc["layers"][lid]
+            field = lay.get("field")
+            word = f": {fields[field].label}" if field and field in fields else ""
+            return f"{n + 1}. {TYPE_LABEL.get(lay['type'], lay['type'])}{word}"
+
+        opts = {name(n, lid): lid for n, lid in enumerate(ids)}
+        src = pn.widgets.Select(name="Copy the look of", options=opts)
+        to = pn.widgets.MultiChoice(name="To layers", options=opts)
+        go = pn.widgets.Button(name="Copy", button_type="light", button_style="outline", height=32,
+                               margin=(4, 4))
+        go.on_click(lambda e: self.copy_look(src.value, to.value))
+        return pn.Card(_note("Colours, lines, style and colorbar of one layer onto others of its "
+                             "type; the colour range, levels and labels too when they show the "
+                             "same field."),
+                       _grid(src, (to, 2)), go, title="Copy a layer's look", collapsed=True,
+                       **SECTION)
+
+    def copy_look(self, src, to):
+        """Shared layer src's look on shared layers `to`, those of its type (one undo step)."""
+        doc = self.shell.doc
+        kept = [lid for lid in to if lid != src and doc["layers"][lid]["type"] == doc["layers"][src]["type"]]
+        if not kept:
+            self.shell.say("Choose layers of the same type to copy to.", True)
+            return
+
+        def apply(d):
+            for lid in kept:
+                d["layers"][lid] = fg.copy_look(d["layers"][src], d["layers"][lid])
+        self.shell.edit(apply, node=self.shell.node)
 
     def _shared(self, fn, lid, *args):
         self.shell.edit(lambda d: fn(d, self.kind, lid, *args), node=self.shell.node)
@@ -531,7 +568,7 @@ class PlanPane:
 
 def _fields_colorbar(doc, row_dim, col_dim):
     """Panels of different fields can't share one colorbar: one per row, column or panel, as
-    the old layout's grid of fields did."""
+    a grid of fields does."""
     if "fields" not in (row_dim, col_dim):
         return
     style = doc.setdefault("style", {})

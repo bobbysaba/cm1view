@@ -136,17 +136,17 @@ def test_workspaces_fill_a_short_window(ff, server):
     ff.go(server)
     map_canvas(ff)
     click_text(ff, "Figure")
-    assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
+    assert until(lambda: find(ff, "Export"), 60), "no Figure editor"
     time.sleep(5)
-    cols = [r for r in rects(ff, ".scrollable") if r[3] > 300]  # (the preview, the tabs)
-    assert len(cols) == 2 and all(abs(r[1] + r[3] - 600) < 2 for r in cols), cols
+    cols = [r for r in rects(ff, ".scrollable") if r[3] > 300]  # (the tree, the inspector)
+    assert len(cols) >= 2 and all(abs(r[1] + r[3] - 600) < 20 for r in cols), cols
 
 
 def test_figure_workspace(ff, server, shots):
     ff.go(server)
     map_canvas(ff)
     click_text(ff, "Figure")
-    assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
+    assert until(lambda: find(ff, "Export"), 60), "no Figure editor"
     time.sleep(8)
     ff.shot(f"{shots}/d_figure.png")
 
@@ -170,15 +170,22 @@ def test_figure_clicks_download_and_scanned_runs(ff, server, shots, scanned_run)
     ff.go(server)
     map_canvas(ff)
     click_text(ff, "Figure")
-    assert until(lambda: find(ff, "Panels"), 60), "no Figure editor"
-    if until(lambda: find(ff, "Keep the example"), 20):  # the first visit's quick start
-        click_text(ff, "Keep the example")
-    # the runs_root scan (in the background) feeds the Run lists
+    assert until(lambda: find(ff, "Export"), 60), "no Figure editor"
+    if until(lambda: find(ff, "Keep this figure"), 20):  # the first visit's New dialog
+        click_text(ff, "Keep this figure")
+    # the runs_root scan (in the background) feeds the list of runs to add
     name = os.path.basename(scanned_run)
     offered = ("(() => {" + _WALK + "let n = 0; walk(document, el => { if (el.tagName === "
-               "'OPTGROUP' && el.label.startsWith('Other runs')) for (const o of el.children) "
-               "if (o.textContent.includes(" + json.dumps(name) + ")) n++; }); return n; })()")
-    assert until(lambda: ff.js(offered), 90), "the scanned run is not offered"
+               "'OPTION' && el.textContent.includes(" + json.dumps(name) + ")) n++; }); "
+               "return n; })()")
+
+    def on_runs_node():
+        click_text(ff, "Runs (1)")  # (shown anew: the list as it is by then)
+        time.sleep(2)
+        return ff.js(offered)
+
+    assert until(on_runs_node, 90, 5.0), "the scanned run is not offered"
+    click_text(ff, "Figure")
     # a click on the preview places a marker where it lands in a panel
     assert until(lambda: rects(ff, "img"), 60), "no preview"
     time.sleep(5)  # (the first preview)

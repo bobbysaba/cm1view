@@ -1,5 +1,5 @@
 """Annotations in the inspector: on the Figure node all of them, on a panel those drawn in it, each
-over the old editor's row but naming panels by id, from a list of their letters."""
+over an AnnotationRow but naming panels by id, from a list of their letters."""
 
 import panel as pn
 

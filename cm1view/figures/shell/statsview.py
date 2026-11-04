@@ -83,7 +83,7 @@ class StatsPane(EntryPane):
         return None
 
     def _tool_of(self, entries):
-        """The old editor's lists of the viewer's tool, in the viewer's run."""
+        """The lists of the viewer's tool, in the viewer's run."""
         rid = own_run(self.shell)
         out = []
         for e in entries:

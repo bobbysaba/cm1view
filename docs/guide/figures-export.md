@@ -1,7 +1,8 @@
 # Export, animations and the script
 
-**Export**, above the preview, saves the figure ([Figures](figures.md#saving)). The **File**
-tab holds the animation, templates and reopening a saved figure.
+**Export**, above the preview, saves the figure ([Figures](figures.md#saving)), and its dialog also
+holds animations, tables as text, templates, and saving the figure for other runs. Saved figures
+reopen from the [New dialog](figures.md#the-new-dialog).
 
 ## Image size
 
@@ -18,27 +19,25 @@ chosen DPI.
 
 ## Reopening a saved figure
 
-Pick the figure from *Saved figures* and press **Open**. Saving always keeps the figure's
-settings, so the list holds every figure saved in the *Figures* folder (⚙ Settings): this run's folder
-first, then the other runs' folders and the last folder used for a figure of several
-runs, newest first in each. A figure saved elsewhere: give the path of its `_spec.json`
-(in the `_src/` folder next to the image) under *A saved figure*; its image or script
-path works too. The editor then shows the figure with all its settings, ready to keep
-editing, and *Save as* is where it was saved, so saving again replaces it. The quick start shows the same figures as thumbnails ([Figures](figures.md#the-quick-start)).
+Saving always keeps the figure's settings, so the [New dialog](figures.md#the-new-dialog) lists
+every figure saved in the *Figures* folder (⚙ Settings) as thumbnails: click one. A figure saved
+elsewhere: give the path of its `_spec.json` (in the `_src/` folder next to the image) under *Or open
+one by its path*; its image or script path works too. The editor then shows the figure with all its settings, ready to keep
+editing, and *Save as* is where it was saved, so saving again replaces it. The New dialog shows the same figures as thumbnails ([Figures](figures.md#the-quick-start)).
 If a run's `namelist.input` changed since the figure was saved (its hash, below), the
 message says so: the figure is drawn from the run's data as it is now.
 
 A figure you have not saved is not lost if the page closes. Each change you see drawn is kept
 for that run, and the next time you open the Figure workspace the new-figure dialog offers
-**Reopen the last figure**. With *Live* off, it is kept when you press *Redraw*. This copy lives in the
+**Reopen the last figure**. With *Auto-redraw* off, it is kept when you change it. This copy lives in the
 Cache folder (⚙ Settings) and holds one figure per run, plus the one before it, so it is a safety net: use
 **Export** to keep a figure.
 
 ## Templates
 
-*Save as template* keeps a figure's panels, layers and look **without its runs**, in
-`templates/` next to the settings file. *Apply to this run*, here or in the
-[quick start](figures.md#the-quick-start), opens the template on the run shown:
+*Export → Template → Save as template* keeps a figure's panels, layers and look **without its runs**, in
+`templates/` next to the settings file. *Apply to this run*, in the
+[New dialog](figures.md#the-new-dialog), opens the template on the run shown:
 
 - its times are moved to the map's time and kept as far apart as they were (each at the
   nearest output; panels past the run's end stay empty);
@@ -49,12 +48,12 @@ Use a template to make the same figure for each of several runs (or `cm1view ren
 
 ## Animations
 
-**File → Animation (GIF)** saves plan views, cross-sections, soundings (skew-T and
+**Export → Animation** saves plan views, cross-sections, soundings (skew-T and
 hodograph), distributions, profiles, joint distributions, azimuthal means and 3D scenes as
 animated GIFs (a 3D scene's box can follow the storm and its camera orbit: see
 [3D scenes](figures-panels.md#3d-scenes)). Time–height plots and time series show every
-time already: they cannot be animated alone, and in a figure of parts they stay as they
-are while the other parts step together.
+time already: they cannot be animated alone, and beside other panels they stay as they
+are while those step together.
 
 Each frame redraws the figure exactly as it is set up, a few outputs later. Every panel
 steps forward together, and storm-centred panels, sections and soundings follow the storm
@@ -63,8 +62,8 @@ put. A profile, joint distribution or azimuthal mean over a time window keeps it
 and the animation ends when the window reaches the end of the run.
 
 To hold something still under the frames, tick **Keep this time in animations** on a
-sounding, distribution, profile, joint distribution or azimuthal mean card (or on a layer's
-own time in the Tree tab). Say two soundings share a panel, one at t = 0 dashed: hold it and
+sounding, distribution, profile, joint distribution or azimuthal mean (or on a layer's
+own time on its panel). Say two soundings share a panel, one at t = 0 dashed: hold it and
 the other moves over it. The panel's time label and the frame count follow what steps, and
 the legend names each entry's time.
 
@@ -84,13 +83,13 @@ later one's settings (you're asked first). Reopen it from the saved-figure list,
 path of the spec or the GIF. *Step*, *Frames per second* and the other settings above are not
 kept in it, and neither is a script or data: an animation has no one set of arrays.
 
-**Format** (new layout's Export dialog) chooses GIF or MP4. An MP4 keeps every colour
+**Format** chooses GIF or MP4. An MP4 keeps every colour
 (a GIF has 256 per frame, chosen separately for each) and is much smaller, but needs an
 encoder: `ffmpeg` on your `PATH` (on a cluster, often `module load ffmpeg`), or the
 optional package `imageio-ffmpeg` (`pip install cm1view[video]`, which carries its own
 copy). With neither, the dialog says so and GIF still works. The video is `<name>.mp4`
 (H.264, `Loop` does not apply); frames start from the saved time, not the preview
-scrubber's. With the old layout, or to make a video yourself from the saved frames:
+scrubber's. To make a video yourself from the saved frames:
 `ffmpeg -framerate 4 -i name_%03d.png -pix_fmt yuv420p name.mp4`. **Stop** abandons a
 running animation.
 
@@ -101,7 +100,7 @@ an arrow drawn for one frame is drawn for all of them.
 Scales that normally fit the data stay still too, using a range that holds every frame:
 the value and count axes of distributions, the value axis of profiles, the axes and
 shading of joint distributions, the shading of azimuthal means, and a hodograph centred on
-*fit*. Limits you set in *Layers* are kept. Extra contour lines of an azimuthal mean with
+*fit*. Limits you set on a layer are kept. Extra contour lines of an azimuthal mean with
 automatic levels still pick them per frame: set *Levels* to keep them the same.
 
 A single panel (1 × 1) is the usual choice, but any grid works: a 1 × 2 figure of two
@@ -139,9 +138,9 @@ with it), a template's file, or a template's name (as in *Templates*).
 | `--out PATH` | Where to save. Its extension, if an image format's, sets the format. It may hold `{run}` (the run's folder name), `{parent}` (the folder above it) and `{name}` (the figure's or template's name); several runs need `{run}` or `{parent}`. Default: where the figure was saved; with `--run`, `<Figures folder>/<parent>_<run>/<name>`. |
 | `--format`, `--dpi` | The image's format and resolution (default: the figure's export settings). |
 | `--bundle` | Also the script, data and spec, as **Also the script and data** in the *Export* dialog. |
-| `--gif` | An animation, as **File → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
+| `--gif` | An animation, as **Export → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
 | `--overwrite` | Replace files that are already there. Without it, nothing is drawn if any is. |
-| `--code` | Run the figure's own code (*Annotate → Your own code*). The editor asks before running code from a file; `render` leaves it off unless told. |
+| `--code` | Run the figure's own code (*Your own code*). The editor asks before running code from a file; `render` leaves it off unless told. |
 | `--config`, `--cache-gb`, `--workers` | As for the viewer. |
 
 A storm track from the viewer's *Track* tab is not saved with a figure: `render` uses the
@@ -179,7 +178,7 @@ as they were. To redraw: `python name.py`. To reopen it in the viewer, open its 
 
 ## Style presets (in scripts)
 
-In the editor, the presets are in [*Style → Apply a style*](figures-style.md#style-preset). In a
+In the editor, the presets are in [*Apply a style*](figures-style.md#style-preset), on the Figure node. In a
 script, `cm1view.figures.spec.apply_style(spec, name)` returns a copy of a figure's spec with
 a preset applied, e.g. to restyle a saved figure's `_spec.json` for a journal or a talk (an
 exported figure script does not import cm1view):

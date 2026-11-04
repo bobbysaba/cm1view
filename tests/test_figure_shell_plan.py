@@ -774,3 +774,19 @@ def test_the_field_lists_follow_the_documents_runs(shell, demo_run):
     shell.undo()
     assert len(shell.doc["runs"]) == 1
 
+
+def test_copy_a_shared_layers_look(shell):
+    doc = shell.doc
+    ids = list(doc["layers"])
+    a, b = ids[0], ids[1]
+    was = doc["layers"][b]
+    assert doc["layers"][a]["type"] != was["type"]
+    plan = shell.inspector.panes["plan"]
+    plan.copy_look(a, [b])  # (another type: nothing)
+    assert doc["layers"][b] == was
+    lid = de.add_shared(doc, "plan", dict(doc["layers"][a], cmap="viridis"))
+    plan.copy_look(a, [lid])
+    assert shell.doc["layers"][lid]["cmap"] == shell.doc["layers"][a]["cmap"]
+    shell.undo()
+    assert shell.doc["layers"][lid]["cmap"] == "viridis"
+

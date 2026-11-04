@@ -1,5 +1,5 @@
 """The card of one distribution of a distribution figure, and the row of one
-annotation (Annotate tab)."""
+annotation."""
 
 import panel as pn
 

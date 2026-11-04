@@ -1,4 +1,4 @@
-"""The card of one layer of a figure panel (Layers tab)."""
+"""The card of one layer of a figure panel."""
 
 from types import SimpleNamespace
 
@@ -432,7 +432,7 @@ class LayerCard:
         if t == "shade":
             w["outline"].visible = w["lw"].visible = w["outline_on"].value
             w["hatch_lw"].visible = bool(w["hatch"].value)
-        if t == "track":  # (each panel's run's colour: Layers → Runs used)
+        if t == "track":  # (each panel's run's colour: the Runs node)
             w["color"].visible = not w["run_color"].value
         if t == "parcels":
             by = bool(w["cvar"].value)

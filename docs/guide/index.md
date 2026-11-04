@@ -14,7 +14,7 @@ one area each.
 | [3D](3d.md) | Isosurfaces, vectors and streamlines in a 3D scene |
 | [Series and distributions](series.md) | A field reduced over a region at every time; all values at one time |
 | [Parcels](parcels.md) | Choosing parcels from CM1's parcel output; trajectories and heads on the map, cross-section and 3D view, on the grid or relative to the storm; plots of their values; 3D fields sampled along them; the Lagrangian w budget; export to netCDF / CSV; in figures (layers, 3D scenes, time series) |
-| [Figures](figures.md) | The quick start and saving; then [panels](figures-panels.md), [layers](figures-layers.md), [style and annotations](figures-style.md), and [export, animations and the script](figures-export.md) |
+| [Figures](figures.md) | The three panes, the New dialog and saving; then [panels](figures-panels.md), [layers](figures-layers.md), [style and annotations](figures-style.md), and [export, animations and the script](figures-export.md) |
 | [Notes on the fields](fields.md) | Winds, parcels, derived fields, pressure decomposition |
 | [Worked examples](recipes.md) | Short walkthroughs that combine the tools |
 | [Mouse and keyboard](shortcuts.md) | Every click, drag and shortcut in one place |

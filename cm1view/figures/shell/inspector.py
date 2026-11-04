@@ -24,7 +24,7 @@ from .entryview import EntryPane
 from .findview import Finder
 from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure node)
 from .insetview import InsetPane
-from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget, kind_bar_rows,
+from .looks import (FIGURE_SECTIONS, code_extra, PANEL_KEYS, Scope, Sections, key_layer_widget, kind_bar_rows,
                     legend_extra, legend_reaches, panels_differ)
 from .planview import PlanPane
 from .sceneview import ScenePane
@@ -194,6 +194,7 @@ class Inspector:
                                                         ("contour",), "First contours")],
             "Maximum and minimum": lambda by: [key_layer_widget(
                 self.shell, doc, "extremes", figdraw.EXTREME_TYPES, "First fill")],
+            "Your own code": code_extra,
             **legend_extra(self.shell, kinds)})
         objs.append(self._presets())
         objs += [c for c in (looks.card(s) for s in FIGURE_SECTIONS)

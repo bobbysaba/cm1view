@@ -63,8 +63,8 @@ class ParcelSeriesCard:
         w["panel"] = panel_widget(ent)
         w["t0"] = _retired(_f(
             "Time zero (min)", float(ent.get("t0_min") or 0.0), 110, step=1.0,
-            description="From an older figure: adds to its run's time zero (Layers → Runs "
-                        "used), which is the place to set it. At 0 this box goes away"))
+            description="From an older figure: adds to its run's time zero (on the Runs "
+                        "node), which is the place to set it. At 0 this box goes away"))
         look_widgets(w, ent, ls=LINE_STYLES, lw=1.5, marker=True, axis=True)
         self.title = pn.pane.HTML(margin=(6, 4, 0, 4))
         self.th_note = _hint("Parcel series are drawn in time-series figures only.")

@@ -277,7 +277,7 @@ class SceneCards:
 
     @staticmethod
     def _number(key, value):
-        """A setting of Region as the document holds it (blank: as the old editor reads it)."""
+        """A setting of Region as the document holds it (blank: as the scene reads it)."""
         if key == "res":
             return int(value or 0)
         return float(value or dict(ztop=15.0, exag=1.0, smooth=0.0)[key])

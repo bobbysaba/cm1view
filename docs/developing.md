@@ -35,8 +35,10 @@ processes and renders figures.
   the session) and `viewer` (a fresh Viewer on the demo supercell at its first storm
   time). `wait(pred)` polls background work; `tap(v, x, y)` is a map click. For the
   figure tests (`tests/test_figure*.py`): `ed` (the viewer's figure editor, no auto
-  render), `coarse_run` (a second run with other output times), `render(ed)`, and the
-  spec helpers `difference_layer`, `swath_layer`, `edited_v1`.
+  render), `coarse_run` (a second run with other output times), `new_spec(ed, kind, rows, cols)`
+  (the spec the New dialog starts from), `doc_now(ed)`, `put(s, widget, value)`,
+  `render(ed, figure)`, `settled(ed, figure)` and the spec helpers `difference_layer`,
+  `swath_layer`, `edited_v1`.
 
 ### Which test file covers what
 
@@ -52,9 +54,12 @@ processes and renders figures.
 | `test_series.py`, `test_dist.py` | Series (cache, time–height, files) and distributions |
 | `test_parcels.py` | Parcel output: reads, lattice, selections, sets, trajectory cache, heads, wraps, split files; the Parcels panel |
 | `test_pdecomp.py` | The pressure decomposition, on copies of demo files |
-| `test_figure_shell.py` | The figure editor's new layout: its tree, picking, edits and undo, the switch |
-| `test_figure_shell_plan.py` | Plan views there: shared layers and overrides, heights, time zero, Fill panels, look settings, the quick start |
-| `test_figure.py`, `test_figure_layers.py`, `test_figure_runs.py`, `test_figure_export.py`, `test_figure_spec.py` | The figure editor: widgets ↔ spec, layers, several runs, export and animation, spec upgrades |
+| `test_figure_shell.py` | The figure editor: its tree, picking, edits and undo |
+| `test_figure_shell_plan.py` | Plan views there: shared layers and overrides, heights, time zero, Fill panels, look settings, the New dialog |
+| `test_figure_shell_*.py` | The other kinds there, mixed grids, insets, Find, the scrubber, Export, other runs |
+| `test_figure_doc.py` | The document: conversion from older figures, drawing from it |
+| `test_figure_drawing.py` | What figures draw and save: each kind's plots, tables, series, animations, the script, own code |
+| `test_figure.py`, `test_figure_layers.py`, `test_figure_runs.py`, `test_figure_export.py`, `test_figure_spec.py` | Without the editor: thumbnails, layer data, runs and time zeros, frames, spec upgrades |
 | `test_legend.py` | Legends of blocks and panels |
 | `test_images.py` | Image baselines and save–load–draw |
 | `test_settings.py`, `test_picker.py`, `test_ui.py` | Settings, the run picker, layout logic |
@@ -144,41 +149,45 @@ figures/                  the Figure workspace
   batch.py                `cm1view render`: saved figures and templates drawn
                           without the viewer (images, bundles, GIFs); the GIF frame
                           helpers anim.py uses
-  shell/                  the editor's new layout on the document, shown only with
-                          CM1VIEW_FIGURE_SHELL set until every kind has moved there
+  shell/                  the editor on the document: what is on the page
     nodes.py              what the tree holds, what a node reaches (no widgets)
     treeview.py           the tree: one widget, rows drawn in the browser
     docedit.py            changes to a document: layers shared or a panel's, what differs,
-                          heights, time zero, filling panels (no widgets)
-    layerrow.py           a layer in the inspector: a LayerCard on the document
+                          heights, time zero, filling panels, the grid, size (no widgets)
+    layerrow.py           a layer in the inspector: a card on the document (CardHost)
     looks.py              look settings at the node's scope, from the settings table
-    planview.py           plan views in the inspector, and the Fill panels tool
+    gridview.py, planview.py, xsecview.py, entryview.py, seriesview.py, statsview.py,
+    sceneview.py, insetview.py, annotview.py
+                          what each node shows in the inspector
     inspector.py          the settings of what is picked
+    findview.py           Find, and what is marked as changed
+    placing.py            clicks and drags in the preview
+    exportview.py, multirun.py
+                          the Export dialog; saving for other runs
+    scrub.py, vision.py   the preview's time slider and colour-vision preview
     frame.py              FigureShell: panes, document, undo, preview
-  editor.py               the Figure workspace editor (FigureEditor): putting the
-                          widgets together, wiring, layer cards, rendering the preview
-  cards/                  its constants, widget helpers and cards (cards.<name> for any
-                          module's)
+  editor.py               FigureEditor: what the shell works with, one mixin a module below
+  cards/                  constants, widget helpers and the cards the inspector embeds
+                          (cards.<name> for any module's)
     base.py               choices, constants and small widget helpers
     layercard.py          LayerCard
     seriescard.py         SeriesCard, SoundingCard
     distcard.py           DistCard, AnnotationRow
-  widgets.py              editor mixin: the widgets of the Panels, Layers, Annotate and
-                          File tabs, and the Export dialog
-  specio.py               editor mixin: spec <-> widgets (set_spec, collect), undo / redo
-  settings.py             table of figure-level settings (spec key, widget, section, kinds,
-                          default) that set_spec and collect go through
-  times.py                editor mixin: the panels' times and titles
-  panelopts.py            editor mixin: the Panels tab's reactions (fields, heights,
-                          layout, size, kind, area, automatic titles)
-  runs.py                 editor mixin: the Runs tab
-  sources.py              editor mixin: new figures from the viewer, series / sounding /
-                          distribution lists (their data: render.py)
-  export.py               editor mixin: saving and reopening figures
-  quick.py                editor mixin: the quick start (new figure dialog)
-  anim.py, click.py,      editor mixins: animation, click-to-place, combining panels,
-  combo.py, style.py,     the Style tab, styles and templates, the figure tree
-  tree.py
+  settings.py             table of figure-level settings: spec key, widget, section, kinds,
+                          default
+  widgets.py, style.py, scene.py
+                          editor mixins: the widgets settings are copied from (looks clones
+                          them, none is on the page), templates, what a scene takes from the
+                          viewer
+  runs.py                 editor mixin: runs a figure could add, track words; RunLists for cards
+  sources.py              editor mixin: new figures from the viewer's tools, a new panel's
+                          entries (their data: render.py)
+  export.py               editor mixin: saving, reopening, autosave
+  quick.py                editor mixin: the New dialog
+  anim.py                 editor mixin: animations
+  click.py                the preview image widget; where clicks land
+  combo.py                figures of parts, an older form: combine, for conversion and tests
+  times.py                helpers for model times and typed heights
 
 tests/                    pytest suite
 docs/                     these pages

@@ -55,7 +55,7 @@ GRID_DIMS = {"— (fill row by row)": "none", "Runs": "runs", "Sections": "secti
              "Times": "times", "Fields": "fields", "Heights": "heights"}  # (rows / columns)
 QUICK_VARY = {"Time": "times", "Field (one time)": "fields", "Height (one time)": "heights",
               "Run (one time)": "runs",
-              "Nothing (alike panels)": "none"}  # (the quick start: panels fill the grid)
+              "Nothing (alike panels)": "none"}  # (the New dialog: panels fill the grid)
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
               "track": "Storm track", "line": "Section line", "sector": "Sector",

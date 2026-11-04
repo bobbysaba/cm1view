@@ -238,8 +238,8 @@ Sessions keep the section, 3D and plot settings too.
 Plan-view and cross-section figures take a **Parcels** layer. *From the map* and *From
 the cross-section* (Figure editor) add one layer for each of the viewer's sets, drawn as
 the viewer draws them: colour, tails, heads, line width, opacity, and on a section the
-distance and which tails. In the **Layers** tab, *+ Parcels* adds the next set not drawn
-yet; a panel's own layers (the panel tree) can add one too.
+distance and which tails. On the kind's node, *Parcels* in *Add a layer* adds the next set not drawn
+yet; a panel's own layers can add one too.
 
 A layer keeps the **rule** that chose its set (the time, box, height range, point and
 radius, value range and cap), not the parcels themselves. The figure chooses them again
@@ -264,7 +264,7 @@ plan view, the parts of tails well outside the panel are left out. When a layer 
 nothing to draw (no parcel output in its run, no parcels meeting the rule), the
 preview's note says so.
 
-A **3D scene** figure draws parcel sets too (Layers → *Parcels*): tails as lines and
+A **3D scene** figure draws parcel sets too (*Parcels*, on the scene): tails as lines and
 heads as balls at the scene's time, only inside the scene's region and below its top
 (the lines break where they leave it). *Copy the 3D view* and the photo icon on the 3D
 box in the items tray bring the viewer's sets along when the 3D view shows them (*In
@@ -275,9 +275,9 @@ parcels are drawn, computes no isosurfaces again.
 
 ### Parcel series
 
-A **time-series** figure draws a parcel variable over the parcel times: **+ Parcels**
-(Layers tab, with parcel output) adds a card of the viewer's next set not drawn yet (or
-a saved set), with *w* to start, in the last card's panel. The card picks its **Run**,
+A **time-series** panel draws a parcel variable over the parcel times: **+ Parcels**
+(with parcel output) adds the viewer's next set not drawn yet (or a saved set), with *w* to
+start. It picks its **Run**,
 *Parcels* (another viewer set or a saved one), *Variable* and *Plot*: the value, or
 *d/dt along the parcel*, *Change since the set's time* or *∫ dt since the set's time*
 (the time when the set was chosen: its rule's time, else the first parcel time). At

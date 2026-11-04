@@ -1,6 +1,5 @@
 """The card of one cross-section of a figure (spec["sections"]): in a section figure
-one panel's (Layers tab: its run, time, section and panel), in a plan view one
-of the sections its Section line layer draws (Panels tab → Area)."""
+one panel's section, in a plan view one of the sections its Section line layer draws."""
 
 import panel as pn
 

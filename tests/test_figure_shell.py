@@ -260,3 +260,18 @@ def test_every_kind_opens_and_every_node_shows(shell):
         for row in shell.tree.items:
             shell.select(row["id"])
             assert shell.inspector.body.objects, (kind, row["id"])
+
+
+def test_the_plain_code_box_holds_the_same_code():
+    import panel as pn
+    from cm1view.figures.shell.looks import code_extra
+    editor = pn.widgets.TextInput(value="x = 1")
+    plain, box = code_extra({"code.text": editor})
+    assert plain.value == "x = 1"
+    box.value = True
+    assert plain.visible and not editor.visible
+    plain.value = "y = 2"
+    assert editor.value == "y = 2"
+    box.value = False
+    assert editor.visible and not plain.visible
+
