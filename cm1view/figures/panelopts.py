@@ -574,7 +574,8 @@ class FigurePanelOpts:
                 bottom += 0.8
                 gy += 0.8 if mode in ("each", "row") else 0.0
         pw = max(0.3, (w - left - right - (c - 1) * gx) / c)
-        return round(max(1.0, bottom + top + r * pw * self._panel_shape(s) + (r - 1) * gy), 2)
+        shape = s.get("shape") or self._panel_shape(s)  # (given: panels of several shapes)
+        return round(max(1.0, bottom + top + r * pw * shape + (r - 1) * gy), 2)
 
     def _on_kind(self, render_=True):
         kind = self.kind.value

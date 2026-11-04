@@ -995,9 +995,12 @@ def place_section(doc, pid, a, b):
     return sid
 
 
-def set_area(doc, box, kind="plan"):
-    """The kind's panels show the fixed box [x0, x1, y0, y1] (grid km)."""
-    k = doc.setdefault("kinds", {}).setdefault(kind, {})
+def set_area(doc, box, kind="plan", pid=None):
+    """The kind's panels, or panel pid alone, show the fixed box [x0, x1, y0, y1] (grid km)."""
+    if pid is None:
+        k = doc.setdefault("kinds", {}).setdefault(kind, {})
+    else:
+        k = panel_by_id(doc, pid).setdefault("opts", {})
     k["domain"] = dict(k.get("domain") or {}, mode="box", box=[round(float(v), 2) for v in box])
 
 

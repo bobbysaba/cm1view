@@ -377,11 +377,25 @@ class FigureShell:
                  size=doc["size"], suptitle=doc.get("suptitle") or "",
                  titles=[p["title"] for p in doc["panels"] if p.get("title")],
                  row_titles=[p["rowlabel"] for p in doc["panels"] if p.get("rowlabel")])
+        if any("domain" in (p.get("opts") or {}) for p in doc["panels"]):
+            s["shape"] = self._mean_shape(res, grid, s)
         if q["kind"] == "table":  # (its tallest table's rows: entries by their panel's place)
             cols = int(grid.get("cols", 1))
             s["tables"] = [dict(lay, panel=_cell(p)[0] * cols + _cell(p)[1])
                            for p in res["panels"] for lay in p["layers"]]
         return self.ed.fit_height(s)
+
+    def _mean_shape(self, res, grid, s):
+        """Plan views with areas of their own: a row is as tall as its tallest panel, so the
+        figure's height goes by the mean of those (a row with no panel: as the first panel)."""
+        tall = {}
+        for q in res["panels"]:
+            shape = self.ed._panel_shape(figdraw.panel_view(res, q))
+            r = _cell(q)[0]
+            tall[r] = max(tall.get(r, 0.0), shape)
+        first = self.ed._panel_shape(s)
+        rows = int(grid.get("rows", 1))
+        return sum(tall.get(r, first) for r in range(rows)) / max(rows, 1)
 
     # ------------------------------------------------------------ the document's runs
     def _sync_fields(self):

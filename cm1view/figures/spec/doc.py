@@ -17,7 +17,8 @@
 A panel's layers are {ref: id, over: {keys}} or a whole layer of its own; soundings, series,
 distributions, ... are layers of their own.  A panel's z and zmode are its height label: the
 heights of its layers are in the layers.  Look resolves style, then kinds[kind], then the
-panel's opts.  A panel's letter is blank for its place in reading order.  Panel ids are
+panel's opts (a plan view's own area: opts {domain: {...}, coords}, merged over the kind's).  A
+panel's letter is blank for its place in reading order.  Panel ids are
 integers (the keys of the plotted arrays, in saved .npz files too); ids never change, so
 nothing is renumbered when a panel, layer or run moves or goes.
 

@@ -90,6 +90,10 @@ class PlanPane:
     def _look_extras(self):
         return {"Area": area_extra(self.shell, Scope(self.kind))}
 
+    def _panel_extras(self, scope):
+        """Its own area, for a plan view (PANEL_KEYS: the others' Area, if any, is rows alone)."""
+        return {"Area": area_extra(self.shell, scope)} if self.kind == "plan" else {}
+
     def kind_objs(self, doc):
         kind = self.kind
         mine = de.panels_of(doc, kind)
@@ -336,7 +340,7 @@ class PlanPane:
     def _panel_looks(self, doc, pid):
         """The panel's own look: what it inherits, each setting to change here."""
         scope = Scope(self.kind, pid)
-        looks = Sections(self.ins, scope, [self.kind])
+        looks = Sections(self.ins, scope, [self.kind], self._panel_extras(scope))
         objs = []
         for section, keys in PANEL_KEYS[self.kind].items():
             card = looks.card(section, only=keys)

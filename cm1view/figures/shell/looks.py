@@ -90,6 +90,11 @@ PANEL_KEYS["azim"] = {**_own_rows("azim", "azim", "Plot"), **PANEL_KEYS["plan"]}
 PANEL_KEYS["table"] = {**_own_rows("table", "table", "Table"),
                        "Panel labels": PANEL_KEYS["plan"]["Panel labels"]}
 PANEL_KEYS["scene"] = {"Panel labels": PANEL_KEYS["plan"]["Panel labels"]}  # (axes: it has none)
+# (a plan view's own area: its arrays are read with its view.  Added last, so that no other kind
+# takes it from "plan" above: a cross-section's height and x axis are its Area, and every other
+# kind's region is in its entries or, for a scene, its own box.)
+AREA_OF_A_PANEL = ("domain.mode", "domain.half", "domain.box", "coords")
+PANEL_KEYS["plan"] = {"Area": AREA_OF_A_PANEL, **PANEL_KEYS["plan"]}
 # (shown by the sounding pane, as the layout has them)
 LAYOUT_HIDES = {"Skew-T": ("hodo",), "Hodograph": ("skewt",)}
 LEFT_OUT = ("legend.panel", "legend.panels")  # (panels by id, not place: legend_extra)
@@ -254,7 +259,8 @@ class Scope:
         out = []
         for k in keys:
             block, _, key = k.rpartition(".")
-            if isinstance(opts.get(block), dict) and key in opts[block]:
+            if (key in opts) if not block else (isinstance(opts.get(block), dict)
+                                                and key in opts[block]):
                 out.append(k)
         return out
 
@@ -263,7 +269,9 @@ class Scope:
         p = de.panel_by_id(doc, self.pid)
         block, _, name = key.rpartition(".")
         opts = p.get("opts") or {}
-        if isinstance(opts.get(block), dict):
+        if not block:
+            opts.pop(name, None)
+        elif isinstance(opts.get(block), dict):
             opts[block].pop(name, None)
             if not opts[block]:
                 opts.pop(block)
@@ -378,7 +386,8 @@ class Sections:
         title = next((SECTION_NAMES[(k, section)] for k in self.kinds
                       if (k, section) in SECTION_NAMES), section)
         card = pn.Card(title=title, collapsed=True, **SECTION)
-        mark_rows = [*rows, *(st for st in EXTRA_ROWS if st.section == section and only is None
+        mark_rows = [*rows, *(st for st in EXTRA_ROWS if st.section == section
+                              and (only is None or st.key in only)
                               and any(k in st.kinds for k in self.kinds))]
         marks = self.live[section] = dict(card=card, rows=mark_rows, widgets={}, line=None,
                                           note=None, header=None)
@@ -782,13 +791,22 @@ def joint_extra():
 TYPE_NAME = {"fill": "Fill", "contour": "Contours", "shade": "Shading"}
 
 
+def _merged(doc, scope, block):
+    """A block of settings as it stands at this scope, through what it inherits."""
+    held = {}
+    for d in scope._layers_up(doc, block):
+        if isinstance(d.get(block), dict):
+            held.update(d[block])
+    return copy.deepcopy(held)
+
+
 def area_extra(shell, scope):
     """The Area section's box, which is written whole (x min ... y max), shown while the area
-    is a fixed box; the half-width while it follows the storm."""
+    is a fixed box; the half-width while it follows the storm.  scope: the kind's, or a panel's
+    own (it shows what the panel inherits until it has its own)."""
     def extra(by_key):
         doc = shell.doc
-        kinds = doc.get("kinds") or {}
-        dom = copy.deepcopy((kinds.get(scope.kind) or {}).get("domain") or {})
+        dom = _merged(doc, scope, "domain")
         box = list(dom.get("box") or [None] * 4)
         ed = shell.ed
         ws = [src.clone(value=box[n], visible=True, disabled=False) for n, src in enumerate(
@@ -797,6 +815,9 @@ def area_extra(shell, scope):
         mode = by_key.get("domain.mode")
         half = by_key.get("domain.half")
         col = pn.Column(_grid(*ws, n=2), note, margin=0, sizing_mode="stretch_width")
+        shared = scope.pid is not None and _merged(doc, scope, "axes").get("share", "none") != "none"
+        warn = [_hint("Axes and ticks has panels share a range: this panel's axes stretch to it, "
+                      "so they can show more than its own area.")] if shared else []
 
         def on_box(ev):
             b = [w.value for w in ws]
@@ -806,7 +827,7 @@ def area_extra(shell, scope):
                 'and y max above y min.</div>')
             if ok:
                 def apply(d):
-                    k = d.setdefault("kinds", {}).setdefault(scope.kind, {})
+                    k = scope._targets(d, "domain")[0]
                     k["domain"] = dict(k.get("domain") or {}, box=[float(v) for v in b])
                 shell.edit(apply)
 
@@ -815,8 +836,10 @@ def area_extra(shell, scope):
             col.visible = m == "box"
             if half is not None:
                 half.visible = m == "storm"
-            if m == "box" and None in [w.value for w in ws]:  # (a start: the map's view)
-                for w, v in zip(ws, shell.v.view):
+            if m == "box" and None in [w.value for w in ws]:
+                # (a start: what the panel shows now, else the map's view)
+                shown = shell.placing.shown_area(scope.pid) if scope.pid is not None else None
+                for w, v in zip(ws, shown or shell.v.view):
                     w.value = round(float(v), 2)
 
         for w in ws:
@@ -824,6 +847,6 @@ def area_extra(shell, scope):
         if mode is not None:
             mode.param.watch(on_mode, "value")
         on_mode()
-        return [col]
+        return [col, *warn]
 
     return extra

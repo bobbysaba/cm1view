@@ -134,7 +134,7 @@ def test_a_kinds_legend_rows_write_its_own_block():
 
 
 def test_a_panels_own_rows_are_rows_of_the_table():
-    keys = {st.key for st in (*table.SETTINGS, *looks.LEGEND_ROWS)}
+    keys = {st.key for st in (*table.SETTINGS, *looks.LEGEND_ROWS, *looks.EXTRA_ROWS)}
     for kind in KINDS:
         for section, own in looks.PANEL_KEYS[kind].items():
             assert set(own) <= keys, (kind, section)

@@ -442,8 +442,9 @@ def test_every_section_named_has_rows_and_no_row_names_a_panel_by_place():
         assert not {st.key for st in rows} & {"legend.panel", "legend.panels", "xsec.ztop"}
     keys = {st.key for rows in [looks.rows_of(s, ["plan"]) for s in looks.PANEL_KEYS["plan"]]
             for st in rows}
+    extras = {st.key for st in looks.EXTRA_ROWS}  # (a section's extras: the fixed box)
     for wanted in looks.PANEL_KEYS["plan"].values():
-        assert set(wanted) <= keys
+        assert set(wanted) <= keys | extras
 
 
 # ------------------------------------------------------------------ on the demo run

@@ -1,6 +1,6 @@
 """Placing by clicking the preview: while a mode is picked, a click or a drag in a panel of the
-preview makes or moves an annotation, sets a section's A-B or the plan views' area, as it does in
-the old editor (click.py holds what both use).  Positions are the panel's axis units; in a 3D scene
+preview makes or moves an annotation, sets a section's A-B or the area of the plan views or of one
+of them, as it does in the old editor, which has no panel's own area (click.py holds what both use).  Positions are the panel's axis units; in a 3D scene
 or a table, which have none to click on, fractions of the panel."""
 
 import panel as pn
@@ -9,6 +9,7 @@ from .. import draw as figdraw
 from ..click import (DRAG, PLACE, TWO, axis_digits, dragged_to, grab_annotation, locate, moved_annotation,
                      placed_item, to_data)
 from . import docedit as de, nodes
+from .looks import panels_differ
 
 FRACTION_KINDS = ("scene", "table")  # (annotations by fractions of the panel)
 HINTS = dict(
@@ -16,7 +17,16 @@ HINTS = dict(
             "line layer shows it.",
     move="Drag an annotation in the preview: from its text, marker, centre or middle to move it "
          "all, from an end to move that end.",
-    area="Drag a box in a plan view: all plan views show that area.")
+    area="Drag a box in a plan view: all plan views show that area, but those with an area of "
+         "their own.",
+    area_panel="Drag a box in a plan view: that panel alone shows that area. Its Area section "
+               "takes it back.")
+OWN_AREA = "area_panel"
+AREAS = ("area", OWN_AREA)
+OWN_OF_THE_AREA = ("domain.mode", "domain.box")  # (a panel with these ignores the kind's box)
+# (the old editor's list has one area, which is the kind's; here, also a panel's)
+MODES = {("Drag: area of all plan views" if v == "area" else k): v for k, v in PLACE.items()}
+MODES["Drag: area of one plan view"] = OWN_AREA
 
 
 def fraction_entry(box):
@@ -29,7 +39,7 @@ class Placing:
         self.shell = shell
         self.place, self.origin, self.fractions = {}, {}, set()
         self.pending = None  # (panel, x, y) of a two-point item's first click
-        self.mode = pn.widgets.Select(options=PLACE, value="", width=230, height=32, margin=(4, 4))
+        self.mode = pn.widgets.Select(options=MODES, value="", width=230, height=32, margin=(4, 4))
         self.hint = pn.pane.HTML(margin=(0, 8), sizing_mode="stretch_width", visible=False,
                                  styles={"flex": "0 0 auto"})
         self.mode.param.watch(self._on_mode, "value")
@@ -42,7 +52,7 @@ class Placing:
         self.pending = None
         mode = ev.new
         self.hint.visible = bool(mode)
-        self.shell.image.band = mode in ("box", "area")
+        self.shell.image.band = mode in ("box", *AREAS)
         text = HINTS.get(mode) or (
             "Click in a panel of the preview" + (" twice, or drag from the first point to the "
                                                  "second" if mode in TWO else "")
@@ -53,6 +63,14 @@ class Placing:
 
     def cursor(self):
         return "move" if self.mode.value == "move" else "crosshair" if self.on else "pointer"
+
+    def shown_area(self, pid):
+        """The box [x0, x1, y0, y1] (grid km) plan view pid shows in the preview, or None."""
+        entry = self.place.get(pid)
+        if entry is None or pid in self.fractions or pid not in self.origin:
+            return None
+        d = self.origin[pid]
+        return [entry[4][0] + d[0], entry[4][1] + d[0], entry[5][0] + d[1], entry[5][1] + d[1]]
 
     def took(self, doc, place, boxes, data):
         """The preview drawn from doc is showing: where its panels are (place_map) and, for
@@ -73,7 +91,7 @@ class Placing:
         return got
 
     def click(self, fx, fy):
-        if self.mode.value in DRAG:
+        if self.mode.value in (*DRAG, OWN_AREA):
             self.shell.say("Drag (press, move, release) in the preview to "
                            + ("move an annotation." if self.mode.value == "move" else
                               "draw the plan-view area."), True)
@@ -98,8 +116,8 @@ class Placing:
         u1, w1 = dragged_to(b, u0, w0, f0, f1)
         if mode == "move":
             self._move(pid, b, (u0, w0), (u1, w1))
-        elif mode == "area":
-            self._area(pid, to_data(b, u0, w0), to_data(b, u1, w1))
+        elif mode in AREAS:
+            self._area(pid, to_data(b, u0, w0), to_data(b, u1, w1), own=mode == OWN_AREA)
         else:
             self.pending = None  # (a drag: both points of a two-point item)
             self._placed(pid, *self._at(pid, b, u0, w0))
@@ -150,8 +168,9 @@ class Placing:
                   + (f" Cross-section{'s' if len(showing) > 1 else ''} {', '.join(showing)} "
                      "show this section too." if showing else ""))
 
-    def _area(self, pid, p1, p2):
-        """All plan views' area from a box dragged in one (grid km)."""
+    def _area(self, pid, p1, p2, own=False):
+        """All plan views' area from a box dragged in one (grid km), or that one's alone (own),
+        which is picked with its Area open."""
         shell = self.shell
         if not self._kind_is(pid, "plan"):
             shell.say("Drag the area in a plan view.", True)
@@ -159,9 +178,18 @@ class Placing:
         d = self.origin.get(pid, (0.0, 0.0))
         xs = sorted((p1[0] + d[0], p2[0] + d[0]))
         ys = sorted((p1[1] + d[1], p2[1] + d[1]))
+        where = "x {:.2f} – {:.2f}, y {:.2f} – {:.2f} km".format(*xs, *ys)
+        if own:
+            shell.inspector.folds[f"look:{pid}:plan:Area"] = True
+            shell.edit(lambda doc: de.set_area(doc, [*xs, *ys], pid=pid), node=f"panel:{pid}")
+            shell.say(f"Area of panel {nodes.letters(shell.doc)[pid]} alone: {where}.")
+            return
         shell.edit(lambda doc: de.set_area(doc, [*xs, *ys]), node=shell.node)
-        shell.say("Area of all plan views: x {:.2f} – {:.2f}, y {:.2f} – {:.2f} km.".format(
-            *xs, *ys))
+        keep = list(panels_differ(shell.doc, "plan", OWN_OF_THE_AREA))
+        shell.say(f"Area of all plan views: {where}." + (
+            f" Panel{'s' if len(keep) > 1 else ''} {', '.join(keep)} keep"
+            f"{'' if len(keep) > 1 else 's'} an area of {'their' if len(keep) > 1 else 'its'} own."
+            if keep else ""))
 
     def _move(self, pid, b, start, end):
         shell = self.shell

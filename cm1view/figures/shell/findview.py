@@ -19,6 +19,7 @@ from .treeview import TreeView
 MOST = 14  # hits listed
 EXPORT = "export"  # (a hit's node: the Export dialog)
 MAPS = ("plan", "xsec")
+AREA_WORDS = "domain x min max y limits region zoom"
 Hit = namedtuple("Hit", "label section where node key words")
 
 # (label, section, more words to find it by)
@@ -113,6 +114,8 @@ def hits_of(shell):
             rows = rows_of(section, [kind], keys)
             add_rows(rows, f"panel {letter}", f"panel:{picked['id']}", section,
                      _title([kind], section))
+        if kind == "plan":
+            add_hand("Fixed box", "Area", f"panel {letter}", f"panel:{picked['id']}", AREA_WORDS)
     # (the figure's)
     fig = "Figure"
     for section in FIGURE_SECTIONS:
@@ -135,7 +138,7 @@ def hits_of(shell):
         for section in KIND_SECTIONS.get(kind, ()):
             add_rows(rows_of(section, [kind]), where, node, section, _title([kind], section))
         if kind == "plan":
-            add_hand("Fixed box", "Area", where, node, "domain x min max y limits region zoom")
+            add_hand("Fixed box", "Area", where, node, AREA_WORDS)
         if kind in MAPS:
             at = shell.node if shell.node.startswith("layer:") and picked["kind"] == kind else node
             place = "this layer" if at != node else f"Layers · {where}"
