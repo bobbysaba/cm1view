@@ -14,6 +14,7 @@ from ..kinds import KINDS
 from ..spec.doc import KIND_KEYS
 from ..times import _nearest_t
 from . import docedit as de, nodes
+from .looks import panel_bar_card
 
 # (the kinds edited here)
 ADDABLE = ("plan", "sounding", "xsec", "th", "line", "dist", "profile", "joint", "azim", "table",
@@ -265,7 +266,9 @@ class GridPane:
         kind = de.panel_by_id(doc, pid)["kind"]
         rm.on_click(lambda e: shell.edit(lambda d: de.remove_panel(d, pid),
                                          node=nodes.KIND_PREFIX + kind))
-        return [self.ins.annots.card(doc, pid), pn.pane.HTML("<b>Place</b>", margin=(8, 4, 0, 4)),
+        bar = panel_bar_card(self.ins, doc, pid)
+        return [*([bar] if bar is not None else []), self.ins.annots.card(doc, pid),
+                pn.pane.HTML("<b>Place</b>", margin=(8, 4, 0, 4)),
                 _grid(row, col, tall, wide, n=2), said,
                 pn.Row(copy_btn, rm, margin=0, sizing_mode="stretch_width")]
 

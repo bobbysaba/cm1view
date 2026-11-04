@@ -13,8 +13,8 @@ import copy
 import panel as pn
 
 from .. import draw as figdraw, settings as table
-from ..cards import _grid
-from ..cards.base import SECTION
+from ..cards import _grid, _hint
+from ..cards.base import FIG_LOCS, LOCS, SECTION
 from ..spec.doc import FIGURE_KEYS, KIND_KEYS
 from . import docedit as de, nodes
 
@@ -85,7 +85,8 @@ PANEL_KEYS["table"] = {**_own_rows("table", "table", "Table"),
 PANEL_KEYS["scene"] = {"Panel labels": PANEL_KEYS["plan"]["Panel labels"]}  # (axes: it has none)
 # (shown by the sounding pane, as the layout has them)
 LAYOUT_HIDES = {"Skew-T": ("hodo",), "Hodograph": ("skewt",)}
-LEFT_OUT = ("legend.panel", "legend.panels")  # (panels by id: M9)
+LEFT_OUT = ("legend.panel", "legend.panels")  # (panels by id, not place: legend_extra)
+OF_A_KIND = ("colorbar",)  # (not under kinds until a kind's node writes it: kind_bar_rows)
 SECTION_ROWS = ("xsec.ztop", "xsec.coords")  # (of cross-sections only: a plan view draws neither)
 
 
@@ -171,6 +172,8 @@ class Scope:
             return [de.panel_by_id(doc, self.pid).setdefault("opts", {})]
         if top in FIGURE_KEYS:
             return [doc]
+        if self.kind and top in OF_A_KIND:
+            return [doc.setdefault("kinds", {}).setdefault(self.kind, {})]
         if kind_block(top):
             kinds = doc.setdefault("kinds", {})
             names = [self.kind] if self.kind else list(kinds) or ["plan"]
@@ -391,6 +394,105 @@ def sounding_extra(layout):
         return []
 
     return {"Sounding panels": extra, "Hodograph": extra}
+
+
+def legend_reaches(doc):
+    """Whether a figure-level legend has anything to list: not with only box plots, nor only
+    time-height panels without legend annotations (the old editor's _show_legend)."""
+    kinds = {p["kind"] for p in doc.get("panels") or []}
+    if kinds == {"th"}:
+        return any(a.get("kind") == "legend" for a in doc.get("annotations") or [])
+    if kinds == {"dist"}:
+        return Scope("dist")._layers_up(doc, "dist")[-1].get("dist", {}).get("plot") \
+            not in ("box", "violin")
+    return True
+
+
+def legend_extra(shell, kinds):
+    """The Legend section's rows that go with the kinds in the figure (panels with legends of
+    their own have those, or one on the figure; the others one legend of their layers), and the
+    panels it is in and lists, by id, so they stay with their panels: {section: extra}."""
+    def extra(by_key):
+        doc = shell.doc
+        names = nodes.letters(doc)
+        ids = {names[p["id"]]: p["id"] for p in sorted(doc["panels"], key=lambda p: list(p["cell"]))}
+        lg = (doc.get("style") or {}).get("legend") or {}
+        panel = pn.widgets.Select(name="In panel", options=ids, value=lg.get("panel") if lg.get(
+            "panel") in ids.values() else next(iter(ids.values())))
+        listed = pn.widgets.MultiChoice(
+            name="From panels (blank: all)", options=ids,
+            value=[i for i in lg.get("panels") or [] if i in ids.values()],
+            description="The panels whose entries it lists")
+
+        def write(**keys):
+            def apply(d):
+                style = d.setdefault("style", {})
+                style["legend"] = dict(style.get("legend") or {}, **keys)
+            shell.edit(apply)
+
+        panel.param.watch(lambda ev: write(panel=ev.new), "value")
+        listed.param.watch(lambda ev: write(panels=list(ev.new)), "value")
+        own = all(k in figdraw.LEGEND_OPTS for k in kinds)
+        some = any(k in figdraw.LEGEND_OPTS for k in kinds)
+        scene = set(kinds) == {"scene"}
+
+        def key(name):
+            return by_key.get(f"legend.{name}")
+
+        where = key("where")
+        where.name = "Legends on" if own else "Layer legend on"
+        where.options = {"Each panel" if own else "A panel": "panel", "The figure": "figure"}
+
+        def show(*ev):
+            fig = where.value == "figure"
+            key("loc").options = LOCS + FIG_LOCS if fig else LOCS
+            for name in ("loc", "anchor", "ncol", "title", "frame"):
+                key(name).visible = fig or not own
+            panel.visible = not fig and not own and not scene
+            listed.visible = fig and not scene
+            key("own").visible = some and not fig
+
+        where.param.watch(show, "value")
+        show()
+        return [_grid(panel, listed, n=2)]
+
+    return {"Legend": extra}
+
+
+def kind_bar_rows(ins, doc, kind):
+    """A kind's own colorbar settings, in a figure of several kinds, where its panels' bars are
+    apart from the others': a card, or None.  How many bars there are stays the figure's."""
+    if kind not in table.CBAR or len({p["kind"] for p in doc.get("panels") or []}) < 2:
+        return None
+    only = tuple(st.key for st in table.SETTINGS if st.section == "Colorbar"
+                 and st.key != "colorbar.mode")
+    return Sections(ins, Scope(kind), (kind,)).card("Colorbar", only)
+
+
+def panel_bar_card(ins, doc, pid):
+    """A panel's part in the colorbars, for the kinds that have them: a card, or None."""
+    shell = ins.shell
+    p = de.panel_by_id(doc, pid)
+    if p["kind"] not in table.CBAR:
+        return None
+    cb = p.get("colorbar") or {}
+    show = pn.widgets.Checkbox(name="Its colours have a bar", value=cb.get("show", True))
+    group = pn.widgets.TextInput(name="The bar it shares (a name)", value=cb.get("group") or "",
+                                 placeholder="blank: as the figure's Colorbars say",
+                                 sizing_mode="stretch_width",
+                                 description="Panels giving the same name share one bar, whatever "
+                                             "their kinds")
+    show.param.watch(lambda ev: shell.edit(lambda d: de.set_panel_colorbar(d, pid, show=ev.new)),
+                     "value")
+    group.param.watch(lambda ev: shell.edit(lambda d: de.set_panel_colorbar(d, pid, group=ev.new)),
+                      "value")
+    key = f"look:{pid}:bar"
+    card = pn.Card(show, group, _hint(
+        "Blank: one bar as the figure's Colorbars say. Where kinds are mixed, panels of the same "
+        "colours share one bar, each of the others its own."), title="Colorbar",
+        collapsed=not ins.folds.get(key), **SECTION)
+    card.param.watch(lambda ev: ins.folds.__setitem__(key, not ev.new), "collapsed")
+    return card
 
 
 def dist_extra():

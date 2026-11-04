@@ -469,6 +469,9 @@ def scene_spec(d, V):
     return dict(sc, look=lk)
 
 
+SMALL_CELL_IN, BAR_IN = 4.0, 0.12  # (a cell this small has smaller colorbar text; a bar's thickness)
+
+
 def scene_panel(fig, ax, d, V, fs, legend):
     """A 3D scene panel before its picture: no axes frame, the colorbars of the floor
     and the streamlines, and the legend entries (into `legend`) of the isosurfaces,
@@ -490,9 +493,15 @@ def scene_panel(fig, ax, d, V, fs, legend):
     if p is not None and lk["parcel_bar"] != "none":
         lab = p.get("cbar_label") or parcel_label(p)
         bars.append((ScalarMappable(p["norm"], p["cm"]), lk["parcel_bar"], lab))
+    cell = V.get("_cell_in")  # (a cell among others: bars that leave the picture its room)
+    small = bool(cell) and min(cell) < SMALL_CELL_IN
     for m, loc, lab in bars:
-        c = fig.colorbar(m, ax=ax, location=loc, shrink=0.6, pad=0.02, aspect=30)
-        c.set_label(lab, fontsize=font_size(V, "label"))
+        kw = dict(fraction=min(0.15, BAR_IN / max(cell[1 if loc in ("bottom", "top") else 0], 0.1))) \
+            if cell else {}
+        c = fig.colorbar(m, ax=ax, location=loc, shrink=0.6, pad=0.02, aspect=30, **kw)
+        c.set_label(lab, fontsize=font_size(V, "label") * (0.85 if small else 1.0))
+        if small:
+            c.ax.tick_params(labelsize=0.85 * font_size(V, "tick"))
     if lk["legend"]:
         for m in arrays["meshes"]:
             legend[m["name"]] = Patch(facecolor=m["color"], edgecolor=m["color"],

@@ -236,7 +236,8 @@ def script(spec, npz_name, out_name, run=None, note="", draw_name="../_src/draw.
         "",
         *(["runs:"] + [f"  {r['label']}: {r['path']}{tag(r['path'])}" for r in spec["runs"]]
           if len(spec.get("runs") or []) > 1 else
-          [f"run: {run.path}{tag(run.path)}" if run is not None else ""]),
+          [f"run: {run.path}{tag(run.path)}" if run is not None else
+           "".join(f"run: {r['path']}{tag(r['path'])}" for r in spec.get("runs") or [])]),
         note,
         "Redraw:  python this_script.py   (needs numpy and matplotlib; cmweather or pyart",
         "for their colormaps).  To change the figure:" if not scene else
@@ -332,8 +333,8 @@ def with_defaults(spec, run, F, t, track=None):
 
 
 def load_spec(path):
-    """The editor's settings of a saved figure: a version-1 spec as it is, of a
-    version-2 one the settings that made it ("form")."""
+    """The editor's settings of a saved figure: a version-1 spec or a document as it is, of a
+    version-2 one the settings that made it ("form", either of those)."""
     with open(_abs(path)) as f:
         spec = json.load(f)
     if spec.get("version") == 2:
@@ -341,8 +342,8 @@ def load_spec(path):
             raise ValueError("this version-2 spec has no editor settings (\"form\"): "
                              "redraw it with its script")
         spec = spec["form"]
-    if spec.get("version") != 1:
-        raise ValueError("not a cm1view figure spec (version 1 or 2)")
+    if spec.get("version") not in (1, 3):
+        raise ValueError("not a cm1view figure spec (version 1, 2 or 3)")
     check_runs(spec)
     return spec
 

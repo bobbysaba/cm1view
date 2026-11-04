@@ -338,7 +338,7 @@ class FigureStyle:
 
     def _save_template(self):
         try:
-            path = fg.save_template(self.collect_all(), self.tpl_name.value.strip())
+            path = fg.save_template(self._figure_now(), self.tpl_name.value.strip())
         except (OSError, ValueError) as e:
             self._msg(f"Could not save the template: {html.escape(str(e))}", True)
             return
@@ -356,5 +356,5 @@ class FigureStyle:
             self._msg(f"Could not apply <code>{html.escape(str(path))}</code>: "
                       f"{html.escape(str(e))}", True)
             return False
-        return self._open_spec(spec, "Applied the template <b>"
-                               f"{html.escape(os.path.basename(path)[:-5])}</b> to this run")
+        note = f"Applied the template <b>{html.escape(os.path.basename(path)[:-5])}</b> to this run"
+        return self._open_doc(spec, note) if fg.is_doc(spec) else self._open_spec(spec, note)

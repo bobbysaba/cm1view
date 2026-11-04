@@ -20,7 +20,7 @@ from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _
 from .layers import (_fill, _contour, _shade, _vectors, _parcels, parcel_label,
                      sector_outline, extend_of,
                      union_extend, _extends, _ticks, _colorbars, _cbar_style, bar_layer,
-                     _contour_key)
+                     _contour_key, _mixed_kinds, bar_key)
 from .lines import (_lines, _dists, _profiles, _joints, _azims, azim_range, dist_edges,
                     dist_hist, dist_of, joint_edges, joint_hist, joint_of)
 from .sounding import _sounding, _hodo_view, shared_hodo_half, sounding_layout
@@ -320,6 +320,8 @@ def _block(fig, spec, k, bv, data, fs, ext):
         extra = legend_handles(V.get("annotations", []), p["id"])
         if p["kind"] in LEGEND_OPTS:  # (into the panel's own legend)
             V = dict(V, _legend_extra=extra)
+        if p["kind"] == "scene" and not own and len(pans) > 1:  # (its bars: to fit its cell)
+            V = dict(V, _cell_in=_cell_inches(fig, b, r, c, rs, cs))
         font = "font" in (p.get("opts") or {})  # (fonts of its own: a part's, converted)
         pfs = _fs(V) if font else fs
         with matplotlib.rc_context(rc(V)) if font else nullcontext():
@@ -349,6 +351,7 @@ def _block(fig, spec, k, bv, data, fs, ext):
         for ax in grid:
             if ax not in used:
                 ax.set_visible(False)
+    mixed = _mixed_kinds(spec, k)
     for name in names:  # (tick labels, limits and legend within the group)
         gv, mine = gview(name), [x for x in placed if x[0].get("group") == name]
         kinds = list(dict.fromkeys(x[0]["kind"] for x in mine))
@@ -360,7 +363,7 @@ def _block(fig, spec, k, bv, data, fs, ext):
         else:
             _axes_of(mine, data, rows, min((_cell(p)[1] for p, _, _ in mine), default=0)
                      if name in own else 0, gv.get("axes", {}))
-        _legends(fig, gv, mine, entries)
+        _legends(fig, gv, mine, entries, mixed)
     fig._cv_mappables = mappables
     where = {p["id"]: _cell(p)[:2] for p in pans}
     if bv.get("colorbar", {}).get("mode") == "groups":
@@ -370,15 +373,13 @@ def _block(fig, spec, k, bv, data, fs, ext):
                        [m for m in mappables if m[0] in mine],
                        [ax for p, ax, _ in placed if p["id"] in mine], lambda i: where[i])
     else:
-        drawn_by = {m[0] for m in mappables}  # (kinds mixed: room taken from those it speaks for)
-        mixed = not own and len({p["kind"] for p, _, _ in placed}) > 1
-        _colorbars(fig, bv.get("colorbar", {}), mappables,
-                   [ax for p, ax, _ in placed if p["id"] in drawn_by] if mixed else used,
-                   lambda i: where[i])
+        _bars(fig, bv.get("colorbar", {}), mappables, placed, used, mixed, lambda i: where[i])
     for name in names:
         gv, mine = gview(name), [p for p in pans if p.get("group") == name]
         ck = gv.get("contour_key", {})
-        keyp = next((p for p in mine if p["id"] == ck.get("panel")), mine[0] if mine else None)
+        keyp = next((p for p in mine if p["id"] == ck.get("panel")), None) or next(
+            (p for p in mine if any(lay.get("type") == "contour" for lay in p.get("layers") or [])),
+            mine[0] if mine else None)
         _contour_key(fig, gv, _fs(gv), keyp.get("layers", []) if keyp else [])
     finish_scenes(fig, scene_dpi(spec))
     fig._cv_axes = {p["id"]: ax for p, ax, _ in placed}  # (panel -> axes)
@@ -391,6 +392,37 @@ def _block(fig, spec, k, bv, data, fs, ext):
     if code.get("on") and str(code.get("text") or "").strip():
         run_code(fig, fig._cv_grid, {p["id"]: data[p["id"]] for p, _, _ in placed}, bv,
                  code["text"])
+
+
+def _cell_inches(fig, b, r, c, rs, cs):
+    """(width, height) in inches of cells of block b, by their shares (before any gaps)."""
+    W, H = fig.get_figure(root=True).get_size_inches()
+
+    def share(vals, n, at, span):
+        vals = [float(v) for v in vals or [1.0] * n]
+        return sum(vals[at:at + span]) / sum(vals)
+
+    return (float(W) * share(b.get("widths"), int(b["cols"]), c, cs),
+            float(H) * share(b.get("heights"), int(b["rows"]), r, rs))
+
+
+def _bars(fig, cb, mappables, placed, used, mixed, cell):
+    """The colorbars of a block's panels: as its mode says, for panels that share them all; else
+    a bar for each bar_key, each taking its room from the panels it speaks for, with the
+    settings its first panel sees (a kind's or a panel's "colorbar" over the figure's).  A bar
+    that panels name is one bar, whatever the mode."""
+    views = {p["id"]: (p, V) for p, _, V in placed}
+    keys = {m[0]: bar_key(views[m[0]][0], m[2][1], mixed) for m in mappables}
+    if not any(keys.values()):
+        _colorbars(fig, cb, mappables, used, cell)
+        return
+    for key in dict.fromkeys(keys.values()):
+        mine = [m for m in mappables if keys[m[0]] == key]
+        look = dict(cb, **(views[mine[0][0]][1].get("colorbar") or {}))
+        look["mode"] = cb.get("mode", "shared")
+        if key.startswith("named:") and look["mode"] != "none":
+            look["mode"] = "shared"
+        _colorbars(fig, look, mine, [m[1] for m in mine], cell)
 
 
 def _axes_of(mine, data, rows, first, axes):
@@ -428,19 +460,40 @@ def _style_key(h):
     return tuple(out)
 
 
-def _legends(fig, bv, placed, entries):
+def _scene_legend(ax, handles, labels, lg, V):
+    """A 3D scene's legend when other kinds share the figure: its own, smaller, in its corner."""
+    loc = lg.get("loc", "upper right")
+    ax.legend(handles, labels, loc="upper right" if loc.startswith("outside") else loc,
+              fontsize=0.85 * font_size(V, "legend"), frameon=lg.get("frame", True), framealpha=0.7,
+              ncol=int(lg.get("ncol", 1) or 1))
+
+
+def _legends(fig, bv, placed, entries, mixed=False):
     """The block's legend (bv["legend"]): the layer entries of its panels
     (entries[panel id] = {text: handle}) in one panel's axes ("where": "panel", at
     "panel"), or on the figure ("figure": gathering also the legends of the panels' own),
     at "loc" (and "anchor" [x, y]: base.anchor_kw).  "panels" (0-based, blank: all but
     those keeping their own) are the panels it draws from; the same text and look is
     listed once.  A panel's own legend goes under a figure legend, or with "own" False,
-    unless the panel keeps it (its Tree legend "on": legend_keep)."""
+    unless the panel keeps it (its Tree legend "on": legend_keep).  mixed (kinds mixed in a
+    panel's legend): it goes in a panel with entries, if the one named has none; a 3D scene keeps
+    its entries in its own corner, as a map's don't explain its picture."""
     lg = bv.get("legend", {})
     if not placed:
         return
     on_fig = lg.get("where") == "figure"
     host = placed[min(max(int(lg.get("panel", 0)), 0), len(placed) - 1)][1]
+    apart = []  # (scenes with a legend of their own)
+    if mixed and not on_fig:
+        apart = [x for x in placed if x[0]["kind"] == "scene"]
+        for p, ax, V in apart:
+            have = entries.get(p["id"]) or {}
+            if have:
+                _scene_legend(ax, list(have.values()), list(have), lg, V)
+        rest = [x for x in placed if x[0]["kind"] != "scene"]
+        chosen = next((x for x in rest if x[1] is host), None)
+        if rest and (chosen is None or not entries.get(chosen[0]["id"])):
+            host = next((ax for p, ax, _ in rest if entries.get(p["id"])), rest[0][1])
 
     def keeps(i):  # (a panel whose own legend stays)
         p, _, V = placed[i]
@@ -448,6 +501,7 @@ def _legends(fig, bv, placed, entries):
 
     pick = [i for i in (lg.get("panels") or []) if 0 <= int(i) < len(placed)] or \
         [i for i in range(len(placed)) if not (on_fig and keeps(i))]
+    pick = [i for i in pick if not any(placed[i] is x for x in apart)]
     handles, labels, seen = [], [], set()
 
     def add(h, text):
@@ -478,6 +532,8 @@ def _legends(fig, bv, placed, entries):
                     a.get_legend().remove()
     if not handles or (not on_fig and not any(entries.get(pid) for _, pid in own)):
         return  # (nothing, or only panels' own legends, which stay)
+    if not on_fig and any(host is x[1] for x in apart):
+        return  # (a figure of scenes alone: each has its own)
     loc, anchor = lg.get("loc", "upper right"), lg.get("anchor")
     kw = dict(fontsize=font_size(bv, "legend"), ncol=int(lg.get("ncol", 1) or 1),
               frameon=lg.get("frame", True), framealpha=0.85, title=lg.get("title") or None,

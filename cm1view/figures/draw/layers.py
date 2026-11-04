@@ -215,10 +215,31 @@ def union_extend(ends):
     return "both" if lo and hi else "min" if lo else "max" if hi else "neither"
 
 
+BAR_LOOK = ("cmap", "reverse", "white_first", "vmin", "vmax", "nlevels", "scale", "levels", "units",
+            "cbar_label", "cbar_ticks")
+
+
+def bar_key(p, lay, mixed):
+    """Which bar of a block panel p's first fill `lay` goes on, among bars that a mode would
+    otherwise make one: the bar it names (p["colorbar"]["group"]), else in a block of several
+    kinds one for each look of colours, as one bar can't speak for a time-height plot and a map
+    in other colours; else "" (the mode alone says)."""
+    named = (p.get("colorbar") or {}).get("group")
+    if named:
+        return f"named:{named}"
+    return repr([lay.get(k) for k in BAR_LOOK]) if mixed else ""
+
+
+def _mixed_kinds(spec, k):
+    """Whether block k has panels of several kinds, not apart in groups of their own."""
+    return not spec.get("groups") and \
+        len({p["kind"] for p in spec["panels"] if int(p.get("block", 0)) == k}) > 1
+
+
 def _extends(spec, data):
     """{panel id: colorbar ends of its first fill}: the ends of all first fills that
     share a colorbar (the block's colorbar mode: shared, row, col; "figure": all
-    blocks') united."""
+    blocks'; bar_key) united."""
     fig_mode = (spec.get("colorbar") or {}).get("mode")
     own = spec.get("groups") or {}
     modes = [(block_view(spec, k).get("colorbar") or {}).get("mode", "shared")
@@ -229,18 +250,22 @@ def _extends(spec, data):
         if d is None or d.get("missing") or p["kind"] in ENTRIES or \
                 not (p.get("colorbar") or {}).get("show", True):
             continue
-        ends = next((extend_of(lay, d[f"L{j}"]) for j, lay in enumerate(_panel_layers(p))
-                     if lay["type"] == "fill" and lay.get("on", True)
-                     and d.get(f"L{j}") is not None), None)
-        if ends is None:
+        at = next((j for j, lay in enumerate(_panel_layers(p))
+                   if lay["type"] == "fill" and lay.get("on", True)
+                   and d.get(f"L{j}") is not None), None)
+        if at is None:
             continue
+        first_fill = _panel_layers(p)[at]
+        ends = extend_of(first_fill, d[f"L{at}"])
         k = int(p.get("block", 0))
         r, c = _cell(p)[:2]
         name = p.get("group")
         mode = (own.get(name, {}).get("colorbar") or {}).get("mode", "shared") \
             if modes[k] == "groups" else modes[k]
+        bar = bar_key(p, first_fill, _mixed_kinds(spec, k))
         g = ("figure",) if fig_mode == "figure" else \
-            (k, name if modes[k] == "groups" else "",
+            (k, name if modes[k] == "groups" else "", bar,
+             "" if bar.startswith("named:") else
              {"shared": "", "row": ("r", r), "col": ("c", c)}.get(mode, ("p", p["id"])))
         groups.setdefault(g, []).append(ends)
         first[p["id"]] = g

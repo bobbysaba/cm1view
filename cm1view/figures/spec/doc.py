@@ -29,7 +29,7 @@ import copy
 import json
 
 from .. import draw as figdraw
-from .base import normalize, renewed
+from .base import is_doc, normalize, renewed  # noqa: F401  (is_doc: fg.is_doc)
 from .sections import card_section, panel_section, sections
 
 FIGURE_KEYS = ("size", "size_auto", "size_set", "suptitle", "export", "background", "code",
@@ -344,9 +344,26 @@ def to_doc(form, run=None):
     return doc
 
 
-def is_doc(spec):
-    """Whether spec is a document (version 3)."""
-    return int(spec.get("version", 1)) == 3
+def ann_panels(a):
+    """The ids an annotation names: [-1] for every panel."""
+    p = a.get("panel", -1)
+    return [int(q) for q in p] if isinstance(p, (list, tuple)) else [int(p)]
+
+
+def drop_annotations(doc, gone):
+    """Panels `gone` are no longer in the figure: what names only them goes with them (a later
+    panel can take a freed id, and must not inherit it); the others lose them."""
+    keep = []
+    for a in doc.get("annotations") or []:
+        ids = ann_panels(a)
+        left = [i for i in ids if i not in gone]
+        if left != ids:
+            if not left:
+                continue
+            a["panel"] = left[0] if len(left) == 1 else left
+        keep.append(a)
+    if doc.get("annotations"):
+        doc["annotations"] = keep
 
 
 def one_panel(doc, p, res=None):

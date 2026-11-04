@@ -6,13 +6,16 @@ import os
 import numpy as np
 
 from ... import config
-from .base import tindex, shift_times, _abs
+from .base import is_doc, tindex, shift_times, _abs
 from .bundle import _plain
 
 def template(spec, name=""):
     """`spec` as a template to apply to another run (from_template): its layout and
     look without its runs (what only another run had is left out), its times kept
-    relative to the shown time."""
+    relative to the shown time.  A document: docfile.doc_template."""
+    if is_doc(spec):
+        from .docfile import doc_template
+        return doc_template(spec, name)
     s = _plain(spec)
     t0 = (s["parts"][0] if s.get("kind") == "combo" else s).get("time_s")
     s.pop("runs", None)
@@ -57,7 +60,11 @@ def template(spec, name=""):
 def from_template(tpl, run, t):
     """Template `tpl` applied to `run` shown at output t: its times moved to there
     (each to the nearest output; panels past the run's end are left empty).  The
-    run itself is added by the editor (as for a saved figure without runs)."""
+    run itself is added by the editor (as for a saved figure without runs).  A document's:
+    docfile.doc_from_template."""
+    if is_doc(tpl):
+        from .docfile import doc_from_template
+        return doc_from_template(tpl, run, t)
     s = _plain(tpl)
     t0 = (s.pop("template", None) or {}).get("time_s")
     dt = 0.0 if t0 is None else float(run.times[t]) - float(t0)
@@ -158,7 +165,11 @@ STYLES["dark"] = dict(STYLES["talk"], background="black", mplstyle="dark_backgro
 
 def apply_style(spec, name, width=True):
     """A copy of `spec` with style preset `name` (STYLES), but for its figure width with
-    width False.  A figure of parts: in every part, the width being the whole figure's."""
+    width False.  A figure of parts: in every part, the width being the whole figure's.  A
+    document: docfile.doc_style."""
+    if is_doc(spec):
+        from .docfile import doc_style
+        return doc_style(spec, name, width)
     s = _plain(spec)
     combo = s.get("kind") == "combo"
     if combo:

@@ -13,6 +13,7 @@ from .. import draw as figdraw
 from ..draw.base import _cell
 from ..kinds import KINDS
 from ..spec.arrays import scene3d_of
+from ..spec.doc import ann_panels, drop_annotations  # noqa: F401  (de.drop_annotations)
 from ..spec.sections import describe as section_words, section_defaults
 
 MISSING = object()  # (a key a layer no longer has)
@@ -932,26 +933,23 @@ def kind_size(doc):
 
 
 # ------------------------------------------------------------ annotations
-def ann_panels(a):
-    """The ids an annotation names: [-1] for every panel."""
-    p = a.get("panel", -1)
-    return [int(q) for q in p] if isinstance(p, (list, tuple)) else [int(p)]
-
-
-def drop_annotations(doc, gone):
-    """Panels `gone` are no longer in the figure: what names only them goes with them (a later
-    panel can take a freed id, and must not inherit it); the others lose them."""
-    keep = []
-    for a in doc.get("annotations") or []:
-        ids = ann_panels(a)
-        left = [i for i in ids if i not in gone]
-        if left != ids:
-            if not left:
-                continue
-            a["panel"] = left[0] if len(left) == 1 else left
-        keep.append(a)
-    if doc.get("annotations"):
-        doc["annotations"] = keep
+def set_panel_colorbar(doc, pid, show=None, group=None):
+    """Panel pid's part in the colorbars: whether its colours have a bar (show), and the bar it
+    shares with the panels naming the same one (group; blank: as the figure's mode says)."""
+    p = panel_by_id(doc, pid)
+    cb = dict(p.get("colorbar") or {})
+    if show is not None:
+        cb.pop("show", None)
+        if not show:
+            cb["show"] = False
+    if group is not None:
+        cb.pop("group", None)
+        if group.strip():
+            cb["group"] = group.strip()
+    if cb:
+        p["colorbar"] = cb
+    else:
+        p.pop("colorbar", None)
 
 
 def copy_annotations(doc, pid, new):

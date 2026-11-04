@@ -64,8 +64,8 @@ def load_figure(arg):
             raise ValueError(f"{path}: this version-2 spec has no editor settings "
                              "(\"form\"): redraw it with its script")
         spec = spec["form"]
-    if spec.get("version") != 1:
-        raise ValueError(f"{path}: not a cm1view figure spec (version 1 or 2) or template")
+    if spec.get("version") not in (1, 3):
+        raise ValueError(f"{path}: not a cm1view figure spec (version 1, 2 or 3) or template")
     return spec, False, os.path.basename(saved_base(path)), path
 
 
@@ -73,11 +73,25 @@ def _parts(spec):
     return spec["parts"] if spec.get("kind") == "combo" else [spec]
 
 
+def _finish_doc(doc, run, F, t, code, track):
+    d = fg.doc_defaults(doc, run, F, t, track)
+    bad = sorted({lay["field"] for p in d["panels"] for _, lay in figdraw.panel_layers(d, p)
+                  if lay.get("field") and lay["field"] not in F})
+    if bad and len(d["runs"]) <= 1:
+        raise ValueError(f"{run.path} has no field " + ", ".join(bad))
+    if not code and (d.get("code") or {}).get("on"):
+        d["code"] = dict(d["code"], on=False)
+    return d
+
+
 def finish(spec, run, F, t, code=False):
     """`spec` as the editor would show it on `run` at output t (fg.with_defaults, then
     fg.normalize, part by part; a part without runs takes `run` with its storm_tracks
-    file, if any).  Its own code (Annotate → Your own code) stays off unless `code`."""
+    file, if any; a document: fg.doc_defaults).  Its own code (Annotate → Your own code) stays
+    off unless `code`."""
     track = fg.run_entry(run)["track"]
+    if fg.is_doc(spec):
+        return _finish_doc(spec, run, F, t, code, track)
     parts = []
     for part in _parts(spec):
         p = fg.normalize(fg.with_defaults(part, run, F, t, track), run, track)
@@ -145,7 +159,11 @@ def as_saved(spec, fd, time_s=None, code=False):
     runs = _parts(s)[0].get("runs") or []
     if not runs:
         raise ValueError("the figure has no runs: give one with --run")
-    run, F = fd.open_run(runs[int(_parts(s)[0].get("run", 0) or 0)]["path"])
+    if fg.is_doc(s):  # (the run of its first panel that steps)
+        refs = fg.time_refs(s)
+        run, F = fd.open_run(refs[0][0] if refs else runs[0]["path"])
+    else:
+        run, F = fd.open_run(runs[int(_parts(s)[0].get("run", 0) or 0)]["path"])
     if time_s is not None:  # (to the output nearest it)
         t0 = first_time(s)
         if t0 is not None:
@@ -183,6 +201,8 @@ def anim_frame(spec, offsets, j, dpi):
     """The spec of animation frame j: its times moved on; a 3D scene's camera turned by
     its share of the orbit and its picture rendered at `dpi`."""
     s = fg.scene_frame(fg.shift_times(spec, offsets[j]), j, len(offsets))
+    if fg.is_doc(s):
+        return fg.doc_scene_dpi(s, dpi)
     if s.get("kind") == "scene":
         s["scene3d"] = dict(s["scene3d"], dpi=dpi)
     return s

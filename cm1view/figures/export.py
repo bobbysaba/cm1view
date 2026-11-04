@@ -167,11 +167,18 @@ class FigureExport:
         w.value = keep if keep in paths else ""
         w.disabled = not g
 
+    def _figure_now(self):
+        """The figure to save: what the new layout holds, while it is what shows, else the
+        widgets'."""
+        if self._in_shell():
+            return json.loads(json.dumps(self.shell.doc, default=float))
+        return self.collect_all()
+
     def _save(self, bundle=None):
         """Save what the Export dialog says; bundle (default: its tick): script and data
         too.  The image and the spec are always written, so it can be reopened."""
         bundle = self.save_more.value if bundle is None else bundle
-        spec = self.collect_all()
+        spec = self._figure_now()
         base = config.expand(self.path.value.strip())
         if not base:
             self._msg("Choose where to save the figure (<b>Export</b> → “Save as”).", True)
@@ -194,7 +201,8 @@ class FigureExport:
         this one).  Edits made meanwhile are not in it."""
         if gen is not None and gen != self._save_gen:
             return
-        if {p["kind"] for p in spec.get("parts", [spec])} & {"th", "line"}:
+        if {p["kind"] for p in spec.get("panels" if fg.is_doc(spec) else "parts", [spec])} & \
+                {"th", "line"}:
             self.panel_data(spec)  # (starts computing what is missing)
             wait = self.series_pending()
             if wait:
@@ -210,7 +218,7 @@ class FigureExport:
             data = self.panel_data(spec)
             base = base or config.expand(self.path.value.strip())
             if bundle:
-                out = fg.save_bundle(spec, data, base, self.run)
+                out = fg.save_bundle(spec, data, base, None if fg.is_doc(spec) else self.run)
             else:
                 out = fg.bundle_paths(spec, base)
                 out = dict(image=fg.save_image(spec, data, out["image"],
@@ -232,7 +240,7 @@ class FigureExport:
     async def _download(self):
         """The image for the browser's download, drawn in the background (reading a
         large figure's data must not hold up the server)."""
-        spec = self.collect_all()
+        spec = self._figure_now()
         self._msg('<span class="busy">● Preparing the download…</span>')
         try:
             buf = await asyncio.wrap_future(self.v.pools["fig"].submit(self._download_job,
@@ -267,12 +275,24 @@ class FigureExport:
         except (OSError, ValueError) as e:
             self._msg(f"Could not load <code>{path}</code>: {e}", True)
             return False
-        changed = fg.changed_runs(spec)
-        if not self._open_spec(spec, f"Loaded <code>{path}</code>" + "".join(
-                f". <b>Note:</b> the namelist.input of <code>{p}</code> changed since "
-                "the figure was saved, so its data may differ" for p in changed)):
+        note = f"Loaded <code>{path}</code>" + "".join(
+            f". <b>Note:</b> the namelist.input of <code>{p}</code> changed since "
+            "the figure was saved, so its data may differ" for p in fg.changed_runs(spec))
+        if fg.is_doc(spec):
+            return self._open_doc(spec, note, saved_base(path))
+        if not self._open_spec(spec, note):
             return False
         self.path.value = saved_base(path)  # (after the runs' sync of the save path)
+        return True
+
+    def _open_doc(self, doc, note, save_as=None):
+        """Show a figure saved in the new layout's form, which only it can: True when shown."""
+        if self.shell is None:
+            self._msg("This figure was made in the new layout, which this page does not have "
+                      "(it needs the CM1VIEW_FIGURE_SHELL setting).", True)
+            return False
+        self.quick.hide()
+        self.shell.open_doc(doc, note, save_as)
         return True
 
     def _open_spec(self, spec, note, part=0):
@@ -303,6 +323,8 @@ class FigureExport:
     def own_figure(self, j=None):
         """Is the figure in the editor more than the example it starts with?  j: its
         JSON (_remember's), when already made."""
+        if self.shell is not None and self.shell.edited(j):
+            return True
         if self._made or self._example is None:
             return self._made
         if j is None:
@@ -311,9 +333,13 @@ class FigureExport:
 
     def figure_state(self, spec=None):
         """The figure as a session or the autosave keeps it: its settings, the part in
-        the widgets and where it would be saved."""
-        return dict(spec=self.collect_all() if spec is None else spec, part=self.part_i,
-                    save_as=self.path.value)
+        the widgets and where it would be saved; with the new layout, what it holds, if that came
+        from those settings ("doc", "showing"; a page without it opens "spec")."""
+        state = dict(spec=self.collect_all() if spec is None else spec, part=self.part_i,
+                     save_as=self.path.value)
+        if self.shell is not None:
+            state.update(self.shell.state_of(state["spec"]))
+        return state
 
     def open_state(self, state, note, render=True):
         """Show a figure_state (its code stays off until ticked, as with any figure
@@ -334,6 +360,12 @@ class FigureExport:
             self.auto.value = live
         if state.get("save_as"):
             self.path.value = state["save_as"]
+        if state.get("doc") and self.shell is not None:
+            try:
+                fg.check_runs(state["doc"])
+            except (KeyError, TypeError, ValueError) as e:
+                return str(e)
+            self.shell.take_state(state, render)
         return None
 
     def _auto_path(self, name=AUTOSAVE):

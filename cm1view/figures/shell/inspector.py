@@ -16,12 +16,13 @@ from .. import draw as figdraw
 from ..cards import SIZE_PRESETS, _hex, _row
 from ..cards.base import _f
 from ..runs import TYPE_PATH, _track_options, _track_path
+from ..style import STYLE_LABELS
 from . import docedit as de, nodes
 from .annotview import AnnotPane
 from .entryview import EntryPane
 from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure node)
-from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget,
-                    panels_differ)
+from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget, kind_bar_rows,
+                    legend_extra, legend_reaches, panels_differ)
 from .planview import PlanPane
 from .sceneview import ScenePane
 from .seriesview import SeriesPane
@@ -136,8 +137,11 @@ class Inspector:
             "Contour key": lambda by: [key_layer_widget(self.shell, doc, "contour_key",
                                                         ("contour",), "First contours")],
             "Maximum and minimum": lambda by: [key_layer_widget(
-                self.shell, doc, "extremes", figdraw.EXTREME_TYPES, "First fill")]})
-        objs += [c for c in (looks.card(s) for s in FIGURE_SECTIONS) if c is not None]
+                self.shell, doc, "extremes", figdraw.EXTREME_TYPES, "First fill")],
+            **legend_extra(self.shell, kinds)})
+        objs.append(self._presets())
+        objs += [c for c in (looks.card(s) for s in FIGURE_SECTIONS)
+                 if c is not None and (c.title != "Legend" or legend_reaches(doc))]
         objs.append(self.annots.card(doc))
         own = {}
         for kind in kinds:
@@ -150,6 +154,13 @@ class Inspector:
             objs.append(_note("This figure was made of parts: each part's colorbar, legend and "
                               "ticks stay its own, whatever is set here."))
         return objs
+
+    def _presets(self):
+        menu = pn.widgets.MenuButton(name="Apply a style preset", button_type="light",
+                                     button_style="outline", height=32, margin=(4, 4),
+                                     items=[(label, key) for key, label in STYLE_LABELS.items()])
+        menu.on_click(lambda e: self.shell.apply_style(e.new))
+        return menu
 
     _quiet = False  # (the size boxes being set from the document)
 
@@ -282,7 +293,10 @@ class Inspector:
 
     # ------------------------------------------------------------ all panels of a kind
     def _kind(self, doc, node):
-        return self.panes[node.partition(":")[2]].kind_objs(doc)
+        kind = node.partition(":")[2]
+        title, objs = self.panes[kind].kind_objs(doc)
+        bars = kind_bar_rows(self, doc, kind)
+        return title, [*objs, bars] if bars is not None else objs
 
     # ------------------------------------------------------------ a panel
     def _panel(self, doc, node):

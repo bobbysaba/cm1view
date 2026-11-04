@@ -73,6 +73,8 @@ class FigureAnimation:
     def _anim_msg(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""
         self.an_msg.object = f'<div class="cv-status"{col}>{html}</div>'
+        if self._in_shell():
+            self.shell.say(html, err)
 
     def _anim_runs(self, spec):
         return {p: self.open_run(p)[0] for p in {p for p, _ in fg.time_refs(spec)}}
@@ -81,14 +83,14 @@ class FigureAnimation:
         return fg.frame_offsets(spec, self._anim_runs(spec), int(self.an_step.value or 1),
                                 self.an_end.value, limit)
 
-    def _anim_refresh(self, spec=None):
+    def _anim_refresh(self, spec=None, force=False):
         """The End time choices (the frames' times through the run's end) and the
-        frame count, while the Animation section is open."""
-        if self.anim_sec.collapsed:
+        frame count, while the Animation section is open (force: the new layout's is)."""
+        if self.anim_sec.collapsed and not force:
             return
         self._an_times, opts = [], {END: None}
         try:
-            spec = self.collect_all() if spec is None else spec
+            spec = self._figure_now() if spec is None else spec
             refs = fg.time_refs(spec) if fg.animated(spec) else []
             if refs:
                 runs = self._anim_runs(spec)
@@ -118,7 +120,7 @@ class FigureAnimation:
         self.an_count.object = f'<div class="cv-hint"{col}>{msg}</div>'
 
     def _on_anim(self):
-        spec = self.collect_all()
+        spec = self._figure_now()
         if not fg.animated(spec):
             self._anim_msg("Time–height plots and time series show every time already, "
                            "so they have nothing to step (the panels' kind in "

@@ -65,6 +65,8 @@ def _load_layer(card, lay, folded):
 class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, FigureRuns,
                    FigureSources, FigureExport, FigureAnimation, FigureCombo, FigureClick,
                    FigureTree, FigureStyle, FigureQuick, FigureScene):
+    shell = None  # (the new layout: __init__, when asked for)
+
     def __init__(self, viewer):
         self.v = viewer
         self.run, self.F = viewer.run, viewer.F
@@ -556,3 +558,5 @@ class FigureEditor(FigureWidgets, FigureSpecIO, FigureTimes, FigurePanelOpts, Fi
     def _msg(self, html, err=False):
         col = ' style="color:#f87171"' if err else ""
         self.msg.object = f'<div class="cv-status"{col}>{html}</div>'
+        if self._in_shell():  # (what the old layout's line above its preview says)
+            self.shell.say(html, err)

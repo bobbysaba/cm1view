@@ -479,7 +479,7 @@ def fill_outputs(spec, open_run):
     """The runs of a figure pairing them by output number (time_match "output"; all
     parts of a figure of parts) with their output times now.  open_run(path) -> (run, _)."""
     for p in [spec] + list(spec.get("parts") or []):
-        if p.get("time_match") == "output":
+        if p.get("time_match") == "output" or (p.get("style") or {}).get("time_match") == "output":
             for r in p.get("runs") or []:
                 r["outputs_s"] = [float(t) for t in open_run(r["path"])[0].times]
 
@@ -492,12 +492,20 @@ def _edit_run(spec, key, e, default):
     return default if ref is None else ref[0]
 
 
+def is_doc(spec):
+    """Whether spec is a document (version 3, spec.doc)."""
+    return int(spec.get("version", 1)) == 3
+
+
 def shift_times(spec, dt_s):
     """A copy of `spec` with every panel's time moved by dt_s seconds (a frame of an
     animation: the panels step through time together; in a figure of parts, the
     panels of every part, and the soundings; an entry or layer with "time_lock" stays).
     dt_s an OutputStep and the runs paired by output number: moved by its outputs, each
-    time in its own run."""
+    time in its own run.  A document: docfile.shift_doc."""
+    if is_doc(spec):
+        from .docfile import shift_doc
+        return shift_doc(spec, dt_s)
     s = json.loads(json.dumps(spec, default=float))
     if s.get("kind") == "combo":
         s["parts"] = [shift_times(p, dt_s) for p in s["parts"]]
@@ -546,6 +554,9 @@ STEP_ENTRIES = ("sounding", "dist", "profile", "joint", "azim")  # (kinds of tim
 def animated(spec):
     """Whether the spec has panels that step in time (plan views, sections, 3D scenes
     and STEP_ENTRIES; time-height and time-series panels stay as they are)."""
+    if is_doc(spec):
+        from .docfile import doc_animated
+        return doc_animated(spec)
     parts = spec["parts"] if spec.get("kind") == "combo" else [spec]
     return any(p["kind"] in ("plan", "xsec", "scene") + STEP_ENTRIES for p in parts)
 
@@ -554,6 +565,9 @@ def scene_frame(spec, j, n):
     """Frame j of n of an animation of 3D scene figure `spec` (already shift_times'd):
     its camera turned by the orbit's share, j / n of it (the last frame stops short, so
     a looping full turn has no repeated frame)."""
+    if is_doc(spec):
+        from .docfile import doc_scene_frame
+        return doc_scene_frame(spec, j, n)
     sc = spec.get("scene3d") or {}
     deg = float(sc.get("orbit") or 0.0) * j / max(int(n), 1)
     if spec.get("kind") != "scene" or not deg:
@@ -633,6 +647,9 @@ def time_refs(spec):
     """(run path, model time s) of every panel that steps in an animation: plan views
     and sections (all parts of a figure of parts), soundings, distributions, profiles
     (each of their runs), joint distributions and azimuthal means."""
+    if is_doc(spec):
+        from .docfile import doc_time_refs
+        return doc_time_refs(spec)
     out = []
     for p in spec["parts"] if spec.get("kind") == "combo" else [spec]:
         runs = p.get("runs") or []
@@ -656,6 +673,9 @@ def time_refs(spec):
 
 def _window_ends(spec):
     """(run path, model time s) of the ends of the time windows of the timed entries."""
+    if is_doc(spec):
+        from .docfile import doc_window_ends
+        return doc_window_ends(spec)
     return [(path, float(t1))
             for p in (spec["parts"] if spec.get("kind") == "combo" else [spec])
             if p["kind"] in STEP_ENTRIES
