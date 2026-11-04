@@ -14,6 +14,7 @@ from ..cards import _grid, _hint
 from ..cards.base import SECTION
 from ..widgets import DIALOG_DARK
 from .looks import Scope, make_widget, rows_of
+from .multirun import ApplyRuns
 
 
 class ExportDialog:
@@ -101,6 +102,7 @@ class ExportDialog:
                   f"<code>{fg.templates_dir()}</code>."),
             _grid((self._copy(ed.tpl_name), 2), self.tpl_go), self.tpl_said,
             title="Template", collapsed=True, **SECTION)
+        self.runs = ApplyRuns(self.shell)
         self.body.objects = [
             pn.pane.HTML('<div class="cv-maptitle" style="font-size:16px"><b>Export the figure'
                          '</b></div>', margin=(0, 4)),
@@ -109,7 +111,7 @@ class ExportDialog:
             self.more,
             _hint("The script (<code>scripts/&lt;name&gt;.py</code>) redraws the figure without the "
                   "viewer, from the data and drawing code it adds to <code>_src/</code>."),
-            pn.Row(self.save, self.dl), self.anim, self.template]
+            pn.Row(self.save, self.dl), self.anim, self.template, self.runs.card]
         self._built = True
 
     # ------------------------------------------------------------ opening it
@@ -119,6 +121,7 @@ class ExportDialog:
         self.shell.ed.path.value = self._default_path()
         self._show_rows()
         self._names()
+        self.runs.refresh()
         if not self.anim.collapsed:
             self.ed._anim_refresh(force=True)
         self.dlg.show()

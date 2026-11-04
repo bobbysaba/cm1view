@@ -262,6 +262,39 @@ def save_gif(fd, spec, base, offsets, fps=4.0, dpi=110, loop=True, frames=False,
     return fg.write_gif(images, base + ".gif", fps, loop), len(images), missing
 
 
+def run_outputs(spec, base, fmt, bundle=False):
+    """The paths save_on_run writes as `base`: the image and the spec (the script and data
+    too with `bundle`)."""
+    s = dict(spec, export=dict(spec.get("export") or {}, format=fmt))
+    out = fg.bundle_paths(s, base)
+    return list(out.values()) if bundle else [out["image"], out["spec"]]
+
+
+def save_on_run(fd, spec, name, rp, base, fmt, bundle=False, time_s=None, code=False,
+                cancelled=None):
+    """The figure `spec` (an editor's document or a figure's spec) drawn for the run in `rp` as a
+    template of it would be (on_run) and saved as `base` (image + spec to reopen it, or with
+    `bundle` script and data too).  fd: a FigureData.  (paths written, notes).  Used by `render
+    --run` and the editor's “Apply to other runs”."""
+    run, F = fd.open_run(rp)
+    s = on_run(spec, False, name, run, F, time_s, code)
+    for p in _parts(s) + ([s] if s.get("kind") == "combo" else []):
+        p["export"] = dict(p.get("export") or {}, format=fmt)
+    data = fd.panel_data(s, None, cancelled)
+    if data is None or (cancelled is not None and cancelled()):
+        raise InterruptedError("stopped")
+    notes = [f"{'panel' if i >= 0 else 'inset'} {abs(i)}: {d['missing']}"
+             for i, d in data.items() if d.get("missing")]
+    notes += [f"storm track {path}: {err}" for path, err in fd.track_err.items()]
+    if bundle:
+        out = list(fg.save_bundle(s, data, base, None if fg.is_doc(s) else run).values())
+    else:
+        paths = fg.bundle_paths(s, base)
+        out = [fg.save_image(s, data, paths["image"], thumb=fg.thumb_path(paths["spec"])),
+               fg.save_spec(s, base)]
+    return out, notes
+
+
 # ------------------------------------------------------------ command line
 def _out_pattern(out, run_path, name):
     parent = os.path.basename(os.path.dirname(run_path.rstrip("/")))
