@@ -21,7 +21,7 @@ from ..draw.base import _cell
 from ..runs import AllFields
 from ..times import _tlabel
 from ...viewer.ui import out_of_flow
-from . import docedit as de, nodes
+from . import docedit as de, nodes, scrub
 from .exportview import ExportDialog
 from .inspector import Inspector
 from .placing import Placing
@@ -55,6 +55,9 @@ class FigureShell:
         self._req = 0
         self._boxes = {}  # panel -> where it is in the preview
         self._png = None
+        self._frames = None  # (the scrubber's: key, offsets, labels, saved frame)
+        self._dt = None  # (how far the preview is moved from the saved figure; None: not)
+        self._syncing = False
         self.fields = ed.fields  # (the fields of the document's runs: _sync_fields)
         self._build()
 
@@ -88,6 +91,28 @@ class FigureShell:
         self.status = pn.pane.HTML(sizing_mode="stretch_width", margin=(0, 8),
                                    styles={"flex": "0 0 auto"})
         self.image = ClickImage(sizing_mode="stretch_both", margin=(4, 8), fit=True)
+        sb = dict(name="", button_type="light", button_style="outline", width=34, height=30,
+                  margin=(2, 2))
+        self.scr_prev = pn.widgets.Button(icon="player-skip-back", description="One output "
+                                                                               "earlier", **sb)
+        self.scr_next = pn.widgets.Button(icon="player-skip-forward", description="One output "
+                                                                                  "later", **sb)
+        self.scr_slider = pn.widgets.IntSlider(name="", start=0, end=1, value=0, step=1,
+                                               show_value=False, sizing_mode="stretch_width",
+                                               margin=(4, 8), height=30)
+        self.scr_label = pn.pane.HTML("", margin=(6, 4), width=230, styles={"flex": "0 0 auto"})
+        self.scr_keep = pn.widgets.Button(name="Keep this time", height=30, margin=(2, 2),
+                                          button_type="light", button_style="outline",
+                                          description="Move the figure's panels to the time "
+                                                      "shown (Undo takes it back); the saved "
+                                                      "figure otherwise stays where it was")
+        self.scr_back = pn.widgets.Button(name="Saved time", height=30, margin=(2, 2),
+                                          button_type="light", button_style="outline",
+                                          description="Back to the time the figure is at")
+        self.scrubber = pn.Row(self.scr_prev, self.scr_slider, self.scr_next, self.scr_label,
+                               self.scr_back, self.scr_keep, margin=0, visible=False,
+                               sizing_mode="stretch_width", align="center",
+                               styles={"flex": "0 0 auto"})
         self.tree = TreeView(sizing_mode="stretch_width", margin=(4, 2))
         self.tree_pane = pn.Column(self.tree, width=240, scroll="y-auto",
                                    sizing_mode="stretch_height",
@@ -102,7 +127,7 @@ class FigureShell:
                              styles={"flex": "0 0 auto", "border-bottom": f"1px solid {GRID}"})
         self.picture = pn.Column(self.image, margin=0, sizing_mode="stretch_both",
                                  styles={"flex": "1 1 0", "min-height": "0", "overflow": "auto"})
-        preview = pn.Column(self.placing.hint, self.picture, self.status, margin=0,
+        preview = pn.Column(self.placing.hint, self.picture, self.scrubber, self.status, margin=0,
                             sizing_mode="stretch_both",
                             styles={"flex": "1 1 0", "min-width": "0", "min-height": "0"})
         self.panes = pn.Row(self.tree_pane, preview, self.inspector.panel, margin=0,
@@ -121,6 +146,11 @@ class FigureShell:
         self.auto.param.watch(lambda e: self.request() if e.new else None, "value")
         self.zoom.param.watch(lambda e: self._show_image(), "value")
         self.back.on_click(lambda e: self.close())
+        self.scr_slider.param.watch(self._on_scrub, "value")
+        self.scr_prev.on_click(lambda e: self._scrub_by(-1))
+        self.scr_next.on_click(lambda e: self._scrub_by(1))
+        self.scr_back.on_click(lambda e: self._scrub_saved())
+        self.scr_keep.on_click(lambda e: self.keep_scrub())
         self.tree.param.watch(lambda e: self.select(e.new[0]) if e.new else None, "pick")
         self.image.param.watch(self._on_click, "click")
         self.image.param.watch(self._on_drag, "drag")
@@ -464,7 +494,82 @@ class FigureShell:
         self._step(self._future, self._hist)
 
     # ------------------------------------------------------------ the preview
-    def request(self, force=False, delay=True):
+    # ------------------------------------------------------------ the time scrubber
+    def _scrub_sync(self):
+        """The scrubber's frames for the document as it is (they are found again only when
+        where the panels are in time changed, which also puts the preview back at the saved
+        time)."""
+        try:
+            key = scrub.scrub_key(self.doc)
+        except Exception:  # noqa: BLE001
+            key = None
+        if self._frames is not None and self._frames[0] == key:
+            return
+        self._dt = None
+        offs, labels, zero = [], [], 0
+        if key is not None:
+            try:
+                offs, labels, zero = scrub.scrub_frames(
+                    self.doc, lambda p: self.ed.open_run(p)[0])
+            except Exception:  # noqa: BLE001  (a run that can't be opened: the panels say)
+                offs, labels, zero = [], [], 0
+        self._frames = (key, offs, labels, zero)
+        self._syncing = True
+        try:
+            self.scrubber.visible = bool(offs)
+            if offs:
+                self.scr_slider.param.update(end=len(offs) - 1, value=zero)
+        finally:
+            self._syncing = False
+        self._scrub_label()
+
+    def _scrub_label(self):
+        if not self._frames or not self._frames[1]:
+            return
+        _, offs, labels, zero = self._frames
+        i = self.scr_slider.value
+        off = i != zero
+        self.scr_label.object = (f'<div class="cv-hint"><b>{labels[i]}</b>' +
+                                 (f' (saved: {labels[zero]})' if off else " (saved)") + "</div>")
+        self.scr_back.disabled = self.scr_keep.disabled = not off
+
+    def _on_scrub(self, ev):
+        if self._syncing or not self._frames or not self._frames[1]:
+            return
+        _, offs, _, zero = self._frames
+        i = int(ev.new)
+        self._dt = None if i == zero else offs[i]
+        self._scrub_label()
+        self.request(force=True, wait=150)  # (a drag gives one drawing when it settles)
+
+    def _scrub_by(self, n):
+        s = self.scr_slider
+        s.value = max(s.start, min(s.end, s.value + n))
+
+    def _scrub_saved(self):
+        if self._frames and self._frames[1]:
+            self.scr_slider.value = self._frames[3]
+
+    def keep_scrub(self):
+        """The panels at the time shown, in the document (one undo step)."""
+        dt = self._dt
+        if dt is None or self.doc is None:
+            return
+        self._dt = None
+
+        def apply(d):
+            new = fg.shift_times(d, dt)
+            d.clear()
+            d.update(new)
+        self.edit(apply)
+
+    def _shown_doc(self):
+        """The document to draw: a copy, moved to the time the scrubber shows."""
+        if self._dt is None:
+            return json.loads(json.dumps(self.doc, default=float))
+        return fg.shift_times(self.doc, self._dt)
+
+    def request(self, force=False, delay=True, wait=400):
         """Draw the preview again (shortly: several quick changes give one drawing)."""
         if not (force or self.auto.value):
             if self.showing:  # (no drawing to wait for)
@@ -474,7 +579,7 @@ class FigureShell:
         n = self._req
         doc = self.v.doc
         if delay and doc is not None:
-            doc.add_timeout_callback(partial(self._fire, n), 400)
+            doc.add_timeout_callback(partial(self._fire, n), wait)
         else:
             self._fire(n)
 
@@ -482,11 +587,11 @@ class FigureShell:
         if n != self._req or not self.showing:
             return
         self._keep_figure()
+        self._scrub_sync()
         self.ed._preview_waiting = True  # (a GIF being saved lets it in after a frame)
         self.v.gen["fig"] += 1
         self.say('<span class="busy">● Rendering…</span>')
-        self.v.pools["fig"].submit(self._job, self.v.gen["fig"], json.loads(json.dumps(
-            self.doc, default=float)))
+        self.v.pools["fig"].submit(self._job, self.v.gen["fig"], self._shown_doc())
 
     def _job(self, g, doc):
         t0, ed = _time.time(), self.ed
