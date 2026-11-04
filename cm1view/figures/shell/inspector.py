@@ -2,8 +2,9 @@
 Only what is shown exists as widgets: a node's are made when it is picked.
 
 Editable so far: the figure's size, title, look, grid and panels, the runs, plan views
-(planview) and soundings (entryview).  Other kinds are shown, with a panel's title and place to
-edit, until they move here."""
+(planview), soundings (entryview), cross-sections (xsecview), time-height panels and time series
+(seriesview).  Other kinds are shown, with a panel's title and place to edit, until they move
+here."""
 
 import html
 import os
@@ -21,6 +22,8 @@ from .gridview import GridPane, grid_map  # noqa: F401  (grid_map: of the Figure
 from .looks import (FIGURE_SECTIONS, PANEL_KEYS, Scope, Sections, key_layer_widget,
                     panels_differ)
 from .planview import PlanPane
+from .seriesview import SeriesPane
+from .xsecview import XsecPane
 from ...theme import GRID
 
 
@@ -43,11 +46,15 @@ class Inspector:
         self.folds = {}  # what is open: by layer id or section, so it outlasts undo and redo
         self.plan = PlanPane(self)
         self.grid = GridPane(self)
-        self.panes = dict(plan=self.plan, sounding=EntryPane(self))  # (kinds moved here)
+        self.panes = dict(plan=self.plan, sounding=EntryPane(self), xsec=XsecPane(self),
+                          th=SeriesPane(self, "th"), line=SeriesPane(self, "line"))  # (moved here)
         self.head = pn.pane.HTML(margin=(4, 4, 0, 4), sizing_mode="stretch_width",
                                  styles={"flex": "0 0 auto"})
+        # (taller than the pane: it scrolls.  Its height is what it holds: Bokeh's max-height 100%
+        # would cap it and each card in it at the pane's, and a taller card run over the next)
         self.body = pn.Column(margin=0, sizing_mode="stretch_width",
-                              styles={"flex": "0 0 auto"})  # (taller than the pane: it scrolls)
+                              styles={"flex": "0 0 auto", "height": "max-content",
+                                      "max-height": "none"})
         self.panel = pn.Column(self.head, self.body, width=440, scroll="y-auto",
                                sizing_mode="stretch_height",
                                styles={"border-left": f"1px solid {GRID}", "padding": "0 8px",
@@ -95,10 +102,10 @@ class Inspector:
                 return
             if "x" in ev.new:
                 size, auto = [float(v) for v in ev.new.split("x")], False
-            else:  # (only plan views' height follows a width)
+            else:  # (only plan views' and sections' height follows a width)
                 size = [float(ev.new), float(height.value or 6.0)]
                 auto = self.shell.can_follow() and \
-                    self.shell.doc["panels"][0]["kind"] == "plan"
+                    self.shell.doc["panels"][0]["kind"] in ("plan", "xsec")
             self.shell.edit(lambda d: d.update(size=size, size_auto=auto), node=nodes.FIGURE)
 
         width.param.watch(on_size, "value")
@@ -108,8 +115,8 @@ class Inspector:
                                                 node=nodes.FIGURE))
         fit.disabled = not self.shell.can_follow(doc)
         if fit.disabled:
-            fit.description = ("Only a figure of plan views or of soundings, in equal cells, "
-                               "has an automatic size")
+            fit.description = "Only a figure of one kind of panel, in equal cells, has an " \
+                              "automatic size"
         title.param.watch(lambda ev: self.shell.edit(
             lambda d: d.update(suptitle=ev.new.strip())), "value")
         objs = [_row(width, height, preset, fit), title, *self.grid.grid_objs(doc)]
@@ -215,8 +222,7 @@ class Inspector:
                                button_style="outline", disabled=bool(used) or n < 2,
                                description="Remove the run" if not used else
                                "In use by panel " + ", ".join(names[i] for i in used))
-        rm.on_click(lambda ev: self.shell.edit(
-            lambda d: d.update(runs=[x for x in d["runs"] if x["id"] != rid]), node=nodes.RUNS))
+        rm.on_click(lambda ev: self.shell.edit(lambda d: de.remove_run(d, rid), node=nodes.RUNS))
         head = pn.pane.HTML(f'<b>{k + 1}.</b> <code>{html.escape(path)}</code>'
                             + ('<span class="cv-hint"> (this viewer\'s run)</span>' if own else ""),
                             margin=(6, 4, 0, 4))

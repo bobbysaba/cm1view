@@ -34,6 +34,8 @@ def layer_name(lay, fields=None):
     """A layer in words: its type and field, or an entry's label or field."""
     if lay.get("type") == "sounding":
         return sounding_name(lay)
+    if lay.get("type") == "series":
+        return series_name(lay, fields)
     head = TYPE_LABEL.get(lay.get("type"), "")
     recipe = lay.get("recipe") if isinstance(lay.get("recipe"), dict) else {}
     field = lay.get("field") or recipe.get("field")
@@ -48,6 +50,15 @@ def sounding_name(lay):
         (lay.get("where") or {}).get("kind"), "")
     when = f"{float(lay['time_s']) / 60:g} min" if lay.get("time_s") is not None else ""
     return " · ".join(x for x in ("Sounding", lay.get("label") or where, when) if x)
+
+
+def series_name(lay, fields=None):
+    """A series in words: of a run, of your own data or of a parcel set, and its label."""
+    head = {"table": "Your data", "parcels": "Parcels"}.get(lay.get("source"), "Series")
+    recipe = lay.get("recipe") if isinstance(lay.get("recipe"), dict) else {}
+    field = recipe.get("field")
+    what = fields[field].label if fields is not None and field in fields else field
+    return " · ".join(str(x) for x in (head, lay.get("label") or what) if x)
 
 
 def panel_name(doc, p, runs=None):

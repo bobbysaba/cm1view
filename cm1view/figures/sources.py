@@ -416,11 +416,13 @@ class FigureSources:
         self.ser_cards.append(self._ser_card(e))
         self._series_changed()
 
-    def _parcel_series_source(self):
-        """The set a new parcel series draws: the next viewer set no card draws yet
-        (else the first; no set: the first saved one), or None (and a message)."""
+    def _parcel_series_source(self, have=None):
+        """The set a new parcel series draws: the next viewer set no card draws yet (have:
+        the sets' names drawn; else the first; no set: the first saved one), or None (and a
+        message)."""
         v = self.v
-        have = {c.ent.get("name") for c in self.ser_cards if isinstance(c, ParcelSeriesCard)}
+        if have is None:
+            have = {c.ent.get("name") for c in self.ser_cards if isinstance(c, ParcelSeriesCard)}
         src = next((parcel_source(n, e) for n, e in v.psets.items() if n not in have),
                    None) or next((parcel_source(n, e) for n, e in v.psets.items()), None)
         if src is None:

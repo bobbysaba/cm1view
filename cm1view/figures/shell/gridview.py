@@ -15,7 +15,7 @@ from ..spec.doc import KIND_KEYS
 from ..times import _nearest_t
 from . import docedit as de, nodes
 
-ADDABLE = ("plan", "sounding")  # (the kinds that can be edited here: M6, M7 add theirs)
+ADDABLE = ("plan", "sounding", "xsec", "th", "line")  # (the kinds edited here: M7 adds its)
 NEW_ROW, NEW_COL = "new row", "new column"
 
 
@@ -175,6 +175,9 @@ class GridPane:
             if kind == "plan":
                 p = de.plan_panel(d, at, rid, ts, spec["layers"], fg.card_section(
                     spec["sections"][0]))
+            elif kind == "xsec":
+                p = de.xsec_panel(d, at, rid, ts, spec["layers"], fg.card_section(
+                    spec["sections"][0]))
             else:
                 p = de.add_panel(d, kind, at, self._first_entries(kind))
             present = {KINDS[q["kind"]] for q in d["panels"]} | {KINDS[k] for k in ADDABLE}
@@ -188,7 +191,31 @@ class GridPane:
         return made[0]
 
     def _first_entries(self, kind):
+        """A new panel's entries (a series panel: none, so nothing is computed until one is
+        added)."""
         return [new_sounding(self.shell)] if kind == "sounding" else []
+
+    def titles_objs(self, kind):
+        """Titles of a kind's panels from what each shows, and clearing them (plan views': Fill
+        panels)."""
+        shell = self.shell
+
+        def on_titles(e):
+            shell.edit(lambda d: de.entry_titles(d, kind), node=shell.node)
+
+        def on_clear(e):
+            def apply(d):
+                for p in de.panels_of(d, kind):
+                    p["title"] = ""
+            shell.edit(apply, node=shell.node)
+
+        make = pn.widgets.Button(name="Titles from what each shows", button_type="light",
+                                 button_style="outline", height=30, margin=(4, 4))
+        clear = pn.widgets.Button(name="Clear the titles", button_type="light",
+                                  button_style="outline", height=30, margin=(4, 4))
+        make.on_click(on_titles)
+        clear.on_click(on_clear)
+        return [pn.Row(make, clear, margin=0)]
 
     # ------------------------------------------------------------ a panel's
     def place_objs(self, doc, pid):

@@ -4,7 +4,8 @@
   a panel          its run, time, height, title, its layers (overrides, or of its own), its look
   a layer          that layer in that panel
 
-and on the figure node, the tool that fills panels and the panel titles from what differs."""
+and on the figure node, the tool that fills panels and the panel titles from what differs.
+Cross-sections (xsecview) are this pane but for what a panel holds: `kind` says which."""
 
 import html
 
@@ -13,10 +14,12 @@ import panel as pn
 from .. import draw as figdraw, spec as fg
 from ..cards import GRID_DIMS, TYPE_LABEL, _grid
 from ..cards.base import SECTION, _near
+from ..kinds import KINDS
 from ..times import _heights, _nearest_t, _tlabel
 from . import docedit as de, nodes
 from .layerrow import InPanel, LayerRow, Shared, describe, own_time_widgets
 from .looks import KIND_SECTIONS, PANEL_KEYS, Scope, Sections, area_extra, panels_differ
+from .sectionrow import section_objs
 
 ZMODES = {"km": "height", "Model level": "level"}
 
@@ -51,6 +54,8 @@ def new_layer(shell, kind):
 
 
 class PlanPane:
+    kind = "plan"
+
     def __init__(self, inspector):
         self.ins, self.shell = inspector, inspector.shell
 
@@ -65,14 +70,33 @@ class PlanPane:
         return menu
 
     def _by_height(self, doc):
-        return any(p.get("z") is not None for p in de.panels_of(doc, "plan"))
+        return any(p.get("z") is not None for p in de.panels_of(doc, self.kind))
+
+    def _words(self):
+        """The kind's panels, in words: "plan views"."""
+        return KINDS[self.kind].name
 
     # ------------------------------------------------------------ All plan views
-    def kind_objs(self, doc, kind="plan"):
+    def _kind_tools(self, doc):
+        """What the kind's node has above its layers."""
+        return []
+
+    def _kind_sections(self, doc):
+        """The sections a plan view's Section line layers draw, when one does."""
+        lines = any(lay.get("type") == "line" for p in de.panels_of(doc, "plan")
+                    for _, lay in figdraw.panel_layers(doc, p))
+        return section_objs(self.ins, doc) if lines else []
+
+    def _look_extras(self):
+        return {"Area": area_extra(self.shell, Scope(self.kind))}
+
+    def kind_objs(self, doc):
+        kind = self.kind
         mine = de.panels_of(doc, kind)
         names = nodes.letters(doc)
         ids = de.shared_ids(doc, kind)
-        objs = [_note("Panels " + ", ".join(names[p["id"]] for p in mine)), _head("Layers"),
+        objs = [_note("Panels " + ", ".join(names[p["id"]] for p in mine)),
+                *self._kind_tools(doc), _head("Layers"),
                 _note("Drawn in this order, the last on top. Changes reach every panel, but what "
                       "a panel has set for itself."),
                 self._add_menu(self.add_shared)]
@@ -84,7 +108,8 @@ class PlanPane:
                            down=lambda i=lid: self._shared(de.move_shared, i, 1),
                            copy=lambda i=lid: self._copy_shared(i),
                            remove=lambda i=lid: self._shared(de.remove_shared, i)),
-                extras=lambda row, i=lid: self._shared_extras(i), opened=lid == ids[0]).panel)
+                extras=lambda row, i=lid: self._shared_extras(i), opened=lid == ids[0],
+                kind=kind).panel)
         if not ids:
             objs.append(_note("No shared layers: add one above."))
         own = [names[p["id"]] for p in mine if any("ref" not in x for x in p.get("layers") or [])]
@@ -92,8 +117,8 @@ class PlanPane:
             objs.append(_note("Panel" + ("s " if len(own) > 1 else " ") + ", ".join(own)
                               + " also draw" + ("" if len(own) > 1 else "s")
                               + " layers of their own: see the panel."))
-        looks = Sections(self.ins, Scope(kind), [kind], {
-            "Area": area_extra(self.shell, Scope(kind))})
+        objs += self._kind_sections(doc)
+        looks = Sections(self.ins, Scope(kind), [kind], self._look_extras())
         objs += [c for c in (looks.card(s) for s in KIND_SECTIONS[kind]) if c is not None]
         differ = panels_differ(doc, kind, [k for keys in PANEL_KEYS[kind].values() for k in keys])
         if differ:
@@ -102,32 +127,32 @@ class PlanPane:
         return f"All {nodes.kind_name(kind, len(mine))}", objs
 
     def _shared(self, fn, lid, *args):
-        self.shell.edit(lambda d: fn(d, "plan", lid, *args), node=self.shell.node)
+        self.shell.edit(lambda d: fn(d, self.kind, lid, *args), node=self.shell.node)
 
     def _copy_shared(self, lid):
         made = []
 
         def apply(d):
-            made.append(de.copy_shared(d, "plan", lid))
+            made.append(de.copy_shared(d, self.kind, lid))
             self.ins.folds[f"s:{made[0]}"] = True  # (the copy: open, to change it)
         self.shell.edit(apply, node=self.shell.node)
 
     def add_shared(self, kind):
-        """A new shared layer on top of every plan view, open."""
+        """A new shared layer on top of every panel of the kind, open."""
         lay = new_layer(self.shell, kind)
         if lay is None:
             self.shell.say("No parcel sets: make one in the viewer's Parcels tab.", True)
             return
 
         def apply(d):
-            self.ins.folds[f"s:{de.add_shared(d, 'plan', lay)}"] = True
+            self.ins.folds[f"s:{de.add_shared(d, self.kind, lay)}"] = True
         self.shell.edit(apply, node=self.shell.node)
 
     def _shared_extras(self, lid):
         """Which panels draw a shared layer, and which of them have it otherwise."""
         doc, shell = self.shell.doc, self.shell
         names = nodes.letters(doc)
-        mine = de.panels_of(doc, "plan")
+        mine = de.panels_of(doc, self.kind)
         opts = {names[p["id"]]: p["id"] for p in mine}
         pick = pn.widgets.CheckButtonGroup(
             name="In panels", options=opts, value=[p["id"] for p in mine if de.draws(doc, p, lid)],
@@ -135,7 +160,7 @@ class PlanPane:
 
         def on_pick(ev):
             def apply(d):
-                for p in de.panels_of(d, "plan"):
+                for p in de.panels_of(d, self.kind):
                     now = p["id"] in ev.new
                     if now != de.draws(d, p, lid):
                         de.in_panel(d, p, lid, now)
@@ -143,27 +168,28 @@ class PlanPane:
 
         pick.param.watch(on_pick, "value")
         objs = [_note("Drawn in panels:"), pick]
-        others = de.other_kinds_with(doc, "plan", lid)
+        others = de.other_kinds_with(doc, self.kind, lid)
         if others:
             n = len(others)
             apart = pn.widgets.Button(name="Keep apart", height=26, margin=(2, 4),
                                       button_type="light", button_style="outline",
-                                      description="Plan views get a copy of this layer of their "
-                                                  "own; the other panels keep this one")
-            apart.on_click(lambda e: shell.edit(lambda d: de.split_shared(d, "plan", lid),
+                                      description=f"These {self._words()} get a copy of this "
+                                                  "layer of their own; the other panels keep "
+                                                  "this one")
+            apart.on_click(lambda e: shell.edit(lambda d: de.split_shared(d, self.kind, lid),
                                                 node=shell.node))
             objs += [_note(f"<b>Panel{'s' if n > 1 else ''} "
                            + ", ".join(names[p["id"]] for p in others)
                            + f" of another kind draw{'' if n > 1 else 's'} this layer too:</b> "
                            "changes here reach them."), apart]
-        differ = de.differing(doc, lid, "plan")
+        differ = de.differing(doc, lid, self.kind)
         if differ:
             n = len(differ)
             back = pn.widgets.Button(name="↺ All as shared", height=26, margin=(2, 4),
                                      button_type="light", button_style="outline",
                                      description="No panel has this layer otherwise any more")
             back.on_click(lambda e: shell.edit(
-                lambda d: de.clear_shared_over(d, lid, "plan"), node=shell.node))
+                lambda d: de.clear_shared_over(d, lid, self.kind), node=shell.node))
             objs += [_note(f"{n} panel{'s differ' if n > 1 else ' differs'} ("
                            + ", ".join(names[i] for i in differ)
                            + "): what they set stays as it is when this changes."), back]
@@ -191,25 +217,7 @@ class PlanPane:
         rowlabel = pn.widgets.TextInput(name="Row label (left)", value=p.get("rowlabel") or "",
                                         placeholder="none")
         rowlabel.param.watch(lambda ev: set_keys(rowlabel=ev.new.strip() or None), "value")
-        rname = nodes.run_names(doc)
-        run_opts = {f"{k + 1}. {rname[r['id']]}": r["id"] for k, r in enumerate(doc["runs"])}
-        run = pn.widgets.Select(name="Run", options=run_opts,
-                                value=p.get("run") if p.get("run") in run_opts.values()
-                                else doc["runs"][0]["id"])
-        time = pn.widgets.Select(name="Time", options=self._times(p.get("run"), p.get("time_s")),
-                                 value=None if p.get("time_s") is None else float(p["time_s"]))
-
-        def on_run(ev):
-            ts = de._moved(shell.doc, time.value, ev.old, ev.new) if time.value is not None \
-                else None
-            tl = list(shell.time_opts(de.run_index(shell.doc, ev.new)).values())
-            if ts is not None and tl:
-                ts = _nearest_t(tl, ts)
-            shell.edit(lambda d: de.panel_by_id(d, pid).update(run=ev.new, time_s=ts),
-                       node=shell.node)
-
-        run.param.watch(on_run, "value")
-        time.param.watch(lambda ev: set_keys(time_s=float(ev.new)), "value")
+        run, time = self._run_time(doc, p)
         z = pn.widgets.TextInput(
             name="Own height (blank: its layers')",
             value="" if p.get("z") is None else f"{float(p['z']):g}", placeholder="e.g. 1",
@@ -240,9 +248,14 @@ class PlanPane:
                                     next(iter(secs)), sizing_mode="stretch_width")
             sec.param.watch(lambda ev: set_keys(section=ev.new), "value")
             objs.append(sec)
-        objs += [_head("Layers"),
-                 _note("Changes here are for this panel alone; a shared layer's other settings "
-                       "follow All plan views.")]
+        return f"Panel {letter}", objs + self._panel_rest(doc, p)
+
+    def _panel_rest(self, doc, p):
+        """A panel's layers, its look and its place."""
+        pid = p["id"]
+        objs = [_head("Layers"),
+                _note("Changes here are for this panel alone; a shared layer's other settings "
+                      f"follow All {self._words()}.")]
         objs.append(self._add_menu(lambda t: self.add_own(pid, t), "Add a layer to this panel"))
         lays = figdraw.panel_layers(doc, p)
         for j, _ in enumerate(lays):
@@ -251,7 +264,32 @@ class PlanPane:
             objs.append(_note("No layers here: add one above."))
         objs += self._panel_looks(doc, pid)
         objs += self.ins.grid.place_objs(doc, pid)
-        return f"Panel {letter}", objs
+        return objs
+
+    def _run_time(self, doc, p):
+        """A panel's Run and Time: another run keeps its moment, at that run's nearest output."""
+        shell, pid = self.shell, p["id"]
+        rname = nodes.run_names(doc)
+        run_opts = {f"{k + 1}. {rname[r['id']]}": r["id"] for k, r in enumerate(doc["runs"])}
+        run = pn.widgets.Select(name="Run", options=run_opts,
+                                value=p.get("run") if p.get("run") in run_opts.values()
+                                else doc["runs"][0]["id"])
+        time = pn.widgets.Select(name="Time", options=self._times(p.get("run"), p.get("time_s")),
+                                 value=None if p.get("time_s") is None else float(p["time_s"]))
+
+        def on_run(ev):
+            ts = de._moved(shell.doc, time.value, ev.old, ev.new) if time.value is not None \
+                else None
+            tl = list(shell.time_opts(de.run_index(shell.doc, ev.new)).values())
+            if ts is not None and tl:
+                ts = _nearest_t(tl, ts)
+            shell.edit(lambda d: de.panel_by_id(d, pid).update(run=ev.new, time_s=ts),
+                       node=shell.node)
+
+        run.param.watch(on_run, "value")
+        time.param.watch(lambda ev: shell.edit(
+            lambda d: de.panel_by_id(d, pid).update(time_s=float(ev.new))), "value")
+        return run, time
 
     def _times(self, rid, now):
         """A panel's Time list: its run's outputs, and the time it has if that is none of
@@ -278,7 +316,7 @@ class PlanPane:
         moves["remove"] = lambda: step(de.remove_in_panel)
         return LayerRow(self.ins, InPanel(doc, pid, j), moves=moves,
                         by_height=de.panel_by_id(doc, pid).get("z") is not None,
-                        extras=own_time_widgets, opened=n == 1)
+                        extras=own_time_widgets, opened=n == 1, kind=self.kind)
 
     def add_own(self, pid, kind):
         """A layer of this panel alone, on top, open."""
@@ -297,10 +335,10 @@ class PlanPane:
 
     def _panel_looks(self, doc, pid):
         """The panel's own look: what it inherits, each setting to change here."""
-        scope = Scope("plan", pid)
-        looks = Sections(self.ins, scope, ["plan"])
+        scope = Scope(self.kind, pid)
+        looks = Sections(self.ins, scope, [self.kind])
         objs = []
-        for section, keys in PANEL_KEYS["plan"].items():
+        for section, keys in PANEL_KEYS[self.kind].items():
             card = looks.card(section, only=keys)
             if card is not None:
                 objs += looks.chips(keys)
@@ -314,14 +352,15 @@ class PlanPane:
         target = InPanel(doc, p["id"], j)
         letter = nodes.letters(doc)[p["id"]]
         row = LayerRow(self.ins, target, fixed=True, by_height=p.get("z") is not None,
-                       extras=own_time_widgets)
+                       extras=own_time_widgets, kind=self.kind)
         objs = [row.panel]
         if target.ref is not None:
             objs.insert(0, _note("A shared layer, as panel " + letter + " draws it: what is set "
-                                 "here stays here. <b>All plan views</b> sets it for all."))
+                                 f"here stays here. <b>All {self._words()}</b> sets it for "
+                                 "all."))
         else:
             objs.insert(0, _note(f"A layer of panel {letter} alone."))
-        name = describe(target.layer(doc), self.shell.fields)
+        name = describe(target.layer(doc), self.shell.fields, kind=self.kind)
         return f"{name} in panel {letter}", objs
 
     # ------------------------------------------------------------ fill panels (figure)

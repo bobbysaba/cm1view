@@ -16,6 +16,9 @@ from ...viewer.ui import held
 
 BLANK = "blank"  # (the Yours column of a blanked point)
 _BLANKS = ("blank", "nan", "none", "-", "–", "x")
+# (text in these columns, not numbers: an empty frame's would format a blank Yours as 0.0)
+AS_TEXT = dict(formatters={"computed": "plaintext", "yours": "plaintext"},
+               text_align={"computed": "right", "yours": "right"})
 
 
 def _fmt(x):
@@ -60,11 +63,11 @@ class SeriesValues:
     def _table(self):
         return pn.widgets.Tabulator(
             pd.DataFrame(dict(t=[], model_s=[], computed=[], yours=[])), show_index=False,
-            selectable="checkbox", theme="midnight", height=300, layout="fit_data_fill",
+            selectable="checkbox", theme="midnight", height=300, layout="fit_columns",
             sizing_mode="stretch_width", editors={"t": None, "model_s": None,
                                                   "computed": None, "yours": "input"},
             titles={"t": "Time (min)", "model_s": "Model time (s)", "computed": "Computed",
-                    "yours": "Yours"})
+                    "yours": "Yours"}, **AS_TEXT)
 
     def _fetch(self, k, ent):
         """(row keys, the leading columns {name: values}, computed values, why there
@@ -302,7 +305,7 @@ class ProfileValues(SeriesValues):
             selectable="checkbox", theme="midnight", height=300, layout="fit_data_fill",
             sizing_mode="stretch_width", editors={"z": None, "computed": None,
                                                   "yours": "input"},
-            titles={"z": "Height (km)", "computed": "Computed", "yours": "Yours"})
+            titles={"z": "Height (km)", "computed": "Computed", "yours": "Yours"}, **AS_TEXT)
 
     def _fetch(self, k, ent):
         runs = self.ed._runs_collect()

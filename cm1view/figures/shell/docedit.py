@@ -1,6 +1,6 @@
 """Changes to a figure document, without widgets: layers shared or of a panel, what differs in
-a panel, a panel's height, a run's time zero, titles, the grid and where panels sit, and filling
-panels.  Each takes the document and changes it in place; the shell keeps a copy first, for
+a panel, a panel's height, a run's time zero, titles, the grid and where panels sit, sections,
+series, and filling panels.  Each takes the document and changes it in place; the shell keeps a copy first, for
 undo.
 
 Layers are named by id (shared) or by place in their panel (j, as figdraw.panel_layers counts
@@ -11,6 +11,8 @@ import json
 
 from .. import draw as figdraw
 from ..draw.base import _cell
+from ..kinds import KINDS
+from ..spec.sections import describe as section_words
 
 MISSING = object()  # (a key a layer no longer has)
 HEIGHT_KEYS = ("z", "mode")  # (what a panel's own height writes in its layers)
@@ -70,6 +72,20 @@ def new_run_id(doc):
     return f"r{n}"
 
 
+def remove_run(doc, rid):
+    """A run out of the figure.  A series' hand edits are held by the run's place (spec/panels
+    apply_edits), so those of the runs after it move with it."""
+    k = run_index(doc, rid)
+    doc["runs"] = [r for r in doc["runs"] if r["id"] != rid]
+    for p in doc.get("panels") or []:
+        for item in p.get("layers") or []:
+            if item.get("edits"):
+                item["edits"] = {str(int(n) - (int(n) > k)): v for n, v in item["edits"].items()
+                                 if int(n) != k}
+                if not item["edits"]:
+                    del item["edits"]
+
+
 # ------------------------------------------------------------ writing a layer's settings
 def write_shared(doc, lid, changes):
     """Keys changed on a shared layer (MISSING: it no longer has them).  A panel's override
@@ -107,6 +123,7 @@ def write_panel(doc, p, j, changes):
             else:
                 over[k] = v
     apply_heights(doc, [p])
+    _follow_series(p)
 
 
 def clear_over(doc, p, j, key=None):
@@ -265,6 +282,7 @@ def remove_in_panel(doc, p, j):
     if lid is not None and not any(x.get("ref") == lid for q in doc["panels"]
                                    for x in q.get("layers") or []):
         doc["layers"].pop(lid, None)
+    _follow_series(p)
 
 
 def move_in_panel(doc, p, j, d):
@@ -634,6 +652,239 @@ def sounding_size(doc):
     if sk.get("table"):
         h += rows * (0.45 + 0.25 * max(len(p.get("layers") or []) for p in pans))
     return float(w), float(h)
+
+
+# ------------------------------------------------------------ sections
+def new_section_id(doc):
+    have = doc.get("sections") or {}
+    n = len(have)
+    while f"s{n}" in have:
+        n += 1
+    return f"s{n}"
+
+
+def add_section(doc, geom):
+    """A new section's geometry (a copy; without a card's run, time and panel).  Returns its
+    id."""
+    sid = new_section_id(doc)
+    doc.setdefault("sections", {})[sid] = copy.deepcopy(
+        {k: v for k, v in geom.items() if k not in ("run", "time_s", "panel")})
+    return sid
+
+
+def twin_section(geom):
+    """A new section after geom: an x–z one's y–z twin, along the motion's across one, and
+    back; no label of its own."""
+    swap = {"x": "y", "y": "x", "along": "across", "across": "along"}
+    return dict(geom, label="", orient=swap.get(geom.get("orient"), geom.get("orient")))
+
+
+def write_section(doc, sid, changes):
+    """Keys changed on a section (MISSING: no longer there)."""
+    sec = doc["sections"][sid]
+    for k, v in changes.items():
+        if v is MISSING:
+            sec.pop(k, None)
+        else:
+            sec[k] = v
+
+
+def section_panels(doc, sid, kind="xsec"):
+    """The panels of a kind showing section sid, in reading order."""
+    return [p for p in panels_of(doc, kind) if p.get("section") == sid]
+
+
+def split_section(doc, pid):
+    """Panel pid gets a copy of its section of its own, so changes to it stay there.  Returns
+    the copy's id."""
+    p = panel_by_id(doc, pid)
+    p["section"] = add_section(doc, doc["sections"][p["section"]])
+    return p["section"]
+
+
+def remove_section(doc, sid):
+    """A section no cross-section shows out of the figure; plan views naming it go to the first
+    left.  Why it can't be (a panel shows it, or it is the last), or None."""
+    from . import nodes
+    using = section_panels(doc, sid)
+    if using:
+        names = nodes.letters(doc)
+        return f"Panel{'s' if len(using) > 1 else ''} " + ", ".join(
+            names[p["id"]] for p in using) + " show" + ("" if len(using) > 1 else "s") + " it."
+    if len(doc.get("sections") or {}) < 2:
+        return "A figure keeps one section."
+    del doc["sections"][sid]
+    first = next(iter(doc["sections"]))
+    for p in doc.get("panels") or []:
+        if p.get("section") == sid:
+            p["section"] = first
+    return None
+
+
+def xsec_panel(doc, cell, run, time_s, start_layers=(), section=None):
+    """A new cross-section at cell.  After another: like it (run, time, layers), showing a new
+    section, its twin.  The first: at the run and time of the last plan view, drawing its shared
+    layers but section lines and sectors, which a section doesn't draw (no plan view: run, time_s
+    and every shared layer; none: start_layers, shared from now on), showing the first section
+    of the figure (none: `section`)."""
+    mine = panels_of(doc, "xsec")
+    new_id = 1 + max([p["id"] for p in doc.get("panels") or []] or [-1])
+    if mine:
+        p = _new_panel(doc, new_id, mine[-1], "xsec")
+        p["section"] = add_section(doc, twin_section(doc["sections"][mine[-1]["section"]]))
+    else:
+        plans = panels_of(doc, "plan")
+        like = plans[-1] if plans else None
+        if not doc.get("layers") and like is None:
+            for lay in start_layers:
+                doc.setdefault("layers", {})[new_layer_id(doc)] = copy.deepcopy(lay)
+        refs = [x["ref"] for x in like.get("layers") or [] if "ref" in x] if like \
+            else list(doc.get("layers") or {})
+        p = dict(id=new_id, kind="xsec", run=like["run"] if like else run,
+                 time_s=like["time_s"] if like else time_s, title="", insets=[],
+                 layers=[dict(ref=i, over={}) for i in refs if i in (doc.get("layers") or {})
+                         and doc["layers"][i].get("type") not in ("line", "sector")])
+        secs = doc.setdefault("sections", {})
+        if not secs and section is not None:
+            add_section(doc, section)
+        p["section"] = next(iter(secs))
+    p["cell"] = [int(cell[0]), int(cell[1]), 1, 1]
+    doc["panels"].append(p)
+    letters_in_order(doc)
+    return p
+
+
+def _cell_below(doc, r, c):
+    """The first free cell under (r, c) in its column, the grid growing a row if none is."""
+    free = free_cells(doc)
+    hit = next((x for x in free if x[1] == c and x[0] > r), None)
+    if hit is not None:
+        return hit
+    rows, cols = grid_shape(doc)
+    set_grid(doc, rows + 1, cols)
+    return rows, c
+
+
+def panel_per_run(doc, pid, times=None):
+    """A copy of panel pid (a cross-section or a time-height panel) for each other run, down its
+    column, each with its layers and section.  A run with the same section or series already
+    there is skipped.  times: {run id: the copy's time}.  Returns how many were made."""
+    p = panel_by_id(doc, pid)
+    kind = p["kind"]
+
+    def what(q):
+        return q.get("section") if kind == "xsec" else json.dumps(
+            ((q.get("layers") or [{}])[0]).get("recipe"), sort_keys=True, default=float)
+
+    have = {(q.get("run"), what(q)) for q in panels_of(doc, kind)}
+    made = 0
+    for r in doc["runs"]:
+        rid = r["id"]
+        if (rid, what(p)) in have:
+            continue
+        new = copy.deepcopy(p)
+        new.pop("rowlabel", None)
+        new.pop("letter", None)
+        at = _cell_below(doc, *_cell(p)[:2])
+        new.update(id=1 + max(q["id"] for q in doc["panels"]), run=rid,
+                   cell=[int(at[0]), int(at[1]), 1, 1])
+        if kind == "th":
+            for item in new.get("layers") or []:
+                item["runs"] = [rid]
+        if times and rid in times:
+            new["time_s"] = float(times[rid])
+        doc["panels"].append(new)
+        made += 1
+    letters_in_order(doc)
+    return made
+
+
+# ------------------------------------------------------------ series
+def _follow_series(p):
+    """A time-height panel's run is its series': the one shown (the first), as one_panel reads
+    it by the panel's."""
+    if p["kind"] != "th":
+        return
+    first = next((x for x in p.get("layers") or [] if x.get("source") not in ("table", "parcels")),
+                 None)
+    if first is None:
+        p["run"] = None
+    elif first.get("runs"):
+        p["run"] = first["runs"][0]
+
+
+def add_series(p, lay):
+    """A series on top of panel p's own (time-height: the panel takes its run)."""
+    add_own(p, lay)
+    _follow_series(p)
+
+
+def series_per_run(doc, p, j):
+    """Series j of a time-series panel, a card per run in the panel, each in its run's colour:
+    a series of several runs (or every run) splits; of one, a copy for each other run (a run
+    with the same series there already is skipped).  Returns how many there are new."""
+    items = places(doc, p)
+    lay = items[j]
+    view = dict(runs=doc.get("runs") or [])
+    ids = [r["id"] for r in doc.get("runs") or []]
+
+    def of_run(rid, **more):
+        return dict(copy.deepcopy(lay), runs=[rid], color=figdraw.run_color(
+            view, run_index(doc, rid)), **more)
+
+    at = p["layers"].index(lay)
+    mine = lay.get("runs")
+    if mine is None or len(mine) > 1:
+        runs = mine or ids
+        if len(runs) < 2:
+            return 0
+        p["layers"][at:at + 1] = [of_run(rid, ens="") for rid in runs]
+        return len(runs)
+    recipe = json.dumps(lay.get("recipe"), sort_keys=True, default=float)
+    have = {(x["runs"][0] if x.get("runs") else None,
+             json.dumps(x.get("recipe"), sort_keys=True, default=float)) for x in items}
+    new = [of_run(rid) for rid in ids if rid != mine[0] and (rid, recipe) not in have]
+    p["layers"][at + 1:at + 1] = new
+    return len(new)
+
+
+def entry_titles(doc, kind):
+    """Titles of a kind's panels from what each shows, as the old editor's: a cross-section's
+    section (with several runs: its run first), a time-height panel's run and series, a time
+    series panel's labels.  Titles that name the runs turn the run labels off."""
+    mine = panels_of(doc, kind)
+    names = {r["id"]: r.get("label") or str(r.get("path", "")).rstrip("/").rsplit("/", 1)[-1]
+             for r in doc.get("runs") or []}
+    many = kind == "th" or (kind == "xsec" and len({p.get("run") for p in mine}) > 1)
+    for p in mine:
+        lays = figdraw.panel_layers(doc, p)
+        if kind == "xsec":
+            sec = (doc.get("sections") or {}).get(p.get("section")) or {}
+            words = [sec.get("label") or section_words(sec)]
+        elif kind == "th":
+            words = [lays[0][1].get("label", "")] if lays else []
+        else:
+            words = [" / ".join(dict.fromkeys(x for x in (lay.get("label", "")
+                                                          for _, lay in lays) if x))]
+        if many and lays is not None and p.get("run") in names:
+            words.insert(0, names[p["run"]])
+        p["title"] = " – ".join(w for w in words if w)
+    if many:
+        style = doc.setdefault("style", {})
+        style["run_label"] = dict(style.get("run_label") or {}, on=False)
+
+
+def kind_size(doc):
+    """A figure of soundings, or of time series or time-height panels alone, as its automatic
+    size has it: (width, height) in, as the old editor's _fit_size; None: otherwise."""
+    pans = doc.get("panels") or []
+    kinds = {p["kind"] for p in pans}
+    if kinds == {"sounding"}:
+        return sounding_size(doc)
+    if kinds not in ({"th"}, {"line"}):
+        return None
+    w, h = KINDS[pans[0]["kind"]].size(*grid_shape(doc))
+    return min(16.0, float(w)), min(16.0, float(h))
 
 
 # ------------------------------------------------------------ the grid: filling panels

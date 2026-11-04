@@ -201,7 +201,7 @@ class FigureShell:
         if self.doc is None:
             return
         self._keep()
-        snd = de.sounding_size(self.doc)
+        snd = de.kind_size(self.doc)
         fn(self.doc)
         self._follow_size(snd)
         self._future = []
@@ -212,22 +212,24 @@ class FigureShell:
         self.request()
 
     def can_follow(self, doc=None):
-        """Whether the figure's size can follow its panels: plan views, or soundings, on a plain
-        grid (an estimate from one panel knows no spans, shares or other kinds)."""
+        """Whether the figure's size can follow its panels: one kind of those moved here, on a
+        plain grid (an estimate from one panel knows no spans, shares or other kinds)."""
         doc = self.doc if doc is None else doc
         grid = doc.get("grid") or {}
-        return {p["kind"] for p in doc["panels"]} in ({"plan"}, {"sounding"}) and \
+        return {p["kind"] for p in doc["panels"]} in (
+            {"plan"}, {"xsec"}, {"sounding"}, {"th"}, {"line"}) and \
             not grid.get("widths") and not grid.get("heights") and \
             all(_cell(p)[2:] == (1, 1) for p in doc["panels"])
 
     def _follow_size(self, snd_was=None):
-        """A figure with an automatic size: the height of plan views for their width and grid;
-        soundings' size when what it depends on just changed (snd_was: what it gave before)."""
+        """A figure with an automatic size: the height of plan views or cross-sections for their
+        width and grid; the size of soundings or series when what it depends on just changed
+        (snd_was: what it gave before)."""
         doc = self.doc
         if not doc.get("size_auto") or not self.can_follow():
             return
-        if doc["panels"][0]["kind"] == "sounding":
-            now = de.sounding_size(doc)
+        if doc["panels"][0]["kind"] in ("sounding", "th", "line"):
+            now = de.kind_size(doc)
             if now != snd_was and now is not None:
                 doc["size"] = list(now)
                 self.inspector.size_followed(doc["size"])
@@ -374,7 +376,7 @@ class FigureShell:
         """The line under the preview: the figure as saved, and what is missing from it."""
         out = float((doc.get("export") or {}).get("dpi", 250))
         w, h = wh[0] / dpi, wh[1] / dpi
-        n = len(data)
+        n = len(doc["panels"])
         note = (f"{n} panel{'s' if n != 1 else ''} · {w:.2f} × {h:.2f} in as saved "
                 f"({w * out:.0f} × {h * out:.0f} px at {out:g} dpi) · {secs:.1f} s")
         said = list(dict.fromkeys(str(d["notes"]) for d in data.values() if d.get("notes")))

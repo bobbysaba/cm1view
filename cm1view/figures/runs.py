@@ -264,9 +264,17 @@ class FigureRuns:
                 run, _ = self.open_run(r["path"])
             except Exception as e:  # noqa: BLE001
                 return f'<span style="color:#f87171">{e}</span>'
-        e = self._run_entry(r)
+        return self._track_words(self._run_entry(r), run)
+
+    def _track_words(self, e, run=None):
+        """What a run entry's storm track gives (HTML): its fixes and times, or why none."""
+        if run is None:
+            try:
+                run, _ = self.open_run(e["path"])
+            except Exception as ex:  # noqa: BLE001
+                return f'<span style="color:#f87171">{ex}</span>'
         fx = self.run_fixes(e, run)
-        tr = e["track"]
+        tr = e.get("track") or ""
         path = _track_path(tr) if tr != "viewer" else ""
         if path in self.data.track_err:
             return f'<span style="color:#f87171">track: {self.data.track_err[path]}</span>'

@@ -22,7 +22,10 @@ FIGURE_SECTIONS = ("Text", "Panel labels", "Colorbar", "Legend", "Contour key",
                    "Maximum and minimum", "Spacing", "matplotlib style", "Your own code")
 KIND_SECTIONS = {"plan": ("Area", "Axes and ticks"),
                  "sounding": ("Sounding panels", "Skew-T", "Hodograph", "Legend in the panel",
-                              "Axes and ticks")}
+                              "Axes and ticks"),
+                 "xsec": ("Area", "Axes and ticks"), "th": ("Plot", "Axes and ticks"),
+                 "line": ("Plot", "Legend in the panel", "Axes and ticks")}
+SECTION_NAMES = {("xsec", "Area"): "Height and x axis"}  # (a kind's words for a section)
 # (a plan panel's own look: what is drawn panel by panel, the rest being its grid's or the figure's)
 PANEL_KEYS = {
     "plan": {"Axes and ticks": ("axes.xlabel", "axes.ylabel", "axes.ticks", "axes.minor",
@@ -47,19 +50,30 @@ PANEL_KEYS["sounding"] = {
     "Hodograph": tuple(st.key for st in table.SETTINGS if st.section == "Hodograph"),
     "Legend in the panel": ("skewt.legend", "skewt.legend_loc", "skewt.legend_ncol",
                             "skewt.legend_frame")}
+# (a cross-section's: its own data and drawing go by its view, so these reach one panel)
+PANEL_KEYS["xsec"] = {"Area": ("xsec.ztop", "xsec.coords"), **PANEL_KEYS["plan"]}
+# (a panel's series are drawn with its view; its time range is the figure's: share_series_range)
+PANEL_KEYS["th"] = {"Plot": ("ts.zmin", "ts.zmax"), **PANEL_KEYS["plan"]}
+PANEL_KEYS["line"] = {
+    "Plot": ("ts.ymin", "ts.ymax", "ts.zero_line", "ts.mark", "ts.mark_legend", "ts.mark_edited"),
+    "Legend in the panel": ("ts.legend", "ts.legend_loc", "ts.legend_ncol", "ts.legend_frame"),
+    **PANEL_KEYS["plan"]}
 # (shown by the sounding pane, as the layout has them)
 LAYOUT_HIDES = {"Skew-T": ("hodo",), "Hodograph": ("skewt",)}
-LEFT_OUT = ("xsec.ztop", "xsec.coords",  # (a section's: with sections, M6)
-            "legend.panel", "legend.panels")  # (panels by id: M9)
+LEFT_OUT = ("legend.panel", "legend.panels")  # (panels by id: M9)
+SECTION_ROWS = ("xsec.ztop", "xsec.coords")  # (of cross-sections only: a plan view draws neither)
 
 
 def _legend_rows():
     """A kind's own panel legend (the old editor's pl_ widgets, not in the table: they go with
-    the kind shown).  Only soundings use it so far."""
-    return tuple(table.Setting(f"skewt.{key}", attr, "Legend in the panel", ("sounding",), default)
-                 for key, attr, default in (
-                     ("legend", "pl_on", False), ("legend_loc", "pl_loc", "upper left"),
-                     ("legend_ncol", "pl_ncol", 1), ("legend_frame", "pl_frame", True)))
+    the kind shown), starting as the old editor's _legend_load does: soundings', then a time
+    series'.  M7 adds its kinds."""
+    return tuple(
+        table.Setting(f"{block}.{key}", attr, "Legend in the panel", (kind,), default)
+        for block, kind, on, loc, frame in (("skewt", "sounding", False, "upper left", True),
+                                            ("ts", "line", True, "best", False))
+        for key, attr, default in (("legend", "pl_on", on), ("legend_loc", "pl_loc", loc),
+                                   ("legend_ncol", "pl_ncol", 1), ("legend_frame", "pl_frame", frame)))
 
 
 LEGEND_ROWS = _legend_rows()
@@ -185,6 +199,8 @@ def rows_of(section, kinds, only=None):
     for st in (*table.SETTINGS, *LEGEND_ROWS):
         if st.section != section or st.key in LEFT_OUT or st.key in seen:
             continue
+        if st.key in SECTION_ROWS and "xsec" not in kinds:
+            continue
         if only is not None and st.key not in only:
             continue
         if any(k in st.kinds for k in kinds):
@@ -229,7 +245,9 @@ class Sections:
             return None
         key = f"look:{self.scope.pid}:{self.scope.kind}:{section}"
         folds = self.ins.folds
-        card = pn.Card(title=section, collapsed=True, **SECTION)
+        title = next((SECTION_NAMES[(k, section)] for k in self.kinds
+                      if (k, section) in SECTION_NAMES), section)
+        card = pn.Card(title=title, collapsed=True, **SECTION)
 
         def fill():
             if not card.objects:

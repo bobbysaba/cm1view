@@ -16,6 +16,7 @@ from .. import draw as figdraw
 from ..cards import LayerCard, TYPE_LABEL
 from ..cards.base import _BTN, CARD, GHOST, _chk, grid_columns
 from ..runs import FigureRuns
+from ..spec.sections import describe as section_words
 from ..times import FigureTimes, _tlabel
 from ...theme import ACCENT
 from ...viewer.ui import held
@@ -40,6 +41,29 @@ class CardHost:
         self._uses = lambda d: by_height and d == "heights"
         self._hold = False
         self._changed = changed
+        self.time1 = SimpleNamespace(value=0.0)  # (a section card's, never shown here)
+
+    # (series cards: what they read of the figure, and their Values section)
+    @property
+    def data(self):
+        return self.shell.ed.data
+
+    @property
+    def spec(self):
+        return self.shell.doc.get("style") or {}
+
+    @property
+    def run_rows(self):
+        return self.shell.doc["runs"]
+
+    def _runs_collect(self):
+        return [dict(r) for r in self.shell.doc["runs"]]
+
+    def _track_note(self, r):
+        return self.shell.ed._track_words(r)
+
+    def _series_changed(self):
+        self.request()
 
     def _show_region(self):
         """(Sections have their own place in the tree.)"""
@@ -72,6 +96,20 @@ class CardHost:
 
     def _msg(self, text, err=False):
         self.shell.say(text, err)
+
+
+class ASection:
+    """A section's geometry (doc["sections"]): edits reach what shows it."""
+
+    def __init__(self, sid, where=""):
+        self.sid = sid
+        self.key = f"sec:{where}{sid}"
+
+    def layer(self, doc):
+        return doc["sections"][self.sid]
+
+    def write(self, doc, changes):
+        de.write_section(doc, self.sid, changes)
 
 
 class Shared:
@@ -110,10 +148,15 @@ class InPanel:
         de.write_panel(doc, self.panel(doc), self.j, changes)
 
 
-def describe(lay, fields=None, p=None):
-    """A layer in a line: its type, field, height, what it does over time."""
+def describe(lay, fields=None, p=None, kind="plan"):
+    """A layer in a line: its type, field, height (a cross-section has none), what it does over
+    time."""
     if lay.get("type") == "sounding":
         return nodes.sounding_name(lay)
+    if lay.get("type") == "series":
+        return nodes.series_name(lay, fields)
+    if "orient" in lay:
+        return " · ".join(x for x in (lay.get("label"), section_words(lay)) if x)
     bits = []
     if lay.get("field"):
         bits.append(fields[lay["field"]].label if fields is not None and lay["field"] in fields
@@ -123,7 +166,7 @@ def describe(lay, fields=None, p=None):
     elif lay.get("type") == "parcels":
         bits.append(str(lay.get("name") or "parcels"))
     mode = lay.get("mode", "height")
-    if lay.get("field") or lay.get("type") == "vectors":
+    if kind != "xsec" and (lay.get("field") or lay.get("type") == "vectors"):
         if p is not None and p.get("z") is not None and not lay.get("z_fixed"):
             pass  # (the panel's: said beside it)
         elif mode == "height" and lay.get("z") is not None:
@@ -146,11 +189,13 @@ class LayerRow:
     moves: {"up", "down", "copy", "remove"} -> what each button does, by document change;
     extras(row): widgets above the settings, when open; opened: open unless folded by hand.
     make_card: the card of an entry (a sounding's: host, entry; else a LayerCard); kind: its
-    panels'.  Only a map layer can be off (an entry has no such setting)."""
+    panels'.  per_run: what the card's One per run button does (none: it isn't shown).  Only a
+    map layer can be off (an entry has no such setting)."""
 
     def __init__(self, inspector, target, moves=None, fixed=False, by_height=False, extras=None,
-                 opened=False, make_card=LayerCard, kind="plan"):
+                 opened=False, make_card=LayerCard, kind="plan", per_run=None):
         self.ins, self.shell, self.target = inspector, inspector.shell, target
+        self.per_run = per_run
         self.moves, self.fixed, self.by_height = moves or {}, fixed, by_height
         self.extras = extras
         self.make_card, self.card_kind = make_card, kind
@@ -206,6 +251,10 @@ class LayerRow:
                 card.w[key].visible = False
         if hasattr(card, "dup"):
             card.dup.visible = False
+        if hasattr(card, "per_run"):
+            card.per_run.visible = self.per_run is not None
+            if self.per_run is not None:
+                card.per_run.on_click(lambda e: self.per_run())
         self._keep_time(lay)
         self.base = de.plain(self._collect())
         for name, sec in self._sections():
@@ -272,7 +321,7 @@ class LayerRow:
         t = self.target
         over = t.over(doc) if isinstance(t, InPanel) else {}
         p = t.panel(doc) if isinstance(t, InPanel) else None
-        text = html.escape(describe(t.layer(doc), self.shell.fields, p))
+        text = html.escape(describe(t.layer(doc), self.shell.fields, p, self.card_kind))
         marks = [k for k in over if not (p.get("z") is not None and k in de.HEIGHT_KEYS)
                  and k != "on"] if p is not None else []
         tail = ""
