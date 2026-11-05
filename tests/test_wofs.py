@@ -273,3 +273,98 @@ def test_picker_lists_members(wofs_root, monkeypatch):
     p.query.value_input = os.path.join(wofs_root, "mem03")  # a member: it is picked
     assert p.selected == os.path.join(wofs_root, "mem03") and not p.open.disabled
     assert "WoFS" in p.msg.object and "3 output times" in p.msg.object
+
+
+# ------------------------------------------------------------- W3: sections, soundings,
+# column fields and series on each column's own heights (winterp = level + 0.5 + c, so
+# at a height h above ground it is h / dz + c between the lowest and highest level)
+def _w_at(h_agl, c):
+    return np.clip(h_agl / _dz(c), 0.5, NK - 0.5) + c
+
+
+def test_section_on_terrain(wofs_root):
+    """A section across the slope: above sea level, from the lowest ground along it,
+    each column on its own heights, blank under the ground; the figure's the same."""
+    from cm1view.core import render
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F, c = Fields(run), 2
+    s, fi, fj, _ = render.section_coords(run, (run.xh[0], 0.0), (run.xh[-1], 0.0))
+    z0, top, ground = render.section_span(run, fi, fj, 2.0)
+    assert (z0, top) == (0.1, 2.0)
+    np.testing.assert_allclose(ground, GROUND, atol=1e-6)
+    zq = np.arange(z0, top + 1e-6, 0.1)
+    a = render.sample_section(run, F.volume("winterp", c), fi, fj, zq, c)
+    want = _w_at(zq[:, None] - GROUND[None], c)
+    want[zq[:, None] < GROUND[None]] = np.nan
+    np.testing.assert_allclose(a, want, atol=1e-4)
+    # a top under the lowest ground: that far above it
+    assert render.section_span(run, fi, fj, 0.3)[:2] == (0.1, 0.4)
+    # the figure: same heights, the ground, limits from the bottom
+    from cm1view.figures import spec as fg
+    from cm1view.figures.spec import arrays
+    sp = fg.default_spec(run, F, 1)
+    sp.update(kind="xsec", layers=[fg.layer_defaults("fill", F, "winterp")])
+    sp["sections"] = [fg.section_defaults(orient="ab", pos="fixed", a=[run.xh[0], 0.0],
+                                          b=[run.xh[-1], 0.0])]
+    sp["xsec"] = dict(sp["xsec"], ztop=2.0, dz=0.1)
+    d = arrays.extract(run, F, sp, 0, None)
+    assert d["ylim"] == (0.1, 2.0) and d["y"][0] == pytest.approx(0.1)
+    np.testing.assert_allclose(d["ground"], GROUND, atol=1e-6)
+    want = _w_at(d["y"][:, None] - GROUND[None], 1)
+    want[d["y"][:, None] < GROUND[None]] = np.nan
+    np.testing.assert_allclose(d["L0"], want, atol=1e-4)
+
+
+def test_sounding_on_the_columns_heights(wofs_root):
+    from cm1view.figures.spec import panels
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    r = panels.sounding_column(run, dict(time_s=360.0, where=dict(kind="pt", x=3.5, y=0.0,
+                                                                   avg=0.0)), {})
+    np.testing.assert_allclose(r["prof"]["z"][:NK], 1000.0 * run.heights(2)[:, 3, NI - 1],
+                               rtol=1e-5)
+
+
+def test_column_fields_and_ddz_on_own_heights(wofs_root):
+    from cm1view.core.fields import column_levels_3d
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F, c = Fields(run), 2
+    dz = _dz(c)
+    ks, th, zk = column_levels_3d(run.heights(c), run.heights(c, w=True), 0.0, 1.0)
+    assert ks == [0, 1]  # (1 km: inside the second cell everywhere)
+    np.testing.assert_allclose(th[0], 1000.0 * np.broadcast_to(dz, (NJ, NI)), atol=0.01)
+    np.testing.assert_allclose(th[1], 1000.0 * np.broadcast_to(1.0 - dz, (NJ, NI)), atol=0.01)
+    np.testing.assert_allclose(zk, run.heights(c)[:2])
+    np.testing.assert_allclose(F.plane("wmax", c), NK - 0.5 + c)
+    # ∂w/∂z = 1 / dz per km, on a level, at a height and as a volume
+    np.testing.assert_allclose(F.plane("ddz.winterp", c, "level", 2)[0], 1.0 / dz,
+                               atol=1e-4)
+    np.testing.assert_allclose(F.plane("ddz.winterp", c, "height", 1.0)[0], 1.0 / dz,
+                               atol=1e-4)
+    np.testing.assert_allclose(F.volume("ddz.winterp", c)[:, 0], np.broadcast_to(
+        1.0 / dz, (NK, NI)), atol=1e-4)
+    assert np.isfinite(F.plane("sbcape", c)).all()
+
+
+def test_series_on_own_heights(wofs_root, monkeypatch):
+    """Series at a height and over a layer: each column on its own heights (the
+    reader process reads them)."""
+    from cm1view.core import series as ser
+    monkeypatch.setattr(ser, "store", lambda *a, **k: None)
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F = Fields(run)
+    c = np.arange(NC)
+    dz0 = 0.5 + c * 20.0 / 1000.0  # (the first column: the max of w at a height)
+
+    def go(**r):
+        rec = ser.normalize(dict(dict(region="domain", reduce="max"), **r))
+        ds, skipped = ser.compute(run, F, rec, ser.empty(run, rec), workers=1)
+        assert not skipped
+        return ds
+    np.testing.assert_allclose(go(field="winterp", vmode="height", z=1.0)["value"],
+                               1.0 / dz0 + c, rtol=1e-5)
+    np.testing.assert_allclose(go(field="ddz.winterp", vmode="height", z=1.0)["value"],
+                               1.0 / dz0, rtol=1e-4)
+    ds = go(field="winterp", vmode="layer", z0=0.0, z1=1.0)
+    np.testing.assert_allclose(ds["value"], 1.5 + c, rtol=1e-6)  # (level 2 is above)
+    np.testing.assert_allclose(ds["z_km"], 1.5 * dz0, rtol=1e-5)
+    np.testing.assert_allclose(go(field="wmax", vmode="2d")["value"], NK - 0.5 + c)

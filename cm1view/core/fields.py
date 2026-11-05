@@ -389,10 +389,10 @@ def _vort_tendencies():
 def _columns():
     """Column fields (2D from 3D): updraft helicity and layer maxima."""
     def uh(f, c):  # ∫ w ζ dz
-        return np.tensordot(c["dz"], f("winterp") * f("zvort"), axes=1)
+        return layer_sum(c["dz"], f("winterp") * f("zvort"))
 
     def top(n):
-        return lambda f, c: f(n).max(axis=0)
+        return lambda f, c: in_layer(f(n), c["dz"], -np.inf).max(axis=0)
 
     g = "Column fields"
     return [
@@ -419,10 +419,26 @@ def bulk_shear(u, v, zk, top):
 
 def helicity(u, v, zk, top, storm):
     """Storm-relative helicity from the lowest level to top km:
-    Σ (u_k+1 − cx)(v_k − cy) − (u_k − cx)(v_k+1 − cy)."""
+    Σ (u_k+1 − cx)(v_k − cy) − (u_k − cx)(v_k+1 − cy).  zk: (L,) or each column's
+    (L, ...) heights."""
+    if np.ndim(zk) > 1:
+        return _helicity_columns(u - storm[0], v - storm[1], np.asarray(zk, np.float64),
+                                 top)
     u = layer_points(u - storm[0], zk, top)
     v = layer_points(v - storm[1], zk, top)
     return (u[1:] * v[:-1] - u[:-1] * v[1:]).sum(axis=0)
+
+
+def _helicity_columns(u, v, zk, top):
+    """helicity of (L, ...) storm-relative winds on each column's own heights zk:
+    the pairs of levels below top, then the highest of those with the wind at top."""
+    pair = u[1:] * v[:-1] - u[:-1] * v[1:]
+    out = np.where(zk[1:] < top, pair, 0.0).sum(axis=0)
+    nb = (zk < top).sum(axis=0)
+    kl = np.maximum(nb - 1, 0)[None]
+    ul, vl = np.take_along_axis(u, kl, 0)[0], np.take_along_axis(v, kl, 0)[0]
+    ut, vt = at_height(u, zk, top), at_height(v, zk, top)
+    return out + np.where(nb > 0, ut * vl - ul * vt, 0.0)
 
 
 def _sounding_kinematics():
@@ -545,9 +561,20 @@ def stride_cols(lo, hi, n, s):
 
 
 def at_height(a, zk, h):
-    """(L, ...) values a on levels zk (km) linearly interpolated to height h km,
-    held at the end levels beyond them."""
+    """(L, ...) values a on levels zk (km; (L,), or (L, ...): each column's own)
+    linearly interpolated to height h km, held at the end levels beyond them."""
     zk = np.asarray(zk, dtype=np.float64)
+    if zk.ndim > 1:
+        L = zk.shape[0]
+        if L == 1:
+            return a[0]
+        k1 = np.clip((zk < h).sum(axis=0), 1, L - 1)[None]
+        z0, z1 = np.take_along_axis(zk, k1 - 1, 0)[0], np.take_along_axis(zk, k1, 0)[0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            w = np.clip((h - z0) / (z1 - z0), 0.0, 1.0)
+        w = np.where(np.isfinite(w), w, 0.0)
+        return (1.0 - w) * np.take_along_axis(a, k1 - 1, 0)[0] + \
+            w * np.take_along_axis(a, k1, 0)[0]
     if zk.size == 1 or h <= zk[0]:
         return a[0]
     if h >= zk[-1]:
@@ -592,6 +619,52 @@ def column_levels(z, zf, z0, z1, edges=False):
         if hi_k < len(zf) - 1:
             ks, dz = np.concatenate([ks, [hi_k]]), np.concatenate([dz, [0.0]])
     return [int(k) for k in ks], dz
+
+
+def column_levels_3d(Z, Zw, z0, z1, edges=False):
+    """column_levels on a terrain run's own heights: Z (nk, ...) of the levels and Zw
+    (nk + 1, ...) of the cell faces (km above ground).  Returns (ks, dz, zk): the
+    levels whose cells reach into the layer in any column (with edges also the one
+    below and above those), each one's thickness in it in every column ((L, ...) m, 0
+    where outside it) and their heights ((L, ...) km)."""
+    Zw = np.asarray(Zw, dtype=np.float64)
+    top = Zw[-1] if z1 is None else float(z1)
+    lo, hi = np.clip(Zw[:-1], z0, top), np.clip(Zw[1:], z0, top)
+    th = hi - lo
+    ks = np.flatnonzero((th > 0).reshape(th.shape[0], -1).any(axis=1))
+    if ks.size == 0:  # (a layer thinner than nothing: the nearest level)
+        k = int(np.argmin(np.abs(np.asarray(Z).reshape(len(Z), -1).mean(axis=1) - z0)))
+        return [k], np.zeros((1,) + th.shape[1:]), np.asarray(Z[k:k + 1], np.float64)
+    ks = list(range(int(ks[0]), int(ks[-1]) + 1))
+    if edges:
+        ks = ([ks[0] - 1] if ks[0] > 0 else []) + ks + \
+            ([ks[-1] + 1] if ks[-1] + 1 < th.shape[0] else [])
+    return ks, 1000.0 * th[ks], np.asarray(Z, np.float64)[ks]
+
+
+def layer_sum(dz, a):
+    """Σ dz a over a column field's levels: dz (L,) or each column's (L, ...)."""
+    dz = np.asarray(dz)
+    return np.tensordot(dz, a, axes=1) if dz.ndim == 1 else (dz * a).sum(axis=0)
+
+
+def in_layer(a, dz, fill):
+    """(L, ...) a, with `fill` where a column's level is outside the layer (dz 0 there,
+    on a terrain run's own heights; with one profile dz, a as it is)."""
+    dz = np.asarray(dz)
+    return a if dz.ndim == 1 else np.where(dz > 0, a, fill)
+
+
+def ddz_volume(b, z):
+    """∂/∂z (per km) of a volume (nk, ...) on heights z: (nk,) as np.gradient, or each
+    column's own (nk, ...) with the same centred / one-sided differences."""
+    z = np.asarray(z)
+    if z.ndim == 1:
+        return np.gradient(b, z, axis=0)
+    out = np.empty(b.shape, dtype=np.float32)
+    for k in range(b.shape[0]):
+        out[k] = ddz_level(lambda kk: b[kk], z, k)
+    return out
 
 
 GROUP_ORDER = ["Radar", "Kinematics", "Vorticity tendencies", "Column fields",
@@ -812,8 +885,13 @@ class Fields:
         """A column field: its inputs on the levels of its layer only (a costly one on
         every column_stride-th column, each block of columns showing its middle one)."""
         run = self.run
-        ks, dz = d.levels(run.z, run.zf)
-        c = dict(ctx, dz=dz, zk=run.z[ks], top=layer_top(d, run))
+        if run.terrain:  # (each column's own levels: per-column thickness, heights)
+            ks, dz, zk = column_levels_3d(run.heights(t), run.heights(t, w=True),
+                                          *d.layer, edges=d.edges)
+        else:
+            ks, dz = d.levels(run.z, run.zf)
+            zk = run.z[ks]
+        c = dict(ctx, dz=dz, zk=zk, top=layer_top(d, run))
         layers = once(lambda n: np.stack([run.read_level(n, t, k) for k in ks]))
         if not d.costly:
             return d.func(layers, c)
@@ -828,6 +906,9 @@ class Fields:
             return d.func(layers, c)
         r0, r1, tj, bj = stride_cols(0, run.nj, run.nj, s)
         c0, c1, ti, bi = stride_cols(0, run.ni, run.ni, s)
+        if run.terrain:  # (the heights of the columns computed)
+            c.update(dz=dz[:, r0:r1, c0:c1][:, tj][:, :, ti],
+                     zk=zk[:, r0:r1, c0:c1][:, tj][:, :, ti])
         a = d.func(once(lambda n: np.stack([run.read_level(n, t, k)[r0:r1, c0:c1][
             np.ix_(tj, ti)] for k in ks])), c)
         return np.asarray(a)[np.ix_(bj, bi)]
@@ -848,7 +929,8 @@ class Fields:
 
     def _ddz_level(self, base, t, k, storm):
         """∂/∂z (per km) of field base on model level k (ddz_level)."""
-        return ddz_level(lambda kk: self.plane(base, t, "level", kk, storm), self.run.z, k)
+        z = self.run.heights(t) if self.run.terrain else self.run.z  # (each column's)
+        return ddz_level(lambda kk: self.plane(base, t, "level", kk, storm), z, k)
 
     def forget(self, t, names):
         """Drop cached planes at time t of `names` and the fields derived from them
@@ -875,7 +957,8 @@ class Fields:
             vol = self.run.cached(key, t)
             if vol is None:
                 b = np.asarray(self.volume(base, t, storm), dtype=np.float32)
-                vol = np.asarray(np.gradient(b, self.run.z, axis=0) if op == "ddz" else
+                vol = np.asarray(ddz_volume(b, self.run.heights(t) if self.run.terrain
+                                            else self.run.z) if op == "ddz" else
                                  hgrad(op, b, self.run.xh, self.run.yh), dtype=np.float32)
                 self.run._insert(key, t, vol)
             return vol

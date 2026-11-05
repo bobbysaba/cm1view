@@ -268,7 +268,7 @@ def minus_section(F, F2, name, t2, A, B, s, zq, fstorm=None):
     _other_has(F, F2, name)
     r2 = F2.run
     s2, fi, fj, _ = section_coords(r2, A, B)
-    b = sample_section(r2, F2.volume(name, t2, fstorm), fi, fj, zq)
+    b = sample_section(r2, F2.volume(name, t2, fstorm), fi, fj, zq, t2)
     out = (fi < -0.5) | (fi > r2.ni - 0.5) | (fj < -0.5) | (fj > r2.nj - 0.5)
     b[:, out] = np.nan
     if s2.size != np.size(s):
@@ -289,12 +289,44 @@ def section_coords(run, A, B, max_pts=1200):
     return s, fi, fj, ((xb - xa) / max(L, 1e-9), (yb - ya) / max(L, 1e-9))
 
 
-def sample_section(run, vol, fi, fj, zq):
-    """Bilinear sampling along the line, then linear in z onto zq (km)."""
+def section_ground(run, fi, fj):
+    """Ground height (km above sea level) along a section line: zero on a flat run."""
+    if not run.terrain:
+        return np.zeros(np.size(fi))
+    return map_coordinates(np.asarray(run.terrain_height(), np.float64),
+                           np.stack([np.asarray(fj, float), np.asarray(fi, float)]),
+                           order=1, mode="nearest")
+
+
+def section_span(run, fi, fj, ztop):
+    """(bottom, top, ground) of a section's height axis (km).  Flat run: 0 to ztop
+    above ground, ground None.  Terrain run: above sea level, from the lowest ground
+    along the line (rounded down to 0.1 km) to ztop (ztop above that bottom when ztop
+    is not at least 0.5 km over it), with the ground along the line."""
+    if not run.terrain:
+        return 0.0, float(ztop), None
+    ground = section_ground(run, fi, fj)
+    z0 = math.floor(float(ground.min()) * 10.0) / 10.0
+    top = float(ztop) if ztop >= z0 + 0.5 else z0 + float(ztop)
+    return z0, top, ground
+
+
+def sample_section(run, vol, fi, fj, zq, t=None):
+    """Bilinear sampling along the line, then linear in z onto zq (km).  On a terrain
+    run with t: each column on its own heights at time t, zq above sea level, NaN under
+    the ground (between the ground and the lowest level: the lowest level's value)."""
     nk = vol.shape[0]
     kk = np.repeat(np.arange(nk)[:, None], fi.size, axis=1)
     coords = np.stack([kk, np.broadcast_to(fj, kk.shape), np.broadcast_to(fi, kk.shape)])
     sec = map_coordinates(vol, coords, order=1, mode="nearest")  # (nk, n)
+    if run.terrain and t is not None:
+        Z = map_coordinates(np.asarray(run.heights(t, "msl")), coords, order=1,
+                            mode="nearest")
+        out = np.empty((np.size(zq), fi.size), np.float32)
+        for c in range(fi.size):
+            out[:, c] = np.interp(zq, Z[:, c], sec[:, c])
+        out[np.asarray(zq)[:, None] < section_ground(run, fi, fj)[None, :]] = np.nan
+        return out
     kf = np.interp(zq, run.z, np.arange(nk))
     k0 = np.clip(np.floor(kf).astype(int), 0, nk - 2)
     w = (kf - k0)[:, None]

@@ -85,6 +85,9 @@ def values(run, F, recipe, field, t, storm, reg):
         return a[mask] if mask is not None else a.ravel()
     ks = ser.levels(run, r) if r["vmode"] == "layer" else [0, len(run.z) - 1]
     a = F.volume(d.name, t, storm=storm)[ks[0]:ks[-1] + 1, j0:j1, i0:i1]
+    if run.terrain and r["vmode"] == "layer":  # (each column's levels in the layer)
+        Z = run.heights(t)[ks[0]:ks[-1] + 1, j0:j1, i0:i1]
+        a = np.where(ser.layer_mask(Z, r["z0"], r["z1"]), np.nan, a)
     return a[:, mask].ravel() if mask is not None else a.ravel()
 
 

@@ -87,17 +87,27 @@ def metric_field(run, t, metric, zkm=1.0, cancelled=None, field=None, fields=Non
         return run.read_height("zvort", t, zkm), {}
     if metric == "w":
         return run.read_height("winterp", t, zkm), {}
-    ks = np.flatnonzero((run.z >= UH_LAYER[0]) & (run.z <= UH_LAYER[1]))
+    if run.terrain:  # (each column's own levels: those in 2-5 km, thickness in it)
+        from .fields import column_levels_3d
+        ks, dzs, _ = column_levels_3d(run.heights(t), run.heights(t, w=True), *UH_LAYER)
+        dzs = dzs.astype(np.float32)
+    else:
+        ks = np.flatnonzero((run.z >= UH_LAYER[0]) & (run.z <= UH_LAYER[1]))
     uh = np.zeros((run.nj, run.ni), np.float32)
     wmax = np.full((run.nj, run.ni), -np.inf, np.float32)
     zmax = np.full((run.nj, run.ni), -np.inf, np.float32)
-    for k in ks:
+    for n, k in enumerate(ks):
         if cancelled and cancelled():
             return None, None
-        dz = float(run.zf[k + 1] - run.zf[k]) * 1000.0
         w = run.read_level("winterp", t, int(k))
         zeta = run.read_level("zvort", t, int(k))
-        uh += w * zeta * dz
+        if run.terrain:
+            inside = dzs[n] > 0  # (dz 0 outside the layer)
+            uh += w * zeta * dzs[n]
+            w, zeta = np.where(inside, w, -np.inf), np.where(inside, zeta, -np.inf)
+        else:
+            dz = float(run.zf[k + 1] - run.zf[k]) * 1000.0
+            uh += w * zeta * dz
         np.maximum(wmax, w, out=wmax)
         np.maximum(zmax, zeta, out=zmax)
     return uh, {"w_max_2_5km": wmax, "zeta_max_2_5km": zmax}

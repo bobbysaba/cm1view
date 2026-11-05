@@ -328,3 +328,42 @@ def test_flat_run_heights_are_its_levels(reg):
     np.testing.assert_allclose(run.read_height("th", 4, 1.3),
                                (1 - w) * run.read_level("th", 4, k0)
                                + w * run.read_level("th", 4, k1), rtol=1e-6)
+
+
+def test_own_heights_helpers_match_one_profile(reg):
+    """The per-column versions (terrain runs) of the column-field helpers give the
+    one-profile results when every column has the same heights; a flat run's sections
+    are the same with or without a time; parcel maps take per-column heights."""
+    from cm1view.core import render, thermo
+    from cm1view.core.fields import (at_height, bulk_shear, column_levels,
+                                     column_levels_3d, ddz_volume, helicity, layer_sum)
+    run, F = reg.get()
+    T = 4
+    u = np.asarray(F.volume("uinterp", T), np.float64)[:, :5, :6]
+    v = np.asarray(F.volume("vinterp", T), np.float64)[:, :5, :6]
+    Z = np.broadcast_to(run.z[:, None, None], u.shape)
+    Zw = np.broadcast_to(run.zf[:, None, None], (run.nk + 1,) + u.shape[1:])
+    for top in (0.01, 1.0, 3.0, 6.0, 1e3):
+        assert np.allclose(helicity(u, v, run.z, top, (10, 5)),
+                           helicity(u, v, Z, top, (10, 5)))
+        assert np.allclose(bulk_shear(u, v, run.z, top), bulk_shear(u, v, Z, top))
+        assert np.allclose(at_height(u, run.z, top), at_height(u, Z, top))
+    for layer, edges in (((2.0, 5.0), False), ((0.0, 6.0), True), ((0.0, None), False)):
+        ks, dz = column_levels(run.z, run.zf, *layer, edges=edges)
+        ks3, dz3, zk3 = column_levels_3d(Z, Zw, *layer, edges=edges)
+        assert ks3 == ks and np.allclose(dz3[:, 2, 3], dz) and np.allclose(zk3, Z[ks])
+        assert np.allclose(layer_sum(dz, u[ks]), layer_sum(dz3, u[ks]))
+    assert np.allclose(ddz_volume(u, Z), np.gradient(u, run.z, axis=0))
+    p, th, qv = (np.asarray(F.volume(n, T), np.float64)[:, :3, :3] for n in ("prs", "th", "qv"))
+    one = thermo.parcel_columns(1000.0 * run.z, p, th, qv, "sb")
+    per = thermo.parcel_columns(1000.0 * np.broadcast_to(run.z[:, None, None], p.shape),
+                                p, th, qv, "sb")
+    assert all(np.allclose(a, b) for a, b in zip(one, per))
+    # a column too shallow to integrate over (once an IndexError)
+    assert thermo._integrate_buoyancy(np.array([100.0]), np.array([0.1]), 50.0)[0] == 0.0
+    s, fi, fj, _ = render.section_coords(run, (-10.0, -5.0), (12.0, 8.0))
+    assert render.section_span(run, fi, fj, 12.0) == (0.0, 12.0, None)
+    zq = np.linspace(0.0, 12.0, 50)
+    vol = F.volume("winterp", T)
+    assert np.array_equal(render.sample_section(run, vol, fi, fj, zq),
+                          render.sample_section(run, vol, fi, fj, zq, T))

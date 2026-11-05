@@ -10,6 +10,7 @@ MUTED = "#7f8aa0"
 ACCENT = "#22d3ee"
 POINT_COLORS = ["#38bdf8", "#f472b6", "#a3e635", "#fbbf24"]
 POINT_LABELS = ["1", "2", "3", "4"]
+GROUND = "#8a7560"  # (a terrain run's ground under a cross-section, viewer and figures)
 
 # dialogs in the dark theme (Panel's dialog box is white by default)
 DIALOG_DARK = f"""

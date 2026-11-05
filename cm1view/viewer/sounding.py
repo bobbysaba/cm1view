@@ -97,11 +97,12 @@ class SoundingPanel:
                 return None
             # horizontally uniform: the domain mean is the column, and mean_profiles
             # reads in the reader processes (a column costs a full read anyway)
-            _BASE_CACHE[key] = {v: np.asarray(p, np.float32)
-                                for v, p in run.mean_profiles(BASE_VARS, 0).items()}
+            _BASE_CACHE[key] = {v: np.asarray(p, np.float32) for v, p in run.mean_profiles(
+                BASE_VARS + (("zagl",) if run.terrain else ()), 0).items()}
         b = _BASE_CACHE[key]
         storm, custom = self._item_storm(spec, spec["t"])
-        return thermo.analyze(run.z * 1000.0, b["prs0"], b["th0"], b["qv0"],
+        z = b["zagl"] if "zagl" in b else run.z * 1000.0  # (a terrain run's mean, m AGL)
+        return thermo.analyze(z, b["prs0"], b["th0"], b["qv0"],
                               b["u0"] + run.umove, b["v0"] + run.vmove, storm=storm,
                               custom=custom, domain=(run.umove, run.vmove))
 
@@ -147,6 +148,8 @@ class SoundingPanel:
         if g != self.gen["snd"]:
             return
         run, t = self.run, spec["t"]
+        # (a terrain run's columns: on their own heights above ground)
+        names = SOUNDING_VARS + (("zagl",) if run.terrain else ())
         try:
             def prog_for(tt, what):
                 def prog(done, total, name):
@@ -160,8 +163,8 @@ class SoundingPanel:
             # live soundings at the shown time read (and cache) whole 3D fields, so
             # later clicks are instant; pinned other times read just their box
             if any(kind != "mean" and tp is None for kind, _, tp in spec["points"]):
-                if any(run.cached(v, t) is None for v in SOUNDING_VARS):
-                    ok = run.load_volumes(SOUNDING_VARS, t, progress=prog_for(t, "3D fields"),
+                if any(run.cached(v, t) is None for v in names):
+                    ok = run.load_volumes(names, t, progress=prog_for(t, "3D fields"),
                                           cancelled=lambda: g != self.gen["snd"])
                     if not ok or g != self.gen["snd"]:
                         return
@@ -184,10 +187,10 @@ class SoundingPanel:
                     i0, i1 = max(0, i - hi), min(run.ni, i + hi + 1)
                     j0, j1 = max(0, j - hj), min(run.nj, j + hj + 1)
                     c = {}
-                    for v in SOUNDING_VARS:
+                    for v in names:
                         vol = run.cached(v, tt)
                         if vol is None:
-                            prog_for(tt, "columns")(SOUNDING_VARS.index(v), len(SOUNDING_VARS), v)
+                            prog_for(tt, "columns")(names.index(v), len(names), v)
                             a = run.read_box(v, tt, i0, i1, j0, j1)
                         else:
                             a = vol[:, j0:j1, i0:i1]
@@ -203,12 +206,13 @@ class SoundingPanel:
                     else:
                         label = f"{POINT_LABELS[n]}{box} ({x:.1f}, {y:.1f}) km{when}"
                 else:
-                    c = run.mean_profiles(SOUNDING_VARS, tt, progress=prog_for(tt, "domain means"))
+                    c = run.mean_profiles(names, tt, progress=prog_for(tt, "domain means"))
                     if g != self.gen["snd"]:
                         return
                     label = f"{POINT_LABELS[n]} domain mean {run.time_label(tt)}"
                 storm, custom = self._item_storm(spec, tt)
-                r = thermo.analyze(z, c["prs"], c["th"], c["qv"], c["uinterp"] + run.umove,
+                zc = c["zagl"] if "zagl" in c else z  # (a terrain run's column: its own)
+                r = thermo.analyze(zc, c["prs"], c["th"], c["qv"], c["uinterp"] + run.umove,
                                    c["vinterp"] + run.vmove, storm=storm,
                                    custom=custom, domain=(run.umove, run.vmove))
                 r["domain"] = (run.umove, run.vmove)

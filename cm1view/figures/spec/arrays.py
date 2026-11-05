@@ -477,16 +477,17 @@ def reduce_layer(run, F, lay, t, fixes=None, progress=None):
     return swath.reduce(run, F, lay, t, centers, storm, progress)
 
 
-def _strip(run, vol, fi, fj, zq, across, width):
-    """render.sample_section, or with width (km) > 0 its mean over lines parallel to
-    the section within width / 2 either side (about one per grid column, at most 21);
+def _strip(run, vol, fi, fj, zq, across, width, t=None):
+    """render.sample_section (at time t: a terrain run's heights), or with width (km)
+    > 0 its mean over lines parallel to the section within width / 2 either side
+    (about one per grid column, at most 21; under the ground of any line: blank);
     across: the unit vector across the section (grid x, y)."""
     if not width or width <= 0:
-        return render.sample_section(run, vol, fi, fj, zq)
+        return render.sample_section(run, vol, fi, fj, zq, t)
     dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
     n = int(min(21, max(3, round(width / min(dxk, dyk)) + 1)))
     secs = [render.sample_section(run, vol, fi + o * across[0] / dxk,
-                                  fj + o * across[1] / dyk, zq)
+                                  fj + o * across[1] / dyk, zq, t)
             for o in np.linspace(-0.5 * width, 0.5 * width, n)]
     return np.mean(secs, axis=0).astype(np.float32)
 
@@ -508,10 +509,13 @@ def _extract_xsec(run, F, spec, i, t, center, fixes, storm, out, progress):
             names += F.native_deps(lay["field"])
         elif lay["type"] == "vectors":
             names += vectors.deps(F, lay.get("vector", "wind"))
+    if run.terrain:  # (each column on its own heights, above sea level)
+        names.append("zmsl")
     run.load_volumes([n for n in names if n in run.vars], t, progress=progress)
     s, fi, fj, (ex, ey) = render.section_coords(run, *ends)
-    ztop, dz = float(xs["ztop"]), float(xs.get("dz", 0.025))
-    zq = np.arange(0.0, ztop + 0.5 * dz, dz)
+    dz = float(xs.get("dz", 0.025))
+    z0, ztop, ground = render.section_span(run, fi, fj, float(xs["ztop"]))
+    zq = z0 + np.arange(0.0, ztop - z0 + 0.5 * dz, dz)
     k, o, out["xname"] = x_axis(sec, xs.get("coords", "storm"), center)
     if k is None:  # the distance along: 0 at the storm (the middle), else at A
         x = s - (s[-1] / 2.0 if is_storm(sec) else 0.0)
@@ -519,17 +523,19 @@ def _extract_xsec(run, F, spec, i, t, center, fixes, storm, out, progress):
         x = ends[0][k] - o + s * (ex, ey)[k]
     width, across = float(sec.get("avg") or 0.0), (-ey, ex)  # (a strip: its mean)
     out["x"], out["y"] = x, zq
-    out["xlim"], out["ylim"] = (min(x[0], x[-1]), max(x[0], x[-1])), (0.0, ztop)
+    out["xlim"], out["ylim"] = (min(x[0], x[-1]), max(x[0], x[-1])), (z0, ztop)
+    if ground is not None:  # (drawn filled)
+        out["ground"] = ground
     for j, lay in enumerate(layers):
         if not lay.get("on", True):
             continue
         if lay["type"] in ("fill", "contour", "shade"):
             out[f"L{j}"] = _strip(run, F.volume(lay["field"], t, storm), fi, fj, zq,
-                                  across, width)
+                                  across, width, t)
         elif lay["type"] == "vectors":
             q = lay.get("vector", "wind")  # in the plane: along-section and vertical
             u, v, w = (np.zeros((zq.size, s.size), np.float32) if a is None else
-                       _strip(run, a, fi, fj, zq, across, width)
+                       _strip(run, a, fi, fj, zq, across, width, t)
                        for a in vectors.volumes(F, q, t))
             if vectors.VECTORS[q].framed:
                 u, v = vectors.to_frame(run, u, v, lay["frame"], storm)

@@ -215,6 +215,8 @@ def skewt_hodo_figure(items, base=None, parcel="ml", units="m/s", width=9.0, sty
         allu += list(pr["u"][s] * wf) + [r["kin"]["rm"][0] * wf, r["kin"]["lm"][0] * wf]
         allv += list(pr["v"][s] * wf) + [r["kin"]["rm"][1] * wf, r["kin"]["lm"][1] * wf]
     allu, allv = np.array(allu), np.array(allv)
+    ok = np.isfinite(allu) & np.isfinite(allv)  # (storm motions of a shallow column: NaN)
+    allu, allv = (allu[ok], allv[ok]) if ok.any() else (np.zeros(1), np.zeros(1))
     ring = lk["ring"] or (10.0 if units == "m/s" else 20.0)
     rmax = max(np.hypot(allu, allv).max(), ring) * 1.1
     cu, cv = 0.5 * (allu.max() + allu.min()), 0.5 * (allv.max() + allv.min())

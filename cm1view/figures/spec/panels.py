@@ -627,8 +627,10 @@ def sounding_column(run, entry, fixes, progress=None, storm=("rm", (0.0, 0.0))):
         return f"no output at {float(entry['time_s']) / 60:g} min in this run"
     w = entry["where"]
     kind = w.get("kind", "trk")
+    # (a terrain run's columns: on their own heights above ground)
+    names = SOUNDING_VARS + (("zagl",) if run.terrain else ())
     if kind == "mean":
-        c = run.mean_profiles(SOUNDING_VARS, t, progress=progress)
+        c = run.mean_profiles(names, t, progress=progress)
     else:
         x, y = float(w.get("x", 0.0)), float(w.get("y", 0.0))
         if kind == "trk":
@@ -641,11 +643,12 @@ def sounding_column(run, entry, fixes, progress=None, storm=("rm", (0.0, 0.0))):
         i0, i1 = max(0, i - h), min(run.ni, i + h + 1)
         j0, j1 = max(0, j - h), min(run.nj, j + h + 1)
         c = {}
-        for v in SOUNDING_VARS:
+        for v in names:
             vol = run.cached(v, t)
             a = vol[:, j0:j1, i0:i1] if vol is not None else run.read_box(v, t, i0, i1, j0, j1)
             c[v] = a.mean(axis=(1, 2), dtype=np.float64)
-    return thermo.analyze(run.z * 1000.0, c["prs"], c["th"], c["qv"], c["uinterp"] + run.umove,
+    z = c["zagl"] if "zagl" in c else run.z * 1000.0
+    return thermo.analyze(z, c["prs"], c["th"], c["qv"], c["uinterp"] + run.umove,
                           c["vinterp"] + run.vmove, storm=storm[0], custom=storm[1],
                           domain=(run.umove, run.vmove))
 

@@ -17,7 +17,7 @@ from .. import pdecomp
 from ..core import render, vectors
 from ..core.run import FileBusy, MissingAtTime
 from ..core.fields import CMAPS, palette
-from ..theme import ACCENT, BG, MUTED
+from ..theme import ACCENT, BG, GROUND, MUTED
 from .numinput import FloatInput
 from .ui import EMPTY_LINES, EMPTY_VEC, _cbar_label, _html, style_fig
 from .widgets import _layer_row
@@ -31,7 +31,8 @@ class SectionPanel:
         fig = figure(sizing_mode="stretch_width", height=430,
                      tools="box_zoom,wheel_zoom,pan,reset,save", active_drag="box_zoom",
                      toolbar_location="above", x_axis_label="Distance from A toward B (km)",
-                     y_axis_label="Height (km AGL)", x_range=Range1d(0, 1),
+                     y_axis_label="Height (km MSL)" if self.run.terrain else
+                     "Height (km AGL)", x_range=Range1d(0, 1),
                      y_range=Range1d(0, 15))
         style_fig(fig)
         self.xs_mapper = LinearColorMapper(palette=palette("reflectivity"), low=0, high=75,
@@ -46,6 +47,10 @@ class SectionPanel:
                                             line_color=None, visible=False)
         # more fills, contours and vectors: their glyphs as their rows are added
         self.xs_fill_r, self.xs_ov_r, self.xs_vec_r = [], [], []
+        # the ground of a terrain run, filled, over the data drawn under it
+        self.xs_ground = ColumnDataSource(dict(x=[], y1=[], y2=[]))
+        fig.varea(x="x", y1="y1", y2="y2", source=self.xs_ground, fill_color=GROUND,
+                  level="guide")
         # A and B, as on the map, at the two ends of the distance axis
         lab = dict(y=0, x_units="data", y_units="data", y_offset=5, text_color=ACCENT,
                    text_font_size="14px", text_font_style="bold", text_baseline="bottom",
@@ -100,10 +105,12 @@ class SectionPanel:
                             else (self.xs_fill.value, "auto")]
         self._xs_add_contour(on="winterp" in F)
         self._xs_add_vec()
-        self.xs_ztop = pn.widgets.FloatSlider(name="Top (km)", start=1.0,
-                                              end=float(np.floor(self.run.z[-1])), step=0.5,
-                                              value=min(15.0, float(np.floor(self.run.z[-1]))),
-                                              width=150)
+        # (a terrain run's section is above sea level: its top over the highest ground)
+        zend = float(np.floor(self.run.z[-1] + (float(self.run.terrain_height().max())
+                                                if self.run.terrain else 0.0)))
+        self.xs_ztop = pn.widgets.FloatSlider(name="Top (km MSL)" if self.run.terrain else
+                                              "Top (km)", start=1.0, end=zend, step=0.5,
+                                              value=min(15.0, zend), width=150)
         # plot style: axis limits (blank = the whole section), size, fonts, guides
         lim = dict(value=None, placeholder="auto", width=85)
         self.xs_smin = FloatInput(name="From (km)", **lim)
@@ -316,6 +323,8 @@ class SectionPanel:
             for o in spec["vecs"]:
                 if o["on"]:
                     names += vectors.deps(F, o["q"])
+            if run.terrain:  # (each column on its own heights)
+                names.append("zmsl")
 
             def prog(done, total, name):
                 if total:
@@ -335,11 +344,12 @@ class SectionPanel:
                         cancelled=lambda: g != self.gen["xs"]):
                     return
             s, fi, fj, (ex, ey) = render.section_coords(run, spec["A"], spec["B"])
-            zq = np.linspace(0.0, spec["ztop"], max(120, int(spec["ztop"] / 0.04)))
+            z0, top, ground = render.section_span(run, fi, fj, spec["ztop"])
+            zq = np.linspace(z0, top, max(120, int((top - z0) / 0.04)))
 
             def sample(name):
                 return render.sample_section(run, F.volume(name, t, spec["fstorm"]),
-                                             fi, fj, zq)
+                                             fi, fj, zq, t)
 
             def fill(name, f, m=None):
                 a = sample(name)
@@ -350,7 +360,7 @@ class SectionPanel:
                           if f["auto"] else (f["vmin"], f["vmax"]))
                 return render.fill_bands(s, zq, a, lo, max(hi, lo + 1e-6), f)
 
-            out = dict(s=s, zq=zq, fill=fill(spec["fill"], spec, m))
+            out = dict(s=s, zq=zq, ground=ground, fill=fill(spec["fill"], spec, m))
             # more fills drawn over the first; clip: clear outside their range
             out["fills"] = [fill(f["var"], f) if f["on"] else None for f in spec["fills"]]
             out["ov"] = []
@@ -363,7 +373,7 @@ class SectionPanel:
                 out["ov"].append(dict(pos=render.contour_lines(s, zq, c, lv[lv >= 0]),
                                       neg=render.contour_lines(s, zq, c, lv[lv < 0])))
             W, H = spec["px"]
-            aspect = (W * spec["ztop"]) / (max(s[-1], 1e-6) * H)
+            aspect = (W * (top - z0)) / (max(s[-1], 1e-6) * H)
             out["vecs"] = []
             for o in spec["vecs"]:
                 if not o["on"]:
@@ -371,7 +381,7 @@ class SectionPanel:
                     continue
                 # in the plane: the along-section and vertical components
                 u, v, w = (np.zeros((zq.size, s.size), np.float32) if a is None else
-                           render.sample_section(run, a, fi, fj, zq)
+                           render.sample_section(run, a, fi, fj, zq, t)
                            for a in vectors.volumes(F, o["q"], t))
                 if vectors.VECTORS[o["q"]].framed:
                     u, v = vectors.to_frame(run, u, v, o["frame"], spec["storm"])
@@ -437,6 +447,11 @@ class SectionPanel:
             r["seg"].glyph.line_color = o["color"]
             r["head"].glyph.fill_color = r["head"].glyph.line_color = o["color"]
         self._xs_extent = (float(s[-1]), float(zq[-1]))
+        self._xs_bottom = float(zq[0])
+        # the ground (terrain runs: the section is above sea level)
+        g = res["ground"]
+        self.xs_ground.data = dict(x=s, y1=np.full(s.size, zq[0]), y2=g) if g is not None \
+            else dict(x=[], y1=[], y2=[])
         self._xs_limits()
         self.xs_lab[1].x = float(s[-1])
         self._xs_look()
@@ -473,6 +488,7 @@ class SectionPanel:
                 f"Vectors · {len(on)}" if on else "Vectors")
 
     _xs_extent = None  # (length, top) of the section shown (km)
+    _xs_bottom = 0.0  # (its bottom: above 0 on a terrain run's, above sea level)
 
     def _xs_limits(self, *e, force=False):
         """Axis ranges from the From/To/Bottom/Top limits (blank: the whole section).  A
@@ -481,25 +497,26 @@ class SectionPanel:
         if self._xs_extent is None:
             return
         L, top = self._xs_extent
+        bot = self._xs_bottom
 
-        def val(w, default, hi):
+        def val(w, default, hi, lo=0.0):
             v = w.value
-            return default if v is None else float(min(max(v, 0.0), hi))
+            return default if v is None else float(min(max(v, lo), hi))
 
         s0, s1 = val(self.xs_smin, 0.0, L), val(self.xs_smax, L, L)
-        z0, z1 = val(self.xs_zmin, 0.0, top), val(self.xs_zmax, top, top)
+        z0, z1 = val(self.xs_zmin, bot, top, bot), val(self.xs_zmax, top, top, bot)
         if s1 <= s0:
             s0, s1 = 0.0, L
         if z1 <= z0:
-            z0, z1 = 0.0, top
-        view = (L, top, s0, s1, z0, z1)
+            z0, z1 = bot, top
+        view = (L, bot, top, s0, s1, z0, z1)
         if view == self._xs_view and not force:
             return
         self._xs_view = view
         self.xs_fig.x_range.update(start=s0, end=s1, reset_start=s0, reset_end=s1,
                                    bounds=(0.0, L))
         self.xs_fig.y_range.update(start=z0, end=z1, reset_start=z0, reset_end=z1,
-                                   bounds=(0.0, top))
+                                   bounds=(bot, top))
         for a in self.xs_lab:  # A and B sit on the bottom axis of the limits
             a.y = z0
 

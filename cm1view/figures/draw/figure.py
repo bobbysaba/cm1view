@@ -12,6 +12,7 @@ from matplotlib.offsetbox import AnchoredOffsetbox
 from matplotlib.patches import Circle, ConnectionPatch, Patch, Rectangle
 from matplotlib.text import Text
 
+from ...theme import GROUND
 from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_letter,
                    time_text, _new_fig, _fs, _cell, grid_layout, rc, anchor_kw, font_size,
                    run_code, run_color, layer_color, run_time_opts)
@@ -780,6 +781,10 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                     Line2D([], [], color=layer_color(spec, lay, d),
                            lw=float(lay.get("lw", 1.0))))
         m = m or pm_lay
+        if xsec and d.get("ground") is not None:  # (a terrain run's ground, filled)
+            g = np.asarray(d["ground"], dtype=float)
+            ax.fill_between(x, min(float(np.min(y)), float(g.min())), g, color=GROUND,
+                            lw=0, zorder=2.5)
         _extremes(ax, d, spec, layers, fs)
     return ax, m
 
@@ -907,8 +912,10 @@ def _decorate(ax, d, spec, fs, title, letter, ztxt, key):
         if xl or kind not in ("dist", "profile", "joint", "azim"):
             ax.set_xlabel(xl)  # (dist, ...: the field's)
         if ax_opts.get("ylabel") or kind not in ("line", "dist", "joint", "azim"):
-            ax.set_ylabel(ax_opts.get("ylabel", ""))  # (time series: units)
-            ax.set_ylabel(ax_opts.get("ylabel", ""))
+            yl = ax_opts.get("ylabel", "")
+            if kind == "xsec" and yl == "height (km)" and d.get("ground") is not None:
+                yl = "height (km MSL)"  # (a terrain run's section: above sea level)
+            ax.set_ylabel(yl)  # (time series: units)
     if title:
         ax.set_title(title, weight="bold" if ax_opts.get("title_bold", True)
                      else "normal", loc=ax_opts.get("title_loc", "center"))

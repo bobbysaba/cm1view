@@ -105,12 +105,50 @@ def short_name(recipe):
 
 
 def levels(run, recipe):
-    """Model level indices of a layer recipe (at least the nearest one)."""
+    """Model level indices of a layer recipe (at least the nearest one).  A terrain
+    run's: the levels inside it in some column at the first time (10% to spare, as the
+    heights change), each column then keeping its own inside it (layer_mask)."""
+    z0, z1 = recipe["z0"], recipe["z1"]
+    if not run.terrain:
+        return mean_levels(run, recipe)
+    Z = np.asarray(run.heights(0)).reshape(run.nk, -1)
+    ks = np.flatnonzero((Z.max(axis=1) * 1.1 >= z0) & (Z.min(axis=1) * 0.9 <= z1))
+    if ks.size == 0:
+        ks = np.array([int(np.argmin(np.abs(run.z - 0.5 * (z0 + z1))))])
+    return [int(k) for k in ks]
+
+
+def mean_levels(run, recipe):
+    """Model level indices of a layer recipe by the levels' heights z (a terrain run's:
+    their domain-mean heights), at least the nearest one."""
     z0, z1 = recipe["z0"], recipe["z1"]
     ks = np.flatnonzero((run.z >= z0) & (run.z <= z1))
     if ks.size == 0:
         ks = np.array([int(np.argmin(np.abs(run.z - 0.5 * (z0 + z1))))])
     return [int(k) for k in ks]
+
+
+def layer_mask(Z, z0, z1):
+    """Where heights Z (km, a terrain run's levels in some columns) are outside the
+    layer z0..z1 km."""
+    return (Z < z0) | (Z > z1)
+
+
+def column_weights(Z, zkm):
+    """(k0, k1, w) per column of height zkm km on levels of heights Z (nk, ...):
+    f(zkm) = (1-w) f[k0] + w f[k1], held at the lowest and highest level beyond them
+    (as Run.column_weights)."""
+    nk = Z.shape[0]
+    if nk == 1:
+        k = np.zeros(Z.shape[1:], dtype=np.intp)
+        return k, k, np.zeros(Z.shape[1:])
+    k1 = np.clip((Z < zkm).sum(axis=0), 1, nk - 1)
+    k0 = k1 - 1
+    z0 = np.take_along_axis(Z, k0[None], 0)[0]
+    z1 = np.take_along_axis(Z, k1[None], 0)[0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.clip((zkm - z0) / (z1 - z0), 0.0, 1.0)
+    return k0, k1, np.where(np.isfinite(w), w, 0.0)
 
 
 def region_at(run, recipe, center):
@@ -214,7 +252,7 @@ def _worker(task):
     npts) or dict(t, error).  A derivative (task "op", of field task "field") and
     derived fields that are not pointwise are computed on the region plus a one-point
     border (task "halo"), so their values at its edge are those of the map."""
-    from .fields import ddz_level, hgrad, split_deriv, stride_cols
+    from .fields import column_levels_3d, ddz_level, hgrad, split_deriv, stride_cols
     from .run import open_source
 
     t = task["t"]
@@ -235,13 +273,30 @@ def _worker(task):
             crop = (slice(j0 - f0, j1 - f0), slice(i0 - e0, i1 - e0))
             mask = task["mask"]
             ctx = task["ctx"]
+            zname = task.get("zname")  # (a terrain run's: heights of the cell faces, m AGL)
+            zboxes = {}
+
+            def heights(r0, r1, c0, c1):
+                """(levels, faces) heights (km AGL) of a terrain run's columns."""
+                if (r0, r1, c0, c1) not in zboxes:
+                    zf = np.stack([_read(d[zname], None, k, r0, r1, c0, c1, 3)
+                                   for k in range(task["nk"] + 1)]) / np.float32(1000.0)
+                    zboxes[r0, r1, c0, c1] = (0.5 * (zf[:-1] + zf[1:]), zf)
+                return zboxes[r0, r1, c0, c1]
 
             def base(fetch):
                 """The field (not yet differentiated) on the box read."""
                 if fdef is not None and fdef.column:  # (its layer's levels only)
                     ks, dz, zk, top = task["column"]
-                    c = dict(ctx, dz=dz, zk=zk, top=top, memo={})
                     s = task.get("stride", 1)
+                    if zname:  # (each column's own levels)
+                        r0, r1, tj, _ = stride_cols(f0, f1, task["nj"], s)
+                        c0, c1, ti, _ = stride_cols(e0, e1, task["ni"], s)
+                        ks, dz, zk = column_levels_3d(*heights(r0, r1, c0, c1), *fdef.layer,
+                                                      edges=fdef.edges)
+                        if s > 1:
+                            dz, zk = dz[:, tj][:, :, ti], zk[:, tj][:, :, ti]
+                    c = dict(ctx, dz=dz, zk=zk, top=top, memo={})
                     if s == 1:
                         return np.asarray(fdef.func(lambda n: np.stack(
                             [_read(d[n], info[n][0], k, f0, f1, e0, e1, info[n][2])
@@ -266,6 +321,8 @@ def _worker(task):
                 return a
 
             zfull = task.get("zfull")
+            if zname and task["vmode"] != "2d":  # (each column's, on the box read)
+                zfull = heights(f0, f1, e0, e1)[0]
             raw = {}  # (native, level) -> plane on the box read; ∂/∂z inputs reuse them
 
             def read(n, k):
@@ -314,6 +371,16 @@ def _worker(task):
             if task["vmode"] in ("height", "2d"):
                 if task["vmode"] == "2d":
                     a = finish(base(fetcher(0)))
+                elif zname:  # (each column's own levels around the height)
+                    k0, k1, w = column_weights(zfull, task["zkm"])
+                    kset = [int(k) for k in np.union1d(k0, k1[w > 0])]
+                    wk = {k: ((1.0 - w) * (k0 == k) + w * (k1 == k)).astype(np.float32)
+                          for k in kset}
+                    if op == "ddz":
+                        a = sum(wk[k][crop] * level(k) for k in kset)
+                    else:
+                        gs = {k: fetcher(k) for k in kset}
+                        a = finish(base(lambda n: sum(wk[k] * gs[k](n) for k in kset)))
                 else:
                     k0, k1, w = task["weights"]
                     if op == "ddz":  # (∂/∂z of the two levels, then between them)
@@ -336,6 +403,8 @@ def _worker(task):
             pool = []  # values for an overall mean / percentile
             for n, k in enumerate(ks):
                 a = level(k)
+                if zname:  # (only the columns where this level is in the layer)
+                    a = np.where(layer_mask(zfull[k][crop], *task["layer"]), np.nan, a)
                 prof[n], i = _reduce(a, how, pct)
                 if how in ("min", "max") and np.isfinite(prof[n]):
                     if (not np.isfinite(best[0]) or (prof[n] < best[0] if how == "min"
@@ -353,7 +422,8 @@ def _worker(task):
                 if best[1] >= 0:
                     jj, ii = divmod(best[2], nx)
                     out.update(x=float(task["xh"][ii]), y=float(task["yh"][jj]),
-                               z=float(zs[best[1]]))
+                               z=float(zfull[ks[best[1]]][crop][jj, ii] if zname
+                                       else zs[best[1]]))
             else:
                 v = np.concatenate(pool) if pool else np.array([])
                 out["value"] = (float("nan") if v.size == 0 else
@@ -520,6 +590,9 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
     vmode = recipe["vmode"] if d.ndim == 3 else "2d"
     weights = run.level_weights(recipe["z"]) if vmode == "height" else None
     ks = levels(run, recipe) if vmode == "layer" else None
+    # a terrain run's columns on their own heights: the worker reads them (zagl)
+    terrain = dict(zname="zagl", nk=run.nk, layer=(recipe.get("z0"), recipe.get("z1"))) \
+        if run.terrain and "zagl" in run.vars else {}
     t_done = ds["computed"].values
     for t in range(len(run.times)) if times is None else sorted(set(times)):
         if t_done[t]:
@@ -546,7 +619,7 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
             zlev=None if ks is None else run.z[ks], xh=run.xh[i0:i1], yh=run.yh[j0:j1],
             xe=run.xh[e0:e1], ye=run.yh[f0:f1], zfull=np.asarray(run.z),
             column=column, stride=column_stride(run) if b.costly else 1, ni=run.ni,
-            nj=run.nj, center=cen))
+            nj=run.nj, center=cen, **terrain))
     total, done = len(tasks), 0
     if not tasks:
         return ds, skipped

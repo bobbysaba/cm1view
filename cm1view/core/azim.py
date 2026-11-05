@@ -83,7 +83,7 @@ def at_time(run, F, recipe, t, center, ref, storm=None):
     d = F[r["field"]]
     if d.ndim == 2:
         raise ValueError("an azimuthal mean needs a 3D field")
-    ks = ser.levels(run, r)
+    ks = ser.mean_levels(run, r)
     dr, nr = bins(run, r)
     dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
     cx, cy = center
@@ -107,7 +107,13 @@ def at_time(run, F, recipe, t, center, ref, storm=None):
     if not m.any():
         return np.full((nz, nr), np.nan), np.zeros((nz, nr), dtype=np.int64)
     rb = np.minimum((R[m] / dr).astype(np.int64), nr - 1)
-    v = np.asarray(vol[ks[0]:ks[-1] + 1, j0:j1, i0:i1][:, m], dtype=np.float64)
+    if run.terrain:  # (each column interpolated to the levels' mean heights, z below)
+        from .fields import at_height
+        Z, box = run.heights(t)[:, j0:j1, i0:i1], vol[:, j0:j1, i0:i1]
+        sub = np.stack([at_height(box, Z, float(h)) for h in run.z[ks[0]:ks[-1] + 1]])
+    else:
+        sub = vol[ks[0]:ks[-1] + 1, j0:j1, i0:i1]
+    v = np.asarray(sub[:, m], dtype=np.float64)
     idx = (np.arange(nz)[:, None] * nr + rb[None, :])
     ok = np.isfinite(v)
     idx, v = idx[ok], v[ok]
@@ -128,7 +134,7 @@ def compute(run, F, recipe, ts, centers, refs, storm=None, cancelled=None):
     turns true before a time."""
     r = recipe
     dr, nr = bins(run, r)
-    ks = ser.levels(run, r)
+    ks = ser.mean_levels(run, r)
     S = N = None
     for t in ts:
         if cancelled and cancelled():

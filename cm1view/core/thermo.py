@@ -98,6 +98,8 @@ def _integrate_buoyancy(z, B, z_lcl):
     dz = 10.0
     zf = np.arange(z[0], z[-1], dz)
     bf = np.interp(zf, z, B)
+    if bf.size == 0:  # (a column under 10 m deep: the parcel starts at its top)
+        return 0.0, 0.0, np.nan, np.nan, 0.0
     pos = bf > 0
     edges = np.flatnonzero(np.diff(pos.astype(np.int8))) + 1
     bounds = np.concatenate(([0], edges, [bf.size]))
@@ -257,11 +259,33 @@ def _columns_one(z, p, th, qv, kind):  # (no thread pool: series reader processe
     return out
 
 
+@njit(parallel=True, cache=True)
+def _columns_par_z(z, p, th, qv, kind):  # (z: each column's own heights)
+    n = p.shape[1]
+    out = np.empty((3, n))
+    for c in prange(n):
+        out[0, c], out[1, c], out[2, c] = _column_parcel(
+            np.ascontiguousarray(z[:, c]), np.ascontiguousarray(p[:, c]),
+            np.ascontiguousarray(th[:, c]), np.ascontiguousarray(qv[:, c]), kind)
+    return out
+
+
+@njit(cache=True)
+def _columns_one_z(z, p, th, qv, kind):
+    n = p.shape[1]
+    out = np.empty((3, n))
+    for c in range(n):
+        out[0, c], out[1, c], out[2, c] = _column_parcel(
+            np.ascontiguousarray(z[:, c]), np.ascontiguousarray(p[:, c]),
+            np.ascontiguousarray(th[:, c]), np.ascontiguousarray(qv[:, c]), kind)
+    return out
+
+
 def parcel_columns(z, p, th, qv, kind="sb", threads=1):
     """CAPE (J/kg), CIN (J/kg) and LCL height (m AGL) of parcel kind ('sb', 'ml', 'mu')
-    in every column, as analyze gives them for one: z (nk,) m AGL; p (Pa), th (K),
-    qv (kg/kg) of shape (nk, ...).  Returns three arrays of shape (...); `threads`
-    columns at a time."""
+    in every column, as analyze gives them for one: z (nk,) m AGL, or each column's
+    own (nk, ...) (a terrain run's); p (Pa), th (K), qv (kg/kg) of shape (nk, ...).
+    Returns three arrays of shape (...); `threads` columns at a time."""
     import numba
     p = np.asarray(p, np.float64)
     shape = p.shape[1:]
@@ -270,11 +294,16 @@ def parcel_columns(z, p, th, qv, kind="sb", threads=1):
     th, qv, p = flat(th), np.maximum(flat(qv), 1e-10), flat(p)
     z, kind = np.asarray(z, np.float64), PARCELS.index(kind)
     threads = max(1, min(int(threads), numba.config.NUMBA_NUM_THREADS))
+    if z.ndim > 1:
+        z = flat(z)
+        one, par = _columns_one_z, _columns_par_z
+    else:
+        one, par = _columns_one, _columns_par
     if threads == 1:
-        out = _columns_one(z, p, th, qv, kind)
+        out = one(z, p, th, qv, kind)
     else:
         numba.set_num_threads(threads)
-        out = _columns_par(z, p, th, qv, kind)
+        out = par(z, p, th, qv, kind)
     return tuple(o.reshape(shape) for o in out)
 
 
