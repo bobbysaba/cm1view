@@ -223,6 +223,11 @@ class Run:
     # the model writes no parcel output: cm1view traces trajectories through the 3D winds
     # (core.trajcalc) instead of looking for parcel files
     traced_parcels = False
+    # a plain-language note on how this run's fields come about ("" for none), shown
+    # with the run's details
+    note = ""
+    # output times kept open in this process (a model's source may open many files)
+    open_max = 6
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         self.path = os.path.abspath(path)
@@ -296,7 +301,7 @@ class Run:
         if d is None:
             d = open_source(self.source(t))
             self._open[t] = d
-            while len(self._open) > 6:
+            while len(self._open) > self.open_max:
                 _, old = self._open.popitem(last=False)
                 old.close()
         else:

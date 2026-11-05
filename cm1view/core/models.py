@@ -7,7 +7,8 @@ model, which keeps the search for runs cheap.  "auto" picks the first model whos
 output a folder holds.
 
 A run's path is usually its folder.  A model may also name runs inside one folder
-(WoFS: <root>/memNN, one per ensemble member, no such folder on disk): runs(path,
+(WoFS: <root>/memNN, one per ensemble member, and <root>/mean, their mean; no such
+folders on disk): runs(path,
 entries) lists them, virtual(path) says a path is one, and canonical(path) turns the
 folder itself into its first run."""
 
@@ -62,7 +63,8 @@ class CM1(Model):
 
 
 class WoFS(Model):
-    """WoFS (DART-cycled WRF): cycle folders of member wrfouts; one run per member."""
+    """WoFS (DART-cycled WRF): cycle folders of member wrfouts; one run per member, and
+    one for their mean (with more than one member)."""
     key, label = "wofs", "WoFS"
 
     @property
@@ -82,11 +84,16 @@ class WoFS(Model):
 
     def runs(self, path, entries):
         from . import wofs
-        return [wofs.member_path(path, m) for m in wofs.members(path, entries)]
+        ms = wofs.members(path, entries)
+        return [wofs.member_path(path, m) for m in ms] + [wofs.mean_path(path)] * (len(ms) > 1)
 
     def virtual(self, path):
         from . import wofs
-        return wofs.is_member(path)
+        return wofs.is_member(path) or wofs.is_mean(path)
+
+    def open(self, path, **kw):
+        from . import wofs
+        return wofs.open_run(path, **kw)
 
     def canonical(self, path):
         from . import wofs

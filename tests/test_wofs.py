@@ -1,7 +1,7 @@
 """WoFS reader (core/wofs.py): one member of a tiny synthetic WoFS run (cycle folders of
 wrfout_d01_<time>_<member> files beside DART files that are ignored), its names, grid,
 times, base state and perturbations, its terrain-following heights and maps at a height
-above ground or sea level, and how runs are found and opened."""
+above ground or sea level, and how runs are found and opened; the ensemble mean (<root>/mean)."""
 import datetime
 import os
 
@@ -104,7 +104,8 @@ def test_found_as_one_run_per_member(wofs_root, tmp_path):
     assert models.detect(wofs_root) is None  # (the folder itself is not one run)
     assert wofs.members(wofs_root) == [1, 2, 3]
     runs, complete = config.scan_runs([str(tmp_path)], model=None)
-    assert runs == [os.path.join(wofs_root, f"mem0{m}") for m in (1, 2, 3)] and complete
+    assert runs == [os.path.join(wofs_root, n) for n in ("mean", "mem01", "mem02", "mem03")]
+    assert complete
     assert config.scan_runs([str(tmp_path)], model="cm1")[0] == []
     mem = os.path.join(wofs_root, "mem02")
     assert models.exists(mem) and not os.path.isdir(mem)
@@ -113,8 +114,8 @@ def test_found_as_one_run_per_member(wofs_root, tmp_path):
     assert not registry.is_run(mem, "cm1")
     assert not models.exists(os.path.join(wofs_root, "mem09"))  # no such member
     assert models.canonical(wofs_root) == os.path.join(wofs_root, "mem01")
-    assert registry.sibling_runs(mem) == [os.path.join(wofs_root, f"mem0{m}")
-                                          for m in (1, 3)]
+    assert registry.sibling_runs(mem) == [os.path.join(wofs_root, n)
+                                          for n in ("mem01", "mem03", "mean")]
 
 
 def test_member_run(wofs_root):
@@ -269,7 +270,7 @@ def test_picker_lists_members(wofs_root, monkeypatch):
     monkeypatch.setattr(registry, "recent_runs", lambda: [])
     p = RunPicker()
     p.query.value_input = wofs_root
-    assert list(p.list.options) == ["mem01", "mem02", "mem03"]
+    assert list(p.list.options) == ["mean", "mem01", "mem02", "mem03"]
     p.query.value_input = os.path.join(wofs_root, "mem03")  # a member: it is picked
     assert p.selected == os.path.join(wofs_root, "mem03") and not p.open.disabled
     assert "WoFS" in p.msg.object and "3 output times" in p.msg.object
@@ -469,3 +470,98 @@ def test_traced_trajectories(wofs_root, tmp_path, monkeypatch):
     assert "180 s" in trajcalc.off(run) and P.for_run(run, F) is None and P.offered(run)
     monkeypatch.setenv("CM1VIEW_TRAJ_MAX_INTERVAL", "0")  # (0: never off)
     assert trajcalc.off(run) == ""
+
+
+# ------------------------------------------------------------- W5: the ensemble mean
+# (members 1, 2, 3: T = m + 0.1 c + k, U = i + c + m, QVAPOR = 0.01 + 0.001 m + ...,
+# so the mean is member 2's state; PH and W are the same in every member)
+def test_mean_run_found_and_opened(wofs_root):
+    mean = os.path.join(wofs_root, "mean")
+    assert models.exists(mean) and not os.path.isdir(mean) and wofs.is_mean(mean)
+    assert models.detect(mean).key == "wofs" and models.count(mean) == NC
+    assert registry.is_run(mean) and not registry.is_run(mean, "cm1")
+    run = models.open_run(mean, workers=1)
+    assert isinstance(run, wofs.WoFSMeanRun) and run.path == mean and run.member is None
+    assert run.stat == "mean" and "3 members" in run.model_label
+    assert "mean state" in run.note and "first time" in run.note
+    np.testing.assert_allclose(run.times, [0.0, 180.0, 360.0])
+    assert run.time_label(2) == "22:06 UTC" and len(run.parts[0]) == 3
+    # one member: no mean listed (but a single-member root still opens as one)
+    one = make_wofs(os.path.join(os.path.dirname(wofs_root), "one"), members=(4,))
+    assert models.runs_in(one, list(os.scandir(one))) == [os.path.join(one, "mem04")]
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_mean_values(wofs_root, workers):
+    """Every field in the files is the member mean (in reader processes: each a share
+    of the members); the base state is the mean at the first time."""
+    run = models.open_run(os.path.join(wofs_root, "mean"), workers=workers)
+    m2 = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    try:
+        for c in range(NC):
+            for n in ("th", "prs", "qv", "uinterp", "vinterp", "winterp", "dbz", "zagl",
+                      "zmsl", "th0", "u0", "qv0"):
+                np.testing.assert_allclose(run.volume(n, c), m2.volume(n, c), rtol=1e-6,
+                                           atol=1e-5, err_msg=f"{n} at {c}")
+            np.testing.assert_allclose(run.read_level("th", c, 1), m2.read_level("th", c, 1),
+                                       rtol=1e-6)
+            np.testing.assert_allclose(run.read_level("UP_HELI_MAX", c), float(c))
+            np.testing.assert_allclose(run.heights(c, "msl", w=True),
+                                       m2.heights(c, "msl", w=True), atol=1e-4)
+            np.testing.assert_allclose(run.heights(c, w=True), m2.heights(c, w=True),
+                                       atol=1e-4)
+        run.clear_cache()  # (columns from the files, then from the cached volume)
+        np.testing.assert_allclose(run.read_box("th", 1, 0, 2, 0, 2)[:, 0, 0],
+                                   302.1 + np.arange(NK), rtol=1e-6)
+        run.volume("th", 1)
+        np.testing.assert_allclose(run.read_box("th", 1, 0, 2, 0, 2)[:, 0, 0],
+                                   302.1 + np.arange(NK), rtol=1e-6)
+        prof = run.mean_profiles(["th", "prs0"], 2)
+        np.testing.assert_allclose(prof["th"], 302.2 + np.arange(NK), rtol=1e-6)
+        np.testing.assert_allclose(prof["prs0"], 1.0e5 - 1000.0 * np.arange(NK))
+        # derived fields: from the mean state
+        F, F2 = Fields(run), Fields(m2)
+        for n in ("thpert", "wmax", "sbcape"):
+            np.testing.assert_allclose(F.plane(n, 2), F2.plane(n, 2), rtol=1e-5, atol=1e-5)
+    finally:
+        if run._pool is not None:
+            run._pool.shutdown()
+
+
+def test_mean_source_split():
+    src = wofs.WRFMeanSource([(f"f{i}", f"g{i}") for i in range(36)])
+    parts = src.split(8)
+    assert len(parts) == 8 and sum(len(p.pairs) for p in parts) == 36
+    assert [q for p in parts for q in p.pairs] == src.pairs
+    assert len(src.split(100)) == 36 and len(src.split(0)) == 1
+
+
+def test_mean_series_and_trajectories(wofs_root, tmp_path, monkeypatch):
+    """Series read the mean in reader processes; trajectories follow the mean winds,
+    traced to their own file (not a member's)."""
+    from cm1view.core import parcels as P, series as ser, trajcalc
+    monkeypatch.setattr(ser, "store", lambda *a, **k: None)
+    monkeypatch.setattr(P, "CACHE_DIR", str(tmp_path / "parcels"))
+    monkeypatch.setenv("CM1VIEW_TRAJ_MAX_INTERVAL", "0")
+    run = models.open_run(os.path.join(wofs_root, "mean"), workers=1)
+    m2 = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    rec = ser.normalize(dict(region="domain", reduce="max", field="uinterp",
+                             vmode="height", z=1.0))
+    got = [ser.compute(r, Fields(r), rec, ser.empty(r, rec), workers=1)[0]["value"]
+           for r in (run, m2)]
+    np.testing.assert_allclose(got[0], got[1], rtol=1e-6)
+    pf, pf2 = P.for_run(run, Fields(run)), P.for_run(m2, Fields(m2))
+    assert isinstance(pf, trajcalc.Traced) and pf.path != pf2.path
+    box = dict(box=[-3.0, 3.0, -2.0, 2.0], z=[0.0, 3.0])
+    tr = pf.trajectories(P.select(pf, box, "s"), ("x", "y", "z"))
+    tr2 = pf2.trajectories(P.select(pf2, box, "s"), ("x", "y", "z"))
+    for k in "xyz":
+        np.testing.assert_allclose(tr[k], tr2[k], atol=1e-4, equal_nan=True)
+
+
+def test_registry_and_figures_open_the_mean(wofs_root):
+    reg = registry.Registry(None, 1, 1)
+    r, F = reg.get(os.path.join(wofs_root, "mean"))
+    assert isinstance(r, wofs.WoFSMeanRun) and reg.get(os.path.join(wofs_root, "mean"))[0] is r
+    assert reg.get(os.path.join(wofs_root, "mem02"))[0] is not r
+    assert config.run_key(r.path).endswith("_mean")

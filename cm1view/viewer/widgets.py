@@ -528,7 +528,9 @@ class Widgets:
                   f'<div class="cv-run"><b>{run.path}</b><br>{run.model_label} · '
                   f'{run.ni}×{run.nj}×{run.nk} · '
                   f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
-                  f'({run.umove:g}, {run.vmove:g}) m/s</div>'),
+                  f'({run.umove:g}, {run.vmove:g}) m/s'
+                  + (f'<br><span style="opacity:0.8">{run.note}</span>' if run.note else '')
+                  + '</div>'),
             pn.Row(self.cache_html, self.clear_btn)))
         p = self.picker
         self.rp_modal = p.modal

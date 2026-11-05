@@ -6,7 +6,8 @@ else in those folders (DART output, wrfinput, obs_seq, logs) is ignored.
 
 A run in cm1view is one member: its path is <root>/memNN, a folder that does not
 exist on disk (models.WoFS knows it), so everything keyed by a run's path (the 3D
-cache, saved figures, exports, ?run=) tells the members apart.
+cache, saved figures, exports, ?run=) tells the members apart.  <root>/mean is the
+ensemble mean (WoFSMeanRun, below).
 
 Fields are renamed to cm1view's (CM1) names where there is one: T+300 -> th,
 P+PB -> prs, QVAPOR... -> qv..., REFL_10CM -> dbz, U/V/W -> uinterp/vinterp/winterp
@@ -25,17 +26,19 @@ the domain-mean height above ground of the levels at the first time."""
 import datetime
 import os
 import re
+from collections import OrderedDict
 
 import netCDF4
 import numpy as np
 
-from .run import IO_LOCK, Run, VarInfo
+from .run import IO_LOCK, Run, VarInfo, _read_volume_worker
 
 G = 9.81  # m/s^2, as WRF
 
 CYCLE_RE = re.compile(r"^\d{12}$")
 FILE_RE = re.compile(r"^wrfout_d01_(\d{4}-\d\d-\d\d_\d\d:\d\d:\d\d)_(\d+)$")
 MEMBER_RE = re.compile(r"^mem0*(\d+)$")
+MEAN = "mean"  # <root>/mean: the ensemble mean run
 
 # cm1view name -> (WRF fields summed, constant added)
 MAPPED = {
@@ -77,6 +80,16 @@ def member_of(path):
     m = MEMBER_RE.match(os.path.basename(os.path.abspath(path).rstrip("/")))
     return (os.path.dirname(os.path.abspath(path).rstrip("/")), int(m.group(1))) if m \
         else None
+
+
+def mean_path(root):
+    return os.path.join(os.path.abspath(root), MEAN)
+
+
+def mean_of(path):
+    """The root of a mean path <root>/mean, or None."""
+    p = os.path.abspath(path).rstrip("/")
+    return os.path.dirname(p) if os.path.basename(p) == MEAN else None
 
 
 def _ok_dir(entry):
@@ -127,6 +140,12 @@ def is_member(path):
             and rm[1] in members(rm[0]))
 
 
+def is_mean(path):
+    """The mean path <root>/mean of a WoFS root (no such folder on disk)."""
+    root = mean_of(path) if path else None
+    return root is not None and not os.path.isdir(path) and is_root(root)
+
+
 def _when(s):
     return datetime.datetime.strptime(s, "%Y-%m-%d_%H:%M:%S").replace(
         tzinfo=datetime.timezone.utc)
@@ -146,7 +165,23 @@ def member_files(root, m):
     return out
 
 
+def mean_files(root):
+    """[(valid time, {member: file path})] of every cycle folder holding member files:
+    what the mean averages at each time (one listing per cycle folder)."""
+    out = []
+    for c in cycles(root):
+        folder = os.path.join(root, c)
+        found = _files_in(folder)
+        if found:
+            when = _when(FILE_RE.match(found[min(found)]).group(1))
+            out.append((when, {m: os.path.join(folder, n) for m, n in sorted(found.items())}))
+    return out
+
+
 def count(path):
+    root = mean_of(path) if path else None
+    if root is not None and not os.path.isdir(path):
+        return len(mean_files(root)) if os.path.isdir(root) else 0
     rm = member_of(path) if path else None
     if rm is None or os.path.isdir(path) or not os.path.isdir(rm[0]):
         return 0
@@ -253,6 +288,72 @@ class WRFSource:
         return WRFView(self.path, self.path0)
 
 
+class _Mean:
+    """The same field of several members, indexed like a netCDF variable: the mean of
+    their values (summed in float64)."""
+
+    def __init__(self, vs):
+        self.vs = vs
+
+    def __getitem__(self, key):
+        acc = np.array(self.vs[0][key], dtype=np.float64)
+        for v in self.vs[1:]:
+            acc += np.asarray(v[key], dtype=np.float64)
+        return (acc / len(self.vs)).astype(np.float32)
+
+
+class WRFMeanView:
+    """Several members' files at one time, seen as one: d[name][...] is the member mean
+    of what each member's WRFView gives (base-state fields: of each member's first
+    time).  The files are opened on the first read of a field."""
+
+    def __init__(self, pairs):
+        self._pairs, self._views = list(pairs), None
+        with _open_nc(self._pairs[0][0]) as d:
+            self.variables = table(d.variables)
+
+    def __getitem__(self, name):
+        if name not in self.variables:
+            raise KeyError(name)
+        if self._views is None:
+            self._views = []
+            try:
+                for path, path0 in self._pairs:
+                    self._views.append(WRFView(path, path0))
+            except BaseException:
+                self.close()
+                raise
+        return _Mean([v[name] for v in self._views])
+
+    def close(self):
+        for v in self._views or ():
+            v.close()
+        self._views = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class WRFMeanSource:
+    """Picklable: what reader processes open for the mean of several members at one
+    time, [(file, the member's first-time file)]."""
+
+    def __init__(self, pairs):
+        self.pairs = list(pairs)
+
+    def open(self):
+        return WRFMeanView(self.pairs)
+
+    def split(self, n):
+        """At most n sources of about equal shares of the members (in order)."""
+        n = max(1, min(int(n), len(self.pairs)))
+        cuts = [round(i * len(self.pairs) / n) for i in range(n + 1)]
+        return [WRFMeanSource(self.pairs[a:b]) for a, b in zip(cuts, cuts[1:])]
+
+
 def table(wrfvars):
     """{cm1view name: (kind, what)} of a WRF file's variables: kind "mapped" (what: a
     MAPPED name), "base" (what: the MAPPED name read at the first time), "height"
@@ -284,18 +385,7 @@ class WoFSRun(Run):
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         super().__init__(path, cache_gb, workers, cache)
-        if is_root(self.path):
-            self.root, self.member = self.path, members(self.path)[0]
-        else:
-            rm = member_of(self.path)
-            if rm is None:
-                raise FileNotFoundError(f"{self.path} is not a WoFS member (<root>/memNN)")
-            self.root, self.member = rm
-        self.path = member_path(self.root, self.member)
-        self.members = members(self.root)
-        found = member_files(self.root, self.member)
-        if not found:
-            raise FileNotFoundError(f"no wrfout_d01_*_{self.member} files under {self.root}")
+        found = self._locate()
         self.valid = [w for w, _ in found]  # valid times (UTC)
         self.files = [f for _, f in found]
         self.times = np.array([(w - self.valid[0]).total_seconds() for w in self.valid],
@@ -342,6 +432,22 @@ class WoFSRun(Run):
         self._hgt = hgt / 1000.0  # ground height (km MSL); WRF's HGT does not change
         self._grid_done()
 
+    def _locate(self):
+        """Set root, member, members and path (<root>/memNN); [(valid time, file)]."""
+        if is_root(self.path):
+            self.root, self.member = self.path, members(self.path)[0]
+        else:
+            rm = member_of(self.path)
+            if rm is None:
+                raise FileNotFoundError(f"{self.path} is not a WoFS member (<root>/memNN)")
+            self.root, self.member = rm
+        self.path = member_path(self.root, self.member)
+        self.members = members(self.root)
+        found = member_files(self.root, self.member)
+        if not found:
+            raise FileNotFoundError(f"no wrfout_d01_*_{self.member} files under {self.root}")
+        return found
+
     def terrain_height(self):
         return self._hgt
 
@@ -363,3 +469,156 @@ class WoFSRun(Run):
     def time_label(self, t):
         w = self.valid[t]
         return f"{w:%H:%M:%S} UTC" if w.second else f"{w:%H:%M} UTC"
+
+
+MEAN_NOTE = ("Ensemble mean of {n} members. Fields in the files (winds, potential "
+             "temperature, pressure, moisture, heights, reflectivity, WRF's 2D fields) "
+             "are the member mean at each time; fields cm1view computes (CAPE, updraft "
+             "helicity, vorticity, ...) are computed from that mean state. Base state: "
+             "the mean at the first time. Trajectories follow the mean winds.")
+
+
+class WoFSMeanRun(WoFSRun):
+    """The ensemble mean of a WoFS run: path <root>/mean.  At each time (cycle folder)
+    every field in the files is the mean over the members with a file there; the base
+    state is the mean of the members' first-time fields, so a perturbation is the
+    mean's change since then.  Fields cm1view derives (core.fields) are computed from
+    the mean state, not averaged member by member; reflectivity (REFL_10CM) and WRF's
+    2D diagnostics are member means of the values in the files.  Traced trajectories
+    follow the mean winds.  The provisional 1D z is the first member's.
+
+    Reading: a 3D field at one time is averaged in the reader processes, each reading
+    its share of the members (Run._read_into_cache), and kept in the 3D cache like any
+    volume; single levels come from that cached volume.  Other reads (2D fields, column
+    boxes, series) open every member's file through a WRFMeanSource.
+
+    stat names the statistic: "mean".  A probability-matched mean would be another
+    (<root>/pmm): it needs every member's whole field before combining, so it would
+    collect per-member volumes (split(len(pairs))) and combine them in _combine
+    instead of weighting partial means."""
+
+    stat = MEAN
+    open_max = 2  # (each open time holds every member's file)
+
+    def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
+        super().__init__(path, cache_gb, workers, cache)
+        for v in self.vars.values():  # (levels: from the whole mean volume, cached)
+            if v.ndim == 3:
+                v.zchunk = 1 << 20
+        self._zw = OrderedDict()  # t -> heights (km MSL) of the w levels
+
+    def _locate(self):
+        root = mean_of(self.path)
+        if root is None or not is_root(root):
+            raise FileNotFoundError(f"{self.path} is not a WoFS ensemble mean (<root>/mean)")
+        self.root, self.member = root, None
+        self.path = mean_path(root)
+        self.members = members(root)
+        found = mean_files(root)
+        if not found:
+            raise FileNotFoundError(f"no wrfout_d01_* member files under {root}")
+        first = {}
+        for _, fs in found:
+            for m, f in fs.items():
+                first.setdefault(m, f)
+        # per time: (file, that member's first file) of every member there
+        self.parts = [[(f, first[m]) for m, f in fs.items()] for _, fs in found]
+        self.model_label = f"WoFS ensemble mean ({len(first)} members)"
+        self.note = MEAN_NOTE.format(n=len(first))
+        return [(w, fs[min(fs)]) for w, fs in found]
+
+    def source(self, t):
+        return WRFMeanSource(self.parts[t])
+
+    # ------------------------------------------------------------------ reading
+    def _combine(self, parts):
+        """The statistic from [(partial mean volume, members in it)]."""
+        n = sum(k for _, k in parts)
+        acc = np.zeros(parts[0][0].shape, np.float64)
+        for a, k in parts:
+            acc += a.astype(np.float64) * (k / n)
+        return acc.astype(np.float32)
+
+    def _pooled(self, wants, t, done, progress=None, cancelled=None):
+        """Mean volumes of [(name, stag)] at time t, read in the reader processes: one
+        task per field and share of the members, each a partial mean in shared memory;
+        done(name, volume) as each field completes.  False if cancelled."""
+        from concurrent.futures import as_completed
+
+        parts = self.source(t).split(self.workers)
+        pool = self._get_pool()
+        futs = {pool.submit(_read_volume_worker, p, n, stag, self._shm): (n, len(p.pairs))
+                for n, stag in wants for p in parts}
+        got = {n: [] for n, _ in wants}
+        pending, finished = set(futs), 0
+        if progress:
+            progress(0, len(wants), wants[0][0])
+        try:
+            for fut in as_completed(futs):
+                pending.discard(fut)
+                n, k = futs[fut]
+                path = fut.result()
+                try:
+                    got[n].append((np.load(path), k))
+                finally:
+                    os.remove(path)
+                if len(got[n]) == len(parts):
+                    done(n, self._combine(got.pop(n)))
+                    finished += 1
+                    if progress:
+                        progress(finished, len(wants), n)
+                if cancelled and cancelled() and pending:
+                    return False
+            return True
+        finally:
+            for f in pending:  # (cancelled or failed: tidy what the others wrote)
+                if not f.cancel():
+                    try:
+                        os.remove(f.result())
+                    except Exception:
+                        pass
+
+    def _read_into_cache(self, missing, t, protect, progress, cancelled):
+        if self.workers <= 1 or not self._shm:  # (in this process: WRFMeanView)
+            return super()._read_into_cache(missing, t, protect, progress, cancelled)
+        return self._pooled([(n, self.vars[n].stag) for n in missing], t,
+                            lambda n, a: self._insert(n, t, a, protect), progress, cancelled)
+
+    def read_box(self, name, t, i0, i1, j0, j1):
+        vol = self.cached(name, t)
+        if vol is not None:
+            return np.array(vol[:, j0:j1, i0:i1])
+        return super().read_box(name, t, i0, i1, j0, j1)
+
+    def mean_profiles(self, names, t, progress=None):
+        todo = [n for n in dict.fromkeys(names) if (n, t) not in self._means]
+        if todo:  # (the mean volumes, read in parallel, then averaged here)
+            self.load_volumes(todo, t, progress)
+        return super().mean_profiles(names, t)
+
+    def heights(self, t, ref="agl", w=False):
+        if not w:
+            return super().heights(t, ref)
+        z = self._zw.get(t)
+        if z is None:
+            self._check("zmsl", t)
+            if self.workers > 1 and self._shm:
+                out = {}
+                self._pooled([("zmsl", None)], t, out.__setitem__)
+                z = out["zmsl"]
+            else:
+                with IO_LOCK:
+                    z = np.asarray(self._ds(t)["zmsl"][0], np.float32)
+            z = z / np.float32(1000.0)
+            self._zw[t] = z
+            while len(self._zw) > 4:
+                self._zw.popitem(last=False)
+        else:
+            self._zw.move_to_end(t)
+        return z if ref == "msl" else z - self._hgt.astype(np.float32)
+
+
+def open_run(path, **kw):
+    """A member's run, or the mean's (<root>/mean)."""
+    return (WoFSMeanRun if mean_of(path) is not None and not os.path.isdir(path)
+            else WoFSRun)(path, **kw)
