@@ -49,6 +49,7 @@ nav:
       - 3D: guide/3d.md
       - Series and distributions: guide/series.md
       - Parcels: guide/parcels.md
+      - WoFS and WRF ensembles: guide/wofs.md
       - Figures: guide/figures.md
       - Figure panels: guide/figures-panels.md
       - Figure layers: guide/figures-layers.md

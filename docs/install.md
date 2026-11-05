@@ -62,6 +62,7 @@ cm1view --demo
 This writes two small synthetic runs to the cache folder (a supercell and a
 weak-mesocyclone twin, with storm tracks) and starts the viewer on them. Open the URL it
 prints. On a cluster, see [Running on a cluster](hpc.md) for how to reach it from your
-laptop.
+laptop. `cm1view --demo wofs` opens a small synthetic WoFS ensemble instead
+([WoFS](guide/wofs.md)).
 
 To run the tests as well, see [Developing](developing.md).

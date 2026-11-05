@@ -565,3 +565,23 @@ def test_registry_and_figures_open_the_mean(wofs_root):
     assert isinstance(r, wofs.WoFSMeanRun) and reg.get(os.path.join(wofs_root, "mean"))[0] is r
     assert reg.get(os.path.join(wofs_root, "mem02"))[0] is not r
     assert config.run_key(r.path).endswith("_mean")
+
+
+def test_demo_ensemble(tmp_path):
+    """The synthetic demo (cm1view --demo wofs): found as a root, opens, has terrain, and a
+    storm that shows in reflectivity and updraft helicity; the mean differs from a member."""
+    from cm1view import demo, demo_wofs
+    root = demo_wofs.make(str(tmp_path))
+    assert demo_wofs.make(str(tmp_path)) == root  # (up to date: not rewritten)
+    assert wofs.members(root) == [1, 2, 3]
+    assert demo.is_demo(os.path.join(root, "mem02"))
+    run = models.open_run(os.path.join(root, "mem02"), workers=1)
+    assert run.terrain and len(run.times) == demo_wofs.NCYCLE
+    F = Fields(run)
+    t = len(run.times) - 1
+    assert F.plane("dbz", t, "level", 2).max() > 30.0
+    assert F.plane("UP_HELI_MAX", t, "level", 0).max() > 10.0
+    mean = models.open_run(os.path.join(root, "mean"), workers=1)
+    a = F.plane("winterp", t, "level", 8)
+    b = Fields(mean).plane("winterp", t, "level", 8)
+    assert a.shape == b.shape and not np.allclose(a, b)

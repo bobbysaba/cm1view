@@ -477,9 +477,12 @@ def write_parcels(path, vmax, wmax):
 
 
 def is_demo(run_path):
-    """A run written by make() (its stamp file is two folders up)."""
+    """A run written by make() (its stamp file is two folders up), or the WoFS demo's."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(run_path)))
-    return os.path.exists(os.path.join(root, ".cm1view-demo"))
+    if os.path.exists(os.path.join(root, ".cm1view-demo")):
+        return True
+    from . import demo_wofs
+    return demo_wofs.is_demo(run_path)
 
 
 def _stamp(cf=False):

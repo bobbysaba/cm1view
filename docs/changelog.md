@@ -8,8 +8,15 @@ has a matching git tag.
 ### Viewer
 
 - The run picker has a **model** box (*Auto-detect* or a model) and lists the runs of that model;
-  `cm1view --model` and `cm1view export --model` do the same on the command line. CM1 is the only
-  model for now; this prepares for WoFS output.
+  `cm1view --model` and `cm1view export --model` do the same on the command line.
+- **WoFS and WRF ensemble output** opens: each member (`<root>/memNN`) and the ensemble mean
+  (`<root>/mean`) is a run, found from the `wrfout_d01_*` files in the cycle folders. Levels keep
+  following the terrain: maps at a model level, km AGL or km MSL, cross-sections on a km MSL axis
+  with the ground drawn, soundings and column fields on each column's heights, 3D views on terrain.
+  Trajectories are traced through the winds, and turned off when the output comes less often than
+  the new `traj_max_interval` setting (300 s). Not supported: pressure decomposition, a
+  probability-matched mean, DART files ([WoFS](guide/wofs.md)).
+- `cm1view --demo wofs` opens a small synthetic WoFS ensemble.
 
 ### Figures
 
