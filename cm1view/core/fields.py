@@ -192,6 +192,8 @@ def _group(name, ndim):
         return "Budgets"
     if name in ("th0", "prs0", "pi0", "qv0", "u0", "v0", "rho0"):
         return "Base state"
+    if name.isupper():  # (another model's own names, e.g. WRF's PH)
+        return "Other model fields"
     if name in ("u", "v", "w", "uinterp", "vinterp", "winterp", "xvort", "yvort", "zvort"):
         return "Kinematics"
     if name in ("th", "prs", "pi", "rho", "qv"):
@@ -595,7 +597,7 @@ def column_levels(z, zf, z0, z1, edges=False):
 GROUP_ORDER = ["Radar", "Kinematics", "Vorticity tendencies", "Column fields",
                "Sounding parameters", "Thermodynamics",
                "Pressure decomposition", "Microphysics", "Swaths & 2D", "Turbulence",
-               "Budgets", "Base state"]
+               "Budgets", "Other model fields", "Base state"]
 
 
 # ---- derivatives of any field, per km: "ddz.winterp" (∂w/∂z), "ddx.", "ddy.", "gradh."

@@ -26,6 +26,7 @@ import traceback
 import numpy as np
 
 from .. import config
+from ..core import models
 from . import draw as figdraw, spec as fg, tablefile
 from .export import saved_base
 
@@ -144,7 +145,7 @@ def as_saved(spec, fd, time_s=None, code=False):
     s, notes = json.loads(json.dumps(spec, default=float)), []
     for p in [s] + list(s.get("parts") or []):
         for e in p.get("runs") or []:
-            if not os.path.isdir(config.expand(e["path"])):
+            if not models.exists(config.expand(e["path"])):
                 raise ValueError(f"run folder {e['path']} not found")
             if e.get("track") == "viewer":
                 e["track"] = fg.find_track(config.expand(e["path"])) or ""
@@ -376,7 +377,7 @@ def main(argv=None):
         return 2
     runs = [config.expand(p) for ps in args.run for p in ps]
     for p in runs:
-        if not os.path.isdir(p):
+        if not models.exists(p):
             print(f"cm1view render: run folder {p} not found", file=sys.stderr)
             return 2
     if is_tpl and not runs:

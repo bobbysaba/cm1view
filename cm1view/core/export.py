@@ -268,7 +268,7 @@ def _header(ds, run, F, p, any3, stormy, compress):
     ds.setncatts({
         "Conventions": "CF-1.8",
         "title": f"cm1view export of {run.name}",
-        "source": f"CM1 output in {run.path}",
+        "source": f"{run.model_label} output in {run.path}",
         "history": f"{datetime.datetime.now().isoformat(timespec='seconds')} "
                    f"cm1view {__version__} export",
         "cm1view_version": __version__,
@@ -397,10 +397,10 @@ def main(argv=None):
         if getattr(args, name) is not None:
             config.override(name, getattr(args, name), flag)
     path = config.expand(args.run)
-    if not os.path.isdir(path):
-        return fail(f"run folder {path} not found")
     from .fields import Fields
     from . import models
+    if not models.exists(path):
+        return fail(f"run folder {path} not found")
     try:
         run = models.open_run(path, args.model, cache_gb=config.cache_gb()[0],
                               workers=config.workers()[0])

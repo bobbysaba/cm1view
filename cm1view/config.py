@@ -465,7 +465,7 @@ def scan_runs(roots=None, depth=5, limit=500, seconds=4.0, model=None):
             except OSError:
                 continue
             if models.looks_like_run(ents, model):
-                runs.append(d)
+                runs += models.runs_in(d, ents, model)  # (a WoFS root: its members)
                 continue
             nxt += sorted(e.path for e in ents
                           if not e.name.startswith(".") and _is(e, "dir"))

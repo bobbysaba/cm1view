@@ -19,7 +19,7 @@ def _recent_file():
 
 
 def is_run(path, model=None):
-    return bool(path) and os.path.isdir(path) and count_files(path, model) > 0
+    return models.exists(path) and count_files(path, model) > 0
 
 
 def count_files(path, model=None):
@@ -29,8 +29,11 @@ def count_files(path, model=None):
 
 
 def sibling_runs(path, limit=60):
-    """Run directories next to `path` (same parent), plus any directly under it."""
+    """Run directories next to `path` (same parent), plus any directly under it (for a
+    run named inside a folder, e.g. a WoFS member: the folder's other runs)."""
     path = os.path.abspath(path)
+    if not os.path.isdir(path):
+        return [p for p in models.siblings(path) if p != path][:limit]
     out = set()
     for base in (os.path.dirname(path), path):
         for d in sorted(glob.glob(os.path.join(base, "*", ""))):
@@ -67,7 +70,7 @@ def recent_runs():
     for fn in (_recent_file(), _OLD_RECENT):  # (older versions kept it in ~/.cache)
         try:
             with open(fn) as f:
-                return [p for p in json.load(f) if os.path.isdir(p)]
+                return [p for p in json.load(f) if models.exists(p)]
         except (OSError, ValueError):
             continue
     return []
@@ -109,6 +112,8 @@ class Registry:
         if not (path or self.default):
             raise FileNotFoundError("no run given")
         path = os.path.abspath(path or self.default)
+        # (a folder of several runs, e.g. a WoFS root: its first run)
+        path = models.canonical(path, model if models.get(model) else chosen(path))
         with self._lock:
             if models.get(model):
                 choose(path, model)

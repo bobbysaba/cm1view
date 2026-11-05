@@ -62,7 +62,7 @@ def need_gb(run, parallel):
 
 
 def can_compute(run):
-    return (script() is not None and all(run.has(n) for n in NEEDS)
+    return (run.model == "cm1" and script() is not None and all(run.has(n) for n in NEEDS)
             and (run.has("w") or run.has("winterp")))
 
 
