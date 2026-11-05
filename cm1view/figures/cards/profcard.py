@@ -150,10 +150,11 @@ class ProfileCard(SeveralRuns, TimeCard):
 
     def collect(self):
         w, runs = self.w, self.run_list()
-        eds = {k: dict(v) for k, v in (self.ent.get("edits") or {}).items() if v}
+        eds = {key: {k: dict(v) for k, v in (self.ent.get(key) or {}).items() if v}
+               for key in ("edits", "added")}
         return dict(run=int(runs[0]) if runs else 0, runs=runs,
                     time_s=float(w["time"].value or 0.0),
                     time_s1=self._t1(), label=w["label"].value,
                     recipe=self.recipe(), op=w["op"].value, **look_values(w), **ens_values(w),
                     **hold_value(w),
-                    **({"edits": eds} if eds else {}))
+                    **{key: v for key, v in eds.items() if v})

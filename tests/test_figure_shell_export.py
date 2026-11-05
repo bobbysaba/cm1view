@@ -366,3 +366,106 @@ def test_a_mixed_figures_height_follows_its_rows(shell):
 def test_the_figure_node_has_a_legend_section_for_maps(shell):
     shell._show(nodes.FIGURE)
     assert any(getattr(o, "title", "") == "Legend" for o in shell.inspector.body.objects)
+
+
+def _on_rows(ed):
+    """A 2 × 2 of plan views with one colorbar per row, past the fill's range: (shell, doc)."""
+    from cm1view.figures import spec as fg
+    ed.open_quick()
+    ed.qs_kind.value = "plan"
+    ed.qs_rows.value, ed.qs_cols.value = 2, 2
+    ed._quick_make()
+    shell = ed.shell
+    d = fg.plain_copy(shell.doc)
+    d["style"]["colorbar"]["mode"] = "row"
+    next(x for x in d["layers"].values() if x["type"] == "fill").update(
+        vmin=0.0, vmax=0.1, extend="auto")
+    shell._take(d)
+    return shell, shell.doc
+
+
+def _inspector_widgets(shell, node):
+    def walk(o):
+        out = [o]
+        for c in getattr(o, "objects", None) or []:
+            out += walk(c)
+        return out
+    shell._show(node)
+    for o in walk(shell.inspector.body):
+        if hasattr(o, "collapsed"):
+            o.collapsed = False
+    return walk(shell.inspector.body)
+
+
+def test_a_bar_has_one_controlling_panel(ed):
+    from cm1view.figures import draw as figdraw
+    shell, doc = _on_rows(ed)
+    assert figdraw.bar_members(figdraw.upgrade(doc)[0]) == {
+        0: [0, 1], 1: [0, 1], 2: [2, 3], 3: [2, 3]}
+    for mode, first in (("shared", [0, 1, 2, 3]), ("col", [0, 2]), ("each", [0])):
+        doc["style"]["colorbar"]["mode"] = mode
+        assert figdraw.bar_members(figdraw.upgrade(doc)[0])[0] == first
+    doc["style"]["colorbar"]["mode"] = "none"
+    assert figdraw.bar_members(figdraw.upgrade(doc)[0]) == {}
+    doc["style"]["colorbar"]["mode"] = "row"
+    from cm1view.figures.shell import docedit as de
+    de.set_panel_colorbar(doc, 0, show=False)  # (the next panel then controls the row's)
+    assert figdraw.bar_members(figdraw.upgrade(doc)[0])[1] == [1]
+
+
+def test_arrows_set_on_the_controlling_panel_reach_its_whole_bar(ed):
+    from conftest import render
+    shell, _ = _on_rows(ed)
+    ends = lambda: [a._colorbar.extend for a in render(ed)[2].axes  # noqa: E731
+                    if getattr(a, "_colorbar", None) is not None]
+    assert ends() == ["max", "max"]
+    arrows = [w for w in _inspector_widgets(shell, "panel:0")
+              if getattr(w, "name", "") == "Colorbar arrows"]
+    assert len(arrows) == 1
+    arrows[0].value = "neither"
+    assert ends() == ["neither", "max"]  # (this row's, not the other's)
+
+
+def test_bar_settings_show_only_where_they_change_the_bar(ed):
+    shell, doc = _on_rows(ed)
+    names = lambda node: {getattr(w, "name", "") for w in _inspector_widgets(shell, node)  # noqa: E731
+                          if getattr(w, "visible", True)}
+    first, other = names("panel:0"), names("panel:1")
+    assert {"Colorbar arrows", "Colorbar ticks (blank: the figure's, else auto)"} <= first
+    assert "Colorbar arrows" not in other and "Go to panel a" in other
+    assert "Colorbar arrows" not in names("layer:0:0")  # (in the panel's section now)
+    assert "Colormap" in names("layer:0:0") and "Colormap" not in names("layer:1:0")
+    doc["style"]["colorbar"]["mode"] = "each"
+    assert "Colorbar arrows" in names("panel:1") and "Colormap" in names("layer:1:0")
+    doc["style"]["colorbar"]["mode"] = "none"
+    assert "Its colours have a bar" not in names("panel:0")
+
+
+def test_colours_on_a_shared_bar_follow_its_controlling_panel(ed):
+    from cm1view.figures import draw as figdraw
+    from cm1view.figures.shell import bars, docedit as de
+    shell, doc = _on_rows(ed)
+    cmap = lambda pid: figdraw.panel_layers(  # noqa: E731
+        shell.doc, de.panel_by_id(shell.doc, pid))[0][1]["cmap"]
+    was = cmap(2)
+    w = next(w for w in _inspector_widgets(shell, "layer:0:0") if getattr(w, "name", "") == "Colormap")
+    w.value = "viridis"
+    assert cmap(0) == cmap(1) == "viridis" and cmap(2) == was
+    de.write_panel(shell.doc, de.panel_by_id(shell.doc, 1), 0, {"cmap": "magma"})
+    bar = bars.bar_of(shell.doc, 1)
+    assert bars.colours_differ(shell.doc, bar, 1)
+    match = next(w for w in _inspector_widgets(shell, "layer:1:0")
+                 if getattr(w, "name", "") == "Match the bar")
+    match.clicks += 1
+    assert cmap(1) == "viridis" and not bars.colours_differ(shell.doc, bars.bar_of(shell.doc, 1), 1)
+
+
+def test_a_shared_layers_bar_settings_reach_every_panel(ed):
+    from cm1view.figures.shell import layerrow
+    from cm1view.figures.shell import bars
+    shell, doc = _on_rows(ed)
+    bars.set_value(doc, bars.bar_of(doc, 0), "extend", "neither")
+    lid = next(k for k, x in doc["layers"].items() if x["type"] == "fill")
+    layerrow.Shared(lid, "plan").write(doc, dict(extend="both"))
+    assert bars.values(doc, bars.bar_of(doc, 0))["extend"] == "both"
+    assert not any("extend" in (i.get("over") or {}) for p in doc["panels"] for i in p["layers"])

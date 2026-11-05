@@ -1,4 +1,5 @@
-"""Data access for a directory of CM1 netCDF output (one time per file).
+"""Data access for model output: the model-neutral Run, and CM1Run (a directory of CM1
+netCDF output, one time per file).  Other models' readers subclass Run (core.models).
 
 Everything returned from here is on the scalar (xh, yh, z) grid: staggered
 fields (u, v, w, ...) are averaged onto scalar points on read.
@@ -49,10 +50,20 @@ def temp_name(path, suffix=".tmp"):
     return f"{path}.{os.getpid()}.{uuid.uuid4().hex[:8]}{suffix}"
 
 
-def _read_volume_worker(path, name, stag, outdir):
-    """Process-pool worker: read one full 3D field, write it to tmpfs as .npy."""
-    with netCDF4.Dataset(path) as d:
+def open_source(src):
+    """One time's output, open for reading (unmasked; use it as a context manager).
+    `src` is a file path (opened with netCDF4) or an object with .open() returning
+    a dataset-like view (a model reader's own: d.variables, d[name][0, ...])."""
+    if isinstance(src, (str, os.PathLike)):
+        d = netCDF4.Dataset(src)
         d.set_auto_mask(False)
+        return d
+    return src.open()
+
+
+def _read_volume_worker(src, name, stag, outdir):
+    """Process-pool worker: read one full 3D field, write it to tmpfs as .npy."""
+    with open_source(src) as d:
         a = np.asarray(d[name][0], dtype=np.float32)
     a = np.ascontiguousarray(_destagger(a, stag), dtype=np.float32)
     out = os.path.join(outdir, f"cm1view-{os.getpid()}-{uuid.uuid4().hex}.npy")
@@ -72,17 +83,15 @@ def _box(v, stag, i0, i1, j0, j1):
     return 0.5 * (a[:-1] + a[1:]) if stag == "z" else a
 
 
-def _read_box_worker(path, name, stag, box):
+def _read_box_worker(src, name, stag, box):
     """Process-pool worker: columns of one 3D field (small: returned directly)."""
-    with netCDF4.Dataset(path) as d:
-        d.set_auto_mask(False)
+    with open_source(src) as d:
         return _box(d[name], stag, *box)
 
 
-def _mean_profile_worker(path, name, stag):
+def _mean_profile_worker(src, name, stag):
     """Process-pool worker: horizontal mean profile of one 3D field."""
-    with netCDF4.Dataset(path) as d:
-        d.set_auto_mask(False)
+    with open_source(src) as d:
         a = np.asarray(d[name][0], dtype=np.float32)
     return _destagger(a, stag).mean(axis=(1, 2), dtype=np.float64)
 
@@ -190,50 +199,30 @@ class VarInfo:
         return f"VarInfo({self.name}, {self.ndim}D, stag={self.stag})"
 
 
-class CM1Run:
+class Run:
+    """Output of one model run: times, a grid and fields, read one time at a time.
+
+    Everything model-neutral lives here (the 3D cache, reader processes, level and
+    height reads, columns, mean profiles).  A model's reader (a subclass) finds the
+    files and sets, before calling _grid_done():
+      path    the run's folder (also the cache key and where exports go)
+      files   one output file per time (their stat says when a time changed)
+      times   simulation time (s) of each time index
+      xh, yh  scalar-point x, y (km); z, zf scalar and staggered heights (km)
+      vars    {name: VarInfo} of the fields in the files, by cm1view's names
+      var_times  {name: frozenset of time indices} for fields only at some times
+      attrs   global attributes; nml the run's namelist ({} if none)
+      umove, vmove  grid motion (m/s) added to the winds for ground-relative ones
+    and may override source(t) (what reader processes open for time t)."""
+
+    model = None  # key in core.models.MODELS
+    model_label = "model"
+
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         self.path = os.path.abspath(path)
-        from .. import config
-        pat = config.get("output_glob")
-        self.files = sorted(glob.glob(os.path.join(self.path, pat)))
-        if not self.files:
-            raise FileNotFoundError(f"no {pat} files found in {self.path}")
-
-        with IO_LOCK, netCDF4.Dataset(self.files[0]) as d:
-            self.xh = np.asarray(d["xh"][:], dtype=np.float64)  # km
-            self.yh = np.asarray(d["yh"][:], dtype=np.float64)
-            # scalar heights: "z" in CM1's own layout, "zh" in the CF-style one
-            self.z = np.asarray(d["z" if "z" in d.variables else "zh"][:], dtype=np.float64)
-            self.zf = np.asarray(d["zf"][:], dtype=np.float64)
-            self.attrs = {k: d.getncattr(k) for k in d.ncattrs()}
-            self.vars = {}
-            for name, v in d.variables.items():
-                info = _var_info(name, v)
-                if info is not None:
-                    self.vars[name] = info
-
-        self.ni, self.nj, self.nk = len(self.xh), len(self.yh), len(self.z)
-        self.dx = float(np.mean(np.diff(self.xh))) * 1000.0  # m
-        self.dy = float(np.mean(np.diff(self.yh))) * 1000.0
-        self.nml = parse_namelist(os.path.join(self.path, "namelist.input"))
-        moving = int(self.nml.get("imove", 0)) == 1
-        # CM1 writes winds relative to the (possibly translating) grid.
-        self.umove = float(self.nml.get("umove", 0.0)) if moving else 0.0
-        self.vmove = float(self.nml.get("vmove", 0.0)) if moving else 0.0
-        self.times, names = self._scan()
-        # fields written into only some files (e.g. by post-processing): which times
-        self.var_times = {}
-        for n in sorted(set().union(*names) - set(self.vars)):
-            ts = [t for t, ns in enumerate(names) if n in ns]
-            with IO_LOCK, netCDF4.Dataset(self.files[ts[-1]]) as d:
-                info = _var_info(n, d[n])
-            if info is not None:
-                self.vars[n] = info
-                self.var_times[n] = frozenset(ts)
-        for n in self.vars:
-            ts = frozenset(t for t, ns in enumerate(names) if n in ns)
-            if len(ts) < len(self.files) and n not in self.var_times:
-                self.var_times[n] = ts
+        self.files, self.attrs, self.nml = [], {}, {}
+        self.vars, self.var_times = {}, {}
+        self.umove = self.vmove = 0.0
         # fields computed here (not in the files), consulted before the files:
         # (name, t) -> float32 (nk, nj, ni); never evicted by the cache
         self.extra = OrderedDict()
@@ -244,7 +233,7 @@ class CM1Run:
         self._cache_lock = threading.Lock()  # guards self.extra
         self._inflight = {}  # (name, t) -> Event: being read by some job right now
         self._inflight_lock = threading.Lock()
-        self._open = OrderedDict()  # tindex -> netCDF4.Dataset
+        self._open = OrderedDict()  # tindex -> open dataset
         if workers is None:
             workers = len(os.sched_getaffinity(0))
         self.workers = max(1, min(int(workers), 8))
@@ -252,41 +241,17 @@ class CM1Run:
         self._means = {}  # (name, tindex) -> domain-mean profile (nk,)
         self._shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
 
+    def _grid_done(self):
+        """Sizes and spacing from xh, yh, z (call once they are set)."""
+        self.ni, self.nj, self.nk = len(self.xh), len(self.yh), len(self.z)
+        self.dx = float(np.mean(np.diff(self.xh))) * 1000.0  # m
+        self.dy = float(np.mean(np.diff(self.yh))) * 1000.0
+
     # ------------------------------------------------------------------ meta
     @property
     def name(self):
         parts = self.path.rstrip("/").split("/")
         return "/".join(parts[-3:])
-
-    def _scan(self):
-        """Simulation time (s) and field names of every file, cached on disk by file
-        stat (one quick metadata pass over the files the first time)."""
-        sig = hashlib.sha1(
-            json.dumps(
-                [(f, os.path.getsize(f), int(os.path.getmtime(f))) for f in self.files]
-            ).encode()
-        ).hexdigest()[:16]
-        cdir = os.path.join(os.path.expanduser("~"), ".cache", "cm1view")
-        cfile = os.path.join(cdir, f"scan-{sig}.json")
-        try:
-            with open(cfile) as f:
-                c = json.load(f)
-            return np.array(c["times"], dtype=np.float64), [set(n) for n in c["vars"]]
-        except (OSError, ValueError, KeyError):
-            pass
-        times, names = [], []
-        for f in self.files:
-            with IO_LOCK, netCDF4.Dataset(f) as d:  # (netCDF/HDF5 is not thread safe)
-                times.append(float(d["time"][0]))
-                names.append(sorted(n for n, v in d.variables.items()
-                                    if v.dimensions[:1] == ("time",) and v.ndim in (3, 4)))
-        try:
-            os.makedirs(cdir, exist_ok=True)
-            with open(cfile, "w") as f:
-                json.dump(dict(times=times, vars=names), f)
-        except OSError:
-            pass
-        return np.array(times, dtype=np.float64), [set(n) for n in names]
 
     def time_label(self, t):
         s = int(round(self.times[t]))
@@ -314,34 +279,16 @@ class CM1Run:
             raise FileBusy(f"the output file at {self.time_label(t)} is being written "
                            f"(pressure decomposition); it is readable again in a moment")
 
-    def begin_write(self, t):
-        """Close this process's handle on file t and refuse reads of it until
-        end_write(t), so another process can open it for writing."""
-        with IO_LOCK:
-            self._writing.add(t)
-            d = self._open.pop(t, None)
-            if d is not None:
-                d.close()
-
-    def end_write(self, t, names=()):
-        """File t is readable again; `names` were written into it."""
-        with IO_LOCK:
-            self._writing.discard(t)
-            if names:
-                with netCDF4.Dataset(self.files[t]) as d:
-                    for n in names:
-                        if n in d.variables:
-                            self.vars[n] = _var_info(n, d[n])
-                            if n in self.var_times:
-                                self.var_times[n] = self.var_times[n] | {t}
-        self.forget(names, t)  # cached volumes of rewritten fields are stale
+    def source(self, t):
+        """What open_source() opens for time t (picklable: reader processes open it
+        themselves).  A file path here; a model reader may return its own object."""
+        return self.files[t]
 
     def _ds(self, t):
         self._not_writing(t)
         d = self._open.get(t)
         if d is None:
-            d = netCDF4.Dataset(self.files[t])
-            d.set_auto_mask(False)
+            d = open_source(self.source(t))
             self._open[t] = d
             while len(self._open) > 6:
                 _, old = self._open.popitem(last=False)
@@ -419,7 +366,7 @@ class CM1Run:
         self._check(name, t)
         self._not_writing(t)
         if self.workers > 1:
-            return self._get_pool().submit(_read_box_worker, self.files[t], name, info.stag,
+            return self._get_pool().submit(_read_box_worker, self.source(t), name, info.stag,
                                            (i0, i1, j0, j1)).result()
         with IO_LOCK:
             return _box(self._ds(t)[name], info.stag, i0, i1, j0, j1)
@@ -483,7 +430,7 @@ class CM1Run:
             futs = {
                 self._get_pool().submit(
                     _read_volume_worker,
-                    self.files[t],
+                    self.source(t),
                     n,
                     self.vars[n].stag,
                     self._shm,
@@ -541,7 +488,7 @@ class CM1Run:
         if self.workers > 1 and todo:
             from concurrent.futures import as_completed
 
-            futs = {self._get_pool().submit(_mean_profile_worker, self.files[t], n,
+            futs = {self._get_pool().submit(_mean_profile_worker, self.source(t), n,
                                             self.vars[n].stag): n for n in todo}
             for done, fut in enumerate(as_completed(futs), 1):
                 n = futs[fut]
@@ -576,3 +523,103 @@ class CM1Run:
         i = int(np.clip(np.rint((x - self.xh[0]) * 1000.0 / self.dx), 0, self.ni - 1))
         j = int(np.clip(np.rint((y - self.yh[0]) * 1000.0 / self.dy), 0, self.nj - 1))
         return i, j
+
+class CM1Run(Run):
+    """A folder of CM1 netCDF output (one time per file, names by output_glob)."""
+
+    model = "cm1"
+    model_label = "CM1"
+
+    def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
+        super().__init__(path, cache_gb, workers, cache)
+        from .. import config
+        pat = config.get("output_glob")
+        self.files = sorted(glob.glob(os.path.join(self.path, pat)))
+        if not self.files:
+            raise FileNotFoundError(f"no {pat} files found in {self.path}")
+
+        with IO_LOCK, netCDF4.Dataset(self.files[0]) as d:
+            self.xh = np.asarray(d["xh"][:], dtype=np.float64)  # km
+            self.yh = np.asarray(d["yh"][:], dtype=np.float64)
+            # scalar heights: "z" in CM1's own layout, "zh" in the CF-style one
+            self.z = np.asarray(d["z" if "z" in d.variables else "zh"][:], dtype=np.float64)
+            self.zf = np.asarray(d["zf"][:], dtype=np.float64)
+            self.attrs = {k: d.getncattr(k) for k in d.ncattrs()}
+            self.vars = {}
+            for name, v in d.variables.items():
+                info = _var_info(name, v)
+                if info is not None:
+                    self.vars[name] = info
+
+        self._grid_done()
+        self.nml = parse_namelist(os.path.join(self.path, "namelist.input"))
+        moving = int(self.nml.get("imove", 0)) == 1
+        # CM1 writes winds relative to the (possibly translating) grid.
+        self.umove = float(self.nml.get("umove", 0.0)) if moving else 0.0
+        self.vmove = float(self.nml.get("vmove", 0.0)) if moving else 0.0
+        self.times, names = self._scan()
+        # fields written into only some files (e.g. by post-processing): which times
+        self.var_times = {}
+        for n in sorted(set().union(*names) - set(self.vars)):
+            ts = [t for t, ns in enumerate(names) if n in ns]
+            with IO_LOCK, netCDF4.Dataset(self.files[ts[-1]]) as d:
+                info = _var_info(n, d[n])
+            if info is not None:
+                self.vars[n] = info
+                self.var_times[n] = frozenset(ts)
+        for n in self.vars:
+            ts = frozenset(t for t, ns in enumerate(names) if n in ns)
+            if len(ts) < len(self.files) and n not in self.var_times:
+                self.var_times[n] = ts
+
+    def _scan(self):
+        """Simulation time (s) and field names of every file, cached on disk by file
+        stat (one quick metadata pass over the files the first time)."""
+        sig = hashlib.sha1(
+            json.dumps(
+                [(f, os.path.getsize(f), int(os.path.getmtime(f))) for f in self.files]
+            ).encode()
+        ).hexdigest()[:16]
+        cdir = os.path.join(os.path.expanduser("~"), ".cache", "cm1view")
+        cfile = os.path.join(cdir, f"scan-{sig}.json")
+        try:
+            with open(cfile) as f:
+                c = json.load(f)
+            return np.array(c["times"], dtype=np.float64), [set(n) for n in c["vars"]]
+        except (OSError, ValueError, KeyError):
+            pass
+        times, names = [], []
+        for f in self.files:
+            with IO_LOCK, netCDF4.Dataset(f) as d:  # (netCDF/HDF5 is not thread safe)
+                times.append(float(d["time"][0]))
+                names.append(sorted(n for n, v in d.variables.items()
+                                    if v.dimensions[:1] == ("time",) and v.ndim in (3, 4)))
+        try:
+            os.makedirs(cdir, exist_ok=True)
+            with open(cfile, "w") as f:
+                json.dump(dict(times=times, vars=names), f)
+        except OSError:
+            pass
+        return np.array(times, dtype=np.float64), [set(n) for n in names]
+
+    def begin_write(self, t):
+        """Close this process's handle on file t and refuse reads of it until
+        end_write(t), so another process can open it for writing."""
+        with IO_LOCK:
+            self._writing.add(t)
+            d = self._open.pop(t, None)
+            if d is not None:
+                d.close()
+
+    def end_write(self, t, names=()):
+        """File t is readable again; `names` were written into it."""
+        with IO_LOCK:
+            self._writing.discard(t)
+            if names:
+                with netCDF4.Dataset(self.files[t]) as d:
+                    for n in names:
+                        if n in d.variables:
+                            self.vars[n] = _var_info(n, d[n])
+                            if n in self.var_times:
+                                self.var_times[n] = self.var_times[n] | {t}
+        self.forget(names, t)  # cached volumes of rewritten fields are stale

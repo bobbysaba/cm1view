@@ -72,7 +72,7 @@ class FigureEditor(FigureWidgets, FigureRuns, FigureSources, FigureExport, Figur
         return self.data.panel_data(spec, progress, cancelled)
 
     def open_run(self, path):
-        """(CM1Run, Fields) of the run in `path` (the viewer's own run, or one opened
+        """(Run, Fields) of the run in `path` (the viewer's own run, or one opened
         through the viewer's registry so its cache is shared)."""
         return self.data.open_run(path)
 

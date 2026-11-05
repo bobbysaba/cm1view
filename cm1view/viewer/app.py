@@ -369,9 +369,10 @@ def create_app(reg, maxpix=None):
     pn.extension("plotly", "modal", "tabulator", "codeeditor", notifications=False,
                  raw_css=[CSS])
     maxpix = maxpix or config.get("maxpix")
-    want, error, session = None, "", None
-    try:  # ?run=/path/to/run picks the run directory
+    want, error, session, model = None, "", None, None
+    try:  # ?run=/path/to/run picks the run directory (?model=key: read by that model)
         want = pn.state.session_args.get("run", [b""])[0].decode().strip() or None
+        model = pn.state.session_args.get("model", [b""])[0].decode().strip() or None
         ses = pn.state.session_args.get("session", [b""])[0].decode().strip()
     except (AttributeError, TypeError, ValueError):
         ses = ""
@@ -385,7 +386,8 @@ def create_app(reg, maxpix=None):
     run = fields = None
     try:
         if want or reg.default:
-            run, fields = reg.get(config.expand(want) if want else None)
+            run, fields = reg.get(config.expand(want) if want else None,
+                                  model if want else None)
     except Exception as e:  # noqa: BLE001
         print(f"cm1view: could not open {want}: {e}", flush=True)
         error += f" Could not open {want}: {e}."

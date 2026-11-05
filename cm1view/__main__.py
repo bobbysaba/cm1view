@@ -25,8 +25,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="cm1view", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run", nargs="?", default=None,
-                    help="directory containing CM1 output files (default: the "
+                    help="directory containing model output (default: the "
                          "default_run setting, else pick one in the browser)")
+    from .core.models import AUTO, MODELS
+    ap.add_argument("--model", default=AUTO, choices=[AUTO, *MODELS],
+                    help="the model whose output RUN holds (default: auto, detected "
+                         "from the files)")
     ap.add_argument("--config", default=None,
                     help="settings file (default: $CM1VIEW_CONFIG, else "
                          "~/.config/cm1view/config.toml)")
@@ -77,11 +81,12 @@ def main(argv=None):
     if start:
         start = config.expand(start)
     t0 = time.time()
-    reg = Registry(start, cache, workers)
+    reg = Registry(start, cache, workers, model=args.model)
     if start:
         try:
             run, fields = reg.get()
-            print(f"cm1view: {len(run.files)} files, {run.ni}x{run.nj}x{run.nk}, "
+            print(f"cm1view: {run.model_label}, {len(run.times)} times, "
+                  f"{run.ni}x{run.nj}x{run.nk}, "
                   f"{len(fields.defs)} fields, cache {cache:.0f} GB, {run.workers} "
                   f"reader(s) [{time.time() - t0:.1f}s]", flush=True)
         except Exception as e:  # noqa: BLE001

@@ -435,7 +435,12 @@ panels, and soundings, distributions, profiles, joint distributions and azimutha
 contours. In a figure of
 several runs a run keeps its
 colour in every panel, also in a panel of that run alone. A panel with two soundings
-(distributions, profiles) of one run colours them apart instead. A run a panel or layer uses can't be removed until nothing uses it.
+(distributions, profiles) of one run colours them apart instead. 
+
+A run's **✕** removes it, with what is of that run alone: its panels, and layers elsewhere of it
+or a difference from it; layers of several runs keep the others. The button's tooltip names the
+panels that go, and **Undo** brings them back. The figure's last run stays, as does a run every
+panel is of.
 
 ## Rows and columns
 

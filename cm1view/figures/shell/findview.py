@@ -43,14 +43,14 @@ PANEL_ROWS = (("Title", "of the panel heading"), ("Row label (left)", "row title
 TIMED_ROWS = (("Run", "of the panel"), ("Time", "of the panel when"))
 HEIGHT_ROWS = (("Own height", "z of the panel"), ("Height in", "z level model"))
 BAR_ROWS = (("Its colours have a bar", "colorbar of the panel"),
-            ("The bar it shares", "colorbar group"))
+            ("The bar it shares", "colorbar group"), ("Colorbar label", "units"),
+            ("Colorbar ticks", ""), ("Colorbar arrows", "extend"))
 LAYER_ROWS = (("Field", "variable"), ("Colormap", "cmap palette colors"), ("Min", "range vmin limit"),
               ("Max", "range vmax limit"), ("Colour steps", "levels contours discrete"),
               ("Reverse", "colormap flip"), ("Start from white", "colormap"),
               ("Opacity", "alpha transparent"), ("Draw as", "pcolormesh contourf shading"),
               ("Height (km)", "z level"), ("Level", "z model"), ("Blank where", "mask threshold"),
               ("Scale", "multiply"), ("Derivative", "gradient d/dz d/dx"),
-              ("Colorbar label", "units"), ("Colorbar ticks", ""), ("Colorbar arrows", "extend"),
               ("Difference", "minus another run time"), ("Ensemble", "statistic several runs mean"),
               ("Over a time window", "average maximum"), ("Keep this time in animations", "lock"),
               ("Add a layer", "contours vectors streamlines shading"))

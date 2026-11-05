@@ -264,10 +264,11 @@ class SeriesCard(SeveralRuns):
         e["vmin"], e["vmax"] = float(w["vmin"].value or 0.0), float(w["vmax"].value or 0.0)
         e["t0_min"] = float(w["t0"].value or 0.0)
         e["runs"] = self.run_list()
-        if e.get("edits"):  # (a copy: the card goes on editing its own)
-            e["edits"] = {k: dict(v) for k, v in e["edits"].items() if v}
-        if not e.get("edits"):
-            e.pop("edits", None)
+        for key in ("edits", "added"):  # (a copy: the card goes on editing its own)
+            if e.get(key):
+                e[key] = {k: dict(v) for k, v in e[key].items() if v}
+            if not e.get(key):
+                e.pop(key, None)
         e["base_units"] = self.ed.fields[e["recipe"]["field"]].units
         e["units"] = fg.op_units(e["base_units"], e["op"])
         return e

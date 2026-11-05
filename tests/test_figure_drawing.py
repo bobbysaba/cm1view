@@ -267,9 +267,11 @@ def test_a_run_time_zero_on_a_time_series_figure(ed):
 
 
 def test_a_figure_draws_your_own_data_and_hand_edits(ed):
-    """A hand-edited series and a series of your own data draw both lines; the edited one's
-    legend entry says "(edited)"."""
-    spec = settled(ed, _one_line(ed))
+    """A hand-edited series and a series of your own data draw both lines; with its mark on, the
+    edited one's legend entry says "(edited)"."""
+    spec = _one_line(ed)
+    put(spec, "ts_mark_edited", True)
+    spec = settled(ed, spec)
     n = ed.panel_data(spec)[0]["nlines"]
     e0 = spec["series"][0]
     spec["series"][0] = dict(e0, edits={"0": {fg.edit_key(ed.v.run.times[0]): -123.0}})

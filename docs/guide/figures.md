@@ -45,14 +45,16 @@ were last working on in this run, saved or not.
 **Or start from a template** applies a template you saved from *Export* to this run
 ([Templates](figures-export.md#templates)).
 
-**Or open a saved figure** shows the figures saved in the *Figures* folder (⚙ Settings) as
-thumbnails, newest first across all folders, 12 at a time (**Show more**). The list above them
-narrows them to one folder, and hovering over one shows its folder and when it was saved. Click
-a thumbnail to open that figure, ready to keep editing
-([Reopening a saved figure](figures-export.md#reopening-a-saved-figure)). A figure saved before
-this version gets its thumbnail from its image; one saved only as a PDF, SVG or EPS shows just its
-name until it is saved again. **Or open one by its path** takes a `_spec.json`, or the image or
-script saved with it, from anywhere.
+**Or open a saved figure** lists the figures saved in the *Figures* folder (⚙ Settings) by
+folder, this run's first. Picking one fills in the path below it; **Open** opens it, ready to keep
+editing ([Reopening a saved figure](figures-export.md#reopening-a-saved-figure)). **Or open one by
+its path** takes a `_spec.json`, or the image or script saved with it, from anywhere.
+
+Below them the same figures appear as thumbnails, newest first across all folders, 12 at a time
+(**Show more**). **Thumbnails from** narrows them to one folder, and hovering over one shows its
+folder and when it was saved. Click a thumbnail to open that figure. A figure saved before this
+version gets its thumbnail from its image; one saved only as a PDF, SVG or EPS shows just its name
+until it is saved again.
 
 A note in the dialog says what to do next for the chosen kind. Time–height and time-series
 figures start with no series, so nothing is computed until you add one. Soundings and

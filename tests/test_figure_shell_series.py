@@ -162,16 +162,57 @@ def test_a_time_series_panel_has_no_run_of_its_own():
 
 # ------------------------------------------------------------------ hand edits by run place
 def test_hand_edits_follow_their_runs_when_one_goes():
-    doc = series_doc("line", [dict(series(), edits={"0": {"60": 1.0}, "1": {"120": 2.0}})])
-    de.remove_run(doc, "r0")
+    doc = series_doc("line", [dict(series(), runs=["r0", "r1"], edits={"0": {"60": 1.0}, "1": {
+        "120": 2.0}}, added={"0": {"90": 3.0}, "1": {"150": 4.0}})])
+    assert de.remove_run(doc, "r0") == []
     assert [r["id"] for r in doc["runs"]] == ["r1"]
-    assert doc["panels"][0]["layers"][0]["edits"] == {"0": {"120": 2.0}}
+    lay = doc["panels"][0]["layers"][0]
+    assert lay["runs"] == ["r1"]
+    assert lay["edits"] == {"0": {"120": 2.0}} and lay["added"] == {"0": {"150": 4.0}}
 
 
 def test_hand_edits_of_the_only_run_that_goes_go_too():
     doc = series_doc("line", [dict(series(), edits={"1": {"120": 2.0}})])
     de.remove_run(doc, "r1")
     assert "edits" not in doc["panels"][0]["layers"][0]
+
+
+# ------------------------------------------------------------------ a run in use goes
+def test_a_runs_panels_go_with_it_and_others_stay():
+    doc = section_doc()
+    doc["panels"].append(dict(id=1, kind="plan", cell=[0, 1, 1, 1], run="r1", time_s=600.0,
+                              title="", layers=[dict(ref="l0", over={})]))
+    assert de.panels_of_run(doc, "r1") == [1]
+    assert len(doc["panels"]) == 2 and len(doc["runs"]) == 2  # (only asked)
+    assert de.remove_run(doc, "r1") == [1]
+    assert [p["id"] for p in doc["panels"]] == [0]
+    assert [r["id"] for r in doc["runs"]] == ["r0"] and "l0" in doc["layers"]
+
+
+def test_a_panels_layers_of_the_run_go_with_it():
+    doc = section_doc()
+    doc["layers"]["l2"] = dict(type="fill", on=True, field="w", minus=dict(run="r1"))
+    doc["panels"][0]["layers"] += [dict(ref="l2", over={}), dict(ref="l1", over=dict(run="r1")),
+                                   dict(type="line", on=True, run="r1")]
+    assert de.remove_run(doc, "r1") == []
+    assert doc["panels"][0]["layers"] == [dict(ref="l0", over={}), dict(ref="l1", over={})]
+    assert "l2" not in doc["layers"]
+
+
+def test_a_panel_of_series_of_the_run_alone_goes_with_it():
+    doc = series_doc("line", [series("r1")])
+    doc["panels"].append(dict(id=1, kind="line", cell=[0, 1, 1, 1], run=None, time_s=None,
+                              title="", layers=[series("r0"), series("r1")]))
+    assert de.remove_run(doc, "r1") == [0]
+    assert [p["id"] for p in doc["panels"]] == [1]
+    assert [x["runs"] for x in doc["panels"][0]["layers"]] == [["r0"]]
+
+
+def test_a_time_height_panel_follows_the_series_left():
+    doc = series_doc("th", [series("r1"), series("r0")])
+    doc["panels"][0]["run"] = None
+    assert de.remove_run(doc, "r1") == []
+    assert doc["panels"][0]["run"] == "r0"
 
 
 # ------------------------------------------------------------------ words

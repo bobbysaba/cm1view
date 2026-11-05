@@ -89,8 +89,8 @@ class FigureStyle:
         self.cb_label = pn.widgets.TextInput(
             name="Label of bars with none of their own (blank: units)",
             placeholder="e.g. w (m s$^{-1}$)",
-            description="A card's own Colorbar label (Layers) comes first, so clear it for "
-                        "this one to show; $…$ is math, e.g. m s$^{-1}$")
+            description="A panel's own Colorbar label comes first, so clear it for this one to "
+                        "show; $…$ is math, e.g. m s$^{-1}$")
         self.cb_lbold = pn.widgets.Checkbox(name="Bold label")
         self.cb_lside = pn.widgets.Select(name="Label side", options={
             "Auto": "", "Above / left": "first", "Below / right": "second"})
@@ -98,7 +98,7 @@ class FigureStyle:
                                            description="e.g. %.1f, %d, %.0e")
         self.cb_ticks = pn.widgets.TextInput(
             name="Ticks of bars with none of their own (blank: auto)", placeholder="0:60:10",
-            description="A card's own Colorbar ticks (Layers) come first")
+            description="A panel's own Colorbar ticks come first")
         self.cb_shrink = _f("Length (0–1)", 0.7, step=0.05, start=0.1, end=1.0)
         self.cb_fraction = _f("Thickness (0–1)", 0.05, step=0.01, start=0.01, end=0.5)
         self.cb_pad = _f("Gap (0–1)", 0.02, step=0.01, start=0.0, end=0.5)

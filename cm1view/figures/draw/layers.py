@@ -236,14 +236,57 @@ def _mixed_kinds(spec, k):
         len({p["kind"] for p in spec["panels"] if int(p.get("block", 0)) == k}) > 1
 
 
+def bar_fill(lay):
+    """Whether layer lay can have a colorbar: a fill, or a time-height series, that is on."""
+    return lay.get("type") in ("fill", "series") and lay.get("on", True) is not False
+
+
+def _bar_group(spec, p, fill, modes):
+    """(what identifies the bar of panel p with first fill `fill`, the colorbar mode there)."""
+    k = int(p.get("block", 0))
+    r, c = _cell(p)[:2]
+    name = p.get("group")
+    own = spec.get("groups") or {}
+    mode = (own.get(name, {}).get("colorbar") or {}).get("mode", "shared") \
+        if modes[k] == "groups" else modes[k]
+    bar = bar_key(p, fill, _mixed_kinds(spec, k))
+    g = ("figure",) if (spec.get("colorbar") or {}).get("mode") == "figure" else \
+        (k, name if modes[k] == "groups" else "", bar,
+         "" if bar.startswith("named:") else
+         {"shared": "", "row": ("r", r), "col": ("c", c)}.get(mode, ("p", p["id"])))
+    return g, mode
+
+
+def _block_modes(spec):
+    return [(block_view(spec, k).get("colorbar") or {}).get("mode", "shared")
+            for k in range(len(spec["blocks"]))]
+
+
+def bar_members(spec):
+    """{panel id: the ids of the panels on its colorbar, in the order they are drawn}, of the panels
+    with a colorbar: the first of them is the one whose colours it shows."""
+    modes = _block_modes(spec)
+    groups, of = {}, {}
+    pans = sorted(spec["panels"], key=lambda p: (int(p.get("block", 0)), _cell(p)[:2]))
+    for p in pans:
+        if (p["kind"] in ENTRIES and p["kind"] != "th") or \
+                not (p.get("colorbar") or {}).get("show", True):
+            continue
+        fill = next((lay for lay in _panel_layers(p) if bar_fill(lay)), None)
+        if fill is None:
+            continue
+        g, mode = _bar_group(spec, p, fill, modes)
+        if mode != "none" or g == ("figure",):
+            groups.setdefault(g, []).append(p["id"])
+            of[p["id"]] = g
+    return {i: groups[g] for i, g in of.items()}
+
+
 def _extends(spec, data):
     """{panel id: colorbar ends of its first fill}: the ends of all first fills that
     share a colorbar (the block's colorbar mode: shared, row, col; "figure": all
     blocks'; bar_key) united."""
-    fig_mode = (spec.get("colorbar") or {}).get("mode")
-    own = spec.get("groups") or {}
-    modes = [(block_view(spec, k).get("colorbar") or {}).get("mode", "shared")
-             for k in range(len(spec["blocks"]))]
+    modes = _block_modes(spec)
     groups, first = {}, {}
     for p in spec["panels"]:
         d = (data or {}).get(p["id"])
@@ -257,16 +300,7 @@ def _extends(spec, data):
             continue
         first_fill = _panel_layers(p)[at]
         ends = extend_of(first_fill, d[f"L{at}"])
-        k = int(p.get("block", 0))
-        r, c = _cell(p)[:2]
-        name = p.get("group")
-        mode = (own.get(name, {}).get("colorbar") or {}).get("mode", "shared") \
-            if modes[k] == "groups" else modes[k]
-        bar = bar_key(p, first_fill, _mixed_kinds(spec, k))
-        g = ("figure",) if fig_mode == "figure" else \
-            (k, name if modes[k] == "groups" else "", bar,
-             "" if bar.startswith("named:") else
-             {"shared": "", "row": ("r", r), "col": ("c", c)}.get(mode, ("p", p["id"])))
+        g = _bar_group(spec, p, first_fill, modes)[0]
         groups.setdefault(g, []).append(ends)
         first[p["id"]] = g
     return {i: union_extend(groups[g]) for i, g in first.items()}

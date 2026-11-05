@@ -13,7 +13,7 @@ from .base import npanels, tindex, storm_motion, profile_runs, entry_run, time_k
 
 LINE_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#8c564b", "k"]
 SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
-EDITED = " (edited)"  # (after a hand-edited line's label, Style: "Mark edited lines")
+EDITED = " (edited)"  # (after a hand-edited line's label, if Plot: "Mark edited lines" is on)
 
 
 def series_defaults(F, recipe, n=0, label=""):
@@ -359,6 +359,43 @@ def apply_edits(v, times_s, entry, k, tol=EDIT_TOL):
     return v, used, gone
 
 
+def axis_at(x, a, b, scale=1.0):
+    """Where x on axis a (ascending, point for point with axis b) falls on axis b: between
+    points on the straight line between them, beyond the ends at scale of b per a."""
+    a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
+    if not a.size:
+        return float(x) * scale
+    if x < a[0]:
+        return float(b[0] + (x - a[0]) * scale)
+    if x > a[-1]:
+        return float(b[-1] + (x - a[-1]) * scale)
+    return float(np.interp(x, a, b))
+
+
+def apply_added(x, v, keys, entry, k, tol=EDIT_TOL, scale=1.0 / 60.0):
+    """Line (x, v) of series entry for run k, with the points added by hand (entry["added"]
+    {str(run): {edit_key(time s): value}}; a profile's: heights, km, tol EDIT_ZTOL, scale 1).
+    keys: where each point of the line is (the run's model times, s), which axis_at puts on x.
+    An added point where the run now has one takes its place.  (x, v, how many), x in order."""
+    pts = (entry.get("added") or {}).get(str(k)) or {}
+    if not pts:
+        return x, v, 0
+    x, v = np.array(x, dtype=np.float64), np.array(v, dtype=np.float64)
+    keys = np.asarray(keys, dtype=np.float64)
+    more_x, more_v = [], []
+    for key, val in pts.items():
+        at = float(key)
+        j = np.flatnonzero(np.abs(keys - at) < tol)
+        if j.size:
+            v[j[0]] = float(val)
+        else:
+            more_x.append(axis_at(at, keys, x, scale))
+            more_v.append(float(val))
+    x, v = np.r_[x, more_x], np.r_[v, more_v]
+    order = np.argsort(x, kind="stable")
+    return x[order], v[order], len(pts)
+
+
 def series_t0(spec, entry, k=None):
     """Time zero (min) of a series' line of run k: the figure's (Style: panel labels)
     plus the run's (Runs used; k None: no run, as your own data) plus the series' own."""
@@ -458,7 +495,7 @@ def line_panel(spec, i, get, pget=None):
     S<n>_r -1, S<n>_v the centre, S<n>_lo / S<n>_hi the band)."""
     ents, runs = spec.get("series", []), spec.get("runs") or []
     ts = spec.get("ts", {})
-    flag = ts.get("mark_edited", True)  # (" (edited)" after the label of a hand-edited line)
+    flag = ts.get("mark_edited", False)  # (" (edited)" after the label of a hand-edited line)
     lines = [(e, k) for e, ent in enumerate(ents) if int(ent.get("panel", 0)) == i
              for k in _entry_runs(ent, len(runs))]
     out, n, lo, hi, why = {}, 0, np.inf, -np.inf, ""
@@ -502,7 +539,8 @@ def line_panel(spec, i, get, pget=None):
         t, v, _, _ = series_of_run(spec, run, ds, ents[e], k)
         if v is not None:
             v, used, _ = apply_edits(v, run.times, ents[e], k)  # (edits at times the
-            if used:  # run lacks wait, not moved to other times: the card says so)
+            t, v, more = apply_added(t, v, run.times, ents[e], k)  # run lacks wait, not
+            if used or more:  # moved to other times: the card says so)
                 edited.add((e, k))
         if v is None or not np.isfinite(v).any():
             why = why or ("d/dz applies to time–height panels" if ents[e].get("op") == "ddz"
@@ -865,13 +903,13 @@ def profile_panel(spec, i, get, auto_label=None, value_label=None):
     index) -> (z, values) or a string (why there is none), each run at its entry_at
     times; auto_label(entry index, run index) -> legend text when the entry has no label of its own; value_label(entry
     index) -> its value axis label.  Hand edits (entry["edits"] {str(run): {edit_key(z
-    km): value or None}}) are applied.  A profile with an ensemble band (its "ens") and
+    km): value or None}}) and points added (entry["added"]) are applied.  A profile with an ensemble band (its "ens") and
     two runs or more: its runs' lines as members (P<n>_mem 1; none when its
     ens_members is "hidden") and one line more of the ensemble (P<n>_ens: the number
     of members, P<n>_r -1, P<n>_v the centre, P<n>_lo / P<n>_hi the band, on the
     members' heights P<n>_z)."""
     ents, nr = spec.get("profiles", []), len(spec.get("runs") or [])
-    flag = spec.get("prof", {}).get("mark_edited", True)
+    flag = spec.get("prof", {}).get("mark_edited", False)
     out, n, why, shown, members, edited = {}, 0, "", [], {}, set()
     for e, ent in enumerate(ents):
         if int(ent.get("panel", 0)) != i:
@@ -896,7 +934,9 @@ def profile_panel(spec, i, get, auto_label=None, value_label=None):
                 continue
             z, v = r
             v, used, _ = apply_edits(v, z, ent, k, EDIT_ZTOL)  # (edits at heights
-            if used:  # the profile lacks wait, not moved: the card says so)
+            z, v, more = apply_added(z, v, z, ent, k, EDIT_ZTOL, 1.0)  # the profile lacks
+            used += more  # wait, not moved: the card says so)
+            if used:
                 edited.add(e)
             shown.append(ent)
             if ens:

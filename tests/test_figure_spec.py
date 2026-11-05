@@ -421,16 +421,16 @@ def _line_setup():
 def test_hand_edits_change_and_blank_a_series():
     """A series' hand edits (by model time, s) replace or blank its values for that run
     only; an edit at a time the run lacks is left out; the legend says "(edited)"
-    unless Style turns it off."""
+    only if asked to."""
     from cm1view.figures import spec as fg
     run, ds, a, spec = _line_setup()
     a["edits"] = {"0": {fg.edit_key(1200.0): 9.5, fg.edit_key(1800.0): None,
                         fg.edit_key(99999.0): 1.0}}
     d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
     assert d["S0_v"][2] == 9.5 and np.isnan(d["S0_v"][3]) and d["S0_v"][4] == 4.0
-    assert d["S0_label"] == "w (edited)"
-    spec["ts"]["mark_edited"] = False
-    assert fg.line_panel(spec, 0, lambda k, e: (run, ds))["S0_label"] == "w"
+    assert d["S0_label"] == "w"
+    spec["ts"]["mark_edited"] = True
+    assert fg.line_panel(spec, 0, lambda k, e: (run, ds))["S0_label"] == "w (edited)"
     a["runs"] = [1]  # (the edits are run 0's: run 1 drawn as computed)
     d = fg.line_panel(spec, 0, lambda k, e: (run, ds))
     assert list(d["S0_v"]) == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
@@ -439,10 +439,25 @@ def test_hand_edits_change_and_blank_a_series():
     assert (used, gone) == (1, 1) and v[1] == 2.0
 
 
+def test_added_points_go_into_a_line_in_order():
+    from cm1view.figures import spec as fg
+    t, v, n = fg.apply_added(np.array([0.0, 10.0]), np.array([1.0, 2.0]), np.array([600.0, 1200.0]),
+                             dict(added={"0": {"900": 5.0, "1500": 6.0, "300": 7.0}}), 0)
+    assert n == 3
+    assert t.tolist() == [-5.0, 0.0, 5.0, 10.0, 15.0]
+    assert v.tolist() == [7.0, 1.0, 5.0, 2.0, 6.0]
+    t, v, n = fg.apply_added(np.array([0.0, 10.0]), np.array([1.0, 2.0]), np.array([600.0, 1200.0]),
+                             dict(added={"0": {"600": 5.0}}), 0)  # (the run has this time now)
+    assert (t.tolist(), v.tolist(), n) == ([0.0, 10.0], [5.0, 2.0], 1)
+    x = np.array([0.0, 10.0])
+    assert fg.apply_added(x, x, x, dict(added={"1": {"5": 1.0}}), 0)[0] is x  # (another run's)
+
+
 def test_hand_edits_feed_the_ensemble_band():
-    """An ensemble band is made from the members as edited, and says "(edited)"."""
+    """An ensemble band is made from the members as edited, and can say "(edited)"."""
     from cm1view.figures import spec as fg
     run, ds, a, spec = _line_setup()
+    spec["ts"]["mark_edited"] = True
     a.update(runs=None, ens="minmax", ens_members="hidden",
              edits={"1": {fg.edit_key(0.0): 10.0}})
     d = fg.line_panel(spec, 0, lambda k, e: (run, ds))

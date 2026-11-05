@@ -22,9 +22,9 @@ from ...theme import ACCENT
 from ... import config
 from .. import draw as figdraw, settings as table
 from ..cards import _grid, _hint
-from ..cards.base import FIG_LOCS, LOCS, SECTION
+from ..cards.base import EXTEND, FIG_LOCS, LOCS, SECTION
 from ..spec.doc import FIGURE_KEYS, KIND_KEYS
-from . import docedit as de, nodes
+from . import bars, docedit as de, nodes
 
 FIGURE_SECTIONS = ("Text", "Panel labels", "Colorbar", "Legend", "Contour key",
                    "Maximum and minimum", "Spacing", "matplotlib style", "Your own code")
@@ -775,28 +775,68 @@ def kind_bar_rows(ins, doc, kind):
     return Sections(ins, Scope(kind), (kind,)).card("Colorbar", only)
 
 
+def _own_bar_rows(shell, doc, pid, bar):
+    """The settings of the bar panel pid controls; on one another panel controls, which that is."""
+    first = bar["members"][0]
+    if first != pid:
+        letter = nodes.letters(doc)[first]
+        go = pn.widgets.Button(name=f"Go to panel {letter}", height=30, button_type="light",
+                               button_style="outline", margin=(2, 4))
+        go.on_click(lambda e: shell._show(f"panel:{first}"))
+        return [_hint(f"Shares the bar with panel {letter}: its label, ticks and arrows are set "
+                      "there."), go]
+    now = bars.values(doc, bar)
+    label = pn.widgets.TextInput(name="Colorbar label (blank: the figure's, else units)",
+                                 value=now["cbar_label"], placeholder="e.g. w (m s$^{-1}$)",
+                                 sizing_mode="stretch_width",
+                                 description="$…$ is math, e.g. m s$^{-1}$")
+    ticks = pn.widgets.TextInput(name="Colorbar ticks (blank: the figure's, else auto)",
+                                 value=now["cbar_ticks"], placeholder="0:60:10",
+                                 sizing_mode="stretch_width")
+    ends = pn.widgets.Select(name="Colorbar arrows", options=EXTEND, value=now["extend"],
+                             sizing_mode="stretch_width")
+
+    def on(key):
+        def changed(ev):
+            def apply(d):
+                here = bars.bar_of(d, pid)
+                if here is not None:
+                    bars.set_value(d, here, key, ev.new)
+            shell.edit(apply)
+        return changed
+    label.param.watch(on("cbar_label"), "value")
+    ticks.param.watch(on("cbar_ticks"), "value")
+    ends.param.watch(on("extend"), "value")
+    return [label, ticks, ends]
+
+
 def panel_bar_card(ins, doc, pid):
     """A panel's part in the colorbars, for the kinds that have them: a card, or None."""
     shell = ins.shell
     p = de.panel_by_id(doc, pid)
-    if p["kind"] not in table.CBAR:
-        return None
+    if p["kind"] not in table.CBAR or bars.bar_of(doc, pid, as_if_shown=True) is None:
+        return None  # (no fill, or the figure has no colorbars: nothing here changes one)
     cb = p.get("colorbar") or {}
+    bar = bars.bar_of(doc, pid)
     show = pn.widgets.Checkbox(name="Its colours have a bar", value=cb.get("show", True))
     group = pn.widgets.TextInput(name="The bar it shares (a name)", value=cb.get("group") or "",
                                  placeholder="blank: as the figure's Colorbars say",
                                  sizing_mode="stretch_width",
                                  description="Panels giving the same name share one bar, whatever "
                                              "their kinds")
-    show.param.watch(lambda ev: shell.edit(lambda d: de.set_panel_colorbar(d, pid, show=ev.new)),
-                     "value")
-    group.param.watch(lambda ev: shell.edit(lambda d: de.set_panel_colorbar(d, pid, group=ev.new)),
-                      "value")
+    # (what it has of a bar can change: shown anew)
+    show.param.watch(lambda ev: shell.edit(lambda d: de.set_panel_colorbar(d, pid, show=ev.new),
+                                           node=shell.node), "value")
+    group.param.watch(lambda ev: shell.edit(lambda d: de.set_panel_colorbar(d, pid, group=ev.new),
+                                            node=shell.node), "value")
     key = f"look:{pid}:bar"
-    card = pn.Card(show, group, _hint(
-        "Blank: one bar as the figure's Colorbars say. Where kinds are mixed, panels of the same "
-        "colours share one bar, each of the others its own."), title="Colorbar",
-        collapsed=not ins.folds.get(key), **SECTION)
+    objs = [show]
+    if bar is not None:
+        objs += [group, _hint(
+            "Blank: one bar as the figure's Colorbars say. Where kinds are mixed, panels of the same "
+            "colours share one bar, each of the others its own.")]
+        objs += _own_bar_rows(shell, doc, pid, bar)
+    card = pn.Card(*objs, title="Colorbar", collapsed=not ins.folds.get(key), **SECTION)
     card.param.watch(lambda ev: ins.folds.__setitem__(key, not ev.new), "collapsed")
     return card
 

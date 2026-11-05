@@ -1,12 +1,16 @@
 """Run picker: one box and one list.  The list holds your recent runs and the runs found
 under the runs_root setting; typing filters it, and typing or pasting a folder lists
-the runs inside that folder instead.  Opening a run reloads the page with ?run=."""
+the runs inside that folder instead.  The model box says which model's output to look
+for (auto-detect: any).  Opening a run reloads the page with ?run= (and ?model= when one
+was chosen)."""
 
+import json
 import os
 
 import panel as pn
 
 from .. import config, registry
+from ..core import models
 from ..theme import CSS, DIALOG_DARK
 
 
@@ -31,7 +35,11 @@ class RunPicker:
         size = dict(sizing_mode="stretch_width") if compact else {}
         self.query = pn.widgets.TextInput(
             placeholder="Filter runs, or paste a folder (e.g. /scratch/you/cm1/run1)",
-            width=None if compact else 520, margin=(5, 10, 5, 0), **size)
+            width=None if compact else 400, margin=(5, 10, 5, 0), **size)
+        self.model = pn.widgets.Select(options=models.choices(), value=models.AUTO,
+                                       width=110 if compact else 120, margin=(5, 10, 5, 0),
+                                       description="Which model's output to look for "
+                                                   "(auto-detect: any model cm1view reads)")
         self.open = pn.widgets.Button(name=open_label, button_type="primary", width=110,
                                       disabled=True, margin=(5, 0))
         self.list = pn.widgets.Select(options={}, size=7 if compact else 13,
@@ -40,16 +48,19 @@ class RunPicker:
         # navigation happens in the browser: the new session opens the run from ?run=
         self.go = pn.widgets.TextInput(visible=False)
         self.go.jscallback(value="""
-            const p = (cb_obj.value || '').trim();
-            if (!p) return;
+            const v = (cb_obj.value || '').trim();
+            if (!v) return;
+            const [p, m] = JSON.parse(v);
             const q = new URLSearchParams(window.location.search);
             q.set('run', p); q.delete('t'); q.delete('session');
+            if (m && m !== 'auto') q.set('model', m); else q.delete('model');
             window.location.search = q.toString();
         """)
-        self.body = pn.Column(pn.Row(self.query, self.open, margin=0, **size), self.list,
+        self.body = pn.Column(pn.Row(self.query, self.model, self.open, margin=0, **size),
+                              self.list,
                               self.msg, self.go, margin=0, **size)
         self.modal = pn.Modal(
-            _html('<div class="cv-maptitle" style="font-size:16px"><b>Open a CM1 run</b>'
+            _html('<div class="cv-maptitle" style="font-size:16px"><b>Open a run</b>'
                   '</div>'),
             self.body, *extra, width=680, margin=10, stylesheets=[DIALOG_DARK])
 
@@ -59,6 +70,7 @@ class RunPicker:
         self._under = {}  # folder -> runs found under it (typed folders)
         self._busy = False
         self.query.param.watch(lambda e: self._refresh(), "value_input")
+        self.model.param.watch(lambda e: self.rescan(), "value")
         self.list.param.watch(self._on_list, "value")
         self.open.on_click(lambda e: self._open())
         self.query.param.watch(lambda e: self._open(), "enter_pressed")
@@ -70,7 +82,7 @@ class RunPicker:
 
     def rescan(self):
         """Look again for the runs under the runs_root setting."""
-        self.set_known(*config.scan_runs(config.get("runs_root")))
+        self.set_known(*config.scan_runs(config.get("runs_root"), model=self.model.value))
 
     def set_known(self, runs, complete=True):
         """The runs under runs_root (from a scan made elsewhere)."""
@@ -88,7 +100,8 @@ class RunPicker:
 
     def _runs_under(self, folder):
         if folder not in self._under:
-            self._under[folder] = config.scan_runs([folder], seconds=2.0)
+            self._under[folder] = config.scan_runs([folder], seconds=2.0,
+                                                   model=self.model.value)
         return self._under[folder]
 
     def _refresh(self):
@@ -137,7 +150,7 @@ class RunPicker:
         """Runs under a typed folder (a run: it and the runs next to it); a partly
         typed name lists the matching runs of its parent folder.  Also returns the
         run to select."""
-        pick = p if registry.is_run(p) else None
+        pick = p if registry.is_run(p, self.model.value) else None
         if pick:
             base, part = os.path.dirname(p), ""
         elif os.path.isdir(p):
@@ -155,7 +168,7 @@ class RunPicker:
         n = len(opts)
         more = " (stopped searching)" * (not complete)
         hint = (f'{n} run{"s" * (n != 1)} in {base}{more}' if n else
-                f'No CM1 output in {base} or the folders below it.')
+                f'No {self._what()} in {base} or the folders below it.')
         return opts, hint, pick
 
     # ------------------------------------------------------------------ pick
@@ -165,23 +178,32 @@ class RunPicker:
 
     def _select(self, path, hint=None):
         self.selected = path
-        n = registry.count_files(path) if path else 0
+        key = self.model.value
+        n = registry.count_files(path, key) if path else 0
         if hint is not None:
             self._hint = hint
         if n:
-            line = (f'<span style="color:#4ade80">✓</span> <b>{path}</b> · {n} output '
-                    f'files')
+            m = models.get(key) or models.detect(path)
+            line = (f'<span style="color:#4ade80">✓</span> <b>{path}</b> · {m.label} · '
+                    f'{n} output times')
         else:
             line = self._hint
         self.msg.object = f'<div class="cv-hint" style="line-height:1.5">{line}</div>'
         self.open.disabled = n == 0
 
+    def _what(self):
+        m = models.get(self.model.value)
+        return f"{m.label} output" if m else "model output"
+
     def _open(self):
         if self.selected and not self.open.disabled:
+            key = self.model.value
+            if models.get(key):  # (read it with that model, in every session)
+                registry.choose(self.selected, key)
             if self.on_open is not None:
                 self.on_open(self.selected)
             else:
-                self.go.value = self.selected
+                self.go.value = json.dumps([self.selected, key])
 
     def clear(self):
         """An empty box (after a pick), and the list of runs again."""

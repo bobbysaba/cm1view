@@ -138,7 +138,7 @@ class FigureWidgets:
             xmin=_auto("Values from"), xmax=_auto("Values to"),
             zmin=_auto("Axis from (km)", description="Blank: the profiles' layer"),
             zmax=_auto("Axis to (km)", description="Blank: the profiles' layer"),
-            zero_line=_chk("Zero line", False), mark_edited=_chk("Mark edited lines", True))
+            zero_line=_chk("Zero line", False), mark_edited=_chk("Mark edited lines", False))
         jo = self.jo = dict(
             plot=pn.widgets.Select(name="Draw as", options=JOINT_PLOTS),
             norm=pn.widgets.Select(name="Histogram of", options=DIST_NORMS,
@@ -192,7 +192,7 @@ class FigureWidgets:
         self.ts_zero = _chk("Zero line", False)
         self.ts_mark = pn.widgets.Select(name="Mark each line's", options=MARK_EXTREMES)
         self.ts_mark_legend = _chk("Extremes in the legend", False)
-        self.ts_mark_edited = _chk("Mark edited lines", True)
+        self.ts_mark_edited = _chk("Mark edited lines", False)
         # the maximum / minimum of a layer (plan, section and time-height panels)
         self.ex_on = _chk("Maximum / minimum", False)
         self.ex_what = pn.widgets.Select(name="Show", value="both", options={

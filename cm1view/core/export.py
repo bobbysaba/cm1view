@@ -98,6 +98,11 @@ def default_name(run, p):
     return f"{head}_t{t0}" + (f"-{t1}" if t1 != t0 else "") + "s.nc"
 
 
+def _model_choices():
+    from .models import AUTO, MODELS
+    return [AUTO, *MODELS]
+
+
 def default_path(run, p):
     return os.path.join(config.exports_dir(run.path, "data"), default_name(run, p))
 
@@ -325,6 +330,8 @@ def parser():
                "derivative is ddx./ddy./gradh./ddz. before a field's name.  --out may "
                "hold {run} (the run's folder name) and {name} (the default file name).")
     ap.add_argument("run", help="the run's folder")
+    ap.add_argument("--model", default="auto", choices=_model_choices(),
+                    help="the model whose output the folder holds (default: detected)")
     ap.add_argument("--fields", default="", metavar="A,B,...",
                     help="fields to write, comma-separated")
     ap.add_argument("--list", action="store_true", help="list the run's fields and stop")
@@ -393,9 +400,10 @@ def main(argv=None):
     if not os.path.isdir(path):
         return fail(f"run folder {path} not found")
     from .fields import Fields
-    from .run import CM1Run
+    from . import models
     try:
-        run = CM1Run(path, config.cache_gb()[0], config.workers()[0])
+        run = models.open_run(path, args.model, cache_gb=config.cache_gb()[0],
+                              workers=config.workers()[0])
     except (OSError, ValueError) as e:
         return fail(str(e))
     F = Fields(run)

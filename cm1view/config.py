@@ -26,7 +26,7 @@ class Key:
 
 KEYS = [
     Key("runs_root", "paths", [], "Where your runs live",
-        "Folders searched for CM1 runs (folders holding the output files). The run "
+        "Folders searched for runs (folders holding model output files). The run "
         "picker starts here.", kind="dirs", required=True),
     Key("default_run", "paths", "", "Run to open on launch",
         "Optional: a run opened when cm1view starts without a run argument.",
@@ -448,9 +448,11 @@ def _is(entry, kind):
         return False
 
 
-def scan_runs(roots=None, depth=5, limit=500, seconds=4.0):
+def scan_runs(roots=None, depth=5, limit=500, seconds=4.0, model=None):
     """Run folders under the roots (breadth first, hidden folders skipped, no search
-    inside a run).  Returns (runs, complete)."""
+    inside a run), of `model` (a core.models key; None/"auto": any model).  Returns
+    (runs, complete)."""
+    from .core import models
     t0, runs, complete = time.time(), [], True
     level = [expand(r) for r in (get("runs_root") if roots is None else roots) if r]
     for _ in range(depth + 1):
@@ -462,7 +464,7 @@ def scan_runs(roots=None, depth=5, limit=500, seconds=4.0):
                 ents = list(os.scandir(d))
             except OSError:
                 continue
-            if any(_is(e, "file") and is_output(e.name) for e in ents):
+            if models.looks_like_run(ents, model):
                 runs.append(d)
                 continue
             nxt += sorted(e.path for e in ents

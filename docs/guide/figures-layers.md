@@ -103,15 +103,21 @@ lists the line of the *Run* picked: *Time (min)*, *Model time (s)*, *Computed* a
 ticked, **Reset all edits** on every run of the card; **Download CSV** saves the line as
 drawn, **Refresh** reads the values again (e.g. after more output was written).
 
+**Add row** puts in a point the run does not have: give its time (minutes, as the *Time*
+column counts them, also before the first output or past the last) and value. The line runs
+through it in time order. At a time the run has a row for, it sets that row's value instead.
+Clear an added row's *Yours*, or tick it and use **Blank points** or **Reset points**, to take
+it out. A profile's card does the same with a height (km).
+
 Edits are kept in the figure, per run, at the model time of the point, so they stay put
 when the run's time zero changes. They are on the plotted values (after
 *d/dt*); changing the card's field or reduction keeps them, with a warning in the card.
 Everything drawn from the line uses them: ensemble bands, maxima and minima, axis
 ranges. An edit at a time the run no longer has is not drawn; the section lists those,
-and **Drop those** forgets them. An edited line's legend label ends in "(edited)" unless
-*Plot → Mark edited lines* is off.
+and **Drop those** forgets them. Turn on *Plot → Mark edited lines* to end an edited line's
+legend label in "(edited)".
 
-Edits belong to a run by its place in the card's *Run* list: reordering or removing the
+Edits and added rows belong to a run by its place in the card's *Run* list: reordering the
 card's runs moves them to another run, so reset them first.
 
 ### Your own data
@@ -138,8 +144,8 @@ model level: *Height (km)*, *Computed*, *Yours*. It lists the values the preview
 are on the plotted values (after the time window's mean and *d/dz*) and kept in the
 figure at the level's height; changing the card's field, layer, region, reduction, time
 or *Then apply* keeps them, with a warning in the card. An ensemble band is made from the
-edited lines. **Download CSV** saves `z_km,computed,plotted`. An edited line's legend
-label ends in "(edited)" unless *Plot → Mark edited lines* is off.
+edited lines. **Download CSV** saves `z_km,computed,plotted`. Turn on *Plot → Mark edited
+lines* to end an edited line's legend label in "(edited)".
 
 **+ Your data** (profile figures) adds a card for a profile that is not from a run: an
 observed sounding, another model. Paste two columns, **height in km** and value (the

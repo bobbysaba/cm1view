@@ -14,13 +14,15 @@ import panel as pn
 
 from .. import draw as figdraw
 from ..cards import LayerCard, TYPE_LABEL
+from ..cards import _hint
 from ..cards.base import _BTN, CARD, GHOST, TimeCard, _chk, grid_columns
 from ..runs import RunLists
 from ..spec.sections import describe as section_words
 from ..times import _tlabel, nearest
 from ...theme import ACCENT
 from ...viewer.ui import held
-from . import docedit as de, nodes
+from .. import settings as table
+from . import bars, docedit as de, nodes
 
 GROUPED = {"minus": "minus_on", "ens": "ens_on", "reduce": "reduce_op"}  # (key -> widget)
 PANELS_TIME = "the panel's"
@@ -112,6 +114,13 @@ class Shared:
 
     def write(self, doc, changes):
         de.write_shared(doc, self.lid, changes)
+        bars.clear_bar_overrides(doc, self.lid, [k for k in changes if k in bars.BAR_KEYS])
+
+    def hidden(self, doc):
+        """A bar's settings have nothing to do while no bar speaks for it."""
+        lay = self.layer(doc)
+        return () if not figdraw.bar_fill(lay) or bars.layer_has_bar(doc, self.lid) \
+            else bars.BAR_KEYS
 
 
 class InPanel:
@@ -140,6 +149,22 @@ class InPanel:
 
     def write(self, doc, changes):
         de.write_panel(doc, self.panel(doc), self.j, changes)
+        bars.follow_colours(doc, self.pid, self.j, changes)
+
+    def bar(self, doc):
+        """The bar this layer speaks for, or None."""
+        p = self.panel(doc)
+        return bars.bar_of(doc, self.pid) if bars.place(doc, p) == self.j else None
+
+    def hidden(self, doc):
+        """A bar's settings are in the panel's Colorbar section; the colours of a panel on a bar
+        another panel controls follow that panel."""
+        lay, p = self.layer(doc), self.panel(doc)
+        if p["kind"] not in table.CBAR or lay.get("type") not in ("fill", "series"):
+            return ()
+        bar = self.bar(doc)
+        return bars.BAR_KEYS + bars.COLOUR_KEYS if bar and bar["follows"] \
+            and bar["members"][0] != self.pid else bars.BAR_KEYS
 
 
 class InInset(InPanel):
@@ -147,6 +172,13 @@ class InInset(InPanel):
     document's changes to a panel's layers read only its "layers")."""
 
     ALONE = "this inset only"
+
+    def bar(self, doc):
+        return None
+
+    def hidden(self, doc):
+        lay = self.layer(doc)
+        return bars.BAR_KEYS if lay.get("type") in ("fill", "series") else ()
 
     def __init__(self, doc, pid, iid, j):
         self.pid, self.iid, self.j = pid, iid, j
@@ -213,6 +245,7 @@ class LayerRow:
         self.card, self.base = None, None
         doc = self.shell.doc
         lay = target.layer(doc)
+        self.hidden = target.hidden(doc) if hasattr(target, "hidden") else ()
         self.type = lay.get("type")
         self.chev = pn.widgets.Button(name="", icon="chevron-right", width=28, height=28,
                                       margin=(2, 0), button_type="light",
@@ -269,8 +302,11 @@ class LayerRow:
                 sec.collapsed = False
             sec.param.watch(lambda e, k=key: self.ins.folds.__setitem__(k, not e.new), "collapsed")
         self.top = pn.Column(margin=0, sizing_mode="stretch_width")
+        for k in self.hidden:
+            if k in card.w:
+                card.w[k].visible = False
         own = self.extras(self) if self.extras else []
-        self.body.objects = [self.top, *own, *card.body.objects]
+        self.body.objects = [self.top, *self._bar_notes(), *own, *card.body.objects]
         self.chev.icon = "chevron-down"
         self._show_marks()
 
@@ -334,13 +370,43 @@ class LayerRow:
         p = t.panel(doc) if isinstance(t, InPanel) else None
         text = html.escape(describe(t.layer(doc), self.shell.fields, p, self.card_kind))
         marks = [k for k in over if not (p.get("z") is not None and k in de.HEIGHT_KEYS)
-                 and k != "on"] if p is not None else []
+                 and k != "on" and k not in self.hidden] if p is not None else []
         tail = ""
         if isinstance(t, InPanel) and t.ref is None:
             tail = f' <span class="cv-hint">{t.ALONE}</span>'
         elif marks:
             tail = f' <span class="cv-hint" style="color:{ACCENT}">differs here</span>'
         self.title.object = f"<b>{text}</b>{tail}"
+
+    # ------------------------------------------------------------ its colorbar
+    def _bar_notes(self):
+        """Where its bar's settings are; a panel's colours that aren't those of the bar it shares."""
+        t, doc = self.target, self.shell.doc
+        bar = t.bar(doc) if isinstance(t, InPanel) and self.hidden else None
+        if bar is None:
+            return []
+        first = bar["members"][0]
+        if first == t.pid or not bar["follows"]:
+            return [_hint("Its colorbar's label, ticks and arrows are in the panel's Colorbar "
+                          "section.")]
+        letter = nodes.letters(doc)[first]
+        objs = [_hint(f"Its colours follow panel {letter}, whose colorbar it shares.")]
+        if bars.colours_differ(doc, bar, t.pid):
+            match = pn.widgets.Button(name="Match the bar", height=26, margin=(2, 2),
+                                      button_type="light", button_style="outline")
+            pid, shell = t.pid, self.shell
+
+            def on_match(e):
+                def apply(d):
+                    now = bars.bar_of(d, pid)
+                    if now is not None:
+                        bars.match_colours(d, now, pid)
+                shell.edit(apply, node=shell.node)
+            match.on_click(on_match)
+            objs = [pn.pane.HTML(
+                f'<span style="color:#fcd34d">⚠ Its colours differ from panel {letter}\'s, so '
+                "the colorbar is wrong for this panel.</span>", margin=(2, 4)), match]
+        return objs
 
     # ------------------------------------------------------------ what differs here
     def _label(self, key):
@@ -361,6 +427,8 @@ class LayerRow:
             for k in de.HEIGHT_KEYS:
                 over.pop(k, None)
         over.pop("on", None)
+        for k in self.hidden:
+            over.pop(k, None)
         marked = {GROUPED.get(k, k) for k in over}
         for k, w in self.card.w.items():
             was = (w.styles or {}).get("box-shadow")
@@ -385,9 +453,17 @@ class LayerRow:
             b = pn.widgets.Button(name="↺ All", height=26, margin=(2, 2), button_type="light",
                                   button_style="outline",
                                   description="This layer as shared: all of the above")
-            b.on_click(lambda e: self._take_back(None))
+            b.on_click(lambda e, keys=tuple(over): self._take_back_all(keys))
             chips.append(b)
         self.top.objects = [pn.FlexBox(*chips, sizing_mode="stretch_width")] if chips else []
+
+    def _take_back_all(self, keys):
+        t = self.target
+
+        def apply(d):
+            for k in keys:
+                de.clear_over(d, t.panel(d), t.j, k)
+        self.shell.edit(apply, node=self.shell.node)
 
     def _take_back(self, key):
         t = self.target

@@ -214,14 +214,12 @@ def _worker(task):
     npts) or dict(t, error).  A derivative (task "op", of field task "field") and
     derived fields that are not pointwise are computed on the region plus a one-point
     border (task "halo"), so their values at its edge are those of the map."""
-    import netCDF4
-
     from .fields import ddz_level, hgrad, split_deriv, stride_cols
+    from .run import open_source
 
     t = task["t"]
     try:
-        with netCDF4.Dataset(task["path"]) as d:
-            d.set_auto_mask(False)
+        with open_source(task["src"]) as d:
             name, info = task["field"], task["natives"]
             op = task.get("op", "")
             fdef = None if name in info else _field_def(name, task["avail"])
@@ -540,7 +538,7 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
         e0, e1, f0, f1 = ((max(i0 - 1, 0), min(i1 + 1, run.ni), max(j0 - 1, 0),
                            min(j1 + 1, run.nj)) if halo else (i0, i1, j0, j1))
         tasks.append(dict(
-            t=t, path=run.files[t], field=name, op=op, natives=natives, dscale=dscale,
+            t=t, src=run.source(t), field=name, op=op, natives=natives, dscale=dscale,
             avail=sorted(run.vars), box=(i0, i1, j0, j1), halo=(e0, e1, f0, f1),
             mask=mask, ctx=c, reduce=recipe["reduce"],
             pct=recipe.get("pct", 99.0), vmode=vmode, weights=weights,

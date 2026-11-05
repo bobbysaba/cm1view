@@ -31,8 +31,7 @@ WIDGETS = f"""
   background-color: rgba(148,163,184,.06) !important; border: 1px solid {GRID} !important;
   color: {TEXT} !important; box-shadow: none !important;
   display: inline-flex !important; align-items: center !important;
-  justify-content: center !important; padding-top: 0 !important;
-  padding-bottom: 0 !important; line-height: 1.2 !important; }}
+  justify-content: center !important; line-height: 1.2 !important; }}
 :where(.bk-btn:hover) {{
   background-color: rgba(148,163,184,.13) !important; border-color: {HOVER_LINE} !important; }}
 :where(.bk-btn.bk-active) {{

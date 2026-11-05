@@ -23,7 +23,8 @@ from collections import OrderedDict
 from . import draw as figdraw, spec as fg
 from ..core import parcels as P, series as ser, track as trk
 from ..core.fields import Fields
-from ..core.run import CM1Run, FileBusy, MissingAtTime
+from ..core import models
+from ..core.run import FileBusy, MissingAtTime
 
 
 def panel_name(spec, i):
@@ -44,7 +45,7 @@ class FigureData:
 
     run, F: a run already open (spec runs at its path use it); reg: a registry
     (viewer's) to open the others through, sharing its cache; else they are opened
-    here (cache_gb, workers as CM1Run's).  viewer_fixes(): the fixes a run entry with
+    here (cache_gb, workers as Run's).  viewer_fixes(): the fixes a run entry with
     track "viewer" takes (of `run` only).  note(text): progress text while reading.
     series_pool: an executor that computes missing series in the background (the
     figure is drawn with what is there; on_series() is called as they come in, gen()
@@ -61,7 +62,7 @@ class FigureData:
         self.cache_gb, self.workers = cache_gb, workers
         self._vc = getattr(run, "_vc", None)  # (runs opened here share one 3D cache)
         self.cache = OrderedDict()  # data key -> panel arrays
-        self.opened = {}  # run path -> (CM1Run, Fields) opened here
+        self.opened = {}  # run path -> (Run, Fields) opened here
         self.tracks = {}  # track file -> (mtime, run path, fixes)
         self.track_err = {}  # track file -> error text
         # series of time-height / time-series figures: (run path, recipe, track) ->
@@ -77,7 +78,7 @@ class FigureData:
 
     # ------------------------------------------------------------ runs
     def open_run(self, path):
-        """(CM1Run, Fields) of the run in `path` (the given run, or one opened through
+        """(Run, Fields) of the run in `path` (the given run, or one opened through
         the registry so its cache is shared, or here)."""
         path = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
         if self.run is not None and path == self.run.path:
@@ -88,7 +89,9 @@ class FigureData:
             if self._vc is None:
                 from ..core.run import VolumeCache
                 self._vc = VolumeCache(self.cache_gb)
-            r = CM1Run(path, cache_gb=self.cache_gb, workers=self.workers, cache=self._vc)
+            from .. import registry
+            r = models.open_run(path, registry.chosen(path), cache_gb=self.cache_gb,
+                                workers=self.workers, cache=self._vc)
             self.opened[path] = (r, Fields(r))
         return self.opened[path]
 

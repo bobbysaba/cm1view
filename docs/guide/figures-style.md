@@ -97,9 +97,20 @@ Hidden for time series, soundings, distributions and vertical profiles, which ha
 | **Ticks of bars with none of their own** | e.g. `0:60:10` (blank: automatic). |
 | **Tick format**, **Tick size** | e.g. `%.1f`, `%d`, `%.0e`. |
 
-With several colorbars each takes its own label and ticks from where its colours are set:
-a fill layer or a time–height series. A bar shared by several panels, such as one per
-row across two columns, takes the first label among them, whichever layer it is on. The label and ticks here are for the bars that have none of their own.
+Each bar is controlled by one panel, the first one on it in reading order: every panel with
+*One per panel*, the first of each row or column with *per row* or *per column*, the first of the
+figure with *One for the figure*. That panel's **Colorbar** section has the bar's **Colorbar label**,
+**Colorbar ticks** and **Colorbar arrows**, and they apply to the whole bar. The other panels on the
+bar say which panel controls it, with a button to go there.
+
+The colormap and range stay on the fill layer or time–height series, since they also set how the
+data is drawn. On a shared bar they are set on the controlling panel and the others follow it: if a
+panel's colours differ from the bar, it says so, and **Match the bar** puts it right. A second fill
+in a panel has no bar, so it has no bar settings.
+
+To set the label, ticks or arrows of every bar at once, use the fill layer under **All plan views**
+(or **All cross-sections**), which clears what single panels set. The label and ticks here are for
+the bars that have none of their own.
 
 ### Legend
 

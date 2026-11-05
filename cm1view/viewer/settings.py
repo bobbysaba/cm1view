@@ -132,7 +132,7 @@ class Settings:
             self.title.object = (
                 '<div class="cv-maptitle" style="font-size:18px"><b>Welcome to cm1view'
                 '</b></div>' + _note(
-                    "Tell cm1view where your CM1 runs live; everything else has a "
+                    "Tell cm1view where your runs live; everything else has a "
                     "default you can change now or later (⚙ in the top bar). Settings "
                     f"are saved in <code>{html.escape(config.config_path())}</code>.")
                 if first else
@@ -186,7 +186,7 @@ class Settings:
             runs, complete = config.scan_runs(v)
             n = f"{len(runs)}{'' if complete else '+'}"
             found = (_note(f"✓ found {n} run{'s' * (len(runs) != 1)}", OK) if runs else
-                     _note("No CM1 output found under these folders (yet).", ERR))
+                     _note("No model output found under these folders (yet).", ERR))
             self.notes[name].object = found + _note(text)
         else:
             self.notes[name].object = _note(text)

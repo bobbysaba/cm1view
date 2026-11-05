@@ -3,6 +3,22 @@
 What changed in each release, newest first. The version is in `pyproject.toml`; a release
 has a matching git tag.
 
+## Unreleased
+
+### Viewer
+
+- The run picker has a **model** box (*Auto-detect* or a model) and lists the runs of that model;
+  `cm1view --model` and `cm1view export --model` do the same on the command line. CM1 is the only
+  model for now; this prepares for WoFS output.
+
+### Figures
+
+- Runs: a run's **✕** now also removes a run in use, with its panels and the layers of it alone
+  (Undo brings them back). Long run paths wrap instead of running off the page.
+- Values of a time series or profile: **Add row** puts in a point the run does not have.
+- Hand-edited lines no longer say "(edited)" in the legend unless you turn on *Plot → Mark edited
+  lines*. Figures saved with it on keep it on until you untick it.
+
 ## 0.5.0 (2026-11-04)
 
 A new three-pane figure editor that replaces the old tabs, with panels of any kinds on one grid,

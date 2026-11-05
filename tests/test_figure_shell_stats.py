@@ -315,6 +315,35 @@ def test_a_profiles_values_can_be_edited_and_undone(shell):
     assert not de.panel_by_id(shell.doc, pid)["layers"][0].get("edits")
 
 
+def test_a_row_can_be_added_to_a_profiles_values_and_taken_out(shell):
+    pid = _fresh(shell, "profile")["id"]
+    _drew(shell)
+    shell._show(f"layer:{pid}:0")
+    sec = next(c for t, c in _cards(shell).items() if t.startswith("Values"))
+    sec.collapsed = False
+    tab = next(w for w in sec.select() if type(w).__name__ == "Tabulator")
+    n, z = len(tab.value), tab.value["z"]
+    at = round(float(z[0] + z[1]) / 2.0, 3)
+    boxes = [w for w in sec.select() if type(w).__name__ == "FloatInput"]
+    add = next(w for w in sec.select() if getattr(w, "name", "") == "Add row")
+    add.clicks += 1  # (nothing typed: nothing added)
+    assert len(tab.value) == n and not de.panel_by_id(shell.doc, pid)["layers"][0].get("edits")
+    boxes[0].value, boxes[1].value = at, 99.0
+    add.clicks += 1
+    added = de.panel_by_id(shell.doc, pid)["layers"][0]["added"]
+    assert list(added.values())[0] == {f"{at:.6g}": 99.0}
+    assert len(tab.value) == n + 1 and tab.value["yours"][1] == "99"
+    assert tab.value["z"].is_monotonic_increasing
+    _drew(shell)
+
+    class Ev:
+        column, row, value = "yours", 1, ""
+
+    tab._on_edit_callbacks[0](Ev)
+    assert not de.panel_by_id(shell.doc, pid)["layers"][0].get("added")
+    assert len(tab.value) == n
+
+
 def test_what_a_joint_distribution_shows_follows_its_plot(shell):
     _fresh(shell, "joint")
     shell.select("kind:joint")

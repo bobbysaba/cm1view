@@ -69,6 +69,12 @@ def test_gallery_newest_first_by_folder_and_more(ed, tmp_path, monkeypatch):
     assert names() == ["old", "older"]
     ed.open_quick()  # (opens on them all again)
     assert ed.qs_where.value == "" and names() == ["new", "old"]
+    groups = ed.qs_pick.groups  # (the list of them, by folder: a pick fills in the path)
+    assert list(groups["other"]) == ["new"] and list(groups["This run (own)"]) == ["old", "older"]
+    ed.qs_pick.value = groups["other"]["new"]
+    assert ed.qs_path.value == groups["other"]["new"]
+    ed.open_quick()
+    assert ed.qs_pick.value == ""
     ed.quick.hide()
     assert names() == []
 
@@ -81,6 +87,7 @@ def test_gallery_with_nothing_saved(ed, tmp_path, monkeypatch):
                         lambda own, root, extra="": listed(own, str(tmp_path / "none")))
     ed.open_quick()
     assert ed.qs_none.visible and not ed.qs_where.visible and ed.qs_gallery.objects == []
+    assert not ed.qs_pick.visible
     ed.quick.hide()
 
 

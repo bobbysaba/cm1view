@@ -294,18 +294,39 @@ class Inspector:
         t0.disabled = by_output and k > 0
         t0.param.watch(lambda ev: self.shell.edit(lambda d: de.set_t0(d, rid, ev.new)), "value")
         track = self._track_widgets(r, own, change)
-        rm = pn.widgets.Button(name="✕", width=32, height=28, margin=(2, 1), button_type="default",
-                               button_style="outline", disabled=bool(used) or n < 2,
-                               description="Remove the run" if not used else
-                               "In use by panel " + ", ".join(names[i] for i in used))
-        rm.on_click(lambda ev: self.shell.edit(lambda d: de.remove_run(d, rid), node=nodes.RUNS))
-        head = pn.pane.HTML(f'<b>{k + 1}.</b> <code>{html.escape(path)}</code>'
-                            + ('<span class="cv-hint"> (this viewer\'s run)</span>' if own else ""),
-                            margin=(6, 4, 0, 4))
-        return pn.Column(pn.Row(head, pn.Spacer(), rm, margin=0, sizing_mode="stretch_width"),
+        rm = self._run_remove(rid, r, n, names)
+        head = pn.pane.HTML(f'<div style="overflow-wrap:anywhere"><b>{k + 1}.</b> '
+                            f'<code>{html.escape(path)}</code>'
+                            + ('<span class="cv-hint"> (this viewer\'s run)</span>' if own else "")
+                            + "</div>", margin=(6, 4, 0, 4), sizing_mode="stretch_width",
+                            min_width=0)
+        return pn.Column(pn.Row(head, rm, margin=0, sizing_mode="stretch_width"),
                          _row(label, color, t0), *track, _note(self._run_note(r, used, names)),
                          margin=(2, 0), sizing_mode="stretch_width",
                          styles={"border-bottom": f"1px solid {GRID}"})
+
+    def _run_remove(self, rid, r, n, names):
+        """A run's ✕.  Panels of that run alone go with it (Undo brings them back); it stays
+        when it is the figure's last run, or every panel is of it."""
+        doc = self.shell.doc
+        gone = de.panels_of_run(doc, rid)
+        words = ", ".join(names.get(i, str(i)) for i in gone)
+        every = bool(gone) and len(gone) == len(doc.get("panels") or [])
+        rm = pn.widgets.Button(name="✕", width=32, height=28, margin=(2, 1), button_type="default",
+                               button_style="outline", disabled=n < 2 or every,
+                               description="Every panel is of this run: add others first" if every
+                               else f"Remove the run and panel {words}" if gone
+                               else "Remove the run")
+
+        def remove(ev):
+            self.shell.edit(lambda d: de.remove_run(d, rid), node=nodes.RUNS)
+            self.shell._sync_fields()
+            what = html.escape(nodes.run_names(dict(runs=[r]))[rid])
+            self.shell.say(f"Removed {what} and panel {html.escape(words)} (Undo brings them back)."
+                           if gone else f"Removed {what}.")
+
+        rm.on_click(remove)
+        return rm
 
     def _track_widgets(self, r, own, change):
         """A run's storm track: the viewer's, or one of its track files, or a path typed."""

@@ -511,7 +511,8 @@ class Widgets:
                                                       "text-overflow: ellipsis; }"])
         self.picker = RunPicker(run.path, extra=(
             _html(f'<div class="cv-h" style="margin-top:14px">This run</div>'
-                  f'<div class="cv-run"><b>{run.path}</b><br>{run.ni}×{run.nj}×{run.nk} · '
+                  f'<div class="cv-run"><b>{run.path}</b><br>{run.model_label} · '
+                  f'{run.ni}×{run.nj}×{run.nk} · '
                   f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
                   f'({run.umove:g}, {run.vmove:g}) m/s</div>'),
             pn.Row(self.cache_html, self.clear_btn)))

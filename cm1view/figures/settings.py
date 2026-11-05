@@ -222,7 +222,7 @@ SETTINGS = (
         ("zero_line", "ts_zero", False, RAW, ("line",)),
         ("mark", "ts_mark", "", As(lambda v: v or "", _same), ("line",)),
         ("mark_legend", "ts_mark_legend", False, FLAG, ("line",)),
-        ("mark_edited", "ts_mark_edited", True, FLAG, ("line",)),
+        ("mark_edited", "ts_mark_edited", False, FLAG, ("line",)),
         ("ymin", "ts_ymin", None, BLANKABLE, ("line",)),
         ("ymax", "ts_ymax", None, BLANKABLE, ("line",)))
     + _family("skewt", "sk", "Skew-T", ("sounding",),

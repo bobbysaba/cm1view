@@ -264,7 +264,7 @@ def minus_plane(F, F2, name, t2, mode, level, fstorm=None):
 def minus_section(F, F2, name, t2, A, B, s, zq, fstorm=None):
     """Field `name` of the run of F2 at time index t2 along the section A–B, on the
     distances s and heights zq of F's section (NaN outside the other run's domain).
-    Its 3D field must be loaded (CM1Run.load_volumes)."""
+    Its 3D field must be loaded (Run.load_volumes)."""
     _other_has(F, F2, name)
     r2 = F2.run
     s2, fi, fj, _ = section_coords(r2, A, B)

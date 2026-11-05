@@ -25,6 +25,7 @@ from .shell.gridview import main_kind
 ALL_FOLDERS = "Newest first, all folders"
 GALLERY_STEP = 12  # thumbnails shown at a time
 NO_TEMPLATES = "No templates yet"
+PICK = "Pick a saved figure…"
 NEW_STEP = 5  # outputs between a new figure's panels, past the times it starts with
 _THUMB_BOX = 104  # px of a gallery button given to the picture; the name is below it
 
@@ -64,11 +65,15 @@ class FigureQuick:
         self.qs_tpl = pn.widgets.Select(name="Or start from a template")
         self.qs_tpl_go = pn.widgets.Button(name="Apply to this run", button_type="primary",
                                            button_style="outline", disabled=True)
-        self.qs_where = pn.widgets.Select(name="Or open a saved figure", width=300,
+        self.qs_pick = pn.widgets.Select(
+            name="Or open a saved figure", options={PICK: ""},
+            description="This run's saved figures first, then the other folders of the Figures "
+                        "setting. Picking one fills in the path below.")
+        self.qs_where = pn.widgets.Select(name="Thumbnails from", width=300,
                                           options={ALL_FOLDERS: ""})
         self.qs_none = _hint("No saved figures yet: they appear here once you save one.")
         self.qs_gallery = pn.FlexBox(margin=0, styles={  # (the dialog stays in the window)
-            "max-height": "clamp(140px, calc(100vh - 630px), 292px)", "overflow-y": "auto",
+            "max-height": "clamp(140px, calc(100vh - 760px), 292px)", "overflow-y": "auto",
             "gap": "4px"})
         self.qs_more = pn.widgets.Button(name="Show more", button_type="light",
                                          button_style="outline", width=120, visible=False)
@@ -100,15 +105,16 @@ class FigureQuick:
             _hint("Saved from Export → Template: its panels and look on this run, its times "
                   "moved to the map's time."),
             pn.layout.Divider(margin=(6, 4)),
-            self.qs_where, self.qs_none, self.qs_load_note, self.qs_gallery, self.qs_more,
-            _hint("Figures saved in the Figures folder (⚙ Settings)."),
-            _grid((self.qs_path, 2), self.qs_open), width=680, margin=10,
+            self.qs_pick, self.qs_none, _grid((self.qs_path, 2), self.qs_open),
+            self.qs_load_note, self.qs_where, self.qs_gallery, self.qs_more,
+            _hint("Figures saved in the Figures folder (⚙ Settings)."), width=680, margin=10,
             stylesheets=[DIALOG_DARK])
         self.qs_kind.param.watch(lambda e: self._quick_show(), "value")
         self.qs_vary.param.watch(lambda e: self._quick_show(), "value")
         self.qs_go.on_click(lambda e: self._quick_make())
         self.qs_skip.on_click(lambda e: self.quick.hide())
         self.qs_tpl_go.on_click(lambda e: self._quick_template())
+        self.qs_pick.param.watch(self._quick_pick, "value")
         self.qs_where.param.watch(lambda e: self._gallery_show(), "value")
         self.qs_more.on_click(lambda e: self._gallery_more())
         # (closed: the thumbnails leave the page)
@@ -180,8 +186,12 @@ class FigureQuick:
         self._qs_figures = saved_list(self._fig_dir, config.expand(config.get("figures_dir")),
                                       config.expand(config.state("last_multi_run_dir")))
         heads = list(dict.fromkeys(f[0] for f in self._qs_figures))
+        groups = {"": {PICK: ""}}
+        for head, name, path, _ in self._qs_figures:
+            groups.setdefault(head, {})[name] = path
+        self.qs_pick.param.update(options={}, groups=groups, value="")
         self.qs_where.options = {ALL_FOLDERS: "", **{h: h for h in heads}}
-        self.qs_where.visible = bool(heads)
+        self.qs_pick.visible = self.qs_where.visible = bool(heads)
         self.qs_none.visible = not heads
         if self.qs_where.value:  # (its watcher shows the gallery)
             self.qs_where.value = ""
@@ -239,6 +249,11 @@ class FigureQuick:
     def _quick_note(self, html):
         self.qs_load_note.object = html
         self.qs_load_note.visible = True
+
+    def _quick_pick(self, ev):
+        """A figure picked from the list: its path, ready to open."""
+        if ev.new:
+            self.qs_path.value = ev.new
 
     def _quick_open(self, path):
         """Open a saved figure (it closes the dialog); if it cannot be opened, say why in the

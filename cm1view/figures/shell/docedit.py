@@ -76,18 +76,81 @@ def new_run_id(doc):
     return f"r{n}"
 
 
+def _lose_run(item, rid):
+    """Item (a layer, or what a panel changes of one) no longer naming run rid.  False: it is of
+    that run alone, or a difference from it, so it has nothing left to draw."""
+    if item.get("run") == rid:
+        return False
+    if isinstance(item.get("minus"), dict) and item["minus"].get("run") == rid:
+        return False
+    if rid in (item.get("runs") or []):
+        item["runs"] = [v for v in item["runs"] if v != rid]
+        if not item["runs"]:
+            return False
+    ens = item.get("ens")
+    if isinstance(ens, dict) and rid in (ens.get("runs") or []):
+        item["ens"] = dict(ens, runs=[v for v in ens["runs"] if v != rid])
+        if not item["ens"]["runs"]:
+            return False
+    return True
+
+
+def _by_run_place(item, k):
+    """A layer's hand edits and added points are held by the run's place (spec/panels
+    apply_edits): run k's go, and those of the runs after it move with it."""
+    for key in ("edits", "added"):
+        if item.get(key):
+            item[key] = {str(int(n) - (int(n) > k)): v for n, v in item[key].items()
+                         if int(n) != k}
+            if not item[key]:
+                del item[key]
+
+
 def remove_run(doc, rid):
-    """A run out of the figure.  A series' hand edits are held by the run's place (spec/panels
-    apply_edits), so those of the runs after it move with it."""
+    """A run out of the figure, with what is of that run alone: its panels, and layers elsewhere
+    of it or a difference from it.  Layers of several runs keep the others; a panel with its
+    run elsewhere keeps its other layers, and goes when it had only those layers and no run.
+    Returns the ids of the panels gone (the figure's, not those set aside)."""
     k = run_index(doc, rid)
     doc["runs"] = [r for r in doc["runs"] if r["id"] != rid]
+    shared = doc.get("layers") or {}
+    for lid in [lid for lid, lay in shared.items() if not _lose_run(lay, rid)]:
+        del shared[lid]
+
+    def stays(item):
+        if "ref" in item:
+            return item["ref"] in shared and _lose_run(item.get("over") or {}, rid)
+        return _lose_run(item, rid)
+
+    def of_the_run(p):
+        if p.get("run") == rid:
+            return True
+        had = bool(p.get("layers"))
+        p["layers"] = [x for x in p.get("layers") or [] if stays(x)]
+        for ins in p.get("insets") or []:
+            if ins.get("layers") is not None:
+                ins["layers"] = [x for x in ins["layers"] if stays(x)]
+        _follow_series(p)
+        return had and not p["layers"] and p.get("run") is None
+
+    gone = [p["id"] for p in doc.get("panels") or [] if of_the_run(p)]
+    for pid in gone:
+        remove_panel(doc, pid)
+    if doc.get(OFF_GRID):
+        doc[OFF_GRID] = [p for p in doc[OFF_GRID] if not of_the_run(p)]
+        if not doc[OFF_GRID]:
+            del doc[OFF_GRID]
+    for lay in shared.values():
+        _by_run_place(lay, k)
     for p in [*(doc.get("panels") or []), *(doc.get(OFF_GRID) or [])]:
         for item in p.get("layers") or []:
-            if item.get("edits"):
-                item["edits"] = {str(int(n) - (int(n) > k)): v for n, v in item["edits"].items()
-                                 if int(n) != k}
-                if not item["edits"]:
-                    del item["edits"]
+            _by_run_place(item, k)
+    return gone
+
+
+def panels_of_run(doc, rid):
+    """The ids of the panels remove_run would take with run rid."""
+    return remove_run(copy.deepcopy(doc), rid)
 
 
 # ------------------------------------------------------------ writing a layer's settings
@@ -148,6 +211,9 @@ def clear_over(doc, p, j, key=None):
     apply_heights(doc, [p])
 
 
+BAR_KEYS = ("cbar_label", "cbar_ticks", "extend")  # (a bar's: in its panel's Colorbar section)
+
+
 def differing(doc, lid, kind):
     """{panel id: the keys it has otherwise than shared layer lid}: a panel's own height and
     whether it draws the layer don't count."""
@@ -157,7 +223,7 @@ def differing(doc, lid, kind):
         for item in places(doc, p):
             if item.get("ref") == lid:
                 keys = [k for k in overrides(item)
-                        if k != "on" and not (own and k in HEIGHT_KEYS)]
+                        if k != "on" and k not in BAR_KEYS and not (own and k in HEIGHT_KEYS)]
                 if keys:
                     out[p["id"]] = keys
     return out
