@@ -280,6 +280,7 @@ class WoFSRun(Run):
     model = "wofs"
     model_label = "WoFS"
     terrain = True
+    traced_parcels = True  # (WoFS has no parcel output: core.trajcalc)
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         super().__init__(path, cache_gb, workers, cache)

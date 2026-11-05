@@ -368,3 +368,104 @@ def test_series_on_own_heights(wofs_root, monkeypatch):
     np.testing.assert_allclose(ds["value"], 1.5 + c, rtol=1e-6)  # (level 2 is above)
     np.testing.assert_allclose(ds["z_km"], 1.5 * dz0, rtol=1e-5)
     np.testing.assert_allclose(go(field="wmax", vmode="2d")["value"], NK - 0.5 + c)
+
+
+def test_points_on_own_heights(wofs_root):
+    """3D points (km MSL) placed among their column's levels: w = k + 0.5 + c at mass
+    level k, between two columns bilinear; a single column like np.interp."""
+    from cm1view.core import volume3d
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F, c = Fields(run), 2
+    H, W = run.heights(c, "msl"), F.volume("winterp", c)
+    for k in (0.0, 1.0, 2.5):
+        k0, f = int(k), k - int(k)
+        z = (1 - f) * H[k0, 2, 5] + f * H[min(k0 + 1, NK - 1), 2, 5]
+        v = volume3d.sample_points(run, W, [run.xh[5]], [run.yh[2]], [z], c)
+        assert float(v[0]) == pytest.approx(k + 0.5 + c, abs=1e-4)
+    x, z = 0.5 * (run.xh[3] + run.xh[4]), 0.5 * (H[1, 2, 3] + H[1, 2, 4])
+    assert float(volume3d.sample_points(run, W, [x], [run.yh[2]], [z], c)[0]) == \
+        pytest.approx(1.5 + c, abs=1e-4)
+    with pytest.raises(ValueError):  # (a terrain run's points need their time)
+        volume3d.sample_points(run, W, [x], [run.yh[2]], [z])
+    col = np.array([[0.1, 0.4, 1.0, 2.5]])
+    zz = np.array([-1.0, 0.1, 0.7, 2.0, 9.0])
+    np.testing.assert_allclose(volume3d.frac_level(np.repeat(col, 5, 0), zz),
+                               np.interp(zz, col[0], np.arange(4.0)))
+
+
+def test_scene_on_terrain(wofs_root):
+    """The 3D scene above sea level: isosurface vertices at their columns' level
+    heights, the ground drawn (the floor on it), vectors that far above the ground,
+    streamlines between each column's lowest level and the top."""
+    from cm1view.core import volume3d
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F, c = Fields(run), 2
+    H = run.heights(c, "msl")
+    box = (float(run.xh[0]), float(run.xh[-1]), float(run.yh[0]), float(run.yh[-1]))
+    scene = dict(t=c, box=box, ztop=3.0, exag=2.0, smooth=0.0, res=1,
+                 ground=dict(on=True, var="dbz", z=0.5, cmap="Field default", rev=False,
+                             range="data", lo=0.0, hi=1.0),
+                 isos=[dict(var="winterp", val=6.0, color="#ffffff", op=0.5)],
+                 storm=(0.0, 0.0), fstorm=((0.0, 0.0), ""),
+                 vecs=[dict(q="wind", level=1.0, frame="grid", density=4, ref=20.0,
+                            color="#ffffff")],
+                 stream=dict(on=True, z=0.5, n=3, length=6.0, dir="both", frame="grid",
+                             color_by="w", seed_box=[-2.0, 2.0, -1.0, 1.0]))
+    sc = volume3d.build_scene(run, F, scene)
+    m = sc["meshes"][0]  # (w = 6 halfway between levels 3 and 4)
+    i = np.round((m["x"] - run.xh[0])).astype(int)
+    j = np.round((m["y"] - run.yh[0])).astype(int)
+    np.testing.assert_allclose(m["z"], 0.5 * (H[3, j, i] + H[4, j, i]), atol=1e-4)
+    np.testing.assert_allclose(sc["terrain"]["z"], run.terrain_height(), atol=1e-6)
+    np.testing.assert_allclose(sc["ground"]["z"], run.terrain_height(), atol=1e-6)
+    v = sc["vecs"][0]
+    ok = np.isfinite(v["x"])
+    np.testing.assert_allclose(v["z"][ok] - volume3d.ground_at(run, v["x"][ok], v["y"][ok]),
+                               1.0, atol=1e-6)
+    s = sc["stream"]
+    ok = np.isfinite(s["x"])
+    low = volume3d.columns(H, *volume3d._fij(run, s["x"][ok], s["y"][ok]))[:, 0]
+    assert (s["z"][ok] >= low - 1e-4).all() and (s["z"][ok] <= 3.0 + 1e-6).all()
+    assert s["seed_ring"].shape[1] == 3
+    fig = volume3d.scene_figure(sc["meshes"], None, box, 3.0, 2.0, terrain=sc["terrain"])
+    assert fig.data[0].name == "ground" and fig.layout.scene.zaxis.title.text == "z (km MSL)"
+    # the figure's arrays keep the ground, the per-point vector heights and the ring
+    from cm1view.figures.draw import scene3d
+    a = scene3d.scene_arrays(scene3d.scene_data(sc, box, 3.0))
+    np.testing.assert_allclose(a["terrain"]["z"], run.terrain_height(), atol=1e-6)
+    assert np.shape(a["vecs"][0]["z"]) == np.shape(v["x"]) and a["ground"]["z"] is not None
+    assert a["stream"]["seed_ring"].shape == s["seed_ring"].shape
+    assert volume3d.top_height(run) == pytest.approx(run.z[-1] + GROUND.max())
+
+
+def test_traced_trajectories(wofs_root, tmp_path, monkeypatch):
+    """No parcel output: trajectories traced through the 3D winds (once, to the cache),
+    above sea level, never under their column's lowest level, read like CM1's; turned
+    off when the output is less often than the setting."""
+    from cm1view.core import parcels as P, trajcalc, volume3d
+    monkeypatch.setattr(P, "CACHE_DIR", str(tmp_path / "parcels"))
+    monkeypatch.delenv("CM1VIEW_TRAJ_MAX_INTERVAL", raising=False)
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F = Fields(run)
+    assert run.traced_parcels and P.offered(run) and trajcalc.interval(run) == 180.0
+    pf = P.for_run(run, F)
+    assert isinstance(pf, trajcalc.Traced) and not pf.traced and pf.lattice() is None
+    assert pf.n == pf.lat["nx"] * pf.lat["ny"] * pf.lat["nz"] and set(pf.vars) == set(trajcalc.VARS)
+    ps = P.select(pf, dict(box=[-3.0, 3.0, -2.0, 2.0], z=[0.0, 3.0]), "s")
+    assert pf.traced and len(ps)
+    tr = pf.trajectories(ps, ("x", "y", "z", "w", "@winterp"))
+    assert tr["z"].shape == (NC, len(ps))
+    np.testing.assert_allclose(tr["w"], tr["@winterp"], atol=1e-4, equal_nan=True)
+    for k in range(NC):
+        ok = np.isfinite(tr["z"][k])
+        low = volume3d.columns(run.heights(k, "msl"), *volume3d._fij(
+            run, tr["x"][k][ok], tr["y"][k][ok]))[:, 0]
+        assert (tr["z"][k][ok] >= low - 1e-4).all()
+    ok = np.isfinite(tr["x"][-1])
+    assert ok.any() and (tr["x"][-1][ok] > tr["x"][0][ok]).all()  # (u > 0 everywhere)
+    assert (tr["z"][-1][ok] > tr["z"][0][ok]).all()  # (w > 0 everywhere)
+    assert P.for_run(run, F) is pf  # (the same files: kept)
+    monkeypatch.setenv("CM1VIEW_TRAJ_MAX_INTERVAL", "120")
+    assert "180 s" in trajcalc.off(run) and P.for_run(run, F) is None and P.offered(run)
+    monkeypatch.setenv("CM1VIEW_TRAJ_MAX_INTERVAL", "0")  # (0: never off)
+    assert trajcalc.off(run) == ""

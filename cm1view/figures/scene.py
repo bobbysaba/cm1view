@@ -7,7 +7,7 @@ import numpy as np
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from ..core import parcels as P
+from ..core import parcels as P, volume3d
 from ..viewer.numinput import FloatInput
 from .cards import (FRAMES, SCENE_ARROWS, SCENE_BARS, SCENE_BG, SCENE_FLOOR_CMAPS,
                     SCENE_FLOOR_RANGE, SCENE_LIGHTS, SCENE_PROJ, SCENE_RES, SCENE_STREAM_BY,
@@ -42,7 +42,9 @@ class FigureScene:
         floor0 = "cref" if "cref" in F else ("dbz" if "dbz" in F else next(iter(F.defs)))
         # (keys: the spec's; scene3d, ground, stream, camera and look)
         self.sc_w = dict(
-            ztop=_f("Top (km)", min(15.0, float(np.floor(run.z[-1]))), step=0.5, start=0.5),
+            ztop=_f("Top (km MSL)" if run.terrain else "Top (km)",
+                    min(15.0, float(np.floor(volume3d.top_height(run)))), step=0.5,
+                    start=0.5),
             exag=_f("Vertical exaggeration", 2.0, step=0.5, start=0.25),
             smooth=_f("Smoothing σ (grid cells)", 0.75, step=0.25, start=0.0),
             res=pn.widgets.Select(name="Resolution", options=SCENE_RES, value=0,

@@ -38,7 +38,12 @@ linear in time between the values of the two fields at the parcel's position the
 Parcel times outside the 3D outputs' span are NaN.  Each 3D time's field is read once
 for all parcel times around it; the result is cached like a trajectory (keyed also by
 the 3D files, so rewritten files are sampled again).  Heights: the parcel's z against
-the grid's z, which are the same without terrain.
+the grid's z, which are the same without terrain; on a terrain run against the level
+heights of the parcel's column at that 3D time (z above sea level).
+
+Traced trajectories.  A model that writes no parcel output (WoFS: run.traced_parcels)
+gets parcels cm1view traces itself through the 3D winds (core.trajcalc), written in
+this same layout to the cache folder and read by the same code (trajcalc.Traced).
 
 The w budget.  Along a parcel, Dw/Dt = b + vpg + the rest (subgrid mixing, numerical
 diffusion), with CM1's parcel buoyancy b and vertical perturbation pressure gradient
@@ -89,7 +94,8 @@ def cache_dir():
 
 
 def find_files(run_path, pattern=None):
-    """The parcel output files of a run folder (Settings: parcel_glob)."""
+    """The parcel output files of a run folder (Settings: parcel_glob).  (A run whose
+    model writes none, run.traced_parcels, gets them traced instead: core.trajcalc.)"""
     if pattern is None:
         from .. import config
         pattern = config.get("parcel_glob")
@@ -99,18 +105,34 @@ def find_files(run_path, pattern=None):
 _open = {}  # run path -> ParcelFile
 
 
+def offered(run):
+    """Whether the run has parcels to choose: parcel output files, or (a model that
+    writes none: run.traced_parcels) trajectories cm1view traces itself, which may be
+    turned off for the run (trajcalc.off says why; for_run is then None)."""
+    return getattr(run, "traced_parcels", False) or bool(find_files(run.path))
+
+
 def for_run(run, fields=None):
     """The run's ParcelFile (reopened when its files change), or None without any.
-    fields: the run's Fields (for "@<field>" variables; made when first needed if not
-    given)."""
-    files = find_files(run.path)
-    if not files:
+    A run whose model writes no parcels (run.traced_parcels) gets trajectories traced
+    through its 3D winds (trajcalc.Traced) unless they are turned off for it
+    (trajcalc.off).  fields: the run's Fields (for "@<field>" variables; made when first
+    needed if not given)."""
+    traced = getattr(run, "traced_parcels", False)
+    files = [] if traced else find_files(run.path)
+    if traced:
+        from . import trajcalc
+        if trajcalc.off(run):
+            return None
+        sig = trajcalc.signature(run)
+    elif not files:
         return None
-    sig = _signature(files)
+    else:
+        sig = _signature(files)
     with _lock:
         pf = _open.get(run.path)
         if pf is None or pf.sig != sig:
-            pf = _open[run.path] = ParcelFile(files)
+            pf = _open[run.path] = trajcalc.Traced(run, sig) if traced else ParcelFile(files)
         if fields is not None:
             pf.attach(fields)
         elif pf._run is not run:
@@ -183,6 +205,10 @@ class ParcelFile:
         self.times = np.asarray(times, dtype=np.float64)
         self.paths = [p for p, _ in parts]
         self.sig = _signature(self.paths)
+        self._fresh()
+
+    def _fresh(self):
+        """What is kept in memory (none of it yet)."""
         self._pos = OrderedDict()  # time index -> (x, y, z) km of every parcel
         self._traj = OrderedDict()  # (set key, name) -> (nt, n) array
         self._traj_bytes = 0
@@ -492,8 +518,8 @@ class ParcelFile:
             ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
             vals = np.full(x.shape, np.nan, dtype=np.float32)
             if ok.any():
-                vals[ok] = F.at_points(field, k, lambda vol: sample_points(
-                    run, vol, x[ok], y[ok], z[ok]))
+                vals[ok] = F.at_points(field, k, lambda vol, k=k: sample_points(
+                    run, vol, x[ok], y[ok], z[ok], k))
             acc[ii] += ww[:, None] * vals
             seen[ii] = True
             if progress is not None:

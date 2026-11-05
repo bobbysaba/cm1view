@@ -213,7 +213,8 @@ class View3DPanel:
             fig = volume3d.scene_figure(meshes, sc["ground"], spec["box"], spec["ztop"],
                                         spec["exag"], title, vectors=sc["vecs"], stream=stream,
                                         camera=self.v3_cam.value, dragmode=self.v3_drag.value,
-                                        revision=f"cam{self._cam_rev}")
+                                        revision=f"cam{self._cam_rev}",
+                                        terrain=sc.get("terrain"))
             nf = sum(len(m["faces"]) for m in meshes)
             s3 = dict(t=t, stream=stream, off=sc["off"], frame=spec["stream"]["frame"],
                       box=tuple(spec["box"]), ztop=spec["ztop"])
@@ -546,7 +547,7 @@ class View3DPanel:
                 s -= s[sd - a]
 
                 def samp(vol):
-                    return volume3d.sample_points(run, vol, x, y, z)
+                    return volume3d.sample_points(run, vol, x, y, z, t)
 
                 if name in ("_ws", "_speed"):
                     u = samp(run.volume("uinterp", t)) - cu

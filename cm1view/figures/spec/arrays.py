@@ -131,7 +131,7 @@ def scene_request(run, spec, fixes, t):
         sb = stream.get("seed_box")
         if sb:
             stream["seed_box"] = [sb[0] + dx, sb[1] + dx, sb[2] + dy, sb[3] + dy]
-    ztop = min(float(sc["ztop"]), float(run.z[-1]))
+    ztop = min(float(sc["ztop"]), volume3d.top_height(run))  # (terrain: km MSL)
     return dict(t=t, box=box, ztop=ztop, exag=float(sc["exag"]),
                 smooth=float(sc["smooth"]), res=int(sc["res"]), isos=_on(sc["isos"]),
                 vecs=_on(sc["vecs"]), stream=stream, ground=dict(sc["ground"]),

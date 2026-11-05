@@ -9,9 +9,13 @@ also returns (to_pixels).
 A scene panel's data (scene_data: flat names, so they go in the figure's .npz)
   nmesh, M<n>_x, M<n>_y, M<n>_z, M<n>_f   isosurface n: vertices (km) and triangles
   M<n>_color, M<n>_op, M<n>_name          its colour, opacity and legend text
-  G_x, G_y, G_a, G_lo, G_hi, G_cmap, G_rev, G_title   the floor (when on)
-  nvec, V<n>_x, V<n>_y, V<n>_z, V<n>_color, V<n>_name  vector plane n
-  S_x, S_y, S_z, S_w, S_n, S_by, S_seed, S_seed_z, S_name  the streamlines (when on)
+  G_x, G_y, G_a, G_lo, G_hi, G_cmap, G_rev, G_title   the floor (when on); G_z its
+                heights on a terrain run (it lies on the ground)
+  T_x, T_y, T_z the ground of a terrain run (km MSL; the scene is then above sea level)
+  nvec, V<n>_x, V<n>_y, V<n>_z, V<n>_color, V<n>_name  vector plane n (V<n>_z: one
+                height, or one per point on a terrain run)
+  S_x, S_y, S_z, S_w, S_n, S_by, S_seed, S_seed_z, S_name  the streamlines (when on);
+                S_ring the seed box outline over a terrain run's ground ((m, 3) km)
   P<n>_px, P<n>_py, P<n>_pz, P<n>_pv   parcel entry n's tails (NaN-separated, km; pv:
                 the value it is coloured by), P<n>_hx, _hy, _hz, _hv its heads; n counts
                 the spec's scene3d["parcels"] (off ones too), whose look they are drawn in
@@ -213,16 +217,16 @@ def _arrows(vec, ex, radius, style):
     import pyvista as pv
 
     X, Y = np.asarray(vec["x"], np.float64), np.asarray(vec["y"], np.float64)
-    z = float(vec["z"]) * ex
+    Z = np.broadcast_to(np.asarray(vec["z"], np.float64) * ex, X.shape)  # (terrain: each)
     if style == "lines":
-        pd = _polylines(X, Y, np.full_like(X, z))
+        pd = _polylines(X, Y, Z)
         return None if pd is None else pd.tube(radius=radius, n_sides=8)
     # surface_vectors: 7 entries per arrow, tail then tip first
     tail = np.stack([X[0::7], Y[0::7]], axis=1)
     tip = np.stack([X[1::7], Y[1::7]], axis=1)
     if not len(tail):
         return None
-    pts = np.column_stack([tail, np.full(len(tail), z)])
+    pts = np.column_stack([tail, Z[0::7]])
     pd = pv.PolyData(pts)
     pd["v"] = np.column_stack([tip - tail, np.zeros(len(tail))])
     geom = pv.Arrow(start=(0, 0, 0), direction=(1, 0, 0), tip_length=0.32,
@@ -294,13 +298,20 @@ def render(arrays, scene, size_px, dpi=None):
         pl.set_background("white" if transparent else lk["background"] or "white")
 
         g = arrays.get("ground")
+        tr = arrays.get("terrain")
         if g is not None:
             X, Y = np.meshgrid(np.asarray(g["x"], float), np.asarray(g["y"], float))
-            grid = pv.StructuredGrid(X, Y, np.zeros_like(X))
+            Z = np.zeros_like(X) if g.get("z") is None else np.asarray(g["z"], float) * ex
+            grid = pv.StructuredGrid(X, Y, Z)
             rgb = floor_rgb(g)  # (ny, nx, 3), StructuredGrid points in Fortran order
             grid["rgb"] = np.stack([rgb[..., k].ravel(order="F") for k in range(3)], axis=1)
             pl.add_mesh(grid, scalars="rgb", rgb=True, lighting=False,
                         show_scalar_bar=False)
+        elif tr is not None:  # a terrain run's ground, plain
+            X, Y = np.meshgrid(np.asarray(tr["x"], float), np.asarray(tr["y"], float))
+            pl.add_mesh(pv.StructuredGrid(X, Y, np.asarray(tr["z"], float) * ex),
+                        color="#a8a593", smooth_shading=True, ambient=0.3, diffuse=0.7,
+                        specular=0.0)
 
         for m in arrays.get("meshes") or []:
             pts = np.column_stack([m["x"], m["y"], np.asarray(m["z"], np.float64) * ex])
@@ -329,8 +340,10 @@ def render(arrays, scene, size_px, dpi=None):
             if lk["seed_box"] and s.get("seed_box") is not None:
                 s0, s1, t0, t1 = s["seed_box"]
                 zs = float(s["seed_z"]) * ex
-                ring = pv.lines_from_points(np.array(
-                    [[s0, t0, zs], [s1, t0, zs], [s1, t1, zs], [s0, t1, zs], [s0, t0, zs]]))
+                pts = (np.array([[s0, t0, zs], [s1, t0, zs], [s1, t1, zs], [s0, t1, zs],
+                                 [s0, t0, zs]]) if s.get("seed_ring") is None
+                       else np.asarray(s["seed_ring"], np.float64) * [1, 1, ex])
+                ring = pv.lines_from_points(pts)
                 pl.add_mesh(ring, color="#64748b", line_width=lw)
 
         pt = (float(dpi) if dpi else min(w, h) / 4.5) / 72.0  # (pixels per point)
@@ -395,8 +408,15 @@ def scene_data(arrays, box, ztop):
                  G_a=f32(g["a"]), G_lo=float(g["lo"]), G_hi=float(g["hi"]),
                  G_cmap=str(g["cmap"]), G_rev=int(bool(g["rev"])),
                  G_title=str(g.get("title", "")))
+        if g.get("z") is not None:
+            d["G_z"] = f32(g["z"])
+    tr = arrays.get("terrain")
+    if tr is not None:
+        d.update(T_x=np.asarray(tr["x"], np.float64), T_y=np.asarray(tr["y"], np.float64),
+                 T_z=f32(tr["z"]))
     for n, v in enumerate(vecs):
-        d.update({f"V{n}_x": f32(v["x"]), f"V{n}_y": f32(v["y"]), f"V{n}_z": float(v["z"]),
+        d.update({f"V{n}_x": f32(v["x"]), f"V{n}_y": f32(v["y"]),
+                  f"V{n}_z": float(v["z"]) if np.ndim(v["z"]) == 0 else f32(v["z"]),
                   f"V{n}_color": str(v["color"]), f"V{n}_name": str(v.get("name", ""))})
     s = arrays.get("stream")
     if s is not None:
@@ -405,6 +425,8 @@ def scene_data(arrays, box, ztop):
                  S_seed_z=float(s.get("seed_z", 0.0)), S_name=str(s.get("name", "")))
         if s.get("seed_box") is not None:
             d["S_seed"] = np.asarray(s["seed_box"], np.float64)
+        if s.get("seed_ring") is not None:
+            d["S_ring"] = f32(s["seed_ring"])
     return d
 
 
@@ -417,8 +439,12 @@ def scene_arrays(d):
     if "G_a" in d:
         ground = dict(x=d["G_x"], y=d["G_y"], a=np.asarray(d["G_a"], np.float64),
                       lo=float(d["G_lo"]), hi=float(d["G_hi"]), cmap=str(d["G_cmap"]),
-                      rev=bool(d["G_rev"]), title=str(d.get("G_title", "")))
-    vecs = [dict(x=d[f"V{n}_x"], y=d[f"V{n}_y"], z=float(d[f"V{n}_z"]),
+                      rev=bool(d["G_rev"]), title=str(d.get("G_title", "")),
+                      z=d.get("G_z"))
+    terrain = (dict(x=d["T_x"], y=d["T_y"], z=np.asarray(d["T_z"], np.float64))
+               if "T_z" in d else None)
+    vecs = [dict(x=d[f"V{n}_x"], y=d[f"V{n}_y"],
+                 z=float(d[f"V{n}_z"]) if np.ndim(d[f"V{n}_z"]) == 0 else d[f"V{n}_z"],
                  color=str(d[f"V{n}_color"]), name=str(d.get(f"V{n}_name", "")))
             for n in range(int(d.get("nvec", 0)))]
     stream = None
@@ -426,8 +452,8 @@ def scene_arrays(d):
         stream = dict(x=d["S_x"], y=d["S_y"], z=d["S_z"], w=d["S_w"], n=int(d["S_n"]),
                       color_by=str(d["S_by"]), seed_z=float(d["S_seed_z"]),
                       seed_box=tuple(float(v) for v in d["S_seed"]) if "S_seed" in d else None,
-                      name=str(d.get("S_name", "")))
-    return dict(meshes=meshes, ground=ground, vecs=vecs, stream=stream)
+                      seed_ring=d.get("S_ring"), name=str(d.get("S_name", "")))
+    return dict(meshes=meshes, ground=ground, vecs=vecs, stream=stream, terrain=terrain)
 
 
 def scene_parcels(d, sc):
@@ -466,6 +492,8 @@ def scene_spec(d, V):
     if not lk["background"]:
         bg = V.get("background", "white")
         lk["background"] = "transparent" if bg == "none" else bg
+    if "T_z" in d and list(lk["labels"])[2:3] == [LOOK["labels"][2]]:
+        lk["labels"] = list(lk["labels"][:2]) + ["z (km MSL)"]  # (a terrain run's scene)
     return dict(sc, look=lk)
 
 

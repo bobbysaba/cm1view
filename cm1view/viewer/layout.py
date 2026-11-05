@@ -6,6 +6,7 @@ A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widg
 import numpy as np
 import panel as pn
 
+from ..core import volume3d
 from ..core.fields import CMAPS
 from .zoomview import ParamTable
 from ..theme import BG, CSS, GRID, PANEL
@@ -63,8 +64,11 @@ class Layout:
                                           value=op, width=130),
             ))
         ztop = float(np.floor(run.z[-1]))
-        self.v3_ztop = pn.widgets.FloatSlider(name="Top (km)", start=2, end=ztop, step=0.5,
-                                              value=min(15.0, ztop), width=150)
+        # (a terrain run's scene is above sea level: its top over the highest ground)
+        z3top = float(np.floor(volume3d.top_height(run))) if run.terrain else ztop
+        self.v3_ztop = pn.widgets.FloatSlider(name="Top (km MSL)" if run.terrain else
+                                              "Top (km)", start=2, end=z3top, step=0.5,
+                                              value=min(15.0, z3top), width=150)
         self.v3_exag = pn.widgets.FloatSlider(name="Vertical exaggeration", start=1, end=6,
                                               step=0.5, value=2, width=150)
         self.v3_smooth = pn.widgets.FloatSlider(name="Smoothing σ", start=0, end=3,

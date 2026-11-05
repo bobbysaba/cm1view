@@ -1,5 +1,14 @@
 """The 3D scene: isosurfaces, floor, vectors and streamlines computed server side
-(build_scene), and the viewer's Plotly WebGL figure of them (scene_figure)."""
+(build_scene), and the viewer's Plotly WebGL figure of them (scene_figure).
+
+Heights.  On a flat run z is the same everywhere: the scene's z is run.z (above ground
+and sea level alike).  On a run whose levels follow the terrain (run.terrain) the
+scene is above sea level: every column has its own level heights at each time
+(run.heights(t, "msl")), which map a height to a fractional level column by column
+(columns, frac_level); isosurfaces are found on the model levels and their vertices
+placed at those heights; the terrain is drawn as a surface (the floor lies on it); the
+floor's, the vectors' and the streamline seeds' heights are above the ground there.
+Flat runs take exactly the old path."""
 
 import numpy as np
 from scipy.ndimage import gaussian_filter, map_coordinates
@@ -30,17 +39,78 @@ def box_indices(run, box):
     return i0, i1 + 1, j0, j1 + 1
 
 
+def _fij(run, x, y):
+    """Fractional grid indices (i, j) of points x, y (km)."""
+    return ((np.asarray(x, np.float64) - run.xh[0]) / (run.dx / 1000.0),
+            (np.asarray(y, np.float64) - run.yh[0]) / (run.dy / 1000.0))
+
+
+def columns(H, fi, fj):
+    """(n, nk) columns of an (nk, nj, ni) array H, bilinear at fractional grid points
+    (fi, fj), held at the edges (a 2D H: (n,) values)."""
+    H = np.asarray(H)
+    flat = H.ndim == 2
+    if flat:
+        H = H[None]
+    nk, nj, ni = H.shape
+    fi = np.clip(np.nan_to_num(np.asarray(fi, np.float64)), 0.0, ni - 1)
+    fj = np.clip(np.nan_to_num(np.asarray(fj, np.float64)), 0.0, nj - 1)
+    i0 = np.minimum(np.floor(fi).astype(np.intp), max(ni - 2, 0))
+    j0 = np.minimum(np.floor(fj).astype(np.intp), max(nj - 2, 0))
+    i1, j1 = np.minimum(i0 + 1, ni - 1), np.minimum(j0 + 1, nj - 1)
+    wi, wj = np.clip(fi - i0, 0.0, 1.0), np.clip(fj - j0, 0.0, 1.0)
+    a = ((1 - wi) * (1 - wj) * H[:, j0, i0] + wi * (1 - wj) * H[:, j0, i1]
+         + (1 - wi) * wj * H[:, j1, i0] + wi * wj * H[:, j1, i1])
+    return a[0] if flat else a.T
+
+
+def frac_level(Hc, z):
+    """Fractional level index of heights z (n,) in columns Hc (n, nk) whose heights
+    increase upward, held at the lowest and highest levels (as np.interp)."""
+    Hc = np.asarray(Hc, np.float64)
+    z = np.asarray(z, np.float64)
+    n, nk = Hc.shape
+    if nk == 1:
+        return np.zeros(n)
+    k1 = np.clip((Hc < z[:, None]).sum(axis=1), 1, nk - 1)
+    r = np.arange(n)
+    z0, z1 = Hc[r, k1 - 1], Hc[r, k1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.clip((z - z0) / (z1 - z0), 0.0, 1.0)
+    return k1 - 1 + np.where(np.isfinite(w), w, 0.0)
+
+
+def level_heights(run):
+    """Heights (km) the stride and level cut go by without a time: run.z, on a terrain
+    run above sea level over the lowest ground (so no level is left out)."""
+    z = np.asarray(run.z, np.float64)
+    return z + float(np.min(run.terrain_height())) if run.terrain else z
+
+
+def top_height(run):
+    """The highest height (km) a scene can reach: run.z[-1], on a terrain run above sea
+    level over the highest ground."""
+    return float(run.z[-1]) + (float(np.max(run.terrain_height())) if run.terrain else 0.0)
+
+
 def auto_stride(run, box, zmax, max_voxels):
     i0, i1, j0, j1 = box_indices(run, box)
-    kmax = int(np.searchsorted(run.z, zmax)) + 1
+    kmax = int(np.searchsorted(level_heights(run), zmax)) + 1
     n = (i1 - i0) * (j1 - j0) * kmax
     return max(1, int(np.ceil(np.sqrt(n / max_voxels))))
 
 
-def isosurface(run, vol, box, value, stride, smooth, zmax):
-    """Vertices (km) and faces of the `value` isosurface inside `box`."""
+def isosurface(run, vol, box, value, stride, smooth, zmax, H=None):
+    """Vertices (km) and faces of the `value` isosurface inside `box`.  H: a terrain
+    run's level heights (km MSL, (nk, nj, ni)) at the time: the surface is found on the
+    model levels and its vertices placed at those heights."""
     i0, i1, j0, j1 = box_indices(run, box)
-    kmax = min(run.nk, int(np.searchsorted(run.z, zmax)) + 1)
+    if H is None:
+        kmax = min(run.nk, int(np.searchsorted(run.z, zmax)) + 1)
+    else:  # (up to the first level above zmax everywhere in the box)
+        Hb = H[:, j0:j1:stride, i0:i1:stride]
+        low = Hb.reshape(Hb.shape[0], -1).min(axis=1) if Hb.size else np.asarray(run.z)
+        kmax = min(run.nk, int(np.searchsorted(low, zmax)) + 1)
     sub = np.asarray(vol[:kmax, j0:j1:stride, i0:i1:stride], dtype=np.float32)
     if smooth > 0:
         sub = gaussian_filter(sub, smooth)
@@ -54,7 +124,11 @@ def isosurface(run, vol, box, value, stride, smooth, zmax):
             break
         step += 1
     kz, jy, ix = verts.T
-    z = np.interp(kz, np.arange(kmax), run.z[:kmax])
+    if H is None:
+        z = np.interp(kz, np.arange(kmax), run.z[:kmax])
+    else:
+        z = map_coordinates(np.asarray(Hb[:kmax], np.float64), verts.T, order=1,
+                            mode="nearest")
     y = run.yh[j0] + jy * stride * run.dy / 1000.0
     x = run.xh[i0] + ix * stride * run.dx / 1000.0
     return dict(x=x.astype(np.float32), y=y.astype(np.float32), z=z.astype(np.float32),
@@ -86,7 +160,7 @@ def surface_vectors(run, u, v, box, n_across=20, ref_speed=20.0):
 
 
 def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
-                direction="forward", offset=(0.0, 0.0), seed_box=None):
+                direction="forward", offset=(0.0, 0.0), seed_box=None, H=None):
     """Instantaneous 3D streamlines of (U - offset[0], V - offset[1], W).
 
     U, V, W are full (nk, nj, ni) volumes in m/s.  Seeds form an n_seed x n_seed grid
@@ -96,6 +170,9 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     point, where a direction-only tracer would zig-zag).  Lines that reach the lowest
     level slide along it.  Integration is RK2 on the flow's direction with a step of
     0.6 dx, shortened so it climbs at most 0.8 of the local level spacing.
+    H: a terrain run's level heights (km MSL) at the time: z is then above sea level
+    (ztop too), seed_z above the ground under each seed, and the lowest level is each
+    column's own.
     Returns x, y, z (km), w (m/s) as NaN-separated arrays, plus `segs`: per line
     (first, end, seed) indices into those arrays, or None."""
     x0, x1, y0, y1 = box
@@ -111,10 +188,26 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     hi = np.array([x1, y1, ztop])
     cu, cv = offset
 
+    def cols(p):  # (terrain) the level heights of the points' columns
+        return columns(H, *_fij(run, p[:, 0], p[:, 1]))
+
+    def lowest(p):  # the lowest level's height under the points
+        return zlo if H is None else cols(p)[:, 0]
+
+    def spacing(p):  # the level spacing at the points
+        if H is None:
+            return np.interp(p[:, 2], run.z, dz)
+        Hc = cols(p)
+        if Hc.shape[1] == 1:
+            return np.full(len(p), ds)
+        k0 = np.clip(np.floor(frac_level(Hc, p[:, 2])).astype(np.intp), 0, Hc.shape[1] - 2)
+        r = np.arange(len(p))
+        return Hc[r, k0 + 1] - Hc[r, k0]
+
     def vel(p):
         fi = (p[:, 0] - run.xh[0]) / dxk
         fj = (p[:, 1] - run.yh[0]) / dyk
-        fk = np.interp(p[:, 2], run.z, kidx)
+        fk = np.interp(p[:, 2], run.z, kidx) if H is None else frac_level(cols(p), p[:, 2])
         c = np.stack([fk, fj, fi])
         u = map_coordinates(U, c, order=1, mode="nearest") - cu
         v = map_coordinates(V, c, order=1, mode="nearest") - cv
@@ -130,6 +223,9 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     gx, gy = np.meshgrid(np.linspace(s0 + mx, s1 - mx, n_seed),
                          np.linspace(t0 + my, t1 - my, n_seed))
     seeds = np.stack([gx.ravel(), gy.ravel(), np.full(gx.size, max(seed_z, zlo))], axis=1)
+    if H is not None:  # (seed_z above the ground under each seed)
+        g = columns(run.terrain_height(), *_fij(run, seeds[:, 0], seeds[:, 1]))
+        seeds[:, 2] = np.maximum(g + seed_z, lowest(seeds))
 
     lines, seed_col = [], 0
     for sign in {"forward": (1,), "backward": (-1,), "both": (-1, 1)}[direction]:
@@ -139,14 +235,14 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
         track = [p.copy()]
         for _ in range(nstep):
             d1, sp = unit(vel(p))
-            dzl = np.interp(p[:, 2], run.z, dz)
+            dzl = spacing(p)
             h = np.minimum(ds, 0.8 * dzl / np.maximum(np.abs(d1[:, 2]), 1e-6))
             h = np.minimum(h, length - done)[:, None]
             mid = p + sign * 0.5 * h * d1
-            mid[:, 2] = np.maximum(mid[:, 2], zlo)
+            mid[:, 2] = np.maximum(mid[:, 2], lowest(mid))
             d2, _ = unit(vel(mid))
             q = p + sign * h * d2
-            q[:, 2] = np.maximum(q[:, 2], zlo)  # slide along the lowest level
+            q[:, 2] = np.maximum(q[:, 2], lowest(q))  # slide along the lowest level
             alive &= (sp > 0.3) & (np.einsum("ij,ij->i", d1, d2) > 0.0)
             # a step that leaves the region ends the line on the region's edge
             dq = q - p
@@ -196,11 +292,20 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
                 w=w.astype(np.float32), n=len(xs), segs=np.array(segs, dtype=np.int64))
 
 
-def sample_points(run, vol, x, y, z):
-    """Trilinear values of a (nk, nj, ni) volume at points (km)."""
+def sample_points(run, vol, x, y, z, t=None, H=None):
+    """Trilinear values of a (nk, nj, ni) volume at points (km).  On a terrain run z is
+    above sea level, placed among the levels of the point's column at time t (or of
+    the level heights H, km MSL, given instead)."""
     fi = (np.asarray(x) - run.xh[0]) / (run.dx / 1000.0)
     fj = (np.asarray(y) - run.yh[0]) / (run.dy / 1000.0)
-    fk = np.interp(z, run.z, np.arange(run.nk, dtype=np.float64))
+    if not run.terrain:
+        fk = np.interp(z, run.z, np.arange(run.nk, dtype=np.float64))
+    else:
+        if H is None:
+            if t is None:
+                raise ValueError("a terrain run's points need the time (their heights)")
+            H = run.heights(t, "msl")
+        fk = frac_level(columns(H, fi, fj), np.ravel(z)).reshape(np.shape(z))
     return map_coordinates(vol, np.stack([fk, fj, fi]), order=1, mode="nearest")
 
 
@@ -227,7 +332,8 @@ def floor_surface(run, F, fs, box, t, fstorm):
     cmap = d.cmap if fs["cmap"] == "Field default" else fs["cmap"]
     title = d.title
     if d.ndim == 3:
-        title += f' @ {max(fs["z"], float(run.z[0])) * 1000:.0f} m'
+        title += f' @ {max(fs["z"], float(run.z[0])) * 1000:.0f} m' + \
+            (" AGL" if run.terrain else "")
     if d.storm:
         title += f" ({fstorm[1]})"
     if fs["range"] == "custom" and fs["hi"] > fs["lo"]:
@@ -236,8 +342,44 @@ def floor_surface(run, F, fs, box, t, fstorm):
         lo, hi = 0.0, 75.0  # the stepped NWS scale is laid out for 0-75 dBZ
     else:
         lo, hi = floor_range(a, d.vrange, d.diverging, fs["range"])
-    return dict(x=run.xh[i0:i1:gs], y=run.yh[j0:j1:gs], a=a, lo=lo, hi=hi, title=title,
-                cmap=cmap, rev=fs["rev"], colorscale=floor_colorscale(cmap, fs["rev"]))
+    out = dict(x=run.xh[i0:i1:gs], y=run.yh[j0:j1:gs], a=a, lo=lo, hi=hi, title=title,
+               cmap=cmap, rev=fs["rev"], colorscale=floor_colorscale(cmap, fs["rev"]))
+    if run.terrain:  # (lying on the ground)
+        out["z"] = terrain_surface(run, box)["z"]
+    return out
+
+
+def terrain_surface(run, box):
+    """A terrain run's ground over the region (km MSL), thinned like the floor (about 300
+    points across): dict(x, y, z); None on a flat run."""
+    if not run.terrain:
+        return None
+    i0, i1, j0, j1 = box_indices(run, box)
+    gs = max(1, int(np.ceil(max(i1 - i0, j1 - j0) / 300)))
+    z = np.asarray(run.terrain_height(), np.float64)[j0:j1:gs, i0:i1:gs]
+    return dict(x=run.xh[i0:i1:gs], y=run.yh[j0:j1:gs], z=z)
+
+
+def ground_at(run, x, y):
+    """The ground's height (km MSL) at points x, y (km): 0 on a flat run; NaN where x
+    or y is."""
+    x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
+    if not run.terrain:
+        return np.zeros(np.broadcast(x, y).shape)
+    g = columns(run.terrain_height(), *_fij(run, x, y))
+    return np.where(np.isfinite(x) & np.isfinite(y), g, np.nan)
+
+
+def seed_ring(run, seed_box, seed_z, n=24):
+    """(m, 3) points (km MSL) of a terrain run's seed box outline at seed_z km above the
+    ground (at least the lowest level), n points a side."""
+    s0, s1, t0, t1 = seed_box
+    f = np.linspace(0.0, 1.0, n)
+    x = np.concatenate([s0 + (s1 - s0) * f, np.full(n, s1), s1 - (s1 - s0) * f,
+                        np.full(n, s0)])
+    y = np.concatenate([np.full(n, t0), t0 + (t1 - t0) * f, np.full(n, t1),
+                        t1 - (t1 - t0) * f])
+    return np.stack([x, y, ground_at(run, x, y) + seed_z], axis=1)
 
 
 def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
@@ -251,7 +393,10 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
     caller across calls; the streamlines are traced again only when what they depend on
     changed (an isosurface or floor edit keeps the same lines).
 
-    Returns dict(meshes, ground, vecs, stream, notes, stride, off)."""
+    On a terrain run everything is above sea level (module notes) and `terrain` is the
+    ground's surface (terrain_surface; None on a flat run).
+
+    Returns dict(meshes, ground, vecs, stream, notes, stride, off, terrain)."""
     t, box, ztop = scene["t"], scene["box"], scene["ztop"]
     ss = scene["stream"]
     names = []
@@ -259,14 +404,18 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
         names += F.native_deps(iso["var"])
     if ss["on"]:
         names += ["uinterp", "vinterp", "winterp"]
+    need_h = run.terrain and bool(scene["isos"] or ss["on"])
+    if need_h and "zmsl" in run.vars:
+        names += ["zmsl"]  # (the levels' heights: run.heights)
     if not run.load_volumes(names, t, progress=progress, cancelled=cancelled):
         return None
+    H = run.heights(t, "msl") if need_h else None
     stride = scene["res"] or auto_stride(run, box, ztop, 12e6)
     meshes, notes = [], []
     for iso in scene["isos"]:
         d = F[iso["var"]]
         m = isosurface(run, F.volume(iso["var"], t, scene["fstorm"][0]), box, iso["val"],
-                       stride, scene["smooth"], ztop)
+                       stride, scene["smooth"], ztop, H)
         name = f'{d.label} = {iso["val"]:g} {d.units}'
         if d.storm:
             name += f' ({scene["fstorm"][1]})'
@@ -285,10 +434,13 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
         X, Y, _ = surface_vectors(run, u, v, box, vs["density"], vs["ref"])
         zlev = max(vs["level"], float(run.z[0]))
         # drawn at least 2% of the scene height up: right at z = 0 the opaque
-        # reflectivity floor hides them (depth-buffer ties); label keeps zlev
-        vecs.append(dict(x=X, y=Y, z=max(zlev, 0.02 * ztop), color=vs["color"],
+        # reflectivity floor hides them (depth-buffer ties); label keeps zlev.  On a
+        # terrain run that far above the ground under each point (z per point)
+        zd = max(zlev, 0.02 * ztop)
+        vecs.append(dict(x=X, y=Y, z=ground_at(run, X, Y) + zd if run.terrain else zd,
+                         color=vs["color"],
                          name=f'{vectors.label(vs["q"], vs["frame"])} @ '
-                              f'{zlev * 1000:.0f} m'))
+                              f'{zlev * 1000:.0f} m' + (" AGL" if run.terrain else "")))
     off = frame_offset(run, ss["frame"], scene["storm"])
     stream = None
     if ss["on"]:
@@ -299,7 +451,8 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
         else:
             stream = streamlines(run, run.volume("uinterp", t), run.volume("vinterp", t),
                                  run.volume("winterp", t), box, ztop, ss["z"], ss["n"],
-                                 ss["length"], ss["dir"], off, seed_box=ss["seed_box"])
+                                 ss["length"], ss["dir"], off, seed_box=ss["seed_box"],
+                               H=H)
             if cache is not None:
                 cache.update(stream_key=key, stream=stream)
         stream = dict(stream) if stream is not None else None
@@ -310,8 +463,10 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
                           seed_z=max(ss["z"], float(run.z[0])),
                           name=f'Streamlines ({vectors.FRAME_SHORT[ss["frame"]]}, '
                                f'{stream["n"]})')
+            if run.terrain and ss["seed_box"] is not None:  # (the outline on the ground)
+                stream["seed_ring"] = seed_ring(run, ss["seed_box"], stream["seed_z"])
     return dict(meshes=meshes, ground=ground, vecs=vecs, stream=stream, notes=notes,
-                stride=stride, off=off)
+                stride=stride, off=off, terrain=terrain_surface(run, box))
 
 def _ref_colorscale():
     """Stepped NWS reflectivity colorscale for 0-75 dBZ (dark below 5)."""
@@ -365,14 +520,17 @@ def stream_color(stream):
 
 
 def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream=None,
-                 camera="oblique", revision="keep", dragmode="turntable"):
+                 camera="oblique", revision="keep", dragmode="turntable", terrain=None):
+    """terrain: a terrain run's ground (terrain_surface): z is then above sea level, the
+    floor lies on the ground, and without a floor the ground is drawn plain."""
     import plotly.graph_objects as go
 
     fig = go.Figure()
     if ground is not None:  # dict(x, y, a, colorscale, lo, hi, title) for the floor
         ga = ground["a"]
         fig.add_trace(go.Surface(
-            x=ground["x"], y=ground["y"], z=np.zeros_like(ga),
+            x=ground["x"], y=ground["y"],
+            z=ground["z"] if ground.get("z") is not None else np.zeros_like(ga),
             surfacecolor=np.nan_to_num(ga, nan=ground["lo"]),
             colorscale=ground["colorscale"], cmin=ground["lo"], cmax=ground["hi"],
             colorbar=dict(title=dict(text=ground["title"], side="top",
@@ -382,6 +540,12 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
                           outlinewidth=0),
             hoverinfo="skip", lighting=dict(ambient=1.0, diffuse=0.0, specular=0.0),
             name="floor"))
+    elif terrain is not None:  # the ground, plain
+        fig.add_trace(go.Surface(
+            x=terrain["x"], y=terrain["y"], z=terrain["z"], surfacecolor=terrain["z"],
+            colorscale=[[0.0, "#3f4a3c"], [1.0, "#8a8f7a"]], showscale=False,
+            hovertemplate="ground %{z:.2f} km<extra></extra>",
+            lighting=dict(ambient=0.6, diffuse=0.6, specular=0.05), name="ground"))
     for m in meshes:
         f = m["faces"]
         fig.add_trace(go.Mesh3d(
@@ -393,7 +557,7 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
             lightposition=dict(x=2000, y=-1000, z=4000)))
     for vec in vectors or []:  # [dict(x, y, z, color, name)]: arrows at a height each
         fig.add_trace(go.Scatter3d(
-            x=vec["x"], y=vec["y"], z=np.full_like(vec["x"], vec["z"]),
+            x=vec["x"], y=vec["y"], z=np.broadcast_to(vec["z"], np.shape(vec["x"])),
             mode="lines", line=dict(color=vec["color"], width=4),
             name=vec["name"], hoverinfo="skip", showlegend=True))
     if stream is not None:
@@ -442,9 +606,12 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
                                    hoverinfo="skip", name="Cursor", showlegend=False))
         if stream.get("seed_box") is not None:  # outline of the seed box at seed height
             s0, s1, t0, t1 = stream["seed_box"]
+            ring = stream.get("seed_ring")  # (a terrain run's: over the ground)
             fig.add_trace(go.Scatter3d(
-                x=[s0, s1, s1, s0, s0], y=[t0, t0, t1, t1, t0],
-                z=[stream["seed_z"]] * 5, mode="lines", hoverinfo="skip",
+                x=[s0, s1, s1, s0, s0] if ring is None else ring[:, 0],
+                y=[t0, t0, t1, t1, t0] if ring is None else ring[:, 1],
+                z=[stream["seed_z"]] * 5 if ring is None else ring[:, 2],
+                mode="lines", hoverinfo="skip",
                 line=dict(color=MUTED, width=2, dash="dash"), name="Seed box",
                 showlegend=True))
     x0, x1, y0, y1 = box
@@ -462,7 +629,8 @@ def scene_figure(meshes, ground, box, zmax, exag, title="", vectors=None, stream
         scene=dict(
             xaxis=dict(ax, title="x (km)", range=[min(x0, x1), max(x0, x1)]),
             yaxis=dict(ax, title="y (km)", range=[min(y0, y1), max(y0, y1)]),
-            zaxis=dict(ax, title="z (km)", range=[0, zmax]),
+            zaxis=dict(ax, title="z (km)" if terrain is None else "z (km MSL)",
+                       range=[0, zmax]),
             aspectmode="manual",
             aspectratio=dict(x=1.0, y=ly / max(lx, 1e-6), z=exag * zmax / max(lx, 1e-6)),
             camera=CAMERAS[camera], dragmode=dragmode,

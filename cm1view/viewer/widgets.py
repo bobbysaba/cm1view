@@ -312,7 +312,7 @@ class Widgets:
             button_style="outline", width=190, height=32, margin=(4, 2))
         tools = ["Sounding", "Cross-section"] + (["Track"] if trk.available(run) else []) \
             + ["Series", "Distribution"] \
-            + (["Parcels"] if parcels.find_files(run.path) else []) + ["3D region"]
+            + (["Parcels"] if parcels.offered(run) else []) + ["3D region"]
         self.mode = ToolRail(tools)
         self.hint = _html()
         # the Sounding tool's click: a point, or a dragged box (area mean)

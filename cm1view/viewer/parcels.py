@@ -248,9 +248,14 @@ class ParcelsPanel:
     def _par_info(self, now=""):
         pf = self.pf
         if pf is None:
+            if getattr(self.run, "traced_parcels", False):  # (turned off: why)
+                from ..core import trajcalc
+                return f'<div class="cv-hint">{trajcalc.off(self.run)}</div>'
             return ('<div class="cv-hint">This run has no parcel output (files named like '
                     'the <code>parcel_glob</code> setting, cm1out_pdata*.nc).</div>')
         run = self.run
+        if hasattr(pf, "describe"):  # (traced by cm1view)
+            now = " " + pf.describe() + now
         t0, t1 = pf.times[0], pf.times[-1]
         dt = np.median(np.diff(pf.times)) if pf.nt > 1 else 0.0
         files = f" in {len(pf.paths)} files" if len(pf.paths) > 1 else ""
@@ -416,7 +421,9 @@ class ParcelsPanel:
         """Select (in the par pool), read the trajectories, then add the set."""
         self.gen["par"] += 1
         g = self.gen["par"]
-        self.par_status.object = '<div class="cv-status"><span class="busy">Choosing parcels…</span></div>'
+        what = ("Tracing trajectories through the 3D winds (once)…"
+                if getattr(self.pf, "traced", True) is False else "Choosing parcels…")
+        self.par_status.object = f'<div class="cv-status"><span class="busy">{what}</span></div>'
         self.pools["par"].submit(self._par_job, rule, name, color, g)
 
     def _par_job(self, rule, name, color, g):

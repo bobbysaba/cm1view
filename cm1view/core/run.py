@@ -220,6 +220,9 @@ class Run:
     # levels that follow the terrain, their heights varying in space and time (heights());
     # z, zf are then one representative profile.  False: flat, z and zf everywhere.
     terrain = False
+    # the model writes no parcel output: cm1view traces trajectories through the 3D winds
+    # (core.trajcalc) instead of looking for parcel files
+    traced_parcels = False
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         self.path = os.path.abspath(path)

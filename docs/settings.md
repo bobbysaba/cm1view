@@ -18,6 +18,7 @@ edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 | `track_patterns` | `{parent}_{name}.csv`, `{name}.csv`, … | track file names tried in each folder |
 | `output_glob` | `cm1out_[0-9]*.nc` | which files are CM1 output |
 | `parcel_glob` | `cm1out_pdata*.nc` | which files hold parcel (trajectory) output; several are joined by time |
+| `traj_max_interval` | `300` | runs without parcel output (WoFS) get trajectories traced through the 3D winds; turned off when the output comes less often than this many seconds (0: never) |
 | `allow_writes_to_output` | off | lets the pressure decomposition write into output files |
 | `column_stride` | auto | CAPE, CIN, LCL, STP and SCP maps on every n-th column (auto: every column up to 500 × 500 points) |
 | `cache_gb`, `workers` | auto | from the job's memory and CPUs (restart to apply) |

@@ -62,6 +62,12 @@ KEYS = [
     Key("parcel_glob", "data", "cm1out_pdata*.nc", "Parcel file names",
         "Which files in a run folder hold parcel (trajectory) output; several (e.g. "
         "one per restart) are joined by time."),
+    Key("traj_max_interval", "data", 300, "Longest output interval for trajectories",
+        "Runs without parcel output (WoFS) get trajectories that cm1view traces through "
+        "the 3D winds, with the winds between two outputs taken as a blend of the two. "
+        "That goes wrong when the outputs are far apart, so trajectories are turned off "
+        "for runs whose output comes less often than this many seconds. 0: never turn "
+        "them off.", kind="int"),
     Key("allow_writes_to_output", "data", False, "Allow writing into output files",
         "Lets the pressure decomposition write its fields into the CM1 output files. "
         "Off: results stay in memory.", kind="bool"),
