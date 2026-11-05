@@ -28,6 +28,10 @@ LABEL_LOCS = LOCS + ["above left", "above right"]  # panel letters, times, run n
 MARK_EXTREMES = {"None": "", "Maximum": "max", "Minimum": "min", "Both": "both"}
 LEVEL_MODES = {"Height (km AGL)": "height", "Model level (k)": "level",
                "Column max": "colmax", "Column min": "colmin"}
+# figures with a run whose levels follow the terrain: heights above sea level too
+TERRAIN_LEVEL_MODES = {"Height (km AGL)": "height", "Height (km MSL)": "msl",
+                       "Model level (k)": "level", "Column max": "colmax",
+                       "Column min": "colmin"}
 FONT_CHOICES = ["sans-serif", "serif", "DejaVu Sans", "Arial", "Helvetica", "Liberation Sans",
                 "Nimbus Sans", "Source Sans Pro", "Roboto", "Open Sans", "Noto Sans",
                 "DejaVu Serif", "Times New Roman", "Liberation Serif", "Nimbus Roman",

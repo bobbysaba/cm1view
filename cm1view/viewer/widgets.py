@@ -12,7 +12,7 @@ from ..core.fields import CMAPS, deriv_options
 from .numinput import FloatInput
 from .picker import RunPicker
 from .settings import ConfirmOverwrite, Settings
-from .ui import FRAMES, LEVEL_MODES, ON, TIME_BAR, ToolRail, _html
+from .ui import FRAMES, LEVEL_MODES, ON, TERRAIN_LEVEL_MODES, TIME_BAR, ToolRail, _html
 
 
 class Widgets:
@@ -234,33 +234,47 @@ class Widgets:
 
     def _level_pair(self, mode="height", value=1.0, compact=False):
         """Level-mode select + level value.  compact: unlabelled spinner for the
-        toolbar (arrow keys / wheel step through levels)."""
+        toolbar (arrow keys / wheel step through levels).  A run whose levels follow
+        the terrain has heights above sea level too (from 0 up to the top over the
+        highest ground)."""
         run = self.run
         ztop = float(np.floor(run.z[-1] * 10) / 10)
+        modes, ground, gtop = LEVEL_MODES, 0.0, 0.0
+        if getattr(run, "terrain", False):
+            hgt = run.terrain_height()
+            modes, ground, gtop = TERRAIN_LEVEL_MODES, float(np.mean(hgt)), float(np.max(hgt))
         if compact:
-            mode_w = pn.widgets.Select(options=LEVEL_MODES, value=mode, width=140, height=32,
+            mode_w = pn.widgets.Select(options=modes, value=mode, width=140, height=32,
                                        margin=(4, 2))
             lvl = FloatInput(start=0.0, end=ztop, step=0.25, value=value,
                                         width=70, height=32, margin=(4, 4))
-            hstep, names = 0.25, ("", "")
+            hstep, names = 0.25, ("", "", "")
         else:
-            mode_w = pn.widgets.Select(name="Level", options=LEVEL_MODES, value=mode,
+            mode_w = pn.widgets.Select(name="Level", options=modes, value=mode,
                                        width=150)
             lvl = pn.widgets.FloatSlider(name="km AGL", start=0.0, end=ztop, step=0.05,
                                          value=value, width=210)
-            hstep, names = 0.05, ("Model level k", "km AGL")
+            hstep, names = 0.05, ("Model level k", "km AGL", "km MSL")
+
+        def agl(m, v):  # (a height of mode m as km AGL: MSL less the mean ground)
+            return v - ground if m == "msl" else v
 
         def on_mode(ev):
             if ev.new == "level":
-                k = run.level_weights(lvl.value)[0] if ev.old == "height" else 0
+                k = run.level_weights(agl(ev.old, lvl.value))[0] \
+                    if ev.old in ("height", "msl") else 0
                 lvl.param.update(start=0, end=run.nk - 1, step=1, value=float(k))
                 if names[0]:
                     lvl.name = names[0]
-            elif ev.new == "height":
-                z = float(run.z[int(lvl.value)]) if ev.old == "level" else 1.0
-                lvl.param.update(start=0.0, end=ztop, step=hstep, value=round(z, 2))
-                if names[1]:
-                    lvl.name = names[1]
+            elif ev.new in ("height", "msl"):
+                msl = ev.new == "msl"
+                z = float(run.z[int(lvl.value)]) if ev.old == "level" else \
+                    agl(ev.old, lvl.value) if ev.old in ("height", "msl") else 1.0
+                end = float(np.floor((ztop + gtop) * 10) / 10) if msl else ztop
+                lvl.param.update(start=0.0, end=end, step=hstep,
+                                 value=round(min(max(z + ground * msl, 0.0), end), 2))
+                if names[2 if msl else 1]:
+                    lvl.name = names[2 if msl else 1]
             lvl.disabled = ev.new in ("colmax", "colmin")
 
         mode_w.param.watch(on_mode, "value")

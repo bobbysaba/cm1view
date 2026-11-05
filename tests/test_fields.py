@@ -308,3 +308,23 @@ def test_cf_style_output_reads_like_cm1s_own(reg, demo_run, tmp_path_factory):
         assert np.array_equal(F.plane(n, T, "height", 1.0), Fr.plane(n, T, "height", 1.0))
     assert export._coord_attrs(run, "z", {})["long_name"] == \
         "nominal height of scalar grid points"
+
+
+def test_flat_run_heights_are_its_levels(reg):
+    """A CM1 run is flat: heights above sea level are those above ground, every column's
+    levels are z, and a map at a height MSL is the one at that height AGL."""
+    run, F = reg.get()
+    assert run.terrain is False
+    assert not run.terrain_height().any() and run.terrain_height().shape == (run.nj, run.ni)
+    Z = run.heights(4)
+    assert Z.shape == (run.nk, run.nj, run.ni)
+    np.testing.assert_allclose(Z[:, 3, 5], run.z)
+    np.testing.assert_allclose(run.heights(4, "msl", w=True)[:, 0, 0], run.zf)
+    np.testing.assert_array_equal(run.read_height("th", 4, 1.3, "msl"),
+                                  run.read_height("th", 4, 1.3))
+    np.testing.assert_array_equal(F.plane("thpert", 4, "msl", 1.3),
+                                  F.plane("thpert", 4, "height", 1.3))
+    k0, k1, w = run.level_weights(1.3)
+    np.testing.assert_allclose(run.read_height("th", 4, 1.3),
+                               (1 - w) * run.read_level("th", 4, k0)
+                               + w * run.read_level("th", 4, k1), rtol=1e-6)

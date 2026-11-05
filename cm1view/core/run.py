@@ -217,6 +217,9 @@ class Run:
 
     model = None  # key in core.models.MODELS
     model_label = "model"
+    # levels that follow the terrain, their heights varying in space and time (heights());
+    # z, zf are then one representative profile.  False: flat, z and zf everywhere.
+    terrain = False
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         self.path = os.path.abspath(path)
@@ -347,15 +350,64 @@ class Run:
         k0 = k1 - 1
         return k0, k1, float((zkm - z[k0]) / (z[k1] - z[k0]))
 
-    def read_height(self, name, t, zkm):
-        """Native field linearly interpolated to a height (km AGL)."""
+    def terrain_height(self):
+        """Ground height (km above sea level), (nj, ni): zero on a flat run."""
+        return np.zeros((self.nj, self.ni))
+
+    def heights(self, t, ref="agl", w=False):
+        """Heights (km) of the model levels at time t, (nk, nj, ni) ((nk + 1, ...) with
+        w: the w levels), above ground ("agl") or sea level ("msl").  A flat run's are
+        z (zf) in every column (a read-only view)."""
+        z = np.asarray(self.zf if w else self.z, dtype=np.float64)
+        return np.broadcast_to(z[:, None, None], (len(z), self.nj, self.ni))
+
+    def column_weights(self, t, zkm, ref="agl"):
+        """Per column (k0, k1, w, under) of height zkm km at time t on a terrain run's
+        levels: f(zkm) = (1-w) f[k0] + w f[k1], held at the lowest and highest level
+        beyond them; under: columns where zkm (msl) is below the ground (else None)."""
+        Z = self.heights(t, ref)
+        nk = Z.shape[0]
+        if nk == 1:
+            k = np.zeros(Z.shape[1:], dtype=np.intp)
+            return k, k, np.zeros(Z.shape[1:]), None
+        k1 = np.clip((Z < zkm).sum(axis=0), 1, nk - 1)
+        k0 = k1 - 1
+        z0 = np.take_along_axis(Z, k0[None], 0)[0]
+        z1 = np.take_along_axis(Z, k1[None], 0)[0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            w = np.clip((zkm - z0) / (z1 - z0), 0.0, 1.0)
+        w = np.where(np.isfinite(w), w, 0.0)
+        under = zkm < self.terrain_height() if ref == "msl" else None
+        return k0, k1, w, under
+
+    def interp_height(self, level, t, zkm, ref="agl"):
+        """level(k) -> (nj, ni) plane, linearly interpolated to height zkm km above
+        ground ("agl") or sea level ("msl"): on a flat run between two levels; on a
+        terrain run column by column, reading only the levels it needs (NaN under the
+        ground)."""
+        if not self.terrain:
+            k0, k1, w = self.level_weights(zkm)
+            a = level(k0)
+            if w == 0.0 or k1 == k0:
+                return a
+            return (1.0 - w) * a + w * level(k1)
+        k0, k1, w, under = self.column_weights(t, zkm, ref)
+        out = np.zeros(w.shape, dtype=np.float64)
+        for k in np.union1d(np.unique(k0), np.unique(k1[w > 0])):
+            a = np.asarray(level(int(k)), dtype=np.float64)
+            m0, m1 = k0 == k, (k1 == k) & (w > 0)
+            out[m0] += (1.0 - w[m0]) * a[m0]
+            out[m1] += w[m1] * a[m1]
+        if under is not None:
+            out[under] = np.nan
+        return out.astype(np.float32)
+
+    def read_height(self, name, t, zkm, ref="agl"):
+        """Native field linearly interpolated to a height (km above ground, or with
+        ref "msl" above sea level: the same on a flat run)."""
         if self.vars[name].ndim == 2:
             return self.read_level(name, t)
-        k0, k1, w = self.level_weights(zkm)
-        a = self.read_level(name, t, k0)
-        if w == 0.0 or k1 == k0:
-            return a
-        return (1.0 - w) * a + w * self.read_level(name, t, k1)
+        return self.interp_height(lambda k: self.read_level(name, t, k), t, zkm, ref)
 
     def read_box(self, name, t, i0, i1, j0, j1):
         """Columns [j0:j1, i0:i1] of a 3D field without populating the cache.  With

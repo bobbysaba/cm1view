@@ -762,7 +762,8 @@ class Fields:
 
     def plane(self, name, t, mode="height", value=1.0, storm=None):
         """2D (nj, ni) array of a field.
-        mode: 'height' (km AGL), 'level' (model level index), 'colmax', 'colmin'.
+        mode: 'height' (km AGL), 'msl' (km above sea level: a terrain run's; the same
+        as 'height' on a flat run), 'level' (model level index), 'colmax', 'colmin'.
         storm: ground-relative storm motion (m/s) for storm-relative fields."""
         d = self[name]
         if d.ndim == 2:
@@ -794,6 +795,8 @@ class Fields:
                     return run.read_level(n, t, int(value))
                 if mode == "2d":
                     return run.read_level(n, t)
+                if mode == "msl":
+                    return run.read_height(n, t, float(value), "msl")
                 return run.read_height(n, t, float(value))
 
             a = d.func(once(fetch), ctx) if d.derived else fetch(name) * d.scale
@@ -840,11 +843,8 @@ class Fields:
                          self.run.yh)
         if mode == "level":
             return self._ddz_level(base, t, int(value), storm)
-        k0, k1, w = self.run.level_weights(float(value))
-        a = self._ddz_level(base, t, k0, storm)
-        if w == 0.0 or k1 == k0:
-            return a
-        return (1.0 - w) * a + w * self._ddz_level(base, t, k1, storm)
+        return self.run.interp_height(lambda k: self._ddz_level(base, t, k, storm), t,
+                                      float(value), "msl" if mode == "msl" else "agl")
 
     def _ddz_level(self, base, t, k, storm):
         """∂/∂z (per km) of field base on model level k (ddz_level)."""

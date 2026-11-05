@@ -214,6 +214,8 @@ def describe(lay, fields=None, p=None, kind="plan"):
             pass  # (the panel's: said beside it)
         elif mode == "height" and lay.get("z") is not None:
             bits.append(f"{float(lay['z']):g} km")
+        elif mode == "msl" and lay.get("z") is not None:
+            bits.append(f"{float(lay['z']):g} km MSL")
         elif mode == "level":
             bits.append(f"k = {float(lay.get('z') or 0):g}")
         elif mode in ("colmax", "colmin"):

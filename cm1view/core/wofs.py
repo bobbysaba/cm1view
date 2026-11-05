@@ -15,8 +15,12 @@ P+PB -> prs, QVAPOR... -> qv..., REFL_10CM -> dbz, U/V/W -> uinterp/vinterp/wint
 (th0, prs0, qv0, u0, v0) is the member's own 3D field at its first time, so a
 perturbation is the change since then.  Winds are grid-relative.
 
-Heights (provisional): one profile for the whole domain, the domain-mean height above
-ground of the model levels at the first time, from (PH+PHB)/g - HGT."""
+Heights: the levels follow the terrain (Run.terrain), so every column has its own,
+changing with time: the fields zmsl and zagl (m above sea level / ground, at mass
+levels) are (PH+PHB)/g and that minus HGT, and heights(t, ref) gives them in km for
+the whole grid (at the w levels too).  Maps at a height interpolate column by column
+(Run.interp_height).  z and zf are one provisional profile for what still takes one:
+the domain-mean height above ground of the levels at the first time."""
 
 import datetime
 import os
@@ -55,6 +59,8 @@ LABELS = {"th": ("potential temperature", "K"), "prs": ("pressure", "Pa"),
 # base state: the member's own field at its first time
 BASE = {"th0": "th", "prs0": "prs", "qv0": "qv", "u0": "uinterp", "v0": "vinterp"}
 USED = {w for srcs, _ in MAPPED.values() for w in srcs}
+# heights of the levels (m), from the geopotential: name -> (above, label)
+HEIGHTS = {"zmsl": ("msl", "height above sea level"), "zagl": ("agl", "height above ground")}
 
 # WRF dimensions: (stagger or None) per dimension
 _ZDIMS = {"bottom_top": None, "bottom_top_stag": "z"}
@@ -181,6 +187,23 @@ class _Sum:
         return a + np.float32(self.add) if self.add else a
 
 
+class _Height:
+    """(PH+PHB)/g (m), less the ground's height HGT with `hgt`, indexed like a
+    netCDF variable (Time, bottom_top_stag, south_north, west_east)."""
+
+    def __init__(self, ph, phb, hgt=None):
+        self.ph, self.phb, self.hgt = ph, phb, hgt
+
+    def __getitem__(self, key):
+        key = key if isinstance(key, tuple) else (key,)
+        a = (np.asarray(self.ph[key], np.float32) + np.asarray(self.phb[key], np.float32)) \
+            / np.float32(G)
+        if self.hgt is None:
+            return a
+        # (the ground under the same columns: broadcast over the levels, if any)
+        return a - np.asarray(self.hgt[(key[0],) + key[2:]], np.float32)
+
+
 class WRFView:
     """One member's file at one time, seen with cm1view's names (and its first time's
     file for the base state): d.variables, d[name][0, ...], a context manager."""
@@ -200,6 +223,9 @@ class WRFView:
         kind, what = self.variables[name]
         if kind == "wrf":
             return self._d[what]
+        if kind == "height":
+            d = self._d
+            return _Height(d["PH"], d["PHB"], d["HGT"] if what == "agl" else None)
         d = self._first() if kind == "base" else self._d
         srcs, add = MAPPED[what]
         return _Sum([d[s] for s in srcs], add)
@@ -229,8 +255,8 @@ class WRFSource:
 
 def table(wrfvars):
     """{cm1view name: (kind, what)} of a WRF file's variables: kind "mapped" (what: a
-    MAPPED name), "base" (what: the MAPPED name read at the first time) or "wrf"
-    (what: the WRF name)."""
+    MAPPED name), "base" (what: the MAPPED name read at the first time), "height"
+    (what: "msl" or "agl", HEIGHTS) or "wrf" (what: the WRF name)."""
     out = {}
     for n, (srcs, _) in MAPPED.items():
         if all(s in wrfvars for s in srcs):
@@ -238,6 +264,9 @@ def table(wrfvars):
     for n, of in BASE.items():
         if of in out:
             out[n] = ("base", of)
+    if all(s in wrfvars for s in ("PH", "PHB", "HGT")):
+        for n, (ref, _) in HEIGHTS.items():
+            out[n] = ("height", ref)
     for n, v in wrfvars.items():
         if n not in USED and n not in out and _stag(v.dimensions):
             out[n] = ("wrf", n)
@@ -250,6 +279,7 @@ class WoFSRun(Run):
 
     model = "wofs"
     model_label = "WoFS"
+    terrain = True
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         super().__init__(path, cache_gb, workers, cache)
@@ -281,6 +311,10 @@ class WoFSRun(Run):
                     long_name = getattr(v, "description", what)
                     units = getattr(v, "units", "")
                     ndim, stag = _stag(v.dimensions)
+                elif kind == "height":
+                    v = d["PH"]
+                    long_name, units = HEIGHTS[n][1], "m"
+                    ndim, stag = 3, "z"
                 else:
                     src = MAPPED[what][0][0]
                     v = d[src]
@@ -294,7 +328,8 @@ class WoFSRun(Run):
             dx, dy = float(d.getncattr("DX")), float(d.getncattr("DY"))
             # provisional heights: domain-mean height AGL of the w levels at t0
             if "PH" in d.variables and "PHB" in d.variables and "HGT" in d.variables:
-                zw = (np.asarray(d["PH"][0], np.float64) + d["PHB"][0]) / G - d["HGT"][0]
+                hgt = np.asarray(d["HGT"][0], np.float64)
+                zw = (np.asarray(d["PH"][0], np.float64) + d["PHB"][0]) / G - hgt
                 zf = zw.mean(axis=(1, 2)) / 1000.0
             else:
                 raise ValueError(f"{self.files[0]} has no PH, PHB and HGT (heights)")
@@ -303,7 +338,23 @@ class WoFSRun(Run):
         self.yh = (np.arange(nj) - 0.5 * (nj - 1)) * dy / 1000.0
         self.zf = zf - zf[0]
         self.z = 0.5 * (self.zf[:-1] + self.zf[1:])
+        self._hgt = hgt / 1000.0  # ground height (km MSL); WRF's HGT does not change
         self._grid_done()
+
+    def terrain_height(self):
+        return self._hgt
+
+    def heights(self, t, ref="agl", w=False):
+        """Heights (km) of the levels at time t, (nk, nj, ni), from the geopotential:
+        at mass levels the cached zagl / zmsl volume, at the w levels (w) read from
+        the file each time ((nk + 1, nj, ni))."""
+        if not w:
+            return self.volume("zmsl" if ref == "msl" else "zagl", t) / np.float32(1000.0)
+        self._check("PH", t)
+        with IO_LOCK:
+            d = self._ds(t)
+            z = (np.asarray(d["PH"][0], np.float32) + d["PHB"][0]) / np.float32(G * 1000.0)
+        return z if ref == "msl" else z - self._hgt.astype(np.float32)
 
     def source(self, t):
         return WRFSource(self.files[t], self.files[0])

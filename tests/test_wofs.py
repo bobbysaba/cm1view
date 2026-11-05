@@ -1,6 +1,7 @@
 """WoFS reader (core/wofs.py): one member of a tiny synthetic WoFS run (cycle folders of
 wrfout_d01_<time>_<member> files beside DART files that are ignored), its names, grid,
-times, base state and perturbations, and how runs are found and opened."""
+times, base state and perturbations, its terrain-following heights and maps at a height
+above ground or sea level, and how runs are found and opened."""
 import datetime
 import os
 
@@ -22,7 +23,7 @@ def _expect(m, c):
     k = np.arange(NK, dtype=np.float32)[:, None, None]
     kw = np.arange(NK + 1, dtype=np.float32)[:, None, None]
     i = np.arange(NI, dtype=np.float32)
-    hgt = np.broadcast_to(100.0 + 10.0 * i, (NJ, NI)).astype(np.float32)
+    hgt = np.broadcast_to(100.0 + 100.0 * i, (NJ, NI)).astype(np.float32)  # a slope
     shape = (NK, NJ, NI)
     return dict(
         T=np.broadcast_to(m + 0.1 * c + k, shape),
@@ -37,8 +38,10 @@ def _expect(m, c):
         V=np.broadcast_to(np.arange(NJ + 1, dtype=np.float32)[:, None] - c,
                           (NK, NJ + 1, NI)),
         W=np.broadcast_to(kw + c, (NK + 1, NJ, NI)),
-        PH=np.zeros((NK + 1, NJ, NI), np.float32),
-        PHB=(G * (hgt + 500.0 * kw)).astype(np.float32),  # levels 500 m apart AGL
+        # levels 500 m apart above the ground at first, then stretched by c (20 + 5 i)
+        # m a level: heights that change with time and from column to column
+        PH=(G * c * (20.0 + 5.0 * i) * kw).astype(np.float32),
+        PHB=(G * (hgt + 500.0 * kw)).astype(np.float32),
         HGT=hgt,
         UP_HELI_MAX=np.full((NJ, NI), float(c), np.float32),
     )
@@ -131,7 +134,7 @@ def test_member_run(wofs_root):
     # names: cm1view's where there is one, else WRF's; nothing off the model grid
     for n in ("th", "prs", "qv", "qc", "qr", "qi", "qs", "qg", "qhl", "dbz", "uinterp",
               "vinterp", "winterp", "th0", "prs0", "qv0", "u0", "v0", "PH", "HGT",
-              "UP_HELI_MAX"):
+              "UP_HELI_MAX", "zagl", "zmsl"):
         assert run.has(n), n
     for n in ("T", "P", "PB", "QVAPOR", "U", "W", "REFL_10CM", "TSLB", "XLAT_U", "XTIME",
               "Times"):
@@ -176,6 +179,65 @@ def test_base_state_and_perturbations(wofs_root):
     np.testing.assert_allclose(F.volume("thpert", 0), 0.0, atol=1e-6)
     prof = run.mean_profiles(["th0"], 1)["th0"]
     np.testing.assert_allclose(prof, 303.0 + np.arange(NK), rtol=1e-6)
+
+
+def _dz(c):
+    """Level spacing (km) of every column (along x) at cycle c: 0.5 + c (20 + 5 i) m."""
+    return 0.5 + c * (20.0 + 5.0 * np.arange(NI)) / 1000.0
+
+
+GROUND = (100.0 + 100.0 * np.arange(NI)) / 1000.0  # km MSL, along x
+
+
+def test_heights(wofs_root):
+    """Heights from the geopotential, per column and time: above ground and sea level,
+    at mass and w levels, as fields too (m)."""
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    assert run.terrain is True
+    np.testing.assert_allclose(run.terrain_height()[0], GROUND, atol=1e-6)
+    kw = np.arange(NK + 1)[:, None, None]
+    for c in (0, 2):
+        zw = kw * _dz(c)
+        np.testing.assert_allclose(run.heights(c, "agl", w=True), np.broadcast_to(
+            zw, (NK + 1, NJ, NI)), atol=1e-4)
+        za = run.heights(c, "agl")
+        assert za.shape == (NK, NJ, NI)
+        np.testing.assert_allclose(za, np.broadcast_to(0.5 * (zw[1:] + zw[:-1]), za.shape),
+                                   atol=1e-4)
+        np.testing.assert_allclose(run.heights(c, "msl") - za,
+                                   np.broadcast_to(GROUND, za.shape), atol=1e-4)
+        np.testing.assert_allclose(run.volume("zagl", c), 1000.0 * za, atol=0.1)
+    # (the one profile for what takes one: the mean at the first time)
+    np.testing.assert_allclose(run.z, run.heights(0).mean(axis=(1, 2)), atol=1e-4)
+    assert run.vars["zmsl"].units == "m" and run.vars["zmsl"].ndim == 3
+
+
+def test_maps_at_a_height_column_by_column(wofs_root):
+    """A map at a height interpolates each column on its own levels: above ground, and
+    above sea level (blank under the ground); derived fields and ∂/∂z too."""
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F = Fields(run)
+    c, dz = 2, _dz(2)
+    # winterp is k + 0.5 + c on mass level k, at (k + 0.5) dz in each column
+    for h in (0.1, 0.6, 1.3, 5.0):
+        want = np.clip(h / dz - 0.5, 0, NK - 1) + 0.5 + c  # (held beyond the levels)
+        np.testing.assert_allclose(F.plane("winterp", c, "height", h)[0], want, atol=1e-4)
+        np.testing.assert_allclose(run.read_height("winterp", c, h)[2], want, atol=1e-4)
+    h = 0.6
+    want = np.clip((h - GROUND) / dz - 0.5, 0, NK - 1) + 0.5 + c
+    want[h < GROUND] = np.nan
+    msl = F.plane("winterp", c, "msl", h)
+    assert msl.shape == (NJ, NI)
+    np.testing.assert_allclose(msl[0], want, atol=1e-4)
+    assert np.isnan(msl[:, GROUND > h]).all() and np.isfinite(msl[:, GROUND <= h]).all()
+    np.testing.assert_allclose(F.plane("zagl", c, "height", 1.0), 1000.0, atol=0.1)
+    inside = GROUND + 0.5 * dz < 1.0  # (columns whose lowest level is below 1 km MSL)
+    np.testing.assert_allclose(F.plane("zmsl", c, "msl", 1.0)[:, inside], 1000.0, atol=0.1)
+    np.testing.assert_allclose(F.plane("thpert", c, "msl", 1.0)[:, GROUND < 1.0], 0.2,
+                               atol=1e-3)
+    assert np.isfinite(F.plane("ddz.winterp", c, "height", 1.0)).all()
+    # a model level is the level, whatever its height
+    np.testing.assert_allclose(F.plane("winterp", c, "level", 3), 3.5 + c, atol=1e-5)
 
 
 def test_reader_processes(wofs_root):

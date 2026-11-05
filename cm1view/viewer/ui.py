@@ -18,6 +18,10 @@ SOUNDING_VARS = ("th", "prs", "qv", "uinterp", "vinterp")
 BASE_VARS = ("th0", "prs0", "qv0", "u0", "v0")
 LEVEL_MODES = {"Height AGL (km)": "height", "Model level (k)": "level",
                "Column max": "colmax", "Column min": "colmin"}
+# a run whose levels follow the terrain: heights above sea level too
+TERRAIN_LEVEL_MODES = {"Height AGL (km)": "height", "Height MSL (km)": "msl",
+                       "Model level (k)": "level", "Column max": "colmax",
+                       "Column min": "colmin"}
 FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
 EMPTY_LINES = dict(xs=[], ys=[])
 EMPTY_VEC = dict(x0=[], y0=[], x1=[], y1=[], angle=[])

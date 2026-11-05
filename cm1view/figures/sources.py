@@ -6,7 +6,7 @@ A mixin of the FigureEditor (figures/editor.py)."""
 
 from . import spec as fg
 from ..core import parcels as P, render, series as ser, vectors
-from .cards import LEVEL_MODES, _dark, parcel_source
+from .cards import TERRAIN_LEVEL_MODES, _dark, parcel_source
 from .kinds import KINDS
 
 
@@ -91,7 +91,8 @@ class FigureSources:
 
         def fill_layer(f):
             fill = fg.layer_defaults("fill", F, f["var"], f["level"])
-            fill.update(mode=f["mode"] if f["mode"] in LEVEL_MODES.values() else "height",
+            modes = TERRAIN_LEVEL_MODES.values()
+            fill.update(mode=f["mode"] if f["mode"] in modes else "height",
                         cmap=f["cmap"], reverse=f["rev"])
             try:  # the range the map shows
                 a = F.plane(f["var"], t, fill["mode"], f["level"], storm=sp["fstorm"])

@@ -10,7 +10,8 @@ import os
 from ...core import parcels as P, vectors
 from ...core.fields import deriv_name, split_deriv
 from .base import (
-    LEVEL_MODES, FRAMES, HATCHES, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS, LINE_STYLES,
+    LEVEL_MODES, TERRAIN_LEVEL_MODES, FRAMES, HATCHES, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS,
+    LINE_STYLES,
     PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _deriv_opts, _hex, _f, _grid, _hint, _checks,
     _near, _nice, _chk, _section, _take_new_runs,
     cmap_select,
@@ -81,7 +82,10 @@ class LayerCard:
                 "grid")
             # (watched before the fill's colours: a 2D field has no ∂/∂z)
             w["field"].param.watch(self._on_base_field, "value")
-            w["mode"] = pn.widgets.Select(name="Level", options=LEVEL_MODES,
+            # (heights above sea level: with a run whose levels follow the terrain)
+            modes = TERRAIN_LEVEL_MODES if "zmsl" in F or lay.get("mode") == "msl" \
+                else LEVEL_MODES
+            w["mode"] = pn.widgets.Select(name="Level", options=modes,
                                           value=lay.get("mode", "height"))
             w["z"] = _f("Height (km)", lay.get("z", 1.0), step=0.25)
             r = lay.get("reduce") or {}
@@ -364,9 +368,10 @@ class LayerCard:
             m = w["mode"].value
             w["mode"].visible = not xs
             w["z_fixed"].visible = by_z and m == "height"
-            w["z"].visible = not xs and m in ("height", "level") and (
-                m == "level" or not by_z or w["z_fixed"].value)
-            w["z"].name = "Model level (k)" if m == "level" else "Height (km)"
+            w["z"].visible = not xs and m in ("height", "level", "msl") and (
+                m != "height" or not by_z or w["z_fixed"].value)
+            w["z"].name = {"level": "Model level (k)", "msl": "Height (km MSL)"}.get(
+                m, "Height (km)")
             w["reduce_op"].visible = not xs  # (plan panels only)
             for k in ("reduce_t0", "reduce_t1", "reduce_every"):
                 w[k].visible = not xs and bool(w["reduce_op"].value)

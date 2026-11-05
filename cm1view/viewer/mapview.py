@@ -373,6 +373,8 @@ class MapView:
                 return ""
             if mode == "height":
                 return f" @ {level:g} km"
+            if mode == "msl":
+                return f" @ {level:g} km MSL"
             if mode == "level":
                 return f" @ k={int(level)} ({run.z[int(level)] * 1000:.0f} m)"
             return " column max" if mode == "colmax" else " column min"

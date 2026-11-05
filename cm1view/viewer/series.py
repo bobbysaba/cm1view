@@ -551,8 +551,10 @@ class SeriesPanel:
             run, w = self.run, self.fill_lvl
             if self.fill_mode.value == "level":
                 v = float(np.argmin(np.abs(run.z - ev.y)))
-            else:
-                v = float(np.clip(round(ev.y / 0.25) * 0.25, w.start, w.end))
+            else:  # (MSL: over the mean ground)
+                y = ev.y + (float(np.mean(run.terrain_height()))
+                            if self.fill_mode.value == "msl" else 0.0)
+                v = float(np.clip(round(y / 0.25) * 0.25, w.start, w.end))
             if v != w.value:
                 w.value = v
         t = int(np.argmin(np.abs(self.run.times / 60.0 - ev.x)))
