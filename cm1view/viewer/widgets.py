@@ -3,11 +3,14 @@ options) and the run picker.
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
+import json
+import os
+
 import numpy as np
 import panel as pn
 
 from .. import config, pdecomp
-from ..core import parcels, sounding_plot as sp, track as trk, vectors
+from ..core import models, parcels, sounding_plot as sp, track as trk, vectors
 from ..core.fields import CMAPS, deriv_options
 from .numinput import FloatInput
 from .picker import RunPicker
@@ -514,6 +517,23 @@ class Widgets:
         self.panel_title = _html(margin=(0, 4), align="center")
         self._build_run_picker()
 
+    def _switch_part(self, e):
+        """Another member (or the mean) of this run: reopen the page on it, keeping what
+        the viewer shows (a session written to the cache, opened with ?session=)."""
+        if not e.new or e.new == self.run.path:
+            return
+        s = self.session_state()
+        s["run"] = e.new
+        path = config.cache_dir("switch", config.run_key(e.new) + ".json")
+        try:
+            os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(s, f, indent=1)
+        except OSError:  # (no view kept: just open it)
+            self.picker.go.value = json.dumps([e.new, self.run.model])
+            return
+        self.ses_go.value = path
+
     def _build_run_picker(self):
         run = self.run
         self.run_btn = pn.widgets.Button(name=run.name, button_type="light",
@@ -535,6 +555,19 @@ class Widgets:
         p = self.picker
         self.rp_modal = p.modal
         self.run_btn.on_click(lambda e: p.show())
+        # a run read as several (WoFS: its members and their mean): which one
+        parts = models.siblings(run.path)
+        if run.path not in parts:
+            parts = []
+        if parts:
+            self.run_btn.name = os.path.basename(models.root_of(run.path))
+            self.run_btn.description = (f"{models.root_of(run.path)}: open another run")
+        self.part_sel = pn.widgets.Select(
+            options={models.part_label(q): q for q in parts}, value=run.path if parts else None,
+            width=150, height=32, margin=(4, 2), visible=bool(parts),
+            description="Ensemble member shown (the view is kept; the page reloads). "
+                        "The member a run opens on: wofs_member in ⚙ Settings.")
+        self.part_sel.param.watch(self._switch_part, "value")
         self.gear_btn = pn.widgets.Button(
             name="", icon="settings", button_type="light", button_style="outline", width=40,
             height=32, margin=(4, 2), description="Settings: where runs live, where figures "

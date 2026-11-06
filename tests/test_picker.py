@@ -1,4 +1,5 @@
 """Run picker: one list (recent + runs under runs_root), filtering, typed folders."""
+import json
 import os
 
 import pytest
@@ -32,7 +33,7 @@ def test_lists_runs_and_picking_enables_open(runs_root):
     p.list.value = p.list.options["project/supercell_weak"]
     assert not p.open.disabled and p.selected.endswith("supercell_weak")
     p._open()
-    assert p.go.value == p.selected
+    assert json.loads(p.go.value) == [p.selected, "auto"]  # (the run and its model)
 
 
 def test_filter_keeps_selection_and_single_match_is_picked(runs_root):
@@ -50,13 +51,39 @@ def test_filter_keeps_selection_and_single_match_is_picked(runs_root):
 def test_typed_folders(runs_root):
     p = RunPicker()
     proj = runs_root / "project"
-    assert typed(p, str(runs_root)) == ["project/supercell", "project/supercell_weak"]
+    # a folder is looked in once it ends in "/" (not while it is being typed)
+    assert typed(p, str(runs_root)) == [] and "End the path with /" in p.msg.object
+    assert typed(p, f"{runs_root}/") == ["project/supercell", "project/supercell_weak"]
+    assert typed(p, f"{proj}/") == ["supercell", "supercell_weak"]
     assert typed(p, f"{proj}/supercell_w") == ["supercell_weak"]  # partly typed name
     # a run's own path: it is selected, with the runs next to it
     assert typed(p, f"{proj}/supercell") == ["supercell", "supercell_weak"]
     assert p.selected == f"{proj}/supercell" and not p.open.disabled
     typed(p, "/no/such/place")
     assert p.list.options == {} and "No such folder" in p.msg.object
+
+
+def test_enter_looks_in_a_typed_folder(runs_root):
+    p = RunPicker()
+    typed(p, str(runs_root))
+    p._on_enter()
+    assert list(p.list.options) == ["project/supercell", "project/supercell_weak"]
+    assert p.go.value == ""  # (nothing opened)
+    p._on_enter()  # a run chosen: Enter opens it
+    assert json.loads(p.go.value)[0].endswith("/supercell")
+
+
+def test_shared_folders_never_searched(runs_root, monkeypatch):
+    from cm1view import config
+    looked = []
+    monkeypatch.setattr(RunPicker, "_runs_under", lambda self, f: looked.append(f))
+    p = RunPicker()
+    assert typed(p, "/") == [] and "shared folder" in p.msg.object
+    p._on_enter()
+    assert looked == [] and "shared folder" in p.msg.object
+    assert not config.searchable("/") and config.searchable(str(runs_root))
+    assert not config.searchable(os.path.dirname(os.path.expanduser("~")))
+    assert config.scan_runs(["/"]) == ([], False)
 
 
 def test_current_run_left_out_and_recent_first(runs_root, monkeypatch):

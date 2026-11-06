@@ -12,7 +12,6 @@ from matplotlib.offsetbox import AnchoredOffsetbox
 from matplotlib.patches import Circle, ConnectionPatch, Patch, Rectangle
 from matplotlib.text import Text
 
-from ...theme import GROUND
 from .base import (RC_LOCK, ENTRIES, _anchored, ann_on, legend_handles, panel_letter,
                    time_text, _new_fig, _fs, _cell, grid_layout, rc, anchor_kw, font_size,
                    run_code, run_color, layer_color, run_time_opts)
@@ -28,6 +27,8 @@ from .lines import (_lines, _dists, _profiles, _joints, _azims, azim_range, dist
 from .sounding import _sounding, _hodo_view, shared_hodo_half, sounding_layout
 from .tables import _table, _tbl_width, finish_tables
 from .scene3d import scene_panel, finish_scenes, scene_dpi
+
+GROUND = "#8a7560"  # (theme.GROUND, here as exported scripts carry only the draw modules)
 
 MIN_LABEL_PT = 6.0  # (fit_labels)
 INSET_KINDS = ("plan", "xsec")  # (the kinds with zoom insets: axes in km, arrays that can be cut)

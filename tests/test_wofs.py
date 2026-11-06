@@ -100,22 +100,55 @@ def wofs_root(tmp_path):
     return make_wofs(str(tmp_path / "exp" / "20220523"))
 
 
-def test_found_as_one_run_per_member(wofs_root, tmp_path):
-    assert models.detect(wofs_root) is None  # (the folder itself is not one run)
-    assert wofs.members(wofs_root) == [1, 2, 3]
+def test_experiment_is_one_run(wofs_root, tmp_path):
+    exp = os.path.dirname(wofs_root)  # <exp>/20220523/<cycles>: the experiment is the run
+    assert wofs.members(exp) == wofs.members(wofs_root) == [1, 2, 3]
+    assert wofs.cycles(exp)[0] == os.path.join("20220523", "202205232200")
+    assert models.detect(exp).key == "wofs" and models.count(exp) == NC
     runs, complete = config.scan_runs([str(tmp_path)], model=None)
-    assert runs == [os.path.join(wofs_root, n) for n in ("mean", "mem01", "mem02", "mem03")]
-    assert complete
+    assert runs == [exp] and complete  # (one entry, not one per member)
     assert config.scan_runs([str(tmp_path)], model="cm1")[0] == []
-    mem = os.path.join(wofs_root, "mem02")
+    assert models.summary(exp) == "3 members"
+    assert models.parts(exp) == [os.path.join(exp, n)
+                                 for n in ("mem01", "mem02", "mem03", "mean")]
+    mem = os.path.join(exp, "mem02")
     assert models.exists(mem) and not os.path.isdir(mem)
     assert models.detect(mem).key == "wofs" and models.count(mem) == NC
     assert registry.is_run(mem) and registry.is_run(mem, "wofs")
     assert not registry.is_run(mem, "cm1")
-    assert not models.exists(os.path.join(wofs_root, "mem09"))  # no such member
-    assert models.canonical(wofs_root) == os.path.join(wofs_root, "mem01")
-    assert registry.sibling_runs(mem) == [os.path.join(wofs_root, n)
+    assert not models.exists(os.path.join(exp, "mem09"))  # no such member
+    assert models.root_of(mem) == exp and models.root_of(exp) == exp
+    assert models.part_label(mem) == "Member 2"
+    assert models.part_label(os.path.join(exp, "mean")) == "Ensemble mean"
+    assert models.canonical(exp) == os.path.join(exp, "mem01")
+    assert models.canonical(wofs_root) == os.path.join(wofs_root, "mem01")  # (a date folder)
+    assert registry.sibling_runs(mem) == [os.path.join(exp, n)
                                           for n in ("mem01", "mem03", "mean")]
+
+
+@pytest.mark.parametrize("setting, opens", [("2", "mem02"), ("mean", "mean"),
+                                            ("9", "mem01"), ("junk", "mem01")])
+def test_member_opened_first_is_a_setting(wofs_root, monkeypatch, setting, opens):
+    exp = os.path.dirname(wofs_root)
+    monkeypatch.setenv("CM1VIEW_WOFS_MEMBER", setting)
+    assert models.canonical(exp) == os.path.join(exp, opens)
+    run = models.open_run(exp, workers=1)
+    assert run.path == os.path.join(exp, opens)
+
+
+def test_date_folders_joined(tmp_path):
+    """A run cycling across 00 UTC: its cycles are in two date folders, one timeline."""
+    exp = str(tmp_path / "exp")
+    make_wofs(os.path.join(exp, "20220523"))
+    last = f"{START + datetime.timedelta(minutes=3 * (NC - 1)):%Y%m%d%H%M}"
+    os.makedirs(os.path.join(exp, "20220524"))
+    os.rename(os.path.join(exp, "20220523", last), os.path.join(exp, "20220524", last))
+    os.makedirs(os.path.join(exp, "FCST", "20220523"))  # (other folders: ignored)
+    assert wofs.cycles(exp)[-1] == os.path.join("20220524", last)
+    assert models.count(exp) == NC
+    run = models.open_run(exp, workers=1)
+    np.testing.assert_allclose(run.times, [0.0, 180.0, 360.0])
+    assert os.path.basename(os.path.dirname(os.path.dirname(run.files[-1]))) == "20220524"
 
 
 def test_member_run(wofs_root):
@@ -265,15 +298,18 @@ def test_registry_keeps_members_apart(wofs_root):
     np.testing.assert_allclose(r2.read_level("th", 0, 0) - r1.read_level("th", 0, 0), 1.0)
 
 
-def test_picker_lists_members(wofs_root, monkeypatch):
+def test_picker_lists_the_experiment(wofs_root, tmp_path, monkeypatch):
     from cm1view.viewer.picker import RunPicker
     monkeypatch.setattr(registry, "recent_runs", lambda: [])
+    exp = os.path.dirname(wofs_root)
     p = RunPicker()
-    p.query.value_input = wofs_root
-    assert list(p.list.options) == ["mean", "mem01", "mem02", "mem03"]
-    p.query.value_input = os.path.join(wofs_root, "mem03")  # a member: it is picked
-    assert p.selected == os.path.join(wofs_root, "mem03") and not p.open.disabled
-    assert "WoFS" in p.msg.object and "3 output times" in p.msg.object
+    p.query.value_input = f"{tmp_path}/"
+    assert list(p.list.options) == ["exp"]  # one run, not one per member
+    assert p.selected == exp and not p.open.disabled
+    assert "WoFS" in p.msg.object and "3 members" in p.msg.object
+    assert "3 output times" in p.msg.object
+    p.query.value_input = os.path.join(exp, "mem03")  # a member typed in full: picked
+    assert p.selected == os.path.join(exp, "mem03") and not p.open.disabled
 
 
 # ------------------------------------------------------------- W3: sections, soundings,
@@ -488,7 +524,8 @@ def test_mean_run_found_and_opened(wofs_root):
     assert run.time_label(2) == "22:06 UTC" and len(run.parts[0]) == 3
     # one member: no mean listed (but a single-member root still opens as one)
     one = make_wofs(os.path.join(os.path.dirname(wofs_root), "one"), members=(4,))
-    assert models.runs_in(one, list(os.scandir(one))) == [os.path.join(one, "mem04")]
+    assert models.runs_in(one, list(os.scandir(one))) == [one]
+    assert models.parts(one) == [os.path.join(one, "mem04")]
 
 
 @pytest.mark.parametrize("workers", [1, 2])

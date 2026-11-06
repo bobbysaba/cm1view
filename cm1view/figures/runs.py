@@ -8,6 +8,7 @@ import threading
 from collections import OrderedDict
 
 from .. import config, registry
+from ..core import models
 from ..core.fields import GROUP_ORDER, deriv_def, split_deriv
 from ..viewer.ui import held
 
@@ -75,7 +76,7 @@ class AllFields:
 class FigureRuns:
     """The runs a figure could add, and storm tracks."""
 
-    _scanned, _scan_complete, _scan_new, _cands = [], True, False, []
+    _scanned, _scan_complete, _scan_new, _cands, _cand_labels = [], True, False, [], {}
 
     def _scan_roots(self):
         """Look for the runs under the runs_root setting in the background (as the Open
@@ -104,12 +105,17 @@ class FigureRuns:
     def _find_runs(self):
         """Runs the figure could add: under runs_root, next to this run, and recent."""
         out = []
-        for p in (list(self._scanned) + registry.sibling_runs(self.run.path)
-                  + registry.recent_runs()):
+        own = models.root_of(self.run.path)  # (a WoFS member's experiment: its members
+        sibs = registry.sibling_runs(self.run.path)  # are listed one by one instead)
+        for p in list(self._scanned) + sibs + registry.recent_runs():
             p = os.path.abspath(p)
-            if p not in out:
+            if p not in out and (p != own or own == self.run.path):
                 out.append(p)
         self._cands = out
+        # (members by name: "<experiment> · Member 5")
+        m = models.MODELS.get(self.run.model)
+        self._cand_labels = {} if own == self.run.path or m is None else {
+            p: f"{os.path.basename(own)} · {m.part_label(p)}" for p in sibs}
 
     def _other_runs(self, have):
         """{label: path} of the runs not in the figure (have: the paths of the runs in it)."""
@@ -121,7 +127,8 @@ class FigureRuns:
         for p in self._cands:
             if p in have:
                 continue
-            lab = next((p[len(r):] for r in roots if p.startswith(r)), None) or \
+            lab = self._cand_labels.get(p) or \
+                next((p[len(r):] for r in roots if p.startswith(r)), None) or \
                 "/".join(p.rstrip("/").split("/")[-2:])
             out[lab if lab not in out else p] = p
         return out

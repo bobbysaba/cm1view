@@ -9,14 +9,19 @@ has a matching git tag.
 
 - The run picker has a **model** box (*Auto-detect* or a model) and lists the runs of that model;
   `cm1view --model` and `cm1view export --model` do the same on the command line.
-- **WoFS and WRF ensemble output** opens: each member (`<root>/memNN`) and the ensemble mean
-  (`<root>/mean`) is a run, found from the `wrfout_d01_*` files in the cycle folders. Levels keep
+- **WoFS and WRF ensemble output** opens: an experiment folder (date folders of cycle folders of
+  `wrfout_d01_*` files; date folders across 00 UTC joined) is one run, and a **Member** box picks
+  a member or the ensemble mean, keeping the view; the new `wofs_member` setting picks the one
+  it opens on (default 1). Levels keep
   following the terrain: maps at a model level, km AGL or km MSL, cross-sections on a km MSL axis
   with the ground drawn, soundings and column fields on each column's heights, 3D views on terrain.
   Trajectories are traced through the winds, and turned off when the output comes less often than
   the new `traj_max_interval` setting (300 s). Not supported: pressure decomposition, a
   probability-matched mean, DART files ([WoFS](guide/wofs.md)).
 - `cm1view --demo wofs` opens a small synthetic WoFS ensemble.
+- The run picker looks in a typed folder once it ends in `/` (or on Enter), not on every key,
+  and never searches shared folders (`/`, top-level folders, folders owned by root, the folders
+  above your home); nor does the runs_root search or the list of runs next to a run.
 
 ### Figures
 

@@ -482,7 +482,17 @@ def in_panel_doc(shell, pid):
     return next(p for p in shell.doc["panels"] if p["id"] == pid)
 
 
+def own_bars(shell):
+    """A colorbar per panel: each panel then controls its bar and shows its colours (on a
+    shared bar only the first panel does)."""
+    from cm1view.figures import spec as fg
+    d = fg.plain_copy(shell.doc)
+    d["style"].setdefault("colorbar", {})["mode"] = "each"
+    shell._take(d)
+
+
 def test_all_plan_views_edits_the_shared_layer_and_a_panel_its_override(shell):
+    own_bars(shell)
     lid = next(iter(shell.doc["layers"]))
     shell.select("kind:plan")
     named(shell.inspector.body, "Min").value = 5.0
@@ -499,6 +509,7 @@ def test_all_plan_views_edits_the_shared_layer_and_a_panel_its_override(shell):
 
 
 def test_changing_a_setting_writes_only_that_setting(shell):
+    own_bars(shell)
     shell.select("layer:2:0")
     named(shell.inspector.body, "Max").value = 33.0
     assert in_panel_doc(shell, 2)["layers"][0]["over"] == dict(vmax=33.0)  # (no other key)
@@ -511,6 +522,7 @@ def test_changing_a_setting_writes_only_that_setting(shell):
 
 
 def test_a_shared_edit_says_who_differs_and_all_as_shared_clears_them(shell):
+    own_bars(shell)
     shell.select("layer:1:0")
     named(shell.inspector.body, "Max").value = 33.0
     shell.select("kind:plan")
@@ -524,6 +536,7 @@ def test_a_shared_edit_says_who_differs_and_all_as_shared_clears_them(shell):
 
 
 def test_an_override_is_marked_and_taken_back_one_by_one(shell):
+    own_bars(shell)
     shell.select("layer:1:0")
     named(shell.inspector.body, "Max").value = 33.0
     named(shell.inspector.body, "Min").value = 3.0
@@ -620,6 +633,7 @@ def test_what_is_open_stays_open_across_undo_and_redo(shell):
 
 
 def test_a_cards_section_left_open_stays_open(shell):
+    own_bars(shell)
     shell.select("layer:1:0")
     ins = shell.inspector
     sec = next(w for w in ins.body.select() if getattr(w, "title", "") == "Difference")

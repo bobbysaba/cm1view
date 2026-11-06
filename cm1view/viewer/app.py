@@ -401,7 +401,9 @@ def create_app(reg, maxpix=None):
         v = Viewer(run, fields, maxpix=maxpix, error=error.strip(), reg=reg)
         pn.state.on_session_destroyed(lambda ctx: v.close())
         if session is not None:
-            v.ses_path.value = config.expand(ses)
+            # (a member switch's session, in the cache: not the one to save over)
+            if not config.expand(ses).startswith(config.cache_dir("switch") + os.sep):
+                v.ses_path.value = config.expand(ses)
             v.apply_session(session)
         body, settings = v.main(), v.settings
     # first run (or settings that no longer work): open the settings window

@@ -36,6 +36,8 @@ def sibling_runs(path, limit=60):
         return [p for p in models.siblings(path) if p != path][:limit]
     out = set()
     for base in (os.path.dirname(path), path):
+        if not config.searchable(base):  # (never list a shared folder's users)
+            continue
         for d in sorted(glob.glob(os.path.join(base, "*", ""))):
             d = d.rstrip("/")
             if is_run(d):

@@ -1,6 +1,7 @@
 """Run picker: one box and one list.  The list holds your recent runs and the runs found
-under the runs_root setting; typing filters it, and typing or pasting a folder lists
-the runs inside that folder instead.  The model box says which model's output to look
+under the runs_root setting; typing filters it, and a folder typed or pasted with a
+"/" at the end (or Enter) lists the runs inside it instead.  Shared folders (see
+config.searchable) are never searched.  The model box says which model's output to look
 for (auto-detect: any).  Opening a run reloads the page with ?run= (and ?model= when one
 was chosen)."""
 
@@ -20,6 +21,11 @@ def _html(text="", **kw):
 
 def _is_path(text):
     return text[:1] in ("/", "~", "$")
+
+
+def _shared(folder):
+    return (f"Not searching {folder}: it is a shared folder, and looking through it "
+            "would list every user's folders. Type the path of a folder of your own.")
 
 
 class RunPicker:
@@ -73,7 +79,7 @@ class RunPicker:
         self.model.param.watch(lambda e: self.rescan(), "value")
         self.list.param.watch(self._on_list, "value")
         self.open.on_click(lambda e: self._open())
-        self.query.param.watch(lambda e: self._open(), "enter_pressed")
+        self.query.param.watch(lambda e: self._on_enter(), "enter_pressed")
         self._refresh()  # recent runs until the first scan
 
     def show(self):
@@ -104,11 +110,11 @@ class RunPicker:
                                                    model=self.model.value)
         return self._under[folder]
 
-    def _refresh(self):
+    def _refresh(self, search=False):
         text = (self.query.value_input or "").strip()
         pick = None
         if _is_path(text):
-            opts, hint, pick = self._folder_options(config.expand(text))
+            opts, hint, pick = self._folder_options(text, search)
         else:
             opts, hint = self._known_options(text)
         keep = pick or (self.selected if self.selected in opts.values() else None)
@@ -146,19 +152,32 @@ class RunPicker:
             hint = f'No run matches “{text}”. ' + hint
         return opts, hint
 
-    def _folder_options(self, p):
-        """Runs under a typed folder (a run: it and the runs next to it); a partly
-        typed name lists the matching runs of its parent folder.  Also returns the
-        run to select."""
-        pick = p if registry.is_run(p, self.model.value) else None
-        if pick:
-            base, part = os.path.dirname(p), ""
-        elif os.path.isdir(p):
+    def _folder_options(self, text, search=False):
+        """Runs under a typed folder, looked for once the text ends in "/" (or search:
+        Enter was pressed); a run typed in full is picked as it is; a partly typed name
+        filters the runs found in its folder (if that was looked in).  Shared folders
+        are never searched.  Also returns the run to select."""
+        p = config.expand(text)
+        looking = (search or text.endswith("/")) and os.path.isdir(p)
+        pick = None
+        if looking:
             base, part = p, ""
         else:
-            base, part = os.path.dirname(p), os.path.basename(p).lower()
+            # (a folder is only looked at when it is not a shared one)
+            if not os.path.isdir(p) or config.searchable(p):
+                pick = p if registry.is_run(p, self.model.value) else None
+            base, part = os.path.dirname(p), ("" if pick else os.path.basename(p).lower())
         if not os.path.isdir(base):
             return {}, "No such folder.", None
+        if not (looking or base in self._under):
+            opts = {self._label(pick, base): pick} if pick else {}
+            where = p if os.path.isdir(p) else base
+            hint = (f"End the path with / (or press Enter) to look for runs in {where}."
+                    if config.searchable(where) else _shared(where))
+            return opts, hint, pick
+        if not config.searchable(base):
+            opts = {self._label(pick, base): pick} if pick else {}
+            return opts, _shared(base), pick
         runs, complete = self._runs_under(base)
         runs = [r for r in runs
                 if not part or os.path.relpath(r, base).lower().startswith(part)]
@@ -184,8 +203,9 @@ class RunPicker:
             self._hint = hint
         if n:
             m = models.get(key) or models.detect(path)
+            more = models.summary(path, key)
             line = (f'<span style="color:#4ade80">✓</span> <b>{path}</b> · {m.label} · '
-                    f'{n} output times')
+                    + (f'{more} · ' if more else '') + f'{n} output times')
         else:
             line = self._hint
         self.msg.object = f'<div class="cv-hint" style="line-height:1.5">{line}</div>'
@@ -194,6 +214,17 @@ class RunPicker:
     def _what(self):
         m = models.get(self.model.value)
         return f"{m.label} output" if m else "model output"
+
+    def _on_enter(self):
+        """Enter: open the chosen run, else look for runs in the typed folder."""
+        text = (self.query.value_input or "").strip()
+        p = config.expand(text) if _is_path(text) else ""
+        unsearched = (p and p != self.selected and os.path.isdir(p)
+                      and p not in self._under)
+        if self.selected and not self.open.disabled and not unsearched:
+            self._open()
+        elif p:
+            self._refresh(search=True)
 
     def _open(self):
         if self.selected and not self.open.disabled:

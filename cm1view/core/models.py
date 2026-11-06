@@ -7,10 +7,10 @@ model, which keeps the search for runs cheap.  "auto" picks the first model whos
 output a folder holds.
 
 A run's path is usually its folder.  A model may also name runs inside one folder
-(WoFS: <root>/memNN, one per ensemble member, and <root>/mean, their mean; no such
-folders on disk): runs(path,
-entries) lists them, virtual(path) says a path is one, and canonical(path) turns the
-folder itself into its first run."""
+(WoFS: an experiment folder is one run in the picker, but each ensemble member is
+read as <root>/memNN, and their mean as <root>/mean; no such folders on disk):
+parts(path) lists them, virtual(path) says a path is one, and canonical(path) turns
+the folder itself into the one to open."""
 
 import glob
 import os
@@ -32,6 +32,18 @@ class Model:
     def runs(self, path, entries):
         """The runs in a folder that looks(entries) like this model's."""
         return [path]
+
+    def parts(self, path, entries=None):
+        """The runs named inside a run folder (WoFS: members and mean); [] if none."""
+        return []
+
+    def summary(self, path):
+        """A few words on a run folder for the picker (e.g. "36 members"), or ""."""
+        return ""
+
+    def part_label(self, path):
+        """The name of a run named inside a folder (parts) in a list: e.g. "Member 5"."""
+        return os.path.basename(path.rstrip("/"))
 
     def virtual(self, path):
         """Is `path` a run of this model that is not a folder on disk?"""
@@ -63,8 +75,9 @@ class CM1(Model):
 
 
 class WoFS(Model):
-    """WoFS (DART-cycled WRF): cycle folders of member wrfouts; one run per member, and
-    one for their mean (with more than one member)."""
+    """WoFS (DART-cycled WRF): an experiment folder of date folders of cycle folders of
+    member wrfouts.  The experiment is one run; its members (and their mean) are read
+    as runs of their own (parts)."""
     key, label = "wofs", "WoFS"
 
     @property
@@ -79,13 +92,27 @@ class WoFS(Model):
     def looks(self, entries):
         from . import wofs
         entries = list(entries)
-        # (one more listing: the first cycle folder, for member files)
+        # (one or two more listings: the first date folder, the first cycle folder)
         return bool(entries) and bool(wofs.members(os.path.dirname(entries[0].path), entries))
 
     def runs(self, path, entries):
+        return [path]  # (the experiment: one run)
+
+    def parts(self, path, entries=None):
         from . import wofs
-        ms = wofs.members(path, entries)
-        return [wofs.member_path(path, m) for m in ms] + [wofs.mean_path(path)] * (len(ms) > 1)
+        return wofs.run_paths(path, entries)
+
+    def summary(self, path):
+        from . import wofs
+        root = path if os.path.isdir(path) else (wofs.mean_of(path)
+                                                 or (wofs.member_of(path) or ("",))[0])
+        n = len(wofs.members(root)) if root else 0
+        return f"{n} member{'s' * (n != 1)}" if n else ""
+
+    def part_label(self, path):
+        from . import wofs
+        rm = wofs.member_of(path)
+        return f"Member {rm[1]}" if rm else "Ensemble mean"
 
     def virtual(self, path):
         from . import wofs
@@ -97,8 +124,7 @@ class WoFS(Model):
 
     def canonical(self, path):
         from . import wofs
-        ms = wofs.members(path) if os.path.isdir(path) else []
-        return wofs.member_path(path, ms[0]) if ms else path
+        return wofs.open_path(path) if os.path.isdir(path) else path
 
 
 MODELS = {m.key: m for m in (CM1(), WoFS())}
@@ -133,14 +159,20 @@ def exists(path):
 
 
 def canonical(path, key=None):
-    """The run to open for `path`: a folder holding several runs (a WoFS root) gives
-    its first; anything else is returned as is."""
-    if not path or not os.path.isdir(path) or (get(key) is None and detect(path)):
+    """The run to open for `path`: a folder holding several runs (a WoFS experiment)
+    gives the one its model opens first; anything else is returned as is."""
+    if not path or not os.path.isdir(path):
         return path
-    for m in [get(key)] if get(key) else MODELS.values():
-        p = m.canonical(path)
-        if p != path:
-            return p
+    m = get(key) or detect(path)
+    return m.canonical(path) if m is not None else path
+
+
+def root_of(path):
+    """The run folder a virtual run is named in (a WoFS member's experiment), else
+    `path` itself."""
+    for m in MODELS.values():
+        if m.virtual(path):
+            return os.path.dirname(os.path.abspath(path))
     return path
 
 
@@ -155,9 +187,32 @@ def siblings(path):
     """The other runs named inside the same folder as a virtual run (else [])."""
     for m in MODELS.values():
         if m.virtual(path):
-            return m.runs(os.path.dirname(os.path.abspath(path)),
-                          list(os.scandir(os.path.dirname(os.path.abspath(path)))))
+            return m.parts(os.path.dirname(os.path.abspath(path)))
     return []
+
+
+def parts(path, key=None):
+    """The runs named inside a run folder or next to a virtual run (WoFS members and
+    mean), else []."""
+    if not exists(path):
+        return []
+    if not os.path.isdir(path):
+        return siblings(path)
+    m = get(key) or detect(path)
+    return m.parts(path) if m is not None else []
+
+
+def part_label(path):
+    """A virtual run's name in its folder's list ("Member 5"), else its folder name."""
+    for m in MODELS.values():
+        if m.virtual(path):
+            return m.part_label(path)
+    return os.path.basename(os.path.abspath(path).rstrip("/"))
+
+
+def summary(path, key=None):
+    m = get(key) or detect(path)
+    return m.summary(path) if m is not None and exists(path) else ""
 
 
 def resolve(path, key=None):

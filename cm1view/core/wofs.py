@@ -1,13 +1,19 @@
-"""WoFS output: one ensemble member of a DART-cycled WRF run.
+"""WoFS output: one ensemble member of a DART-cycled WRF experiment.
 
-A WoFS run folder (the "root") holds one folder per cycle, named YYYYMMDDHHMM, each
-with one WRF file per member, wrfout_d01_<YYYY-MM-DD_HH:MM:SS>_<member>.  Everything
-else in those folders (DART output, wrfinput, obs_seq, logs) is ignored.
+A WoFS experiment folder (the "root"; its name is the run's name) holds one folder per
+date, YYYYMMDD, each holding one folder per cycle, YYYYMMDDHHMM, each with one WRF
+file per member, wrfout_d01_<YYYY-MM-DD_HH:MM:SS>_<member>.  A run that cycles across
+00 UTC has two date folders; their cycles are joined into one timeline.  Cycle
+folders straight in the root are read too (a date folder picked as the root).
+Everything else (DART output, wrfinput, obs_seq, logs, FCST/, postpr/, summary/) is
+ignored.
 
-A run in cm1view is one member: its path is <root>/memNN, a folder that does not
-exist on disk (models.WoFS knows it), so everything keyed by a run's path (the 3D
+The experiment is one run in the picker; a member is chosen inside it.  Under the
+hood each member is a run of its own with the path <root>/memNN, a folder that does
+not exist on disk (models.WoFS knows it), so everything keyed by a run's path (the 3D
 cache, saved figures, exports, ?run=) tells the members apart.  <root>/mean is the
-ensemble mean (WoFSMeanRun, below).
+ensemble mean (WoFSMeanRun, below).  Opening the root opens the member the
+wofs_member setting names (default 1).
 
 Fields are renamed to cm1view's (CM1) names where there is one: T+300 -> th,
 P+PB -> prs, QVAPOR... -> qv..., REFL_10CM -> dbz, U/V/W -> uinterp/vinterp/winterp
@@ -36,6 +42,7 @@ from .run import IO_LOCK, Run, VarInfo, _read_volume_worker
 G = 9.81  # m/s^2, as WRF
 
 CYCLE_RE = re.compile(r"^\d{12}$")
+DATE_RE = re.compile(r"^\d{8}$")
 FILE_RE = re.compile(r"^wrfout_d01_(\d{4}-\d\d-\d\d_\d\d:\d\d:\d\d)_(\d+)$")
 MEMBER_RE = re.compile(r"^mem0*(\d+)$")
 MEAN = "mean"  # <root>/mean: the ensemble mean run
@@ -99,13 +106,49 @@ def _ok_dir(entry):
         return False
 
 
-def cycles(root, entries=None):
-    """Cycle folder names under root, oldest first."""
+def _cycle_names(ents):
+    return sorted(e.name for e in ents if CYCLE_RE.match(e.name) and _ok_dir(e))
+
+
+def _date_dirs(ents):
+    return sorted(e.name for e in ents if DATE_RE.match(e.name) and _ok_dir(e))
+
+
+def _scan(folder):
     try:
-        ents = entries if entries is not None else list(os.scandir(root))
+        return list(os.scandir(folder))
     except OSError:
         return []
-    return sorted(e.name for e in ents if CYCLE_RE.match(e.name) and _ok_dir(e))
+
+
+def cycles(root, entries=None, first=False):
+    """Cycle folders of a root, oldest first, as paths relative to it: YYYYMMDDHHMM
+    straight in the root, and YYYYMMDD/YYYYMMDDHHMM in its date folders (joined into
+    one timeline).  first: stop at the first folder holding any (no more listings)."""
+    ents = entries if entries is not None else _scan(root)
+    out = _cycle_names(ents)
+    if first and out:
+        return out[:1]
+    for d in _date_dirs(ents):
+        cs = _cycle_names(_scan(os.path.join(root, d)))
+        out += [os.path.join(d, c) for c in cs]
+        if first and out:
+            break
+    return sorted(out, key=os.path.basename)
+
+
+def default_member(ms):
+    """The member the wofs_member setting names, of members ms (else the first); None:
+    the mean."""
+    from .. import config
+    want = str(config.get("wofs_member")).strip().lower()
+    if want == MEAN and len(ms) > 1:
+        return None
+    try:
+        m = int(want.removeprefix("mem"))
+    except ValueError:
+        m = None
+    return m if m in ms else (ms[0] if ms else None)
 
 
 def _files_in(folder):
@@ -124,7 +167,7 @@ def _files_in(folder):
 
 def members(root, entries=None):
     """Member numbers of a WoFS root, from its first cycle folder ([]: not a WoFS run)."""
-    cs = cycles(root, entries)
+    cs = cycles(root, entries, first=True)
     return sorted(_files_in(os.path.join(root, cs[0]))) if cs else []
 
 
@@ -156,7 +199,8 @@ def member_files(root, m):
     out = []
     for c in cycles(root):
         folder = os.path.join(root, c)
-        name = (f"wrfout_d01_{c[:4]}-{c[4:6]}-{c[6:8]}_{c[8:10]}:{c[10:12]}:00_{m}")
+        b = os.path.basename(c)
+        name = (f"wrfout_d01_{b[:4]}-{b[4:6]}-{b[6:8]}_{b[8:10]}:{b[10:12]}:00_{m}")
         if not os.path.isfile(os.path.join(folder, name)):
             name = _files_in(folder).get(m)  # (a file not at the cycle's own time)
             if name is None:
@@ -179,13 +223,33 @@ def mean_files(root):
 
 
 def count(path):
-    root = mean_of(path) if path else None
-    if root is not None and not os.path.isdir(path):
+    """Output times of a member or mean path, or of a root (its cycle folders)."""
+    if not path:
+        return 0
+    if os.path.isdir(path):
+        return len(cycles(path)) if is_root(path) else 0
+    root = mean_of(path)
+    if root is not None:
         return len(mean_files(root)) if os.path.isdir(root) else 0
-    rm = member_of(path) if path else None
-    if rm is None or os.path.isdir(path) or not os.path.isdir(rm[0]):
+    rm = member_of(path)
+    if rm is None or not os.path.isdir(rm[0]):
         return 0
     return len(member_files(*rm))
+
+
+def run_paths(root, entries=None):
+    """Every run of a root: its members' paths, then the mean's (more than one member)."""
+    ms = members(root, entries)
+    return [member_path(root, m) for m in ms] + [mean_path(root)] * (len(ms) > 1)
+
+
+def open_path(root):
+    """The run to open for a root: the wofs_member setting's member (or the mean)."""
+    ms = members(root)
+    if not ms:
+        return root
+    m = default_member(ms)
+    return mean_path(root) if m is None else member_path(root, m)
 
 
 # ------------------------------------------------------------------ reading
@@ -435,7 +499,8 @@ class WoFSRun(Run):
     def _locate(self):
         """Set root, member, members and path (<root>/memNN); [(valid time, file)]."""
         if is_root(self.path):
-            self.root, self.member = self.path, members(self.path)[0]
+            ms = members(self.path)
+            self.root, self.member = self.path, (default_member(ms) or ms[0])
         else:
             rm = member_of(self.path)
             if rm is None:

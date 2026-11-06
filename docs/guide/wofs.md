@@ -1,28 +1,33 @@
 # WoFS and WRF ensemble output
 
 cm1view also reads the output of **WoFS** (the Warn-on-Forecast System) and of other
-DART-cycled WRF ensembles laid out the same way. A run in cm1view is one **member**, or the
-**ensemble mean**, and the map, soundings, cross-sections, series, 3D views, figures and
-export work on it as on a CM1 run. This page covers what is different.
+DART-cycled WRF ensembles laid out the same way. A WoFS experiment is **one run** in cm1view;
+you choose which **member** (or the **ensemble mean**) to look at inside it, and the map,
+soundings, cross-sections, series, 3D views, figures and export work on it as on a CM1 run. This
+page covers what is different.
 
 To try it without data, run `cm1view --demo wofs`: a small synthetic ensemble (three members,
 terrain that rises toward the east, a storm moving north-east).
 
 ## What is read
 
-A WoFS folder (the **root**) holds one folder per cycle, named `YYYYMMDDHHMM`, and in each of
-them one WRF file per member:
+A WoFS experiment folder (the **root**; its name is the run's name) holds one folder per date,
+`YYYYMMDD`, each holding one folder per cycle, `YYYYMMDDHHMM`, and in each of those one WRF file
+per member:
 
 ```
-<root>/202205232200/wrfout_d01_2022-05-23_22:00:00_1
-                    wrfout_d01_2022-05-23_22:00:00_2
-                    ...
-<root>/202205232205/wrfout_d01_2022-05-23_22:05:00_1
+<root>/20220523/202205232200/wrfout_d01_2022-05-23_22:00:00_1
+                             wrfout_d01_2022-05-23_22:00:00_2
+                             ...
+<root>/20220523/202205232203/wrfout_d01_2022-05-23_22:03:00_1
 ```
 
-Only the `wrfout_d01_<time>_<member>` files are read. DART files, `wrfinput`, `obs_seq` and
-logs in the same folders are ignored. Each file is one output time, so a run's times are the
-cycle times; they are shown in UTC, and run time is seconds since the first cycle.
+A run that cycles across 00 UTC has two date folders; their cycles are joined into one
+timeline. Cycle folders straight in the root are read too (as when you open a date folder).
+Only the `wrfout_d01_<time>_<member>` files are read. DART files, `wrfinput`, `obs_seq`, logs and
+the experiment's other folders (`FCST`, `postpr`, `summary`, ...) are ignored. Each file is one
+output time, so a run's times are the cycle times; they are shown in UTC, and run time is
+seconds since the first cycle.
 
 ## Choosing the model
 
@@ -36,19 +41,29 @@ cm1view --model wofs /path/to/root
 cm1view export --model wofs ...        # likewise for the export command
 ```
 
-## Member and mean runs
+To look in a folder you type or paste into the picker, end it with `/` or press Enter. The
+picker never searches shared folders (`/`, top-level folders, folders owned by root such as a
+cluster's scratch or work root, or the folders above your home): type a folder of your own.
 
-Each member and the mean is its own run, addressed by a path that does not exist on disk:
+## Members and the mean
 
-| Run | Path |
+The picker lists the experiment once (e.g. *bnrhf_ctrl · WoFS · 36 members · 81 output
+times*). It opens on member 1; the **WoFS member opened first** setting (`wofs_member`: a
+member number, or `mean`) changes that. The **Member** box next to the run name in the viewer
+switches to another member or the mean, keeping the view (time, map, fields, tools).
+
+Under the hood each member and the mean is read as a run of its own, with a path that does
+not exist on disk:
+
+| Member | Path |
 |---|---|
 | Member 1, 2, … | `<root>/mem01`, `<root>/mem02`, … |
 | The ensemble mean | `<root>/mean` |
-| The root itself | opens member 1 |
+| The root itself | opens the `wofs_member` setting's member |
 
-The picker lists them all under the root. Because every one has its own path, they keep
-their own cache, saved figures and exports, and can sit side by side in a
-[figure](figures-panels.md) (the *Runs* of a layer) or be compared as a difference ([The map](map.md)).
+So each keeps its own cache, saved figures and exports, and members can sit side by side in
+a [figure](figures-panels.md) (a layer's run list offers *bnrhf_ctrl · Member 5* and so on)
+or be compared as a difference ([The map](map.md)).
 
 ## Heights
 

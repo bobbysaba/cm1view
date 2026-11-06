@@ -68,6 +68,10 @@ KEYS = [
         "That goes wrong when the outputs are far apart, so trajectories are turned off "
         "for runs whose output comes less often than this many seconds. 0: never turn "
         "them off.", kind="int"),
+    Key("wofs_member", "data", "1", "WoFS member opened first",
+        "Which ensemble member a WoFS run opens on: a member number, or mean for the "
+        "ensemble mean (slower: reads every member's file). A member the run lacks: "
+        "its first. Switch members in the viewer's Member box."),
     Key("allow_writes_to_output", "data", False, "Allow writing into output files",
         "Lets the pressure decomposition write its fields into the CM1 output files. "
         "Off: results stay in memory.", kind="bool"),
@@ -454,13 +458,32 @@ def _is(entry, kind):
         return False
 
 
+def searchable(path):
+    """May cm1view search (list, look inside the folders of) `path`?  Never a shared
+    folder: "/", a top-level folder, a folder owned by root (on a cluster, the shared
+    roots: /scratch, /work, /home, ...) or a folder above your home folder.  Searching
+    those lists every user's folders, which slows the filesystem for everyone."""
+    try:
+        p = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+        if p.count(os.sep) <= 1 or not os.path.isdir(p):
+            return False
+        home = os.path.realpath(os.path.expanduser("~"))
+        if home.startswith(p.rstrip(os.sep) + os.sep):
+            return False
+        return os.stat(p).st_uid != 0 or os.getuid() == 0
+    except (OSError, ValueError):
+        return False
+
+
 def scan_runs(roots=None, depth=5, limit=500, seconds=4.0, model=None):
     """Run folders under the roots (breadth first, hidden folders skipped, no search
-    inside a run), of `model` (a core.models key; None/"auto": any model).  Returns
-    (runs, complete)."""
+    inside a run), of `model` (a core.models key; None/"auto": any model).  Roots that
+    are not searchable() (shared folders) are skipped.  Returns (runs, complete)."""
     from .core import models
     t0, runs, complete = time.time(), [], True
     level = [expand(r) for r in (get("runs_root") if roots is None else roots) if r]
+    complete = all(searchable(r) for r in level)
+    level = [r for r in level if searchable(r)]
     for _ in range(depth + 1):
         nxt = []
         for d in level:
@@ -479,7 +502,7 @@ def scan_runs(roots=None, depth=5, limit=500, seconds=4.0, model=None):
         if not level:
             break
     else:
-        complete = not level
+        complete = complete and not level
     return sorted(runs), complete
 
 

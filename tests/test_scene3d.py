@@ -130,7 +130,7 @@ def test_scene_data_round_trips_through_the_saved_arrays():
     # nothing but a floor
     d = scene3d.scene_data(dict(meshes=[], ground=None, vecs=[], stream=None), BOX, 8.0)
     a = scene3d.scene_arrays(d)
-    assert a == dict(meshes=[], ground=None, vecs=[], stream=None)
+    assert a == dict(meshes=[], ground=None, vecs=[], stream=None, terrain=None)
 
 
 def test_reflectivity_floor_steps_every_5_dbz():

@@ -114,6 +114,8 @@ def test_the_3d_pane_ignores_a_late_restyle_echo():
 class _Run(SimpleNamespace):
     """RUN with what build_scene needs: volumes kept in a dict, loading counted."""
 
+    terrain = False  # (a flat run, as Run)
+
     def ij(self, x, y):
         return (int(np.clip(np.rint((x - X1[0]) * 2), 0, len(X1) - 1)),
                 int(np.clip(np.rint((y - X1[0]) * 2), 0, len(X1) - 1)))

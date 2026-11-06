@@ -25,7 +25,8 @@ def grid():
     """A 1 km grid, 81 x 81 columns centred on (0, 0), 5 levels from 0.25 km."""
     x = np.arange(-40.0, 40.5, 1.0)
     run = SimpleNamespace(xh=x, yh=x.copy(), z=np.arange(5) * 0.5 + 0.25, dx=1000.0,
-                          dy=1000.0, ni=x.size, nj=x.size, times=[0.0, 60.0])
+                          dy=1000.0, ni=x.size, nj=x.size, times=[0.0, 60.0],
+                          terrain=False)
     X, Y = np.meshgrid(run.xh, run.yh)
     return run, X, Y
 

@@ -204,7 +204,7 @@ def test_vectors_as_barbs_in_knots():
 def test_strip_averaged_section():
     from types import SimpleNamespace
     from cm1view.figures.spec.arrays import _strip
-    run = SimpleNamespace(dx=1000.0, dy=1000.0, z=np.array([0.5, 1.5]))
+    run = SimpleNamespace(dx=1000.0, dy=1000.0, z=np.array([0.5, 1.5]), terrain=False)
     vol = np.broadcast_to((np.arange(11.0) ** 2)[None, :, None], (2, 11, 11)).copy()
     fi, fj, zq = np.arange(2.0, 9.0), np.full(7, 5.0), np.array([0.5, 1.0])
     line = _strip(run, vol, fi, fj, zq, (0.0, 1.0), 0.0)  # along x, at y index 5
