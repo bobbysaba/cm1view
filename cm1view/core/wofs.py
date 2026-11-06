@@ -37,7 +37,9 @@ from collections import OrderedDict
 import netCDF4
 import numpy as np
 
-from .run import IO_LOCK, Run, VarInfo, _read_volume_worker
+from . import geo
+from .run import (IO_LOCK, Run, VarInfo, _drop_pending, _read_volume_worker,
+                  check_cancelled, report)
 
 G = 9.81  # m/s^2, as WRF
 
@@ -356,12 +358,15 @@ class _Mean:
     """The same field of several members, indexed like a netCDF variable: the mean of
     their values (summed in float64)."""
 
-    def __init__(self, vs):
-        self.vs = vs
+    def __init__(self, vs, name=""):
+        self.vs, self.name = vs, name
 
     def __getitem__(self, key):
+        n = len(self.vs)
         acc = np.array(self.vs[0][key], dtype=np.float64)
-        for v in self.vs[1:]:
+        for i, v in enumerate(self.vs[1:], 1):  # (read on this thread: tell, may stop)
+            report(0, 1, f"{self.name} · {i}/{n} members")
+            check_cancelled()
             acc += np.asarray(v[key], dtype=np.float64)
         return (acc / len(self.vs)).astype(np.float32)
 
@@ -387,7 +392,7 @@ class WRFMeanView:
             except BaseException:
                 self.close()
                 raise
-        return _Mean([v[name] for v in self._views])
+        return _Mean([v[name] for v in self._views], name)
 
     def close(self):
         for v in self._views or ():
@@ -446,6 +451,10 @@ class WoFSRun(Run):
     model_label = "WoFS"
     terrain = True
     traced_parcels = True  # (WoFS has no parcel output: core.trajcalc)
+    storm_relative = False  # (how to get the storm motion is still to be decided)
+    # every cycle is a fresh DART analysis, so tracked fixes jump by its increments:
+    # storm motion is fitted over 30 min of track (core.track.motion)
+    track_window = 1800.0
 
     def __init__(self, path, cache_gb=12.0, workers=None, cache=None):
         super().__init__(path, cache_gb, workers, cache)
@@ -488,6 +497,10 @@ class WoFSRun(Run):
                 zf = zw.mean(axis=(1, 2)) / 1000.0
             else:
                 raise ValueError(f"{self.files[0]} has no PH, PHB and HGT (heights)")
+            lat = lon = None
+            if "XLAT" in d.variables and "XLONG" in d.variables:
+                lat = np.asarray(d["XLAT"][0], np.float64)
+                lon = np.asarray(d["XLONG"][0], np.float64)
         # x, y (km) of mass points, origin at the domain centre (as CM1 runs)
         self.xh = (np.arange(ni) - 0.5 * (ni - 1)) * dx / 1000.0
         self.yh = (np.arange(nj) - 0.5 * (nj - 1)) * dy / 1000.0
@@ -495,6 +508,9 @@ class WoFSRun(Run):
         self.z = 0.5 * (self.zf[:-1] + self.zf[1:])
         self._hgt = hgt / 1000.0  # ground height (km MSL); WRF's HGT does not change
         self._grid_done()
+        # the grid on the Earth (None if its projection is not one cm1view knows or does
+        # not match the file's XLAT, XLONG)
+        self.geo = geo.from_wrf(self.attrs, self.xh, self.yh, lat, lon)
 
     def _locate(self):
         """Set root, member, members and path (<root>/memNN); [(valid time, file)]."""
@@ -616,8 +632,18 @@ class WoFSMeanRun(WoFSRun):
                 for n, stag in wants for p in parts}
         got = {n: [] for n, _ in wants}
         pending, finished = set(futs), 0
-        if progress:
-            progress(0, len(wants), wants[0][0])
+        members = sum(len(p.pairs) for p in parts)
+        read = 0  # member reads done, over all the fields
+
+        def tell():  # e.g. "th · 18/36 members" (or "th, qv · 40/72 member reads")
+            if progress:
+                left = [n for n, _ in wants if n in got]
+                what = ", ".join(left[:3]) + (", …" if len(left) > 3 else "")
+                unit = "members" if len(wants) == 1 else "member reads"
+                progress(finished, len(wants),
+                         f"{what or wants[-1][0]} · {read}/{members * len(wants)} {unit}")
+
+        tell()
         try:
             for fut in as_completed(futs):
                 pending.discard(fut)
@@ -627,21 +653,16 @@ class WoFSMeanRun(WoFSRun):
                     got[n].append((np.load(path), k))
                 finally:
                     os.remove(path)
+                read += k
                 if len(got[n]) == len(parts):
                     done(n, self._combine(got.pop(n)))
                     finished += 1
-                    if progress:
-                        progress(finished, len(wants), n)
+                tell()
                 if cancelled and cancelled() and pending:
                     return False
             return True
         finally:
-            for f in pending:  # (cancelled or failed: tidy what the others wrote)
-                if not f.cancel():
-                    try:
-                        os.remove(f.result())
-                    except Exception:
-                        pass
+            _drop_pending(pending)  # (cancelled or failed: tidy what the others write)
 
     def _read_into_cache(self, missing, t, protect, progress, cancelled):
         if self.workers <= 1 or not self._shm:  # (in this process: WRFMeanView)

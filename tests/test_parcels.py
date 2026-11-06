@@ -191,7 +191,8 @@ def test_for_run(reg):
 # ------------------------------------------------------------------ the Parcels panel
 def _wait_sets(v, n):
     from conftest import wait
-    wait(lambda: len(v.psets) >= n, msg=f"{n} parcel sets")
+    # (added on the pool's thread: listed in psets first, drawn a moment later)
+    wait(lambda: len(v.psets) >= n and v._par_added >= n, msg=f"{n} parcel sets")
 
 
 @pytest.fixture

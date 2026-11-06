@@ -263,16 +263,20 @@ class ConfirmOverwrite:
         self.yes.on_click(self._yes)
         self.no.on_click(lambda e: self.modal.hide())
 
-    def ask(self, paths, then):
+    def ask(self, paths, then, title=None, note=""):
+        """Run `then`, asking first when a path exists (title: the question; note: a
+        line under the file list)."""
         there = [p for p in paths if os.path.exists(p)]
         if not there:
             then()
             return
         self._then = then
         files = "".join(f"<li><code>{html.escape(p)}</code></li>" for p in there)
-        self.text.object = ('<div class="cv-maptitle" style="font-size:16px"><b>Replace '
-                            f'existing file{"s" * (len(there) > 1)}?</b></div>'
-                            f'<ul class="cv-hint" style="margin:8px 0">{files}</ul>')
+        title = title or f'Replace existing file{"s" * (len(there) > 1)}?'
+        self.text.object = ('<div class="cv-maptitle" style="font-size:16px"><b>'
+                            f'{html.escape(title)}</b></div>'
+                            f'<ul class="cv-hint" style="margin:8px 0">{files}</ul>'
+                            + (f'<div class="cv-hint">{note}</div>' if note else ''))
         self.modal.show()
 
     def _yes(self, ev):

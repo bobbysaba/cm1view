@@ -8,7 +8,7 @@ import warnings
 import numpy as np
 
 from ... import config
-from ...core import track as trk
+from ...core import geo, track as trk
 from ...core.render import regrid, same_grid as _same
 from .. import draw as figdraw
 from .sections import panel_section, section_defaults, to_cards, upgrade_sections
@@ -48,6 +48,10 @@ def layer_defaults(kind, F, field=None, z=1.0):
         return dict(type="sector", on=True, color="k", lw=1.5, ls="-", az0=0.0, az1=360.0,
                     rmax=20.0, ref="motion", center="track", offx=0.0, offy=0.0, cx=0.0,
                     cy=0.0, legend="")
+    if kind == "boundaries":  # (runs on a map projection, Run.geo: coastlines ... counties,
+        # geo.KINDS; grid: lat/lon lines every `step` degrees, 0: auto, labelled at the edges)
+        return dict(type="boundaries", on=True, kinds=list(geo.SHOWN), color="#555555",
+                    lw=0.6, grid=False, step=0.0, grid_labels=True, legend="")
     if kind == "parcels":  # (a parcel set: its rule, or its indices without one)
         return dict(type="parcels", on=True, name="parcels", rule=None, ids=None,
                     color="#d62728", cvar="", units="", cmap="viridis", reverse=False,
@@ -67,13 +71,17 @@ def _refl_cmap():
         return "reflectivity"
 
 
-def run_entry(run, track=None):
+def run_entry(run, track=None, storm=None):
     """A spec["runs"] entry for `run`: its path, a label (the folder name) and a storm
     track ("viewer": the viewer's Track tab, a CSV / text file, or "": none; default:
-    a storm_tracks file found next to the run, else none)."""
+    a storm_tracks file found next to the run, else none); storm: which storm of a track
+    file holding several (a "storm" key; none: the file's first)."""
     if track is None:
         track = find_track(run.path) or ""
-    return dict(path=run.path, label=os.path.basename(run.path.rstrip("/")), track=track)
+    e = dict(path=run.path, label=os.path.basename(run.path.rstrip("/")), track=track)
+    if storm:
+        e["storm"] = storm
+    return e
 
 
 def find_track(path):
@@ -100,6 +108,8 @@ def default_spec(run, F, t=0):
         layers.append(layer_defaults("contour", F, "winterp", 3.0))
     if "uinterp" in F:
         layers.append(dict(layer_defaults("vectors", F), on=False))
+    if getattr(run, "geo", None) is not None:  # (a run on a map: its borders on top)
+        layers.append(layer_defaults("boundaries", F))
     times = spread_times(nt, t, 6)
     rows, cols = (1, len(times)) if len(times) <= 3 else (2, (len(times) + 1) // 2)
     return dict(

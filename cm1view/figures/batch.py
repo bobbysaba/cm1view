@@ -114,6 +114,16 @@ def finish(spec, run, F, t, code=False):
     return dict(spec, parts=parts, runs=runs)
 
 
+def with_storm(spec, storm):
+    """Every run of `spec` (in place) follows storm `storm` of its track file."""
+    from ..core import track as trk
+    name = trk.storm_name(storm)
+    for p in [spec] + list(spec.get("parts") or []):
+        for e in p.get("runs") or []:
+            e["storm"] = name
+    return spec
+
+
 def first_time(spec):
     """Model time (s) of the figure's first panel (None: it has none)."""
     refs = fg.time_refs(spec)
@@ -147,10 +157,11 @@ def as_saved(spec, fd, time_s=None, code=False):
         for e in p.get("runs") or []:
             if not models.exists(config.expand(e["path"])):
                 raise ValueError(f"run folder {e['path']} not found")
-            if e.get("track") == "viewer":
+            if e.get("track") == "viewer":  # (its storm, if named, of that file)
                 e["track"] = fg.find_track(config.expand(e["path"])) or ""
+                what = f"storm {e['storm']} of " if e.get("storm") and e["track"] else ""
                 notes.append(f"{e['path']}: the viewer's track is not saved with the "
-                             "figure; " + (f"using {e['track']}" if e["track"] else
+                             "figure; " + (f"using {what}{e['track']}" if e["track"] else
                                            "no storm_tracks file found, so no track"))
     fg.fill_outputs(s, fd.open_run)  # (runs paired by output number: as they are now)
     notes = list(dict.fromkeys(notes))
@@ -319,6 +330,10 @@ def parser():
     ap.add_argument("--time", type=float, default=None, metavar="MIN",
                     help="model time (min) of the first panel; the others keep their "
                          "spacing (default: the saved figure's)")
+    ap.add_argument("--storm", default=None, metavar="NAME",
+                    help="which storm of track files holding several (a 'storm' column) "
+                         "the figure follows, for every run (default: the figure's or "
+                         "template's, else each file's first)")
     ap.add_argument("--out", default=None, metavar="PATH",
                     help="where to save (its extension, if any, sets the format); default: "
                          "where the figure was saved, or <figures folder>/<run>/<name> "
@@ -430,6 +445,8 @@ def main(argv=None):
                 s, notes = on_run(spec, is_tpl, name, run, F, time_s, args.code), []
             else:
                 s, notes = as_saved(spec, fd, time_s, args.code)
+            if args.storm:
+                with_storm(s, args.storm)
             for note in notes:
                 say(f"note: {note}")
             for p in _parts(s) + ([s] if s.get("kind") == "combo" else []):

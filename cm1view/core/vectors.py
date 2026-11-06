@@ -33,9 +33,29 @@ def options(F):
     return {d.label: k for k, d in VECTORS.items() if all(c in F for c in d.comps[:2])}
 
 
+FRAMES = {"Ground-relative": "ground", "Grid-relative": "grid", "Storm-relative": "storm"}
+
+
+def frames(run=None):
+    """{label: key} of the frames a run's winds can be shown in (None: every frame).
+    A run without storm-relative winds (Run.storm_relative) is ground-relative only:
+    its grid does not move, so grid-relative would be the same."""
+    if run is None or getattr(run, "storm_relative", True):
+        return dict(FRAMES)
+    return {"Ground-relative": "ground"}
+
+
+def frame_of(run, frame, default="ground"):
+    """`frame` if the run offers it, else `default` (else its first frame): what a saved
+    session or figure asking for another frame gets."""
+    ok = frames(run).values()
+    return frame if frame in ok else (default if default in ok else next(iter(ok)))
+
+
 def to_frame(run, u, v, frame, storm):
     """Grid-relative winds -> the frame: 'ground', 'grid' or 'storm' (storm motion
     ground-relative m/s; None: the domain motion)."""
+    frame = frame_of(run, frame)
     if frame == "ground":
         return u + run.umove, v + run.vmove
     if frame == "storm":

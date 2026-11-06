@@ -3,6 +3,8 @@
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
+import threading
+import time
 import traceback
 from functools import partial
 
@@ -17,7 +19,7 @@ from bokeh.transform import transform
 
 from .. import pdecomp
 from ..core import render, track as trk, vectors
-from ..core.run import FileBusy, MissingAtTime
+from ..core.run import Cancelled, FileBusy, MissingAtTime, reporting
 from ..core.fields import deriv_name, palette
 from ..theme import ACCENT, BG, GRID, MUTED
 from .ui import EMPTY_LINES, EMPTY_VEC, KEEP_ASPECT_JS, _cbar_label, _html, style_fig
@@ -68,6 +70,9 @@ class MapView:
         self.vec_r = []  # each vector layer's glyphs (Widgets._add_vec)
         for _ in self.vecs:
             self._vec_glyphs(fig)
+        hover = HoverTool(renderers=[self.img_r],
+                          tooltips=[("x, y", "$x{0.0}, $y{0.0} km"), ("value", "@image{0.000}")])
+        self._build_geo(fig, hover)  # (boundaries, lat/lon lines: runs with a map projection)
 
         self.box_src = ColumnDataSource(dict(left=[], right=[], bottom=[], top=[]))
         fig.quad(left="left", right="right", bottom="bottom", top="top", source=self.box_src,
@@ -112,8 +117,6 @@ class MapView:
 
         self.pan, self.wz = PanTool(), WheelZoomTool()
         self.bsel = BoxSelectTool(renderers=[outline], dimensions="both")
-        hover = HoverTool(renderers=[self.img_r],
-                          tooltips=[("x, y", "$x{0.0}, $y{0.0} km"), ("value", "@image{0.000}")])
         fig.add_tools(self.pan, self.wz, BoxZoomTool(match_aspect=True), self.bsel, hover,
                       self.trk_hover, ResetTool(), SaveTool())
         fig.toolbar.active_drag = self.pan
@@ -281,9 +284,63 @@ class MapView:
         g, spec = self.gen["map"], self._map_spec()
         self.pools["map"].submit(self._map_job, spec, g)
 
+    # a map taking longer than this shows "Loading…" (with reading progress) meanwhile
+    LOADING_AFTER = 0.3
+
     def _map_job(self, spec, g):
         if g != self.gen["map"]:
             return
+        t0, said = time.monotonic(), [0.0, None]  # (last update, latest progress)
+
+        def show():  # (on the page thread)
+            if g == self.gen["map"]:
+                self._set_status(self._map_loading_html(said[1], time.monotonic() - t0))
+
+        def progress(done, total, what):  # throttled: at most 4 updates a second
+            said[1] = (done, total, what)
+            now = time.monotonic()
+            if now - t0 >= self.LOADING_AFTER and now - said[0] >= 0.25 \
+                    and g == self.gen["map"]:
+                said[0] = now
+                self._schedule(show)
+
+        stop = threading.Event()
+
+        def tick():  # "Loading…" once it takes a while; the seconds count on meanwhile
+            wait = self.LOADING_AFTER
+            while not stop.wait(wait) and g == self.gen["map"]:
+                if time.monotonic() - said[0] >= 0.9:
+                    self._schedule(show)
+                wait = 1.0
+
+        threading.Thread(target=tick, daemon=True).start()
+        try:
+            with reporting(progress, cancelled=lambda: g != self.gen["map"]):
+                res, spec = self._compute_map(spec)
+        except Cancelled:  # (a newer map was asked for: it says what it is doing)
+            return
+        finally:
+            stop.set()
+        if g == self.gen["map"]:
+            self._schedule(partial(self._apply_map, res, spec, g))
+
+    def _map_loading_html(self, prog, secs):
+        """Status while a map is being made: what is read, and how long it has taken."""
+        mean = getattr(self.run, "stat", None)
+        head = "Ensemble mean: reading" if mean else "Loading"
+        what = ""
+        if prog:
+            done, total, name = prog
+            what = f" {name}" + (f" · field {min(done + 1, total)}/{total}"
+                                 if total > 1 and "member" not in name else "")
+        elif mean:
+            head = "Ensemble mean: computing"
+        secs = f" · {secs:.0f} s" if secs >= 1 else ""
+        return f'<span class="busy cv-maploading">● {head}{what}…{secs}</span>'
+
+    def _compute_map(self, spec):
+        """(result or error, spec with any difference resolved to the {F, t, label} it
+        subtracts: the title says it)."""
         try:
             if any(pdecomp.is_pdecomp(self.F, n) for n in
                    self._spec_names(spec)):
@@ -291,14 +348,14 @@ class MapView:
             m = spec["fill"].get("minus")
             if m:  # (a difference: the other run / time it subtracts, opened here)
                 spec = dict(spec, fill=dict(spec["fill"], minus=self._minus_ref(m, spec["t"])))
-            res = render.compute_map(self.F, spec)
+            return render.compute_map(self.F, spec), spec
         except (MissingAtTime, FileBusy) as e:  # fields at other times only / being written
-            res = e
+            return e, spec
+        except Cancelled:
+            raise
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
-            res = e
-        if g == self.gen["map"]:
-            self._schedule(partial(self._apply_map, res, spec, g))
+            return e, spec
 
     def _apply_map(self, res, spec, g):
         if g != self.gen["map"]:
@@ -314,7 +371,7 @@ class MapView:
                 self._set_status(f'<span style="color:#f87171">Map error: {res}</span>')
             return
         old = self.status.object or ""
-        if "Map error" in old or "is not in the output" in old:
+        if "Map error" in old or "is not in the output" in old or "cv-maploading" in old:
             self._set_status("")
         F, run = self.F, self.run
         fill, fs = res.get("fill"), spec["fill"]

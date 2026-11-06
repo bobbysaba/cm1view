@@ -316,3 +316,14 @@ def test_autosave_failure_is_said_once(viewer, monkeypatch):
     assert not [n for n in os.listdir(os.path.dirname(ed._auto_path())) if n.endswith(".tmp")]
 
 
+
+
+def test_cm1_map_has_no_boundaries(viewer):
+    """An idealized run is not on the Earth: no Boundaries pill, no lat, lon in the
+    hover, nothing in its session."""
+    v = viewer
+    assert v.geo is None and "geo" not in v.map_drawer.items
+    assert "boundaries" not in v.session_state()
+    hover = [t for t in v.fig.tools if type(t).__name__ == "HoverTool"
+             and v.img_r in t.renderers][0]
+    assert all(k != "lat, lon" for k, _ in hover.tooltips)

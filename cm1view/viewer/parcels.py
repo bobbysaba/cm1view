@@ -56,6 +56,7 @@ BANDS = {"No band": "", "Min to max": "minmax", "10–90th percentile": "p10p90"
 class ParcelsPanel:
     pf = None  # the run's ParcelFile (None: no parcel output)
     _par_key = None  # what the drawn trajectories show (redrawn only when it changes)
+    _par_added = 0  # parcel sets added and drawn so far (tests wait for it)
     _par_xs_t = None  # model time (s) of the cross-section shown
     _par_xs_key = _par_3d_key = _pp_key = None  # (likewise, on the section, in 3D, plot)
     _par_busy = None  # (gen, names) of the trajectory read under way
@@ -486,6 +487,7 @@ class ParcelsPanel:
         self._par_list_options(name)
         self._par_redraw()
         self._update_items()
+        self._par_added += 1  # (last: the set is listed and drawn)
 
     def _par_list_options(self, value=None):
         names = list(self.psets)

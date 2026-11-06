@@ -160,6 +160,7 @@ class View3DPanel:
         if self._applying:  # (a session going back: once, at its end)
             self._due.add("3d")
             return
+        self._3d_stale = False
         if self.box is None:
             self._set_box(self.view)
         self.gen["3d"] += 1

@@ -25,9 +25,16 @@ class FigureSources:
         storm_tracks file next to the run (the Track tab when there is neither)."""
         return "viewer" if self.v.fixes else (fg.find_track(self.run.path) or "viewer")
 
+    def _viewer_storm(self):
+        """The storm the viewer's Track tab follows ("": none named)."""
+        box = getattr(self.v, "trk_storm", None)
+        return (box.value or "").strip() if box is not None and self.v.fixes else ""
+
     def _keep_runs(self, s):
         """A new spec of this run keeps the runs already added (this run selected)."""
         s["runs"][0]["track"] = self._own_track()
+        if self._viewer_storm():  # (the viewer's storm, also of a track file found)
+            s["runs"][0]["storm"] = self._viewer_storm()
         doc = self.shell.doc if self.shell is not None else None
         if doc is not None:
             runs = [{k: v for k, v in r.items() if k != "id"} for r in doc["runs"]]
@@ -134,6 +141,14 @@ class FigureSources:
                        color=_dark(o["color"]), scale=vectors.FIG_SCALE * o["ref"])
             layers.append(lay)
         layers += self._parcel_layers()
+        # (a run on a map: its Boundaries, as the map draws them)
+        geo = getattr(v, "_geo_state", lambda: None)()
+        if geo is not None and (geo["kinds"] or geo["grid"]):
+            c = geo["color"]
+            layers.append(dict(fg.layer_defaults("boundaries", F), kinds=list(geo["kinds"]),
+                               color="#555555" if _dark(c) != c else c,
+                               lw=0.6 * float(geo["width"]), grid=bool(geo["grid"]),
+                               step=float(geo["step"] or 0.0)))
         s = self._keep_runs(fg.default_spec(self.run, F, t))
         self._times(s, [t], t)
         self._minus(s, layers[0], sp["fill"].get("minus"), v._last_range)

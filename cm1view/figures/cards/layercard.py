@@ -7,10 +7,10 @@ import panel as pn
 from .. import spec as fg
 import os
 
-from ...core import parcels as P, vectors
+from ...core import geo, parcels as P, vectors
 from ...core.fields import deriv_name, split_deriv
 from .base import (
-    LEVEL_MODES, TERRAIN_LEVEL_MODES, FRAMES, HATCHES, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS,
+    LEVEL_MODES, TERRAIN_LEVEL_MODES, HATCHES, REDUCE, GRIDS, AZ_REFS, AZ_CENTERS,
     LINE_STYLES,
     PAR_MOVING, PAR_TAILS, PAR_XS_TAILS, _deriv_opts, _hex, _f, _grid, _hint, _checks,
     _near, _nice, _chk, _section, _take_new_runs,
@@ -57,6 +57,12 @@ def parcel_pick(ed, choice):
         return None
     return dict(name=ps.name, rule=ps.rule or None,
                 ids=None if ps.rule else [int(i) for i in ps.ids])
+
+
+def _step_value(step):
+    """A Map boundaries layer's lat/lon step as one of the Every list's (0: auto)."""
+    s = float(step or 0.0)
+    return min(geo.STEPS, key=lambda v: abs(v - s)) if s > 0 else 0.0
 
 
 class LayerCard:
@@ -186,8 +192,9 @@ class LayerCard:
             w["style"] = pn.widgets.Select(name="Draw as", options={
                 "Arrows": "arrows", "Barbs (plan views)": "barbs",
                 "Streamlines": "streamlines"}, value=lay.get("style", "arrows"))
-            w["frame"] = pn.widgets.Select(name="Frame", options=FRAMES,
-                                           value=lay.get("frame", "ground"))
+            run = getattr(ed, "run", None)
+            w["frame"] = pn.widgets.Select(name="Frame", options=vectors.frames(run),
+                                           value=vectors.frame_of(run, lay.get("frame", "ground")))
             w["z"] = _f("Height (km)", lay.get("z", 0.0), step=0.25)
             w["spacing"] = _f("Spacing (km)", lay.get("spacing", 2.0), step=0.25)
             w["zspacing"] = _f("Vertical spacing (km)", lay.get("zspacing", 0.5), step=0.1)
@@ -213,9 +220,21 @@ class LayerCard:
                 w[k] = _f(lab, float(lay.get(k, v)), step=st)
             w["ref"] = pn.widgets.Select(name="Azimuth 0", options=AZ_REFS,
                                          value=lay.get("ref", "motion"))
-        if t in ("contour", "shade", "vectors", "track", "line", "sector"):
+        if t == "boundaries":
+            have = [k for k in lay.get("kinds") or [] if k in geo.KINDS]
+            w["kinds"] = pn.widgets.CheckButtonGroup(
+                name="Lines", options={geo.KIND_LABELS[k]: k for k in geo.KINDS}, value=have,
+                button_type="primary", button_style="outline", height=32,
+                description="Boundary lines drawn on the panel")
+            w["grid"] = pn.widgets.Checkbox(name="Lat/lon lines", value=bool(lay.get("grid")))
+            w["step"] = pn.widgets.Select(
+                name="Every", options={"Auto": 0.0, **{f"{s:g}°": s for s in geo.STEPS}},
+                value=_step_value(lay.get("step")))
+            w["grid_labels"] = pn.widgets.Checkbox(name="Label them at the edges",
+                                                   value=lay.get("grid_labels", True))
+        if t in ("contour", "shade", "vectors", "track", "line", "sector", "boundaries"):
             w["color"] = pn.widgets.ColorPicker(name="Colour", value=_hex(lay.get("color", "k")))
-        if t in ("contour", "shade", "track", "line", "sector"):
+        if t in ("contour", "shade", "track", "line", "sector", "boundaries"):
             w["lw"] = _f("Outline width" if t == "shade" else "Line width", lay.get("lw", 1.0),
                          step=0.25)
         if t in ("track", "sector"):
@@ -234,7 +253,7 @@ class LayerCard:
                 value=lay.get("which", "all"))
         if t == "parcels":
             self._parcel_widgets(lay)
-        if t in ("contour", "shade", "track", "line", "sector", "parcels"):
+        if t in ("contour", "shade", "track", "line", "sector", "parcels", "boundaries"):
             w["legend"] = pn.widgets.TextInput(name="Legend entry (blank: none)",
                                                value=lay.get("legend", ""),
                                                placeholder="e.g. w = 10, 20 m s⁻¹")
@@ -345,6 +364,13 @@ class LayerCard:
                           "parcels are then. Coloured by a variable, the panel's colorbar "
                           "is theirs when it has no fill; give a Min and Max so panels "
                           "agree.")]
+        if t == "boundaries":
+            return [w["kinds"], _grid(w["color"], w["lw"], (w["legend"], 2)),
+                    _checks(w["grid"], w["grid_labels"], title="Lat/lon lines"),
+                    _grid(w["step"]),
+                    _hint("Coastlines, borders, states, lakes and US counties where the "
+                          "run's grid sits on the Earth (its map projection), saved with the "
+                          "figure. Counties are drawn thinner and lighter.")]
         if t == "sector":
             return [_grid((w["center"], 2), w["offx"], w["offy"], w["cx"], w["cy"],
                           (w["ref"], 2), w["az0"], w["az1"], w["rmax"], w["color"], w["lw"],
@@ -395,6 +421,8 @@ class LayerCard:
         if t == "shade":
             w["outline"].visible = w["lw"].visible = w["outline_on"].value
             w["hatch_lw"].visible = bool(w["hatch"].value)
+        if t == "boundaries":
+            w["step"].visible = w["grid_labels"].visible = w["grid"].value
         if t == "track":  # (each panel's run's colour: the Runs node)
             w["color"].visible = not w["run_color"].value
         if t == "parcels":

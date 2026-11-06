@@ -23,7 +23,7 @@ import os
 
 import numpy as np
 
-VERSION = 1  # bump when the fields change: cached copies are rewritten
+VERSION = 2  # bump when the fields change: cached copies are rewritten
 
 G, P0 = 9.81, 1.0e5
 NI, NJ, NK, DX = 40, 40, 20, 3000.0  # mass points, levels, metres
@@ -32,6 +32,11 @@ MEMBERS = (1, 2, 3)
 START = datetime.datetime(2022, 5, 23, 22, 0)
 ZTOP = 16000.0  # m
 
+# the grid's map projection (WRF's attributes): a real WoFS domain's, centred on the
+# Texas Panhandle, so the demo has lat/lon and boundary lines (core.geo)
+PROJ = dict(MAP_PROJ=np.int32(1), TRUELAT1=np.float32(30.0), TRUELAT2=np.float32(60.0),
+            STAND_LON=np.float32(-102.75), CEN_LAT=np.float32(33.75),
+            CEN_LON=np.float32(-102.75), MOAD_CEN_LAT=np.float32(33.75))
 _DIMS = dict(T="zyx", P="zyx", PB="zyx", QVAPOR="zyx", QCLOUD="zyx", QRAIN="zyx",
              REFL_10CM="zyx", U="zyX", V="zYx", W="Zyx", PH="Zyx", PHB="Zyx",
              HGT="yx", UP_HELI_MAX="yx")
@@ -97,6 +102,16 @@ def fields(member, c):
         UP_HELI_MAX=uh)
 
 
+def latlon():
+    """XLAT, XLONG of the mass points (degrees, NJ x NI)."""
+    from .core import geo
+    xh = (np.arange(NI) - (NI - 1) / 2) * DX / 1000.0
+    yh = (np.arange(NJ) - (NJ - 1) / 2) * DX / 1000.0
+    g = geo.from_wrf(PROJ, xh, yh)
+    lon, lat = g.lonlat(*np.meshgrid(xh, yh))
+    return lat.astype(np.float32), lon.astype(np.float32)
+
+
 def write_member(fn, when, member, c):
     import netCDF4
     tmp = fn + ".part"
@@ -108,13 +123,19 @@ def write_member(fn, when, member, c):
                        ("bottom_top_stag", NK + 1)):
             d.createDimension(dim, n)
         d.setncatts(dict(DX=np.float32(DX), DY=np.float32(DX),
-                         TITLE=" OUTPUT FROM WRF (cm1view synthetic demo)"))
+                         TITLE=" OUTPUT FROM WRF (cm1view synthetic demo)", **PROJ))
         ts = d.createVariable("Times", "S1", ("Time", "DateStrLen"))
         ts[0] = netCDF4.stringtochar(np.array([f"{when:%Y-%m-%d_%H:%M:%S}"], "S19"))
         for name, a in fields(member, c).items():
             v = d.createVariable(name, "f4", ("Time",) + tuple(
                 _NAMES[ch] for ch in _DIMS[name]))
             v.setncatts(dict(description=f"synthetic {name}", units="", stagger=""))
+            v[0] = a
+        for (name, what, units), a in zip(
+                (("XLAT", "LATITUDE, SOUTH IS NEGATIVE", "degree_north"),
+                 ("XLONG", "LONGITUDE, WEST IS NEGATIVE", "degree_east")), latlon()):
+            v = d.createVariable(name, "f4", ("Time", "south_north", "west_east"))
+            v.setncatts(dict(description=what, units=units, stagger=""))
             v[0] = a
     os.replace(tmp, fn)
 

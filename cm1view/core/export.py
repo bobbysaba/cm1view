@@ -293,15 +293,16 @@ def times_between(run, t0_min=None, t1_min=None, every=1):
     return list(range(min(a, b), max(a, b) + 1, max(1, int(every))))
 
 
-def storm_motion(run, track):
+def storm_motion(run, track, storm=None):
     """storm(t) for write: the tracked storm's motion where the track (a storm_tracks
     file; 'auto': the run's own, found by the track_dirs setting) has a fix, else the
-    domain motion, as the viewer's map does.  (function, note)"""
+    domain motion, as the viewer's map does.  storm: which storm of a file holding
+    several (None: its first).  (function, note)"""
     from . import track as trk
     path = config.find_track(run.path) if track == "auto" else config.expand(track)
     if not path:
         return None, "no storm_tracks file found: storm-relative fields use umove, vmove"
-    fixes = trk.load(run, path)
+    fixes = trk.load(run, path, storm)
     m = {t: uv for t, uv in trk.motion(run, fixes).items() if np.all(np.isfinite(uv))}
 
     def storm(t):
@@ -353,6 +354,9 @@ def parser():
     ap.add_argument("--track", default="auto", metavar="FILE",
                     help="storm track for storm-relative fields (default auto: the run's "
                          "storm_tracks file if there is one; none: umove, vmove)")
+    ap.add_argument("--track-storm", default=None, metavar="NAME",
+                    help="which storm of a track file holding several (its storm "
+                         "column; default: the file's first)")
     ap.add_argument("--storm", default=None, metavar="U,V",
                     help="fixed ground-relative storm motion (m/s) instead of a track")
     ap.add_argument("--out", default=None, metavar="PATH",
@@ -432,7 +436,7 @@ def main(argv=None):
     note = None
     if storm is None and args.track != "none" and any(F[n].storm for n in p["names"]):
         try:
-            storm, note = storm_motion(run, args.track)
+            storm, note = storm_motion(run, args.track, args.track_storm)
         except (OSError, ValueError) as e:
             return fail(f"storm track: {e}")
     if note:
@@ -474,7 +478,7 @@ def _parcel_frame(run, pf, args):
             config.find_track(run.path) if args.track == "auto" else config.expand(args.track)
         if not path:
             raise ValueError("--relative needs --storm U,V or a storm track (--track)")
-        how, motion, fixes = "track", None, trk.load(run, path)
+        how, motion, fixes = "track", None, trk.load(run, path, args.track_storm)
     shift = P.frame_shift(pf, run, t_ref, how, motion, fixes)
     if shift is None:
         raise ValueError("--relative: the frame does not move across the grid (a track of "

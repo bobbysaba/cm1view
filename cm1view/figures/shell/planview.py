@@ -61,9 +61,12 @@ class PlanPane:
 
     # ------------------------------------------------------------ shared by kind and panel
     def _add_menu(self, add, name="Add a layer"):
-        """A menu of the types of layer; add(type)."""
+        """A menu of the types of layer; add(type) (Map boundaries: plan views of a run
+        on a map projection)."""
+        on_map = self.kind == "plan" and getattr(self.shell.ed.run, "geo", None) is not None
         items = [(label, t) for t, label in TYPE_LABEL.items()
-                 if t != "parcels" or self.shell.v.pf is not None]
+                 if (t != "parcels" or self.shell.v.pf is not None)
+                 and (t != "boundaries" or on_map)]
         menu = pn.widgets.MenuButton(name=name, items=items, button_type="primary",
                                      button_style="outline", height=32, margin=(4, 4))
         menu.on_click(lambda ev: add(ev.new))

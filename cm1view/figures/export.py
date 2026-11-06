@@ -122,8 +122,15 @@ class FigureExport:
         self._scan_roots()  # (the runs_root setting may have changed)
 
     def _figure_now(self):
-        """The figure to save: a copy of the document."""
-        return json.loads(json.dumps(self.shell.doc, default=float))
+        """The figure to save: a copy of the document, a run on the viewer's track naming the
+        viewer's storm (drawn later without the viewer, it is that storm of its track file)."""
+        doc = json.loads(json.dumps(self.shell.doc, default=float))
+        for r in doc.get("runs") or []:
+            if r.get("track") == "viewer" and os.path.abspath(r.get("path", "")) == self.run.path:
+                r.pop("storm", None)
+                if self._viewer_storm():
+                    r["storm"] = self._viewer_storm()
+        return doc
 
     def _save(self, bundle=None):
         """Save what the Export dialog says; bundle (default: its tick): script and data

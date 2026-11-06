@@ -139,12 +139,14 @@ with it), a template's file, or a template's name (as in *Templates*).
 | `--format`, `--dpi` | The image's format and resolution (default: the figure's export settings). |
 | `--bundle` | Also the script, data and spec, as **Also the script and data** in the *Export* dialog. |
 | `--gif` | An animation, as **Export → Animation**: `--step` (outputs per frame), `--end` (model time in min of the first panel in the last frame), `--fps`, `--no-loop`, `--frames` (also each frame as a PNG); `--dpi` default 110. |
+| `--storm NAME` | Which storm of track files holding several the figure follows, for every run (default: the figure's or template's, else each file's first). |
 | `--overwrite` | Replace files that are already there. Without it, nothing is drawn if any is. |
 | `--code` | Run the figure's own code (*Your own code*). The editor asks before running code from a file; `render` leaves it off unless told. |
 | `--config`, `--cache-gb`, `--workers` | As for the viewer. |
 
 A storm track from the viewer's *Track* tab is not saved with a figure: `render` uses the
-run's `storm_tracks` file instead (and says so), or no track. Series, soundings and the
+run's `storm_tracks` file instead (and says so), or no track. When the viewer's storm had a
+name, it is that storm of the file. Series, soundings and the
 rest are computed as in the editor, using the same series cache. Each run is reported as
 it is saved; if one fails, the others are still drawn and the command exits with
 status 1. For batch-job scripts, see [Running on a cluster](../hpc.md#figures-in-a-batch-job).

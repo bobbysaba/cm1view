@@ -1,5 +1,5 @@
 """Session files: what the viewer shows (run, time, map view, the map's fill, more
-fills, contours and vectors, the storm track, soundings, the cross-section, the 3D
+fills, contours and vectors, boundary lines, the storm track, soundings, the cross-section, the 3D
 setup, series, distributions, parcel sets, the figure being made, the active tool and workspace)
 saved to JSON and put back, from the Session dialog or with ?session=/path/to/file.json.
 
@@ -159,7 +159,8 @@ class Sessions:
                   'from their cache and distributions are computed again.  A session of '
                   'another run opens that run.</div>'),
             self.ses_path, pn.Row(self.ses_save, self.ses_load, self.ses_dl, margin=0),
-            self.ses_msg, self.ses_go, width=600, margin=10, stylesheets=[DIALOG_DARK])
+            self.ses_msg, self.ses_go, self.url_run, width=600, margin=10,
+            stylesheets=[DIALOG_DARK])
         self.ses_btn = pn.widgets.Button(
             name="", icon="bookmark", button_type="light", button_style="outline",
             width=40, height=32, margin=(4, 2),
@@ -198,13 +199,16 @@ class Sessions:
             contours=[{k: o[k].value for k in OV_KEYS} for o in self.ovs],
             vectors=[{k: o[k].value for k in VEC_KEYS} for o in self.vecs],
             storm={k: getattr(self, a).value for k, a in STORM},
-            track=dict(path=self.trk_path.value, opts=self.trk_spec,
+            track=dict(path=self.trk_path.value, storm=self.trk_storm.value,
+                       opts=self.trk_spec,
                        fixes=[[float(self.run.times[t]), f]
                               for t, f in sorted(self.fixes.items())]),
             soundings=self._snd_state(), section=self._xs_state(), view3d=self._3d_state(),
             series=self._ser_state(), distributions=self._dist_state(),
             parcels=self._par_state(),
         )
+        if self.geo is not None:
+            s["boundaries"] = self._geo_state()
         figure = self._figure_state()
         if figure is not None:
             s["figure"] = figure
@@ -344,6 +348,7 @@ class Sessions:
             st = s.get("storm", {})
             for k, a in STORM:
                 put(getattr(self, a), st.get(k), k)
+            self._put_geo(s.get("boundaries"), put)
             self._put_track(s.get("track"))
             self._put_soundings(s.get("soundings"), put)
             self._put_section(s.get("section"), put)
@@ -613,8 +618,13 @@ class Sessions:
     def _put_track(self, tr):
         if not tr:
             return
+        if tr.get("member"):  # another member's page switched here: its own track file
+            self._member_track(tr)
+            return
         if tr.get("path"):
             self.trk_path.value = tr["path"]
+        if "storm" in tr:
+            self._set_storm(tr.get("storm") or "")
         times = np.asarray(self.run.times)
         fixes = {}
         for ts, fx in tr.get("fixes") or []:

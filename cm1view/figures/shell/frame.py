@@ -19,6 +19,7 @@ from ..click import ClickImage, panel_boxes, place_map, watch_tight
 from ..draw.base import _cell
 from ..runs import AllFields
 from ..times import _tlabel
+from ...core.run import Cancelled, reporting
 from ...viewer.ui import out_of_flow
 from . import docedit as de, nodes, scrub, vision
 from .exportview import ExportDialog
@@ -458,6 +459,9 @@ class FigureShell:
             self.say(f"Could not open {html.escape(path)}: {html.escape(str(e))}", True)
             return None
         entry = dict(fg.run_entry(run), id=de.new_run_id(self.doc))
+        storm = self._same_storm(entry["track"])
+        if storm:  # (a storm is the same storm in every member by its name)
+            entry["storm"] = storm
         entry["color"] = figdraw.RUN_COLORS[len(self.doc["runs"]) % len(figdraw.RUN_COLORS)]
 
         def apply(d):
@@ -465,6 +469,18 @@ class FigureShell:
         self.edit(apply, node=node)
         self._sync_fields()
         return len(self.doc["runs"]) - 1
+
+    def _same_storm(self, track):
+        """The storm the figure's runs follow ("viewer": the viewer's), when the track file
+        `track` holds one of that name, else ""."""
+        from ...core import track as trk
+        names = [r.get("storm") or (self.ed._viewer_storm() if r.get("track") == "viewer"
+                                    else "") for r in self.doc["runs"]]
+        want = next((n for n in names if n), "")
+        try:
+            return want if want and track and want in trk.storms(track) else ""
+        except Exception:  # noqa: BLE001  (not a track file)
+            return ""
 
     def _keep(self):
         self._hist.append(self._state())
@@ -600,13 +616,27 @@ class FigureShell:
         def cancelled():
             return g != self.v.gen["fig"]
 
+        at, last = [""], [0.0]
+
         def progress(i, n):
-            self.v._schedule(partial(self.say, f'<span class="busy">● Reading panel {i + 1}/{n}'
-                                               '…</span>'))
+            at[0] = f"panel {i + 1}/{n}"
+            self.v._schedule(partial(self.say, f'<span class="busy">● Reading {at[0]}…</span>'))
+
+        def reading(done, total, what):  # (fields as they are read, e.g. a mean's members)
+            now = _time.time()
+            if now - last[0] >= 0.25 and not cancelled():
+                last[0] = now
+                where = f"{at[0]} · " if at[0] else ""
+                self.v._schedule(partial(self.say, f'<span class="busy">● Reading {where}'
+                                                   f'{html.escape(what)}…</span>'))
 
         try:
             ed.data.ser_touch = set()
-            data = ed.data.panel_data(doc, progress, cancelled)
+            try:
+                with reporting(reading, cancelled):
+                    data = ed.data.panel_data(doc, progress, cancelled)
+            except Cancelled:  # (a newer preview was asked for)
+                return
             if data is None:
                 return
             ed.data.ser_live = ed.data.ser_touch

@@ -5,7 +5,7 @@ import panel as pn
 
 from ...core import parcels as P, vectors
 from ...core.fields import CMAPS
-from .base import FRAMES, _GRID_N, PAR_MOVING, PAR_TAILS, _BTN, _f, _grid, _hex, cmap_select
+from .base import _GRID_N, PAR_MOVING, PAR_TAILS, _BTN, _f, _grid, _hex, cmap_select
 from .layercard import parcel_pick, parcel_sets
 from ...viewer.ui import held
 
@@ -74,9 +74,9 @@ class VecRow:
             on=_onbox(e.get("on", True)),
             q=pn.widgets.Select(name="Vector", options=opts, value=q),
             level=_f("Height (km)", float(e.get("level") or 0.0), step=0.25, start=0.0),
-            frame=pn.widgets.Select(name="Frame", options=FRAMES,
-                                    value=e.get("frame") if e.get("frame") in FRAMES.values()
-                                    else "ground"),
+            frame=pn.widgets.Select(name="Frame", options=vectors.frames(getattr(ed, "run", None)),
+                                    value=vectors.frame_of(getattr(ed, "run", None),
+                                                           e.get("frame") or "ground")),
             density=pn.widgets.IntInput(name="Arrows across", start=4, end=60,
                                         value=int(e.get("density") or 16)),
             ref=_f("Ref. length", float(e.get("ref") or vectors.VECTORS[q].ref),

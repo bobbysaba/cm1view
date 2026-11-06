@@ -56,6 +56,12 @@ KEYS = [
         "File names tried in each track folder: {name} = run folder, {parent} = the "
         "folder above it. Wildcards (*) are allowed; new tracks are named by the "
         "first name without one.", kind="list"),
+    Key("track_motion_window", "tracks", "auto", "Storm-motion window (min)",
+        "Storm motion from a track is the slope of a straight line fitted through the "
+        "fixes within half this many minutes of each time, which steadies a jumpy "
+        "track. 0: centred differences between neighbouring fixes. auto: 0 for CM1, "
+        "30 for WoFS (every cycle is a fresh analysis, so its fixes jump).",
+        kind="auto_float"),
     Key("output_glob", "data", "cm1out_[0-9]*.nc", "Output file names",
         "Which files in a run folder are CM1 output (applies to runs opened after "
         "saving)."),

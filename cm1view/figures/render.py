@@ -63,7 +63,7 @@ class FigureData:
         self._vc = getattr(run, "_vc", None)  # (runs opened here share one 3D cache)
         self.cache = OrderedDict()  # data key -> panel arrays
         self.opened = {}  # run path -> (Run, Fields) opened here
-        self.tracks = {}  # track file -> (mtime, run path, fixes)
+        self.tracks = {}  # (track file, storm) -> (mtime, run path, fixes)
         self.track_err = {}  # track file -> error text
         # series of time-height / time-series figures: (run path, recipe, track) ->
         # dataset (filled in place while it is computed); state "running" / "done"
@@ -96,20 +96,22 @@ class FigureData:
         return self.opened[path]
 
     def run_fixes(self, entry, run):
-        """Track fixes {t: fix} of a spec["runs"] entry ({} without a track)."""
+        """Track fixes {t: fix} of a spec["runs"] entry ({} without a track): of its
+        "storm" when the track file holds several (none: the file's first)."""
         tr = entry.get("track") or ""
         if tr == "viewer":
             return dict(self.viewer_fixes()) if run is self.run else {}
         if not tr:
             return {}
         path = os.path.abspath(os.path.expanduser(os.path.expandvars(tr)))
+        storm = trk.storm_name(entry.get("storm") or "") or None
         try:
             mt = os.path.getmtime(path)
-            hit = self.tracks.get(path)
+            hit = self.tracks.get((path, storm))
             if hit is None or hit[0] != mt or hit[1] != run.path:
-                self.tracks[path] = (mt, run.path, trk.load(run, path))
+                self.tracks[(path, storm)] = (mt, run.path, trk.load(run, path, storm))
             self.track_err.pop(path, None)
-            return self.tracks[path][2]
+            return self.tracks[(path, storm)][2]
         except Exception as e:  # noqa: BLE001
             self.track_err[path] = str(e)
             return {}

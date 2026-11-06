@@ -311,6 +311,8 @@ def sample_points(run, vol, x, y, z, t=None, H=None):
 
 def frame_offset(run, frame, storm):
     """What to subtract from grid-relative (u, v) to get the wanted frame."""
+    from .vectors import frame_of
+    frame = frame_of(run, frame)
     if frame == "ground":
         return (-run.umove, -run.vmove)
     if frame == "storm":

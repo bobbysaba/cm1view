@@ -16,6 +16,7 @@ edits the file itself). They are saved in `~/.config/cm1view/config.toml`
 | `pdecomp_script` | none | your own pressure-decomposition script instead of cm1view's solver |
 | `track_dirs` | `storm_tracks` | where storm track files are found (a plain name: that folder in the run folder or up to 4 above it) |
 | `track_patterns` | `{parent}_{name}.csv`, `{name}.csv`, … | track file names tried in each folder |
+| `track_motion_window` | auto | minutes of track a storm motion is fitted over (0: centred differences; auto: 0 for CM1, 30 for WoFS) |
 | `output_glob` | `cm1out_[0-9]*.nc` | which files are CM1 output |
 | `parcel_glob` | `cm1out_pdata*.nc` | which files hold parcel (trajectory) output; several are joined by time |
 | `traj_max_interval` | `300` | runs without parcel output (WoFS) get trajectories traced through the 3D winds; turned off when the output comes less often than this many seconds (0: never) |

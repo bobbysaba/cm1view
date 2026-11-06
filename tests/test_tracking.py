@@ -212,3 +212,52 @@ def test_storm_following_pinned_sounding(viewer, demo_root):
     wait(lambda: not v.snd_col.loading and len(v.results) == 2, msg="pinned soundings")
     storms = [tuple(np.round(r["kin"]["storm"], 0)) for _, _, r in v.results]
     assert all(abs(s[0] - 15) <= 2 and abs(s[1] - 3) <= 2 for s in storms), storms
+
+
+def test_storm_box_loads_and_saves_storms(viewer, tmp_path):
+    """A file with a storm column: the Storm box offers its storms, picking one loads
+    it, a new name is saved beside the others, a blank name is refused (it would drop
+    them); the chip, the summary, downloads and sessions carry the storm name."""
+    v = viewer
+    run = v.run
+    assert not v.trk_storm.visible  # (a CM1 run, no storms in its file)
+    p = tmp_path / "two.csv"
+    rows = ["storm,time_index,x_km,y_km"]
+    rows += [f"A,{t},1.0,2.0" for t in (1, 2, 3)]
+    rows += [f"cell b,{t},-3.0,4.0" for t in (2, 3)]
+    p.write_text("\n".join(rows) + "\n")
+    v.trk_path.value = str(p)
+    assert v.trk_storm.options == ["A", "cell_b"] and v.trk_storm.visible
+    v._on_load_track(None)
+    assert v.trk_storm.value == "A" and sorted(v.fixes) == [1, 2, 3]
+    v.trk_storm.value = "cell_b"  # a storm of the file: loaded
+    assert sorted(v.fixes) == [2, 3] and v.fixes[2]["x"] == -3.0
+    v.tslider.value = 2
+    v._update_track_now()
+    assert v.storm_btn.name.startswith("Storm cell_b · 2 fixes")
+    assert "Storm cell_b: 2 fixes" in txt(v.trk_status.object)
+    v.trk_storm.value = "new one"  # a new name: kept for Save, nothing loaded
+    assert v.trk_storm.value == "new_one" and sorted(v.fixes) == [2, 3]
+    v._on_save_track(None)  # (added: no question asked)
+    assert trk.storms(str(p)) == ["A", "cell_b", "new_one"]
+    assert sorted(trk.load(run, str(p), "A")) == [1, 2, 3]
+    assert v.trk_storm.options == ["A", "cell_b", "new_one"]
+    down = v._track_download().getvalue().decode()
+    assert [ln.split(",")[0] for ln in down.splitlines()
+            if not ln.startswith("#")][1:] == ["new_one"] * 2  # (its rows only; header names it)
+    v.trk_storm.value = ""
+    v._on_save_track(None)
+    assert "name this one" in txt(v.trk_status.object)
+    assert trk.storms(str(p)) == ["A", "cell_b", "new_one"]
+    v._set_storm("A")  # replacing a storm asks first, and says the others stay
+    v._on_save_track(None)
+    assert "Replace storm A?" in txt(v.confirm.text.object)
+    assert "cell_b, new_one stay" in txt(v.confirm.text.object)
+    v.confirm._yes(None)
+    assert sorted(trk.load(run, str(p), "A")) == [2, 3]
+    assert sorted(trk.load(run, str(p), "cell_b")) == [2, 3]
+    s = v.session_state()
+    assert s["track"]["storm"] == "A"
+    v._set_storm("")
+    v.apply_session(s)
+    assert v.trk_storm.value == "A" and sorted(v.fixes) == [2, 3]

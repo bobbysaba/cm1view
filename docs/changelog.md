@@ -12,13 +12,45 @@ has a matching git tag.
 - **WoFS and WRF ensemble output** opens: an experiment folder (date folders of cycle folders of
   `wrfout_d01_*` files; date folders across 00 UTC joined) is one run, and a **Member** box picks
   a member or the ensemble mean, keeping the view; the new `wofs_member` setting picks the one
-  it opens on (default 1). Levels keep
+  it opens on (default 1); switching member keeps the page (no reload). Levels keep
   following the terrain: maps at a model level, km AGL or km MSL, cross-sections on a km MSL axis
   with the ground drawn, soundings and column fields on each column's heights, 3D views on terrain.
   Trajectories are traced through the winds, and turned off when the output comes less often than
   the new `traj_max_interval` setting (300 s). Not supported: pressure decomposition, a
   probability-matched mean, DART files ([WoFS](guide/wofs.md)).
 - `cm1view --demo wofs` opens a small synthetic WoFS ensemble.
+- WoFS runs know where their grid sits on the Earth: the map projection in the files (Lambert
+  conformal, polar stereographic or Mercator), checked against their `XLAT`, `XLONG`. cm1view now
+  ships coastline, country, state/province, lake and US county lines (public-domain US Census
+  and Natural Earth data, about 5 MB; nothing is downloaded) and needs `pyproj`.
+- WoFS maps have a **Boundaries** pill: coastlines, countries, states, lakes and US counties
+  (each on or off, colour and width), dotted lat/lon lines with edge labels, and lat, lon in the
+  map's hover; sessions keep them ([WoFS](guide/wofs.md#on-the-map)).
+- Figures of WoFS runs: a **Map boundaries** layer for plan views (the same lines, lat/lon
+  lines labelled at the panel edges), on top of a new figure and copied from the map's
+  Boundaries by *New figure from the map*; saved with the figure's data, so exported scripts
+  draw them too.
+- A map that takes a while shows **Loading…** in the status line, and for the ensemble mean how
+  many members of each field are read so far (*Ensemble mean: reading th · 18/36 members ·
+  4 s*); sections, soundings, 3D views and figure previews show the member count too. Moving to
+  another time or field stops reading what the old map needed.
+- WoFS winds are ground-relative only for now: no storm-relative frame, and no storm-relative
+  helicity, STP, SCP or streamwise vorticity (no storm motion yet).
+- Track files can hold **several storms**: a `storm` column names each row's storm. Saving a
+  named storm replaces only its rows, and loading picks one storm (by default the first);
+  `cm1view export --track-storm NAME` does the same. One-storm files are unchanged
+  ([Several storms in one file](guide/tracking.md#several-storms-in-one-file)).
+- The Track panel has a **Storm** box (shown for WoFS members, or when the file has storms):
+  pick one of the file's storms to load it, or type a new name to save the track as that storm.
+  The Storm chip and sessions keep the name, and switching member loads the same storm from that
+  member's own track file (before, the other member's track was carried over).
+- Figures follow a chosen storm: a run whose track file holds several has a **Storm** list
+  in the editor's Runs. Templates and **Apply to other runs** carry the storm's name to the
+  other run (e.g. the same storm in another member), a run on the viewer's track saves the
+  viewer's storm, and `cm1view render --storm NAME` picks one for every run.
+- New `track_motion_window` setting: storm motion is fitted over this many minutes of track.
+  auto is 0 for CM1 (centred differences, as before) and 30 for WoFS, whose fixes jump from
+  cycle to cycle ([Storm motion](guide/tracking.md#storm-motion)).
 - The run picker looks in a typed folder once it ends in `/` (or on Enter), not on every key,
   and never searches shared folders (`/`, top-level folders, folders owned by root, the folders
   above your home); nor does the runs_root search or the list of runs next to a run.

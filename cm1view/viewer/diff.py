@@ -8,6 +8,7 @@ import os
 import panel as pn
 
 from .. import registry
+from ..core import models
 from ..figures.spec import tindex
 from .ui import held
 
@@ -38,10 +39,13 @@ class Differences:
     def _minus_runs(self):
         """{label: path} of this run, then the runs next to it and the recent ones."""
         out, here = {"this run": ""}, os.path.abspath(self.run.path)
+        own = models.root_of(here)  # (a WoFS member: the others by name, not the folder)
         for p in registry.sibling_runs(self.run.path) + registry.recent_runs():
             p = os.path.abspath(p)
-            if p != here and p not in out.values():
+            if p != here and p not in out.values() and (p != own or own == here):
                 lab = "/".join(p.rstrip("/").split("/")[-2:])
+                if own != here and models.root_of(p) == own:
+                    lab = f"{os.path.basename(own)} · {models.part_label(p)}"
                 out[lab if lab not in out else p] = p
         return out
 

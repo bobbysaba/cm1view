@@ -238,10 +238,13 @@ def doc_template(doc, name=""):
             figdraw.run_ids(item, renamed)
     for lay in (s.get("layers") or {}).values():
         figdraw.run_ids(lay, renamed)
+    storm = next((r.get("storm") for r in runs if r["id"] == first), None)
     s.pop("runs", None)
     s.pop("made_with", None)
     (s.get("style") or {}).pop("time_match", None)
     s["template"] = dict(name=name, time_s=float(refs[0][1]) if refs else _table_time(keep))
+    if storm:  # (the same storm of the other run's track file)
+        s["template"]["storm"] = storm
     return s
 
 
@@ -267,7 +270,10 @@ def doc_from_template(tpl, run, t):
     of `run`, each to the nearest output; a plan view past the run's ends is left out, its cell
     empty.  doc_defaults adds the run."""
     s = _copy(tpl)
-    t0 = (s.pop("template", None) or {}).get("time_s")
+    info = s.pop("template", None) or {}
+    t0 = info.get("time_s")
+    if info.get("storm"):  # (doc_defaults gives it to the run's entry)
+        s["storm"] = info["storm"]
     dt = 0.0 if t0 is None else float(run.times[t]) - float(t0)
     s = shift_doc(s, dt)
     tt = np.asarray(run.times, dtype=float)
@@ -317,8 +323,10 @@ def doc_from_template(tpl, run, t):
 # ------------------------------------------------------------ a document from a file
 def doc_defaults(doc, run, F, t=0, track=None):
     """A document read from a file (a copy), with what it lacks from this version's defaults, as
-    with_defaults does for an older figure; without runs (a template), `run` with `track`."""
+    with_defaults does for an older figure; without runs (a template), `run` with `track` (and
+    the template's storm, a "storm" key doc_from_template leaves)."""
     d = _copy(doc)
+    storm = d.pop("storm", None)
     base = default_spec(run, F, t)
     style = d.setdefault("style", {})
     style.setdefault("label_fit", False)  # (its labels as they were)
@@ -345,7 +353,7 @@ def doc_defaults(doc, run, F, t=0, track=None):
             if isinstance(have.get(key), dict):
                 have[key].update({k: v for k, v in was.items() if k not in have[key]})
     if not d.get("runs"):
-        d["runs"] = [dict(run_entry(run, track), id=TEMPLATE_RUN)]
+        d["runs"] = [dict(run_entry(run, track, storm), id=TEMPLATE_RUN)]
     d.setdefault("layers", {})
     d.setdefault("sections", {})
     d.setdefault("annotations", [])

@@ -782,6 +782,8 @@ class Fields:
                                        ndim=info.ndim, scale=scale, cmap=cmap,
                                        vrange=vr, diverging=div)
         for d in _make_fields(run.vars):
+            if d.storm and not getattr(run, "storm_relative", True):
+                continue  # (no storm motion for this run: see Run.storm_relative)
             self.defs[d.name] = d
         self._planes = OrderedDict()
         self._lock = threading.Lock()

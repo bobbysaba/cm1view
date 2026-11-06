@@ -19,7 +19,7 @@ from .v2 import (upgrade, block_view, panel_view, block_shares, _panel_layers, _
                  LEGEND_OPTS)
 from .v3 import inset_panel
 from .layers import (_fill, _contour, _shade, _vectors, _parcels, parcel_label,
-                     sector_outline, extend_of,
+                     sector_outline, _boundaries, extend_of,
                      union_extend, _extends, _ticks, _colorbars, _cbar_style, bar_layer,
                      _contour_key, _mixed_kinds, bar_key)
 from .lines import (_lines, _dists, _profiles, _joints, _azims, azim_range, dist_edges,
@@ -766,13 +766,15 @@ def _panel(fig, ax, d, spec, layers, fs, legend, first_ext=None):
                             ls=lay.get("ls", "-"))
             elif t == "line" and ("lines" in d or "line" in d):
                 _section_lines(ax, d, lay, y, fs)
+            elif t == "boundaries" and not xsec:
+                _boundaries(ax, d, j, lay, fs)
             elif t == "parcels":  # (its colorbar: the panel's when it has no fill)
                 pm = _parcels(ax, d, j, lay)
                 if pm is not None and pm_lay is None:
                     pm_lay = (pm, dict(lay, extend=lay.get("extend") or "neither",
                                        units=parcel_label(lay)))
             if lay.get("legend") and t in ("contour", "shade", "track", "line", "sector",
-                                           "parcels"):
+                                           "parcels", "boundaries"):
                 legend[lay["legend"]] = (
                     Patch(facecolor="none" if lay.get("hatch") else lay.get("color", "magenta"),
                           alpha=float(lay.get("alpha", 0.6)), hatch=lay.get("hatch") or None,

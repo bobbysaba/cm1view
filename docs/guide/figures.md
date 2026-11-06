@@ -126,4 +126,10 @@ A figure may show several runs. Every layer, sounding, distribution and series p
 own run, and runs have their own storm track (the Track tool, or `storm_tracks/<run>.csv`
 found automatically; see `track_dirs` and `track_patterns` in [Settings](../settings.md)).
 A run's *Track file* lists the files in those folders, or takes a path you type.
+When the file holds several storms (a WoFS member's cells, say), a *Storm* list picks the
+one that run's panels follow; without one picked they follow the file's first. A run on the
+viewer's track follows the viewer's storm, and the saved figure names it.
+[Templates](figures-panels.md#runs) and **Apply to other runs** carry the storm's name to the
+run they are applied to, so the same storm is drawn for every member
+([Several storms in one file](tracking.md#several-storms-in-one-file)).
 See [Figure panels](figures-panels.md#runs) for how runs are added and coloured.

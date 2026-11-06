@@ -13,6 +13,7 @@ import os
 import panel as pn
 
 from ... import config
+from ...core import track as trk
 from .. import draw as figdraw, spec as fg
 from ..cards import SIZE_PRESETS, _hex, _row
 from ..cards.base import _f
@@ -37,6 +38,16 @@ from ...theme import GRID
 def _note(text):
     return pn.pane.HTML(f'<div class="cv-hint">{text}</div>', margin=(2, 4),
                         sizing_mode="stretch_width")
+
+
+def _storms(track):
+    """The storms of a run entry's track file ([]: the viewer's, none, or one storm)."""
+    if not track or track == "viewer":
+        return []
+    try:
+        return trk.storms(_track_path(track))
+    except Exception:  # noqa: BLE001  (no such file yet, or not a track)
+        return []
 
 
 class Inspector:
@@ -279,6 +290,8 @@ class Inspector:
             def apply(d):
                 run = next(x for x in d["runs"] if x["id"] == rid)
                 run.update(kw)
+                if not run.get("storm"):  # (none named: the track file's first)
+                    run.pop("storm", None)
             self.shell.edit(apply)
 
         label = pn.widgets.TextInput(name="Label", value=r.get("label", ""), width=130)
@@ -345,16 +358,49 @@ class Inspector:
                                    disabled=now == "viewer", sizing_mode="stretch_width",
                                    visible=typed or not found)
 
-        viewer.param.watch(lambda ev: change(track="viewer" if ev.new else ""), "value")
-        box.param.watch(lambda ev: change(track=ev.new.strip()), "value")
+        names = _storms(now)
+        cur = dict(storm=trk.storm_name(r.get("storm") or ""))
+        storm = pn.widgets.Select(
+            name="Storm", options=names, sizing_mode="stretch_width", visible=bool(names),
+            value=cur["storm"] if cur["storm"] in names else (names[0] if names else None),
+            description="Which storm of the track file this run's panels follow (the file "
+                        "holds several)")
+        hold = [False]
+
+        def on_storm(ev):
+            if not hold[0] and ev.new:
+                cur["storm"] = ev.new
+                change(storm=ev.new)
+
+        def retrack(value):
+            """A new track: the same storm when its file has it, else the file's first."""
+            if value == "viewer":
+                cur["storm"] = self.shell.ed._viewer_storm()
+                left = []
+            else:
+                left = _storms(value)
+                if cur["storm"] not in left:
+                    cur["storm"] = ""
+            change(track=value, storm=cur["storm"])
+            hold[0] = True
+            try:
+                storm.options = left
+                storm.value = cur["storm"] if cur["storm"] in left else (left[0] if left else None)
+            finally:
+                hold[0] = False
+            storm.visible = bool(left)
+
+        storm.param.watch(on_storm, "value")
+        viewer.param.watch(lambda ev: retrack("viewer" if ev.new else ""), "value")
+        box.param.watch(lambda ev: retrack(ev.new.strip()), "value")
 
         def on_pick(ev):
             box.visible = ev.new == TYPE_PATH
             if ev.new != TYPE_PATH:
-                change(track=ev.new)
+                retrack(ev.new)
 
         pick.param.watch(on_pick, "value")
-        return [viewer, pick, box]
+        return [viewer, pick, box, storm]
 
     def _run_note(self, r, used, names):
         where = "not used yet" if not used else \

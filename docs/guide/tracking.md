@@ -118,9 +118,10 @@ columns:
 | `time_index`, `file`, `time_s`, `time_hms` | The output's index, file name, time in seconds and time as `h:mm:ss`. (The table in the panel leaves out `file` and `time_s`.) |
 | `x_km`, `y_km` | Position on the model grid (which translates with the storm in a moving-grid run). |
 | `x_ground_km`, `y_ground_km` | Ground-relative position: grid + (`umove`, `vmove`) × time. |
-| `u_motion_ms`, `v_motion_ms` | Ground-relative storm motion, from centred differences of the ground-relative track. |
+| `u_motion_ms`, `v_motion_ms` | Ground-relative storm motion: by default from centred differences of the ground-relative track (CM1), or the slope of a straight line fitted through 30 min of track (WoFS). See [Storm motion](#storm-motion). |
 | the tracked value | Named for what was tracked, e.g. `w_1km`, `zeta_1km`, `uh_2_5km`, `prspert_1km`, `max_<field>_<height>`. The raw extreme within the smoothing box around the fix. For UH the file also has `w_max_2_5km` and `zeta_max_2_5km`. |
 | `source` | How the fix was made: `auto`, `manual` or `loaded`. |
+| `storm` | Only in a file holding several storms: which storm the row belongs to (first column). |
 
 **Loading** accepts a CSV or whitespace-separated file. It needs
 
@@ -132,6 +133,47 @@ columns:
 Times are matched to the run's output times; rows that do not match one are skipped
 (unless given by `time_index`). A column called `value`, or named like `w_*`, `zeta_*`,
 `uh_*`, `prspert_*`, `max_*` or `min_*`, becomes each fix's value.
+
+### Several storms in one file
+
+A track file can hold several storms, for example the cells of one WoFS member. A
+`storm` column names the storm of each row (a name or a number; spaces and commas
+become `_`). Loading one storm reads only its rows; with no storm named it reads the
+file's first one. Saving a named storm into a file that already holds several replaces
+that storm's rows and keeps the others in their order. A file without a `storm` column
+is one storm, as CM1 tracks always are, and saving over it replaces it.
+
+Give the same storm the same name in every member's file: a storm is matched across
+members by its name. The command-line export picks a storm with `--track-storm NAME`. In figures each run picks
+its storm ([Fields and runs](figures.md#fields-and-runs)), and `cm1view render --storm NAME`
+names it for every run.
+
+In the viewer, the **Storm** box beside the path box picks the storm. It is shown for WoFS
+members, and for any file that has a `storm` column.
+
+- Picking one of the file's storms loads it.
+- Typing a new name loads nothing. **Save** then adds the track to the file as that storm.
+  Saving over a storm the file already has asks first, and the other storms are kept.
+- Leaving the box empty loads the file's first storm. **Save** refuses to write an unnamed
+  track into a file that holds several storms, because that would replace them all.
+- **Download** writes the track alone, with a `storm` column when it has a name.
+
+The Storm chip shows the storm's name (*Storm B · 12 fixes, …*), and sessions keep it.
+Each WoFS member has its own track file. Switching member with the **Member** box loads the
+storm of the same name from the new member's file, or says that member has none.
+
+### Storm motion
+
+Storm motion comes from the track. It is used for soundings, storm-relative fields and
+parcels moving with the storm. The `track_motion_window` setting (minutes) sets how it is
+worked out:
+
+- `0`: centred differences between neighbouring fixes.
+- A number: the slope of a straight line fitted through the fixes within half that many
+  minutes on either side of each time. Fewer fixes are used near the ends of the track.
+- `auto` (the default): 0 for CM1, and 30 for WoFS. Every WoFS cycle is a fresh
+  analysis, so its fixes jump with the analysis increments, and differences between
+  neighbouring fixes would jump too.
 
 ### Finding track files automatically
 

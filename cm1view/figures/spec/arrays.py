@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 
-from ...core import (azim, parcels as P, render, series as ser, swath, track as trk, vectors,
+from ...core import (azim, geo, parcels as P, render, series as ser, swath, track as trk, vectors,
                      volume3d)
 from .. import draw as figdraw
 from ...core.run import FileBusy, MissingAtTime
@@ -15,7 +15,7 @@ from .sections import (card_section, domain_box, is_storm, panel_section, sectio
 DATA_KEYS = ("type", "field", "mode", "z", "spacing", "zspacing", "frame",  # -> data
              "style", "reduce", "vector", "which", "rule", "ids", "cvar", "tails",
              "minutes", "heads", "interp", "within", "xs_tails", "moving", "move_u",
-             "move_v")
+             "move_v", "kinds", "grid", "step")
 MAX_PARCEL_POINTS = 300_000  # per parcel layer: longer tails at every n-th parcel time
 
 
@@ -320,6 +320,8 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
                 out["now_x"], out["now_y"] = fixes[t]["x"] - ox, fixes[t]["y"] - oy
         elif lay["type"] == "parcels":
             _parcels_plan(run, lay, out, j, (x0, x1, y0, y1), (ox, oy), fixes)
+        elif lay["type"] == "boundaries":
+            _boundaries_plan(run, lay, out, j, (x0, x1, y0, y1), (ox, oy))
         elif lay["type"] == "line":  # (every section, or with which "panel" its own)
             if lay.get("which", "all") == "panel":
                 secs = [panel_section(spec, i)]
@@ -343,6 +345,32 @@ def _extract_plan(run, F, spec, i, t, center, fixes, storm, out, progress=None):
             c = ser.track_centers(fixes or {}, len(run.times)).get(t)  # (not the view's)
             out["sector"] = np.array([np.nan, np.nan, azim.bearing(*m)]) if c is None \
                 else np.array([c[0] - ox, c[1] - oy, azim.bearing(*m)])
+
+
+def _boundaries_plan(run, lay, out, j, win, origin):
+    """A Map boundaries layer's lines over the panel's window (run.geo's, cut to it)
+    and its lat/lon lines and their labels, from the axes' origin (km)."""
+    g = getattr(run, "geo", None)
+    if g is None:
+        _note(out, "map boundaries: this run is not on a map projection")
+        return
+    x0, x1, y0, y1 = win
+    ox, oy = origin
+    pad = 2.0 * float(run.dx) / 1000.0
+    xlim, ylim = (x0 - pad, x1 + pad), (y0 - pad, y1 + pad)
+    for kind in lay.get("kinds") or []:
+        if kind not in geo.KINDS:
+            continue
+        x, y = geo.clip(*g.lines(kind), xlim, ylim)
+        out[f"L{j}_b_{kind}"] = np.array([x - ox, y - oy], dtype=np.float32)
+    if lay.get("grid"):
+        x, y, labels, _ = geo.graticule(g, float(lay.get("step") or 0.0) or None,
+                                        (x0, x1), (y0, y1))
+        out[f"L{j}_grid"] = np.array([x - ox, y - oy], dtype=np.float32)
+        out[f"L{j}_glab"] = np.array([[lx - ox, ly - oy, float(edge == "left")]
+                                      for lx, ly, _, edge in labels],
+                                     dtype=float).reshape(-1, 3)
+        out[f"L{j}_glab_t"] = np.array([lab[2] for lab in labels], dtype=str)
 
 
 def _note(out, why):

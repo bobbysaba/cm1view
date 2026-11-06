@@ -62,7 +62,7 @@ QUICK_VARY = {"Time": "times", "Field (one time)": "fields", "Height (one time)"
 LETTERS = {"a": "{a}", "(a)": "({a})", "a)": "{a})", "A": "{A}", "(A)": "({A})"}
 TYPE_LABEL = {"fill": "Fill", "contour": "Contours", "shade": "Shading", "vectors": "Vectors",
               "track": "Storm track", "line": "Section line", "sector": "Sector",
-              "parcels": "Parcels"}
+              "parcels": "Parcels", "boundaries": "Map boundaries"}
 PAR_TAILS = {"Up to the panel time": "until", "All parcel times": "all",
              "Last minutes": "last", "None (heads only)": "none"}
 PAR_MOVING = {"The grid": "grid", "Moving with the tracked storm": "track",

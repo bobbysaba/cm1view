@@ -17,6 +17,10 @@ data: {panel index: {name: array}} with, per panel,
   L<j>_x, L<j>_y, L<j>_u, L<j>_v   vectors of layer j
   L<j>_gx, L<j>_gy, L<j>_gu, L<j>_gv   grid and winds of a streamline layer j
   track_x, track_y, now_x, now_y   storm track (plan views)
+  L<j>_b_<kind>  rows x, y (NaN between lines) of a Map boundaries layer j's coastlines,
+                countries, states, lakes or counties (plan views of runs on a map)
+  L<j>_grid     rows x, y of its lat/lon lines; L<j>_glab rows [x, y, edge (0 bottom,
+                1 left)] and L<j>_glab_t the texts of their labels
   lines         rows [xa, ya, xb, yb, width averaged across, section index]: the
                 cross-section lines (plan views; older data: line [xa, ya, xb, yb])
   sector        [x, y, bearing] centre of a Sector layer (track centres; nan: none) and

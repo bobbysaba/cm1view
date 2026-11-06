@@ -116,9 +116,10 @@ def provenance():
     return dict(_PROVENANCE)
 
 
-# the settings that change what a figure shows (which files are output, which track)
+# the settings that change what a figure shows (which files are output, which track,
+# how the storm motion is taken from it)
 SETTINGS_USED = ("output_glob", "track_dirs", "track_patterns", "pdecomp_script",
-                 "parcel_glob")
+                 "parcel_glob", "track_motion_window")
 
 
 def namelist_hash(path):
@@ -314,8 +315,10 @@ OLDER = {"run_label": dict(run_color=False),
 def with_defaults(spec, run, F, t, track=None):
     """A saved figure (or part) with what it lacks from this version's defaults (of
     `run` at output t); without runs of its own (a template), `run` with `track`
-    (run_entry's)."""
+    (run_entry's, and the template's storm: a "storm" key from_template leaves)."""
     base = default_spec(run, F, t)
+    storm = spec.get("storm")
+    spec = {k: v for k, v in spec.items() if k != "storm"}
     for k, val in spec.items():  # keys added in later versions keep their defaults
         base[k] = dict(base[k], **val) if isinstance(base.get(k), dict) else val
     for k, was in OLDER.items():  # ... but what would change how it looked
@@ -323,7 +326,7 @@ def with_defaults(spec, run, F, t, track=None):
             base[k].update({kk: v for kk, v in was.items() if kk not in spec[k]})
     base["label_fit"] = bool(spec.get("label_fit"))  # (likewise: its labels as they were)
     if "runs" not in spec:  # a figure of one run: this run
-        base["runs"] = [run_entry(run, track)]
+        base["runs"] = [run_entry(run, track, storm)]
     nt = len(run.times)
     if "times_s" not in spec:
         base["times"] = [t for t in base["times"] if t is None or t < nt]

@@ -12,10 +12,14 @@ import pytest
 from cm1view import config, registry
 from cm1view.core import models, wofs
 from cm1view.core.fields import Fields
+from cm1view.demo_wofs import PROJ
+from conftest import txt
 
 NI, NJ, NK, NC = 8, 6, 5, 3  # mass points, levels, cycles (every 3 minutes)
 G = 9.81
 START = datetime.datetime(2022, 5, 23, 22, 0)
+# WoFS's projection, the grid centred on the Texas / New Mexico border (103.06° W)
+ON_MAP = dict(PROJ, CEN_LON=np.float32(-103.03), CEN_LAT=np.float32(34.0))
 
 
 def _expect(m, c):
@@ -77,7 +81,8 @@ def make_wofs(root, members=(1, 2, 3), cycles=NC):
                                ("bottom_top_stag", NK + 1), ("soil_layers_stag", 4)):
                     d.createDimension(dim, n)
                 d.setncatts(dict(DX=np.float32(1000.0), DY=np.float32(1000.0),
-                                 TITLE=" OUTPUT FROM WRF V3.9 MODEL", MP_PHYSICS=18))
+                                 TITLE=" OUTPUT FROM WRF V3.9 MODEL", MP_PHYSICS=18,
+                                 **ON_MAP))
                 ts = d.createVariable("Times", "S1", ("Time", "DateStrLen"))
                 ts[0] = netCDF4.stringtochar(np.array([f"{when:%Y-%m-%d_%H:%M:%S}"], "S19"))
                 for name, a in _expect(m, c).items():
@@ -622,3 +627,265 @@ def test_demo_ensemble(tmp_path):
     a = F.plane("winterp", t, "level", 8)
     b = Fields(mean).plane("winterp", t, "level", 8)
     assert a.shape == b.shape and not np.allclose(a, b)
+
+
+def test_recent_runs_keep_the_experiment(wofs_root, tmp_path, monkeypatch):
+    """A member opened is remembered as its experiment (the run), once."""
+    exp = os.path.dirname(wofs_root)
+    recent = tmp_path / "recent.json"
+    monkeypatch.setattr(registry, "_recent_file", lambda: str(recent))
+    monkeypatch.setattr(registry, "_OLD_RECENT", str(tmp_path / "old.json"))
+    registry.remember(os.path.join(exp, "mem02"))
+    registry.remember(os.path.join(exp, "mean"))
+    assert registry.recent_runs() == [exp]
+    recent.write_text(f'["{exp}/mem03", "{exp}"]')  # (as kept before: members)
+    assert registry.recent_runs() == [exp]
+
+
+def test_ground_relative_winds_only(wofs_root):
+    """No storm motion for WoFS yet: winds are ground-relative only, and the fields
+    that take a storm motion (storm-relative helicity, STP, SCP, streamwise
+    vorticity) are left out; a saved storm-relative frame draws ground-relative."""
+    from cm1view.core import vectors
+    from cm1view.core.volume3d import frame_offset
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    assert not run.storm_relative
+    assert vectors.frames(run) == {"Ground-relative": "ground"}
+    assert vectors.frame_of(run, "storm") == vectors.frame_of(run, "grid") == "ground"
+    assert vectors.to_frame(run, 1.0, 2.0, "storm", (5.0, 5.0)) == (1.0, 2.0)
+    assert frame_offset(run, "storm", (5.0, 5.0)) == (0.0, 0.0)
+    F = Fields(run)
+    assert not [d.name for d in F.defs.values() if d.storm]
+    assert vectors.frames(None) == vectors.FRAMES  # (other runs: every frame)
+
+
+# ------------------------------------------------- P1: reading progress of the mean
+@pytest.mark.parametrize("workers", [1, 2])
+def test_mean_reports_members_and_stops_when_cancelled(wofs_root, workers):
+    """Reads within reporting() say how many members of the mean are read so far,
+    and stop (Cancelled, nothing half-read cached) once the block is cancelled; an
+    explicit cancelled argument still makes load_volumes return False."""
+    from cm1view.core.run import Cancelled, reporting
+    run = models.open_run(os.path.join(wofs_root, "mean"), workers=workers)
+    try:
+        seen = []
+        with reporting(lambda d, n, w: seen.append((d, n, w))):
+            run.volume("th", 1)
+        assert seen and seen[-1][0] == 1 and seen[-1][1] == 1
+        whats = [w for _, _, w in seen]
+        assert all(w.startswith("th") for w in whats)
+        assert any(w.endswith("members") and "/3 " in w for w in whats)
+        with pytest.raises(Cancelled):
+            with reporting(None, cancelled=lambda: True):
+                run.volume("qv", 2)
+        assert run.cached("qv", 2) is None
+        assert run.load_volumes(["qv"], 2, cancelled=lambda: True) is False
+        assert run.volume("qv", 2).shape == (NK, NJ, NI)  # (and then reads in full)
+        # explicit progress and the block's both hear the reads
+        mine, block = [], []
+        run.clear_cache()
+        with reporting(lambda *a: block.append(a)):
+            run.load_volumes(["prs"], 0, progress=lambda *a: mine.append(a))
+        assert mine and all(a in block for a in mine)
+    finally:
+        if run._pool is not None:
+            run._pool.shutdown()
+
+
+def test_map_says_the_mean_is_being_read(wofs_root):
+    """The map's status while a slow map is made: what is read, for how long."""
+    from cm1view.viewer.mapview import MapView
+    v = type("V", (), {"run": models.open_run(os.path.join(wofs_root, "mean"),
+                                              workers=1)})()
+    html = MapView._map_loading_html(v, (0, 1, "th · 18/36 members"), 4.2)
+    assert "Ensemble mean: reading th · 18/36 members" in html and "4 s" in html
+    assert "cv-maploading" in html
+    assert "computing" in MapView._map_loading_html(v, None, 0.1)
+    v.run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    assert "Loading th · field 2/3" in MapView._map_loading_html(v, (1, 3, "th"), 0.1)
+
+
+def test_map_boundaries_and_lat_lon(wofs_root):
+    """A WoFS map gets a Boundaries pill: layers shown / hidden and restyled in the
+    browser only, lat/lon lines with labels, lat, lon in the hover, all kept in a
+    session.  A CM1 run has none of it (see test_session for the CM1 viewer)."""
+    from cm1view.registry import Registry
+    from cm1view.viewer import app as A
+    reg = Registry(os.path.join(wofs_root, "mem02"), 4, 2)
+    run, F = reg.get()
+    v = A.Viewer(run, F, reg=reg)
+    v.main()
+    try:
+        assert v.geo is not None and "geo" in v.map_drawer.items
+        assert v.geo_r["states"].visible and not v.geo_r["counties"].visible
+        gen = v.gen["map"]
+        v.geo_kinds.value = ["counties"]
+        v.geo_width.value = 2.0
+        v.geo_color.value = "#000000"
+        v.geo_grid.value = True
+        assert v.gen["map"] == gen  # (no map redraw)
+        assert v.geo_r["counties"].visible and not v.geo_r["states"].visible
+        assert v.geo_r["counties"].glyph.line_width == pytest.approx(2.0 * 0.55)
+        assert v.geo_r["counties"].glyph.line_color == "#000000"
+        assert v.grid_r.visible and len(v.grid_src.data["x"])
+        assert v.grid_lab["left"][0].data["text"]
+        assert v.map_drawer.items["geo"][0].name.startswith("Boundaries · 2")
+        hover = [t for t in v.fig.tools if type(t).__name__ == "HoverTool"
+                 and v.img_r in t.renderers][0]
+        assert ("lat, lon", "$x{lonlat}") in hover.tooltips and "$x" in hover.formatters
+        v.geo_step.value = 0.25
+        s = v.session_state()
+        assert s["boundaries"] == dict(kinds=["counties"], color="#000000", width=2.0,
+                                       grid=True, step=0.25)
+    finally:
+        v.close()
+    v = A.Viewer(run, F, reg=reg)
+    v.main()
+    try:
+        assert v.apply_session(s) == []
+        assert v._geo_state() == s["boundaries"] and v.geo_r["counties"].visible
+        assert v.grid_r.visible
+    finally:
+        v.close()
+
+
+def test_figure_map_boundaries(wofs_root, tmp_path):
+    """A plan-view figure of a run on a map gets a Map boundaries layer: its lines cut
+    to the panel's window (the Texas / New Mexico border runs through the fixture),
+    lat/lon lines and labels, all saved with the figure so its script redraws them.
+    A run without a projection: no layer in a new figure, a note if one is there."""
+    import matplotlib
+    matplotlib.use("Agg")
+    from cm1view.core import geo
+    from cm1view.figures import draw as figdraw, spec as fg
+    from cm1view.figures.spec import arrays, bundle
+    run = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
+    F = Fields(run)
+    sp = fg.default_spec(run, F, 1)
+    types = [lay["type"] for lay in sp["layers"]]
+    assert types[-1] == "boundaries" and sp["layers"][-1]["kinds"] == list(geo.SHOWN)
+    j = len(types) - 1
+    sp["layers"][j].update(kinds=["states"], grid=True, step=0.5)
+    sp.update(rows=1, cols=1, times=[1], times_s=[float(run.times[1])],
+              domain=dict(mode="full", half=12.5, box=None))
+    d = arrays.extract(run, F, sp, 0, None)
+    xy = d[f"L{j}_b_states"]
+    assert xy.shape[0] == 2 and np.isfinite(xy).sum() >= 4
+    lon, lat = run.geo.lonlat(xy[0][np.isfinite(xy[0])], xy[1][np.isfinite(xy[1])])
+    np.testing.assert_allclose(lon, -103.06, atol=0.03)  # (the border, not the box)
+    assert f"L{j}_b_counties" not in d  # (only the chosen kinds)
+    assert set(d[f"L{j}_glab_t"]) == {"103° W", "34° N"}
+    assert d[f"L{j}_glab"][:, 2].tolist() == [0.0, 1.0]  # (bottom edge, left edge)
+    # a storm-centred panel: the same border, from the storm's position
+    sp2 = dict(sp, coords="storm", domain=dict(mode="storm", half=2.0, box=None))
+    d2 = arrays.extract(run, F, sp2, 0, (1.0, 0.5))
+    xy = d2[f"L{j}_b_states"]
+    ok = np.isfinite(xy[0])
+    lon, _ = run.geo.lonlat(xy[0][ok] + 1.0, xy[1][ok] + 0.5)
+    np.testing.assert_allclose(lon, -103.06, atol=0.03)
+    # changing what is drawn reads the data again
+    sp3 = dict(sp, layers=[dict(lay) for lay in sp["layers"]])
+    sp3["layers"][j]["kinds"] = ["counties"]
+    assert arrays.data_key(sp3, 0, None) != arrays.data_key(sp, 0, None)
+    fig = figdraw.draw(sp, {0: d})
+    ax = fig.axes[0]
+    assert {t.get_text() for t in ax.texts} >= {"103° W", "34° N"}
+    out = bundle.save_bundle(sp, {0: d}, str(tmp_path / "out" / "fig"), run=run)
+    with np.load(out["data"]) as z:
+        assert f"p0__L{j}_b_states" in z.files and z[f"p0__L{j}_glab_t"].dtype.kind == "U"
+    assert "def _boundaries" in open(out["draw"]).read()
+    # an idealized run (no projection)
+    run.geo = None
+    assert "boundaries" not in [lay["type"] for lay in fg.default_spec(run, F, 1)["layers"]]
+    d = arrays.extract(run, F, sp, 0, None)
+    assert not any(k.startswith(f"L{j}_") for k in d) and "map projection" in d["notes"]
+
+
+def test_member_switch_loads_the_same_storm(wofs_root, tmp_path, monkeypatch):
+    """Each member has its own track file; the Member box shows another member (in
+    place) on the storm shown (by name), from that member's file, or says it has none."""
+    from cm1view.registry import Registry
+    from cm1view.viewer import app as A
+    from cm1view.core import track as trk
+    monkeypatch.setenv("CM1VIEW_EXPORTS_DIR", str(tmp_path / "exports"))
+
+    def write(path, x):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("storm,time_index,x_km,y_km\n")
+            f.write("".join(f"A,{t},{x},0.0\n" for t in range(NC)))
+            f.write("".join(f"B,{t},{x + 10},5.0\n" for t in range(NC)))
+
+    reg = Registry(os.path.join(wofs_root, "mem02"), 4, 2)
+    run, F = reg.get()
+    v = A.Viewer(run, F, reg=reg)
+    v.main()
+    member = lambda n: next(q for q in v.part_sel.options.values()  # noqa: E731
+                            if q.endswith(n))
+    try:
+        assert v.trk_storm.visible  # (a member: storms are expected)
+        write(v.trk_path.value, 1.0)
+        v._refresh_storms()
+        v.trk_storm.value = "B"
+        assert v.fixes[0]["x"] == 11.0
+        v.part_sel.value = member("mem03")
+        assert v.run.path.endswith("mem03") and not v.ses_go.value  # (no reload)
+        assert v.trk_storm.value == "B" and not v.fixes
+        assert "This member has no storm B" in txt(v.trk_status.object)
+        assert "mem03" in v.trk_path.value  # (its own track file)
+        write(v.trk_path.value, 2.0)
+        v._refresh_storms()
+        assert v._load_track("B") and v.fixes[0]["x"] == 12.0
+        v.part_sel.value = member("mem02")
+        assert v.trk_storm.value == "B" and v.fixes[0]["x"] == 11.0
+        v.part_sel.value = member("mem03")
+        assert v.trk_storm.value == "B" and v.fixes[0]["x"] == 12.0
+        assert v.storm_btn.name.startswith("Storm B")
+        assert trk.storms(v.trk_path.value) == ["A", "B"]
+    finally:
+        v.close()
+
+
+def test_member_switch_keeps_the_view_without_a_reload(wofs_root, tmp_path, monkeypatch):
+    """Members (and the mean) share the grid: the Member box swaps the run in place,
+    keeping time, view, fills and soundings; per-member save boxes, the figure editor's
+    own run and the address follow.  A run on another grid reopens the page."""
+    import copy
+    import json
+    from cm1view.registry import Registry
+    from cm1view.viewer import app as A
+    from cm1view.viewer import swap
+    monkeypatch.setenv("CM1VIEW_EXPORTS_DIR", str(tmp_path / "exports"))
+    reg = Registry(os.path.join(wofs_root, "mem02"), 4, 2)
+    run, F = reg.get()
+    v = A.Viewer(run, F, reg=reg)
+    v.main()
+    try:
+        v.tslider.value = 2
+        field = next(n for n in v.fill_var.values if n and n != v.fill_var.value)
+        v.fill_var.value = field
+        v.points = [("pt", (1.0, 2.0), None)]
+        mean = next(q for q in v.part_sel.options.values() if q.endswith("mean"))
+        ser_dir = os.path.dirname(v.ser_path.value)
+        v.part_sel.value = mean
+        assert v.run is reg.get(mean)[0] and v.F is reg.get(mean)[1]
+        assert not v.ses_go.value and v.url_run.value == v.run.path
+        assert v.t == 2 and v.fill_var.value == field and v.points[0][1] == (1.0, 2.0)
+        assert "Ensemble mean" in v._run_info.object
+        assert v.figed.run is v.run and v.figed.data.run is v.run
+        assert os.path.dirname(v.ser_path.value) != ser_dir
+        assert "mean" in v.ses_path.value and "mean" in v.trk_path.value
+        assert v.settings.run_path == v.run.path
+        # another grid: not swapped (the page reloads, through a session file)
+        other = reg.get(os.path.join(wofs_root, "mem01"))
+        assert swap.same_grid(v.run, v.F, *other)
+        bigger = copy.copy(other[0])
+        bigger.ni += 1
+        assert not swap.same_grid(v.run, v.F, bigger, other[1])
+        monkeypatch.setattr(swap, "same_grid", lambda *a: False)
+        v.part_sel.value = os.path.join(os.path.dirname(mean), "mem01")
+        assert v.run.path == mean
+        s = json.load(open(v.ses_go.value))
+        assert s["run"].endswith("mem01") and s["track"]["member"]
+    finally:
+        v.close()

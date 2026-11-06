@@ -40,3 +40,17 @@ def test_opens_member_one_and_reads_a_2d_field(root):
         assert a.shape == (run.nj, run.ni) and np.isfinite(a).any()
     finally:
         getattr(run, "close", lambda: None)()
+
+
+def test_grid_sits_on_the_map(root):
+    """The grid's projection (core.geo) places every point within a tenth of a grid
+    spacing of the file's XLAT, XLONG, and finds some boundary lines over it."""
+    from cm1view.core import geo, models, wofs
+    mem = wofs.members(root)[0]
+    run = models.open_run(os.path.join(root, f"mem{mem:02d}"), workers=1)
+    try:
+        assert run.geo is not None, "projection not recognised or not matching XLAT, XLONG"
+        assert run.geo.misfit < 0.1 * run.dx / 1000.0
+        assert any(np.isfinite(run.geo.lines(k)[0]).any() for k in geo.KINDS)
+    finally:
+        getattr(run, "close", lambda: None)()

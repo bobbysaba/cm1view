@@ -7,9 +7,9 @@ import numpy as np
 import panel as pn
 
 from . import draw as figdraw, spec as fg
-from ..core import parcels as P, volume3d
+from ..core import parcels as P, vectors, volume3d
 from ..viewer.numinput import FloatInput
-from .cards import (FRAMES, SCENE_ARROWS, SCENE_BARS, SCENE_BG, SCENE_FLOOR_CMAPS,
+from .cards import (SCENE_ARROWS, SCENE_BARS, SCENE_BG, SCENE_FLOOR_CMAPS,
                     SCENE_FLOOR_RANGE, SCENE_LIGHTS, SCENE_PROJ, SCENE_RES, SCENE_STREAM_BY,
                     SCENE_STREAM_DIR, SCENE_VIEWS, _auto, _chk, _dark, _f, _hex, parcel_pick)
 
@@ -69,7 +69,8 @@ class FigureScene:
             n=pn.widgets.IntInput(name="Seeds across (n × n)", start=2, end=40, value=12),
             length=_f("Max length (km)", 40.0, step=5.0, start=1.0),
             dir=pn.widgets.Select(name="Direction", options=SCENE_STREAM_DIR),
-            frame=pn.widgets.Select(name="Frame", options=FRAMES, value="storm"),
+            frame=pn.widgets.Select(name="Frame", options=vectors.frames(self.run),
+                                    value=vectors.frame_of(self.run, "storm")),
             color_by=pn.widgets.Select(name="Colour by", options=SCENE_STREAM_BY))
         self.sc_c = dict(
             preset=pn.widgets.Select(name="View", options=SCENE_VIEWS, value="oblique"),

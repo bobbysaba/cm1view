@@ -17,7 +17,10 @@ def template(spec, name=""):
         from .docfile import doc_template
         return doc_template(spec, name)
     s = _plain(spec)
-    t0 = (s["parts"][0] if s.get("kind") == "combo" else s).get("time_s")
+    first = s["parts"][0] if s.get("kind") == "combo" else s
+    t0 = first.get("time_s")
+    runs, k = first.get("runs") or [], int(first.get("run", 0) or 0)
+    storm = runs[k].get("storm") if k < len(runs) else None
     s.pop("runs", None)
     for p in s["parts"] if s.get("kind") == "combo" else [s]:
         p.pop("runs", None)
@@ -54,6 +57,8 @@ def template(spec, name=""):
                 if lay.get("run") not in (None, 0):
                     lay["run"] = None
     s["template"] = dict(name=name, time_s=None if t0 is None else float(t0))
+    if storm:  # (the same storm of the other run's track file)
+        s["template"]["storm"] = storm
     return s
 
 
@@ -66,7 +71,10 @@ def from_template(tpl, run, t):
         from .docfile import doc_from_template
         return doc_from_template(tpl, run, t)
     s = _plain(tpl)
-    t0 = (s.pop("template", None) or {}).get("time_s")
+    info = s.pop("template", None) or {}
+    t0 = info.get("time_s")
+    if info.get("storm"):  # (with_defaults gives it to the run's entry)
+        s["storm"] = info["storm"]
     dt = 0.0 if t0 is None else float(run.times[t]) - float(t0)
     s = shift_times(s, dt)
     tt = np.asarray(run.times, dtype=float)

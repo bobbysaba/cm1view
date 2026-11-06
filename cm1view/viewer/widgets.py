@@ -15,7 +15,7 @@ from ..core.fields import CMAPS, deriv_options
 from .numinput import FloatInput
 from .picker import RunPicker
 from .settings import ConfirmOverwrite, Settings
-from .ui import FRAMES, LEVEL_MODES, ON, TERRAIN_LEVEL_MODES, TIME_BAR, ToolRail, _html
+from .ui import LEVEL_MODES, ON, TERRAIN_LEVEL_MODES, TIME_BAR, ToolRail, _html
 
 
 class Widgets:
@@ -129,8 +129,9 @@ class Widgets:
             level=pn.widgets.FloatSlider(name="Height (km AGL)", start=0.0,
                                          end=float(np.floor(run.z[-1])), step=0.05,
                                          value=level, width=190),
-            frame=pn.widgets.Select(name="Frame", options=FRAMES,
-                                    value="grid" if (run.umove or run.vmove) else "ground",
+            frame=pn.widgets.Select(name="Frame", options=vectors.frames(run),
+                                    value=vectors.frame_of(
+                                        run, "grid" if (run.umove or run.vmove) else "ground"),
                                     width=150),
             density=pn.widgets.IntSlider(name="Arrows across", start=dens_range[0],
                                          end=dens_range[1], value=density, width=170),
@@ -518,12 +519,17 @@ class Widgets:
         self._build_run_picker()
 
     def _switch_part(self, e):
-        """Another member (or the mean) of this run: reopen the page on it, keeping what
-        the viewer shows (a session written to the cache, opened with ?session=)."""
-        if not e.new or e.new == self.run.path:
+        """Another member (or the mean) of this run: shown in place, keeping what the
+        viewer shows (swap_run); one that does not fit this page reopens the page on it
+        (a session written to the cache, opened with ?session=)."""
+        if getattr(self, "_part_hold", False) or not e.new or e.new == self.run.path:
             return
         s = self.session_state()
         s["run"] = e.new
+        # a track file per member: the other member loads the same storm from its own
+        s["track"] = dict(member=True, storm=self.trk_storm.value, load=bool(self.fixes))
+        if self.swap_run(e.new, s):
+            return
         path = config.cache_dir("switch", config.run_key(e.new) + ".json")
         try:
             os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
@@ -534,6 +540,19 @@ class Widgets:
             return
         self.ses_go.value = path
 
+    def _run_info_html(self):
+        """The run picker's "This run" box."""
+        run = self.run
+        root = models.root_of(run.path)
+        part = f" · {models.part_label(run.path)}" if root != run.path else ""
+        return (f'<div class="cv-h" style="margin-top:14px">This run</div>'
+                f'<div class="cv-run"><b>{root}</b><br>{run.model_label}{part} · '
+                f'{run.ni}×{run.nj}×{run.nk} · '
+                f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
+                f'({run.umove:g}, {run.vmove:g}) m/s'
+                + (f'<br><span style="opacity:0.8">{run.note}</span>' if run.note else '')
+                + '</div>')
+
     def _build_run_picker(self):
         run = self.run
         self.run_btn = pn.widgets.Button(name=run.name, button_type="light",
@@ -543,14 +562,10 @@ class Widgets:
                                          stylesheets=[".bk-btn { max-width: 260px; "
                                                       "overflow: hidden; white-space: nowrap; "
                                                       "text-overflow: ellipsis; }"])
-        self.picker = RunPicker(run.path, extra=(
-            _html(f'<div class="cv-h" style="margin-top:14px">This run</div>'
-                  f'<div class="cv-run"><b>{run.path}</b><br>{run.model_label} · '
-                  f'{run.ni}×{run.nj}×{run.nk} · '
-                  f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
-                  f'({run.umove:g}, {run.vmove:g}) m/s'
-                  + (f'<br><span style="opacity:0.8">{run.note}</span>' if run.note else '')
-                  + '</div>'),
+        root = models.root_of(run.path)
+        self._run_info = _html(self._run_info_html())
+        self.picker = RunPicker(root, extra=(
+            self._run_info,
             pn.Row(self.cache_html, self.clear_btn)))
         p = self.picker
         self.rp_modal = p.modal
@@ -565,7 +580,7 @@ class Widgets:
         self.part_sel = pn.widgets.Select(
             options={models.part_label(q): q for q in parts}, value=run.path if parts else None,
             width=150, height=32, margin=(4, 2), visible=bool(parts),
-            description="Ensemble member shown (the view is kept; the page reloads). "
+            description="Ensemble member shown (the view is kept). "
                         "The member a run opens on: wofs_member in ⚙ Settings.")
         self.part_sel.param.watch(self._switch_part, "value")
         self.gear_btn = pn.widgets.Button(

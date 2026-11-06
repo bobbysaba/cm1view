@@ -67,6 +67,41 @@ def _shade(ax, x, y, a, lay):
 KEY_UNITS = {"wind": "m s$^{-1}$", "hvort": "s$^{-1}$", "bgen": "10$^{-4}$ s$^{-2}$"}
 
 
+# a Map boundaries layer's lines: width and opacity as a share of the layer's (the
+# viewer's map draws them alike)
+BOUNDARY_LOOK = {"coastlines": (1.0, 1.0), "countries": (1.25, 1.0), "states": (1.0, 1.0),
+                 "lakes": (0.8, 0.9), "counties": (0.55, 0.6)}
+
+
+def _boundaries(ax, d, j, lay, fs):
+    """A Map boundaries layer j: its chosen lines (d["L<j>_b_<kind>"], rows x, y,
+    NaN-separated), and its lat/lon lines (L<j>_grid) with their labels where they
+    meet the bottom and left edges (L<j>_glab rows x, y, edge 0 bottom / 1 left;
+    L<j>_glab_t their texts)."""
+    col, lw = lay.get("color", "0.35"), float(lay.get("lw", 0.6))
+    for kind in lay.get("kinds") or []:
+        xy = d.get(f"L{j}_b_{kind}")
+        if xy is None or not np.size(xy):
+            continue
+        fw, fa = BOUNDARY_LOOK.get(kind, (1.0, 1.0))
+        ax.plot(xy[0], xy[1], color=col, lw=lw * fw, alpha=fa, solid_joinstyle="round",
+                solid_capstyle="round")
+    g = d.get(f"L{j}_grid")
+    if not lay.get("grid") or g is None or not np.size(g):
+        return
+    ax.plot(g[0], g[1], color=col, lw=max(0.4, 0.75 * lw), ls=":", alpha=0.7)
+    if not lay.get("grid_labels", True):
+        return
+    rows = np.atleast_2d(d.get(f"L{j}_glab", np.zeros((0, 3))))
+    texts = np.atleast_1d(d.get(f"L{j}_glab_t", np.array([], str)))
+    for (x, y, edge), text in zip(rows, texts):
+        left = int(edge) == 1
+        ax.annotate(str(text), (x, y), xytext=(3, 0) if left else (0, 2),
+                    textcoords="offset points", ha="left" if left else "center",
+                    va="center" if left else "bottom", color=col, fontsize=0.65 * fs,
+                    annotation_clip=True)
+
+
 def sector_outline(d, lay):
     """(x, y) of a Sector layer's outline in panel data d (a plan view): the wedge from
     az0 clockwise to az1 (degrees from the storm motion's direction, d["sector"], or

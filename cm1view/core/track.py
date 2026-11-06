@@ -258,13 +258,19 @@ def place(run, t, x, y, opts, fields=None):
     return fx
 
 
-def load(run, path):
-    """Fixes {t: fix} from a CSV / whitespace table with x_km, y_km or loc_x, loc_y
-    (grid-relative) or x_ground_km, y_ground_km, and time_s, time_hms, time_index or
-    time (minutes; seconds if the values are too large for minutes).  Lines starting
-    with '#' are comments.  Times are matched to the nearest output time; a column
-    named value or like uh_* / zeta_* / w_* / prspert_* / max_* / min_* becomes the
-    fix value."""
+STORM_COL = "storm"  # optional column naming the storm of each row (several per file)
+
+
+def storm_name(name):
+    """A storm name as written to a track file: stripped, with spaces and commas made
+    underscores (so whitespace tables still split into columns)."""
+    import re
+    return re.sub(r"[\s,]+", "_", str(name or "").strip())
+
+
+def _table(path):
+    """(absolute path, DataFrame) of a track file (CSV, or whitespace columns), comment
+    lines ('#') skipped."""
     import pandas as pd
 
     path = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
@@ -273,60 +279,179 @@ def load(run, path):
     sep = "," if "," in first else r"\s+"
     df = pd.read_csv(path, comment="#", sep=sep, engine="python")
     df.columns = [c.strip() for c in df.columns]
+    return path, df
+
+
+def _storm_of(df):
+    """Each row's storm name ("" without a storm column, or for a blank cell)."""
+    if STORM_COL not in df:
+        return np.full(len(df), "", object)
+    return np.array(["" if v != v or v is None else storm_name(v)  # (v != v: NaN)
+                     for v in df[STORM_COL]], object)
+
+
+def storms(path):
+    """The storms a track file holds, in the order they first appear; [] for a file
+    without a storm column (one storm, as CM1 tracks are)."""
+    _, df = _table(path)
+    if STORM_COL not in df:
+        return []
+    return list(dict.fromkeys(_storm_of(df)))
+
+
+def load(run, path, storm=None):
+    """Fixes {t: fix} from a CSV / whitespace table with x_km, y_km or loc_x, loc_y
+    (grid-relative) or x_ground_km, y_ground_km, and time_s, time_hms, time_index or
+    time (minutes; seconds if the values are too large for minutes).  Lines starting
+    with '#' are comments.  Times are matched to the nearest output time; a column
+    named value or like uh_* / zeta_* / w_* / prspert_* / max_* / min_* becomes the
+    fix value.
+    A file may hold several storms, told apart by a 'storm' column (a name or number
+    per row): `storm` picks one (None: the file's first).  A storm the file lacks is a
+    ValueError; without a storm column the whole file is the one storm whatever
+    `storm` says."""
+    _, df = _table(path)
+    names = _storm_of(df)
+    if STORM_COL in df:
+        order = list(dict.fromkeys(names))
+        want = order[0] if storm is None and order else storm_name(storm)
+        if want not in order:
+            raise ValueError(f"no storm {want!r} in the file (it has "
+                             f"{', '.join(repr(n) for n in order) or 'none'})")
+        df = df[names == want].reset_index(drop=True)
+    return _fixes(run, df)
+
+
+def load_all(run, path):
+    """{storm: fixes} of every storm in a track file, in file order ({"": fixes} for a
+    file without a storm column)."""
+    _, df = _table(path)
+    names = _storm_of(df)
+    return {n: _fixes(run, df[names == n].reset_index(drop=True))
+            for n in dict.fromkeys(names)}
+
+
+def _fixes(run, df):
+    """Fixes {t: fix} of one storm's rows (see load)."""
     times = np.asarray(run.times)
-    if "time_s" in df:
-        tsec = df["time_s"].astype(float).to_numpy()
-    elif "time_hms" in df:
-        def hms(v):
-            h, m, s = (float(p) for p in str(v).split(":"))
-            return h * 3600 + m * 60 + s
-        tsec = np.array([hms(v) for v in df["time_hms"]])
-    elif "time_index" in df:
-        tsec = times[np.clip(df["time_index"].astype(int).to_numpy(), 0, len(times) - 1)]
-    elif "time" in df:  # e.g. storm_tracks/*.csv: model minutes
-        tv = df["time"].astype(float).to_numpy()
-        tsec = tv * 60.0 if np.nanmax(tv) <= times[-1] / 60.0 + 1.0 else tv
-    else:
+    n_rows = len(df)
+    # each row takes the first time / position columns that hold numbers in it: a file
+    # of several storms may mix them (a storm saved by cm1view has time_s, another
+    # written by hand only time_index; the columns it lacks are blank in its rows)
+    tsec = np.full(n_rows, np.nan)
+    by_index = np.zeros(n_rows, bool)  # (a time_index row is always an output time)
+    found = False
+    for c in ("time_s", "time_hms", "time_index", "time"):
+        if c not in df:
+            continue
+        found = True
+        if c == "time_hms":
+            def hms(v):
+                try:
+                    h, m, s = (float(p) for p in str(v).split(":"))
+                except ValueError:
+                    return np.nan
+                return h * 3600 + m * 60 + s
+            tv = np.array([hms(v) for v in df[c]], float)
+        else:
+            tv = pd_floats(df[c])
+        if c == "time_index":
+            ok = np.isfinite(tv)
+            tv = np.where(ok, times[np.clip(np.nan_to_num(tv).astype(int), 0,
+                                            len(times) - 1)], np.nan)
+        elif c == "time":  # e.g. storm_tracks/*.csv: model minutes
+            fin = tv[np.isfinite(tv)]
+            if len(fin) and np.max(fin) <= times[-1] / 60.0 + 1.0:
+                tv = tv * 60.0
+        fill = ~np.isfinite(tsec) & np.isfinite(tv)
+        tsec[fill] = tv[fill]
+        if c == "time_index":
+            by_index |= fill
+    if not found:
         raise ValueError("needs a time_s, time_hms, time_index or time (min) column")
-    if {"x_km", "y_km"} <= set(df.columns):
-        x, y = df["x_km"].astype(float).to_numpy(), df["y_km"].astype(float).to_numpy()
-    elif {"loc_x", "loc_y"} <= set(df.columns):
-        x, y = df["loc_x"].astype(float).to_numpy(), df["loc_y"].astype(float).to_numpy()
-    elif {"x_ground_km", "y_ground_km"} <= set(df.columns):
-        x = df["x_ground_km"].astype(float).to_numpy() - run.umove * tsec / 1000.0
-        y = df["y_ground_km"].astype(float).to_numpy() - run.vmove * tsec / 1000.0
-    else:
+    x, y = np.full(n_rows, np.nan), np.full(n_rows, np.nan)
+    found = False
+    for cx, cy in (("x_km", "y_km"), ("loc_x", "loc_y"), ("x_ground_km", "y_ground_km")):
+        if not {cx, cy} <= set(df.columns):
+            continue
+        found = True
+        xv, yv = pd_floats(df[cx]), pd_floats(df[cy])
+        if cx == "x_ground_km":
+            xv = xv - run.umove * tsec / 1000.0
+            yv = yv - run.vmove * tsec / 1000.0
+        fill = ~np.isfinite(x) & np.isfinite(xv) & np.isfinite(yv)
+        x[fill], y[fill] = xv[fill], yv[fill]
+    if not found:
         raise ValueError("needs x_km, y_km or loc_x, loc_y (grid), or x_ground_km, "
                          "y_ground_km columns")
-    vcol = next((c for c in df.columns if c == "value"
-                 or c.split("_")[0] in ("uh", "zeta", "w", "prspert", "max", "min")
-                 and c not in
-                 ("w_max_2_5km", "zeta_max_2_5km")), None)
+    # the value column: in a file of several storms each may have its own (tracked on
+    # different fields), the others blank in its rows -> the first with a number here
+    cand = [c for c in df.columns if c == "value"
+            or c.split("_")[0] in ("uh", "zeta", "w", "prspert", "max", "min")
+            and c not in ("w_max_2_5km", "zeta_max_2_5km")]
+    vals = {c: pd_floats(df[c]) for c in cand}
+    vcol = next((c for c in cand if np.isfinite(vals[c]).any()), cand[0] if cand else None)
     keep = [c for c in ("w_max_2_5km", "zeta_max_2_5km") if c in df]
     fixes = {}
     for n in range(len(df)):
+        if not (np.isfinite(tsec[n]) and np.isfinite(x[n])):
+            continue  # (a row without a time or a position)
         t = int(np.argmin(np.abs(times - tsec[n])))
-        if abs(times[t] - tsec[n]) > 1.0 and "time_index" not in df:
+        if abs(times[t] - tsec[n]) > 1.0 and not by_index[n]:
             continue  # not an output time of this run
         fx = dict(x=float(x[n]), y=float(y[n]),
-                  value=float(df[vcol].iloc[n]) if vcol else float("nan"))
+                  value=float(vals[vcol][n]) if vcol else float("nan"))
         for c in keep:
-            fx[c] = float(df[c].iloc[n])
-        fx["source"] = str(df["source"].iloc[n]) if "source" in df else "loaded"
+            fx[c] = float(pd_floats(df[c])[n])
+        src = df["source"].iloc[n] if "source" in df else None
+        fx["source"] = "loaded" if src is None or src != src or str(src) in ("", "nan") \
+            else str(src)  # (blank in another storm's rows)
         fixes[t] = fx
     return fixes
 
 
-def motion(run, fixes):
-    """Ground-relative motion (m/s) at every fix from centred differences of the
-    ground-relative track (grid positions + grid translation)."""
+def pd_floats(col):
+    """A column as floats, NaN where a cell is not a number (blank, 'nan', text)."""
+    import pandas as pd
+    return pd.to_numeric(col, errors="coerce").to_numpy(float)
+
+
+def motion_window(run):
+    """Seconds of track the storm motion is fitted over (the track_motion_window
+    setting, minutes; auto: the run's own, Run.track_window); 0: centred differences."""
+    from .. import config
+    w = config.get("track_motion_window")
+    if w == "auto":
+        return float(getattr(run, "track_window", 0.0) or 0.0)
+    return max(0.0, 60.0 * float(w))
+
+
+def motion(run, fixes, window=None):
+    """Ground-relative motion (m/s) at every fix, from the ground-relative track (grid
+    positions + grid translation).  window (s; None: motion_window(run)): the slope of
+    a least-squares line through the fixes within window / 2 of each fix (fewer near
+    the ends), which steadies a jumpy track (WoFS: every cycle is a fresh analysis, so
+    the fixes jump by its increments); 0, or fewer than two fixes in the window:
+    centred differences."""
     ts = sorted(fixes)
     if len(ts) < 2:
         return {t: (np.nan, np.nan) for t in ts}
-    tsec = np.array([run.times[t] for t in ts])
+    tsec = np.array([run.times[t] for t in ts], float)
     xg = np.array([fixes[t]["x"] * 1000.0 + run.umove * run.times[t] for t in ts])
     yg = np.array([fixes[t]["y"] * 1000.0 + run.vmove * run.times[t] for t in ts])
     u, v = np.gradient(xg, tsec), np.gradient(yg, tsec)
+    w = motion_window(run) if window is None else max(0.0, float(window))
+    if w > 0:
+        for n in range(len(ts)):
+            near = np.abs(tsec - tsec[n]) <= 0.5 * w + 1e-6
+            if near.sum() < 2:
+                continue
+            tt = tsec[near] - tsec[n]
+            d = tt - tt.mean()
+            den = float(np.sum(d * d))
+            if den > 0:
+                u[n] = float(np.sum(d * xg[near]) / den)
+                v[n] = float(np.sum(d * yg[near]) / den)
     return {t: (float(a), float(b)) for t, a, b in zip(ts, u, v)}
 
 
@@ -362,9 +487,13 @@ _FMT = {"time_index": "{:d}", "time_s": "{:.0f}", "x_km": "{:.3f}", "y_km": "{:.
         "v_motion_ms": "{:.2f}"}
 
 
-def to_text(run, fixes, opts, fmt="csv", fields=None):
+def to_text(run, fixes, opts, fmt="csv", fields=None, storm=None, others=None):
     """The track as CSV (fmt='csv') or a whitespace-aligned table ('txt'), with a
-    '#'-commented header describing the run, method and columns."""
+    '#'-commented header describing the run, method and columns.
+    storm: the storm's name -> a 'storm' column (first), so a file can hold several;
+    others: rows of the file's other storms to keep, a list of {column: text} (from
+    save), written in their place in `others` order (this storm where it was, or
+    last)."""
     rs = rows(run, fixes)
     m, sn = opts["metric"], sense(opts)
     lab, units = label(opts, fields)
@@ -373,6 +502,8 @@ def to_text(run, fixes, opts, fmt="csv", fields=None):
     nt = len(run.times)
     lo, hi = opts.get("t_from", 0), opts.get("t_to", nt - 1)
     cols = list(rs[0].keys()) if rs else ["time_index", "time_s", "x_km", "y_km", "value"]
+    win = motion_window(run)
+    storm = storm_name(storm) if storm is not None else None
     head = [
         "cm1view mesocyclone track",
         f"created: {_time.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -393,10 +524,16 @@ def to_text(run, fixes, opts, fmt="csv", fields=None):
         f"grid translation (umove, vmove) = ({run.umove:g}, {run.vmove:g}) m/s",
         "x_km, y_km: position on the (translating) model grid; "
         "x/y_ground_km: ground-relative = grid + (umove, vmove) * time_s",
-        "u/v_motion_ms: ground-relative storm motion (centred differences)",
+        "u/v_motion_ms: ground-relative storm motion ("
+        + (f"least-squares fit over {win / 60.0:g} min of track)" if win > 0 else
+           "centred differences)"),
         f"{vname}: raw {sn} within the smoothing box around the fix",
         "source: auto = tracked, manual = placed by hand, loaded = read from a file",
     ]
+    if storm is not None:
+        head.insert(3, "storm: which storm a row belongs to (a file may hold several; "
+                       "the method lines above are this file's last saved storm, "
+                       f"{storm!r})")
     names = [vname if c == "value" else c for c in cols]
 
     def cell(c, v):
@@ -407,6 +544,21 @@ def to_text(run, fixes, opts, fmt="csv", fields=None):
         return f"{v:.6g}"
 
     body = [[cell(c, r[c]) for c in cols] for r in rs]
+    if storm is not None:
+        names, body = [STORM_COL] + names, [[storm] + b for b in body]
+        order = list(dict.fromkeys([r.get(STORM_COL, "") for r in others or []]))
+        if storm not in order:
+            order.append(storm)
+        names += [c for c in dict.fromkeys(c for r in others or [] for c in r)
+                  if c not in names]
+        mine = [b + ["nan"] * (len(names) - len(b)) for b in body]
+        body = []
+        for n in order:
+            if n == storm:
+                body += mine
+            else:
+                body += [[r.get(c, "nan") or "nan" for c in names]
+                         for r in others if r.get(STORM_COL, "") == n]
     buf = io.StringIO()
     for h in head:
         buf.write(f"# {h}\n")
@@ -423,12 +575,52 @@ def to_text(run, fixes, opts, fmt="csv", fields=None):
     return buf.getvalue()
 
 
-def save(run, fixes, opts, path, fields=None):
+def _other_storms(path, storm):
+    """Rows ({column: text}) of the storms other than `storm` in the track file at
+    path, to keep when saving `storm` into it; [] when there is no such file or it has
+    no storm column (it is then replaced whole, as a one-storm file always was)."""
+    if not os.path.isfile(path):
+        return []
+    try:
+        _, df = _table(path)
+    except Exception:  # noqa: BLE001  (not a readable track: replaced)
+        return []
+    if STORM_COL not in df:
+        return []
+    names = _storm_of(df)
+    out = []
+    for n, (_, r) in zip(names, df.iterrows()):
+        if n == storm:
+            out.append({STORM_COL: n})  # (keeps its place in the order)
+            continue
+        d = {c: ("nan" if v != v else str(v)) for c, v in r.items()}
+        d[STORM_COL] = n
+        out.append(d)
+    return out
+
+
+def save(run, fixes, opts, path, fields=None, storm=None):
     """Write the track to `path` (.csv -> comma separated, anything else -> aligned
-    text).  Creates missing directories.  Returns the absolute path."""
+    text).  Creates missing directories.  storm: the storm's name -> written with a
+    storm column, replacing only that storm's rows of a file that already holds
+    several (its other storms are kept).  Returns the absolute path."""
     path = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fmt = "csv" if path.lower().endswith(".csv") else "txt"
+    others = None
+    if storm is not None:
+        storm = storm_name(storm)
+        keep = _other_storms(path, storm)
+        # this storm's own old rows only mark its place; drop all but the first marker
+        seen, others = False, []
+        for r in keep:
+            if r.get(STORM_COL) == storm:
+                if not seen:
+                    others.append({STORM_COL: storm})
+                seen = True
+            else:
+                others.append(r)
+    text = to_text(run, fixes, opts, fmt, fields, storm, others)
     with open(path, "w") as f:
-        f.write(to_text(run, fixes, opts, fmt, fields))
+        f.write(text)
     return path

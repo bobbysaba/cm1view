@@ -1,10 +1,10 @@
 """Panel application: the Viewer (one per browser session) and the page.
 
 The Viewer is assembled from mixins, one module each: widgets (the drawers' controls),
-mapview (the map and its job), layout (the page), events (time, tools, map clicks),
-sounding, tracking, series, dist, parcels, xsec, view3d (3D, pressure decomposition,
-streamline pick), items (the items tray), diff (differences) and session (session
-files).  This module builds it, wires the
+mapview (the map and its job), geomap (boundaries and lat/lon lines), layout (the
+page), events (time, tools, map clicks), sounding, tracking, series, dist, parcels,
+xsec, view3d (3D, pressure decomposition, streamline pick), items (the items tray),
+diff (differences), session (session files) and swap (another member in place).  This module builds it, wires the
 events and makes the page; shared UI pieces are in ui.py, the Figure workspace in
 figures/editor.py."""
 
@@ -25,6 +25,7 @@ from .events import Events
 from .export import DataExport
 from .layout import Layout
 from .mapview import MapView
+from .geomap import MapLines
 from .widgets import Widgets
 from .diff import Differences
 from .dist import DistPanel
@@ -33,15 +34,16 @@ from .sounding import SoundingPanel
 from .series import SeriesPanel
 from .session import Sessions
 from .session import read as read_session
+from .swap import RunSwap
 from .parcels import ParcelsPanel
 from .tracking import TrackPanel
 from .view3d import View3DPanel
 from .xsec import SectionPanel
 
 
-class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, SeriesPanel,
+class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPanel, SeriesPanel,
              DistPanel, ParcelsPanel, SectionPanel, View3DPanel, ItemsTray, Differences,
-             Sessions, DataExport):
+             Sessions, DataExport, RunSwap):
     def __init__(self, run, fields, maxpix=900, error="", reg=None):
         self.run, self.F = run, fields
         self.reg = reg  # the shared runs (figures with panels from other runs)
@@ -76,6 +78,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
         self.map_bar, self.v3_bar = self._map_toolbar(), self._3d_toolbar()
         self.figed = figui.FigureEditor(self)
         self._build_items()
+        self._build_swap()
         self._build_session()
         self._build_export()
         self._wire()
@@ -91,6 +94,7 @@ class Viewer(Widgets, MapView, Layout, Events, SoundingPanel, TrackPanel, Series
 
     def _wire(self):
         rm = lambda *e: self.request_map()  # noqa: E731
+        self._wire_geo()
         self.tslider.param.watch(self._on_time, "value")
         self.tslider.param.watch(lambda e: self._refresh_panels(), "value_throttled")
         self.t_play.on_click(self._on_play)

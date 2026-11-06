@@ -147,7 +147,8 @@ class FigureRuns:
             return f'<span style="color:#f87171">track: {self.data.track_err[path]}</span>'
         if not tr:
             return "no track (storm-centred panels stay empty)"
-        note = f"track: {len(fx)} fix{'es' if len(fx) != 1 else ''}"
+        what = f"storm {e['storm']}, " if e.get("storm") and tr != "viewer" else ""
+        note = f"track: {what}{len(fx)} fix{'es' if len(fx) != 1 else ''}"
         if fx:
             ts = sorted(fx)
             note += f" ({run.times[ts[0]] / 60:g}–{run.times[ts[-1]] / 60:g} min)"

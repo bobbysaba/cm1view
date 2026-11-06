@@ -21,6 +21,7 @@ import threading
 import uuid
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 
 import numpy as np
 import netCDF4
@@ -31,6 +32,52 @@ IO_LOCK = threading.RLock()
 # staggered dimensions: CM1's own names (ni/nj/nk on scalar points) and the CF-style
 # ones of newer versions (xh/yh/zh on scalar points, xf/yf/zf staggered)
 STAG_DIMS = {"nip1": "x", "njp1": "y", "nkp1": "z", "xf": "x", "yf": "y", "zf": "z"}
+
+
+class Cancelled(Exception):
+    """A read stopped because the job that asked for it no longer wants it (see
+    reporting)."""
+
+
+_hook = threading.local()  # .on: (progress, cancelled) of the reporting() block
+
+
+@contextmanager
+def reporting(progress=None, cancelled=None):
+    """Within the block, reads made on this thread (through any run) report
+    progress(done, total, what) as they go, the way load_volumes' own argument does,
+    with `what` naming the field and, for an ensemble mean, the members read so far
+    ("th · 18/36 members").  Once cancelled() is true a read stops at the next field
+    or member share and raises Cancelled.  load_volumes' own progress argument hears
+    the same reports; its own cancelled argument takes precedence (and it keeps
+    returning False when that one cancels)."""
+    old = getattr(_hook, "on", None)
+    _hook.on = (progress, cancelled)
+    try:
+        yield
+    finally:
+        _hook.on = old
+
+
+def report(done, total, what):
+    """Progress to the reporting() block of this thread, if any."""
+    on = getattr(_hook, "on", None)
+    if on and on[0]:
+        on[0](done, total, what)
+
+
+def _both(a, b):
+    def progress(done, total, what):
+        a(done, total, what)
+        b(done, total, what)
+    return progress
+
+
+def check_cancelled():
+    """Raise Cancelled if the reporting() block of this thread was cancelled."""
+    on = getattr(_hook, "on", None)
+    if on and on[1] and on[1]():
+        raise Cancelled()
 
 
 def _destagger(a, stag):
@@ -69,6 +116,21 @@ def _read_volume_worker(src, name, stag, outdir):
     out = os.path.join(outdir, f"cm1view-{os.getpid()}-{uuid.uuid4().hex}.npy")
     np.save(out, a)
     return out
+
+
+def _drop_pending(futs):
+    """Cancel reader tasks no longer wanted; those already running remove their file
+    when they finish (without waiting here for them)."""
+    for f in futs:
+        if not f.cancel():
+            f.add_done_callback(_remove_result)
+
+
+def _remove_result(fut):
+    try:
+        os.remove(fut.result())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _box(v, stag, i0, i1, j0, j1):
@@ -223,6 +285,16 @@ class Run:
     # the model writes no parcel output: cm1view traces trajectories through the 3D winds
     # (core.trajcalc) instead of looking for parcel files
     traced_parcels = False
+    # storm-relative winds are offered (vector frames, and fields that take the storm
+    # motion: storm-relative helicity, STP, SCP, streamwise vorticity).  False (WoFS,
+    # for now): winds are ground-relative only, and those fields are left out
+    storm_relative = True
+    # seconds of storm track a storm motion is fitted over when the
+    # track_motion_window setting is auto (core.track.motion); 0: centred differences
+    track_window = 0.0
+    # where the grid sits on the Earth (core.geo.Geo: projection, lat/lon, boundary
+    # lines), or None: an idealized run (CM1) has none
+    geo = None
     # a plain-language note on how this run's fields come about ("" for none), shown
     # with the run's details
     note = ""
@@ -455,6 +527,19 @@ class Run:
         parallel) when there is more than one CPU.  A field another job is already
         reading is waited for, not read twice.  Returns False if cancelled."""
         names = list(dict.fromkeys(names))
+        on = getattr(_hook, "on", None)
+        hooked = cancelled is None and on is not None and on[1] is not None
+        if on and on[0] and on[0] is not progress:  # (the block hears it too)
+            progress = on[0] if progress is None else _both(progress, on[0])
+        if hooked:
+            cancelled = on[1]
+        if not self._load_volumes(names, t, progress, cancelled):
+            if hooked:  # (callers that don't check the result can't use a partial read)
+                raise Cancelled()
+            return False
+        return True
+
+    def _load_volumes(self, names, t, progress, cancelled):
         for _ in range(3):  # (only repeats if a waited-for field was evicted at once)
             missing = [n for n in names if self.cached(n, t) is None]
             if not missing:
@@ -499,17 +584,24 @@ class Run:
             }
             from concurrent.futures import as_completed
 
-            for fut in as_completed(futs):
-                n = futs[fut]
-                path = fut.result()
-                try:
-                    self._insert(n, t, np.load(path), protect)
-                finally:
-                    os.remove(path)
-                done += 1
-                if progress:
-                    progress(done, total, n)
-            return True
+            pending = set(futs)
+            try:
+                for fut in as_completed(futs):
+                    pending.discard(fut)
+                    n = futs[fut]
+                    path = fut.result()
+                    try:
+                        self._insert(n, t, np.load(path), protect)
+                    finally:
+                        os.remove(path)
+                    done += 1
+                    if progress:
+                        progress(done, total, n)
+                    if cancelled and pending and cancelled():
+                        return False
+                return True
+            finally:
+                _drop_pending(pending)
         for n in missing:
             if cancelled and cancelled():
                 return False

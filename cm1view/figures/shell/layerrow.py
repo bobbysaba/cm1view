@@ -208,6 +208,11 @@ def describe(lay, fields=None, p=None, kind="plan"):
         bits.append(str(lay.get("vector") or "wind"))
     elif lay.get("type") == "parcels":
         bits.append(str(lay.get("name") or "parcels"))
+    elif lay.get("type") == "boundaries":
+        ks = list(lay.get("kinds") or [])
+        bits.append(", ".join(ks) if len(ks) <= 2 else f"{ks[0]} + {len(ks) - 1} more")
+        if lay.get("grid"):
+            bits.append("lat/lon lines")
     mode = lay.get("mode", "height")
     if kind != "xsec" and (lay.get("field") or lay.get("type") == "vectors"):
         if p is not None and p.get("z") is not None and not lay.get("z_fixed"):

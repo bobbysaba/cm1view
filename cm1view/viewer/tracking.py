@@ -3,6 +3,7 @@ and saving / loading tracks.
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
+import html
 import io
 import os
 import traceback
@@ -15,7 +16,7 @@ from bokeh.models import ColumnDataSource, HoverTool
 from bokeh.plotting import figure
 
 from .. import config
-from ..core import track as trk
+from ..core import models, track as trk
 from ..theme import ACCENT
 from .numinput import FloatInput
 from .ui import _bokeh, _html, pd_empty, style_fig
@@ -111,6 +112,20 @@ class TrackPanel:
         self.trk_path = pn.widgets.TextInput(
             name="Save to (on the server; .csv = comma separated, .txt = aligned columns)",
             value=self._trk_default(), sizing_mode="stretch_width", min_width=300)
+        # which storm of the track file (a file may hold several: its 'storm' column);
+        # shown for runs read as several (WoFS members) or a file with storms
+        self.trk_storm = pn.widgets.AutocompleteInput(
+            name="Storm", options=[], value="", restrict=False, min_characters=0,
+            search_strategy="includes", case_sensitive=False, width=150,
+            placeholder="the file's first",
+            visible=models.root_of(run.path) != run.path,
+            description="Which storm of the track file (a file can hold several, told "
+                        "apart by a 'storm' column). Pick one of the file's storms to "
+                        "load it; type a new name to save the track as that storm (the "
+                        "file's other storms are kept). Switching member loads the same "
+                        "storm from that member's file.")
+        self.trk_storm.param.watch(self._on_trk_storm, "value")
+        self._trk_storms = []  # the storms of the file at the path
         self.trk_save = pn.widgets.Button(name="Save", button_type="primary", height=32,
                                           margin=(5, 4, 8, 10), disabled=True)
         self.trk_dl = pn.widgets.FileDownload(
@@ -275,19 +290,70 @@ class TrackPanel:
             self._draw_points()
 
     def _on_load_track(self, ev):
+        self._load_track()
+
+    def _load_track(self, storm=None, quiet=False):
+        """Read the track at the path: the named storm (default: the Storm box; blank:
+        the file's first).  quiet: a missing file or storm is no error (a member
+        switch looking for the same storm).  True when a track was loaded."""
+        storm = trk.storm_name(self.trk_storm.value if storm is None else storm)
+        path = self.trk_path.value
         try:
-            fixes = trk.load(self.run, self.trk_path.value)
+            self._refresh_storms()
+            if quiet and (not os.path.isfile(config.expand(path)) or
+                          storm and self._trk_storms and storm not in self._trk_storms):
+                return False
+            fixes = trk.load(self.run, path, storm or None)
         except (OSError, ValueError, KeyError) as e:
             self.trk_status.object = (f'<div class="cv-status" style="color:#f87171">Could '
                                       f'not load: {e}</div>')
-            return
+            return False
+        if self._trk_storms and not storm:  # (the file's first)
+            storm = self._trk_storms[0]
+        if storm != self.trk_storm.value:
+            self._set_storm(storm)
         self.gen["trk"] += 1
         self.trk_stop_btn.disabled = True
         self.fixes, self.trk_spec = fixes, self._trk_opts()
         self._update_track_view()
         self.trk_status.object = self._track_summary(f" · loaded from <code>"
-                                                     f"{self.trk_path.value}</code>")
+                                                     f"{path}</code>")
         self._draw_points()
+        return True
+
+    def _refresh_storms(self):
+        """The Storm box offers the storms of the file at the path."""
+        try:
+            names = trk.storms(self.trk_path.value)
+        except Exception:  # noqa: BLE001  (no file yet, or not a track)
+            names = []
+        self._trk_storms = names
+        if self.trk_storm.options != names:
+            self.trk_storm.options = names
+        if names:
+            self.trk_storm.visible = True
+
+    _storm_hold = False
+
+    def _set_storm(self, name):
+        """Put a name in the Storm box without loading it."""
+        self._storm_hold = True
+        try:
+            self.trk_storm.value = name
+        finally:
+            self._storm_hold = False
+        if name:
+            self.trk_storm.visible = True
+
+    def _on_trk_storm(self, ev):
+        """A storm of the file picked: load it (a new name is only kept, for Save)."""
+        name = trk.storm_name(ev.new)
+        if name != ev.new:  # (as it is written to the file)
+            self._set_storm(name)
+        if not self._storm_hold and name and name in self._trk_storms:
+            self._load_track(name)
+        else:
+            self._update_storm_btn()
 
     def _trk_job(self, g, t0, x, y, opts, direction, existing):
         run = self.run
@@ -351,7 +417,9 @@ class TrackPanel:
             mv = (' · tracking stopped after one time: the signal was not past '
                   f'<i>{self.trk_stop.name}</i> at the next time, or the From–To '
                   'window ends there')
-        return (f'<div class="cv-status">{len(ts)} fixes, {run.time_label(ts[0])} → '
+        name = self.trk_storm.value
+        name = f"Storm <b>{html.escape(name)}</b>: " if name else ""
+        return (f'<div class="cv-status">{name}{len(ts)} fixes, {run.time_label(ts[0])} → '
                 f'{run.time_label(ts[-1])}{mv}{note}</div>')
 
     def _update_track_view(self):
@@ -391,7 +459,7 @@ class TrackPanel:
         self._show_panel(True, 2)
         if found:
             self.trk_path.value = found
-            self._on_load_track(None)
+            self._load_track()
 
     def _track_file(self):
         """The run's storm track file (track_dirs / track_patterns), or None; looked up
@@ -408,11 +476,14 @@ class TrackPanel:
             found = self._track_file()
             name, cls = (f"Load storm track ({os.path.basename(found)})" if found
                          else "No storm track"), []
-        elif self.t in self.fixes:
-            name, cls = (f"Storm track · {len(ts)} fixes, {self.run.time_label(ts[0])}–"
-                         f"{self.run.time_label(ts[-1])}"), ["cv-on"]
         else:
-            name, cls = f"Storm track · no fix at this time ({len(ts)} fixes)", ["cv-warn"]
+            storm = self.trk_storm.value
+            head = f"Storm {storm}" if storm else "Storm track"
+            if self.t in self.fixes:
+                name, cls = (f"{head} · {len(ts)} fixes, {self.run.time_label(ts[0])}–"
+                             f"{self.run.time_label(ts[-1])}"), ["cv-on"]
+            else:
+                name, cls = f"{head} · no fix at this time ({len(ts)} fixes)", ["cv-warn"]
         if b.name != name:
             b.name = name
         b.css_classes = cls
@@ -442,28 +513,70 @@ class TrackPanel:
 
     def _on_trk_path(self, ev):
         self.trk_dl.filename = os.path.basename(self.trk_path.value) or "meso_track.csv"
+        self._refresh_storms()
 
     def _track_download(self):
+        """This track alone (with its storm column when it has a storm name)."""
         fmt = "csv" if self.trk_dl.filename.lower().endswith(".csv") else "txt"
         text = trk.to_text(self.run, self.fixes, self.trk_spec or self._trk_opts(), fmt,
-                           self.F)
+                           self.F, storm=self.trk_storm.value or None)
         return io.BytesIO(text.encode())
+
+    def _member_track(self, tr):
+        """After a member switch (tr from _switch_part): this member's track file, and
+        the storm the other member showed, loaded when that one had a track."""
+        storm = tr.get("storm") or ""
+        found = self._track_file()
+        if found:
+            self.trk_path.value = found
+        self._set_storm(storm)
+        if not tr.get("load"):
+            return
+        if not self._load_track(storm, quiet=True):
+            what = f"storm <b>{html.escape(storm)}</b>" if storm else "a storm track"
+            where = (f"in <code>{html.escape(found)}</code>" if found else
+                     "(no track file found for it)")
+            self.trk_status.object = (f'<div class="cv-status" style="color:#fbbf24">'
+                                      f'This member has no {what} {where}</div>')
 
     def _trk_default(self):
         return config.track_save_path(self.run.path)
 
     def _on_save_track(self, ev):
         path = config.expand(self.trk_path.value.strip())
-        if path:
+        if not path:
+            return
+        self._refresh_storms()
+        storm = self.trk_storm.value
+        if self._trk_storms and not storm:  # (saving without a name would drop them)
+            self.trk_status.object = (
+                '<div class="cv-status" style="color:#f87171">That file holds several '
+                'storms: name this one in the <b>Storm</b> box (one of '
+                + html.escape(", ".join(self._trk_storms))
+                + ' to replace it, or a new name)</div>')
+            return
+        if not self._trk_storms:  # (a one-storm file: replaced whole)
             self.confirm.ask([path], partial(self._save_track, path))
+        elif storm not in self._trk_storms:  # (added; nothing is lost)
+            self._save_track(path)
+        else:
+            others = [html.escape(n) for n in self._trk_storms if n != storm]
+            esc = html.escape(storm)
+            self.confirm.ask(
+                [path], partial(self._save_track, path), f"Replace storm {storm}?",
+                f"Only storm {esc}'s rows are replaced"
+                + (f"; {', '.join(others)} stay{'s' * (len(others) == 1)} as they are."
+                   if others else "."))
 
     def _save_track(self, path):
+        storm = self.trk_storm.value or None
         try:
             path = trk.save(self.run, self.fixes, self.trk_spec or self._trk_opts(), path,
-                            self.F)
+                            self.F, storm=storm)
         except OSError as e:
             self.trk_status.object = (f'<div class="cv-status" style="color:#f87171">Could '
                                       f'not save: {e}</div>')
             return
         self.trk_status.object = self._track_summary(f' · saved to <code>{path}</code>')
+        self._refresh_storms()
         self._track_found = ()  # the chip may now find this file

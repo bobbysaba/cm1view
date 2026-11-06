@@ -922,7 +922,8 @@ def xsec_panel(doc, cell, run, time_s, start_layers=(), section=None):
         p = dict(id=new_id, kind="xsec", run=like["run"] if like else run,
                  time_s=like["time_s"] if like else time_s, title="", insets=[],
                  layers=[dict(ref=i, over={}) for i in refs if i in (doc.get("layers") or {})
-                         and doc["layers"][i].get("type") not in ("line", "sector")])
+                         and doc["layers"][i].get("type")
+                         not in ("line", "sector", "boundaries")])
         secs = doc.setdefault("sections", {})
         if not secs and section is not None:
             add_section(doc, section)

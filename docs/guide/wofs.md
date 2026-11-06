@@ -50,7 +50,14 @@ cluster's scratch or work root, or the folders above your home): type a folder o
 The picker lists the experiment once (e.g. *bnrhf_ctrl · WoFS · 36 members · 81 output
 times*). It opens on member 1; the **WoFS member opened first** setting (`wofs_member`: a
 member number, or `mean`) changes that. The **Member** box next to the run name in the viewer
-switches to another member or the mean, keeping the view (time, map, fields, tools).
+switches to another member or the mean, keeping the view (time, map, fields, tools). The page
+does not reload: what is shown is read again from the new member, and the address changes to
+`?run=<member>` so a reload stays on it. Series come back from their cache, distributions and
+parcel sets are worked out again. A figure being made keeps the runs it names. The save
+boxes (track, series, session) move to the new member's folders unless you typed a path.
+Each member has its own storm track file, and a file can hold several storms. The switch
+loads the storm of the same name from the new member's file
+([Several storms in one file](tracking.md#several-storms-in-one-file)).
 
 Under the hood each member and the mean is read as a run of its own, with a path that does
 not exist on disk:
@@ -64,6 +71,15 @@ not exist on disk:
 So each keeps its own cache, saved figures and exports, and members can sit side by side in
 a [figure](figures-panels.md) (a layer's run list offers *bnrhf_ctrl · Member 5* and so on)
 or be compared as a difference ([The map](map.md)).
+
+## Winds
+
+WRF writes no storm-relative winds, and how best to estimate a WoFS storm's motion is still
+open, so for now WoFS winds are **ground-relative only**: the vector and streamline frame
+lists offer just *Ground-relative* (the grid does not move, so grid-relative would be the
+same), and the fields that take a storm motion (storm-relative helicity, STP, SCP,
+streamwise and crosswise vorticity) are not listed. A saved session or figure asking for
+storm-relative winds draws them ground-relative.
 
 ## Heights
 
@@ -110,11 +126,37 @@ guess. The `traj_max_interval` [setting](../settings.md) (default 300 s) says ho
 output interval is still accepted; a run whose output comes less often gets no trajectories,
 and the Parcels tool says why. Set it to 0 to never turn them off.
 
+## On the map
+
+WoFS grids sit on the Earth (their map projection is in the files), so the map has a
+**Boundaries** pill next to *Vectors*:
+
+- **Lines**: coastlines, countries, states / provinces, lakes and US counties, each on or off
+  (all but counties at first), in one colour and line width (counties thinner and fainter).
+  They are drawn in your browser: turning them on or off, or restyling them, does not redraw
+  the map.
+- **Lat/lon lines**: dotted lines every *Every* degrees (*Auto*: a few across the domain),
+  labelled along the bottom (longitudes) and left (latitudes) edges of the domain.
+- Hovering over the map shows **lat, lon** under *x, y* and the value.
+
+Sessions keep these settings. The lines ship with cm1view (public-domain US Census and
+Natural Earth data); nothing is downloaded. Idealized CM1 runs have no Boundaries pill.
+
+In figures, plan views get a **Map boundaries** layer (*Add a layer* → *Map boundaries*): the
+same lines, each on or off, in one colour and width, and optionally the lat/lon lines with their
+labels along each panel's bottom and left edges. A new figure of a WoFS run starts with one on
+top; *New figure from the map* copies the Boundaries pill's choices (a light colour picked for
+the dark map turns dark grey on white paper). The lines are cut to each panel's area and saved
+with the figure's data, so the exported script redraws them with numpy and matplotlib alone.
+
 ## The ensemble mean
 
 At each time every field in the files is averaged over the members that have a file there.
 The mean is read in the reader processes, so a 3D field of many members takes a little longer
-the first time and is cached after that. What it means for the fields:
+the first time and is cached after that. Meanwhile the map's status line says what is being
+read and how far along it is (*Ensemble mean: reading th · 18/36 members · 4 s*), and so do
+cross-sections, soundings, 3D views and figure previews; moving on to another time or field
+stops the reading that is no longer needed. What it means for the fields:
 
 - Fields in the files (temperature, winds, hydrometeors, reflectivity, WRF's 2D diagnostics
   such as hourly maxima) are **member means of the values**. The mean of reflectivity is

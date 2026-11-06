@@ -6,13 +6,13 @@ A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widg
 import numpy as np
 import panel as pn
 
-from ..core import volume3d
+from ..core import vectors, volume3d
 from ..core.fields import CMAPS
 from .zoomview import ParamTable
 from ..theme import BG, CSS, GRID, PANEL
 from .numinput import FloatInput
 from .ui import (
-    BAR, DRAWER, FILL, FRAMES, PANEL_TITLES, PANELS, RAIL_BTN, TAB_MODE, Drawer, Plotly3D,
+    BAR, DRAWER, FILL, PANEL_TITLES, PANELS, RAIL_BTN, TAB_MODE, Drawer, Plotly3D,
     _bar, _bokeh, _group, _html, _pill, _settings_toggle, out_of_flow,
 )
 
@@ -129,7 +129,8 @@ class Layout:
         self.st_dir = pn.widgets.Select(name="Direction",
                                         options={"Forward": "forward", "Backward": "backward",
                                                  "Both": "both"}, value="forward", width=120)
-        self.st_frame = pn.widgets.Select(name="Frame", options=FRAMES, value="storm",
+        self.st_frame = pn.widgets.Select(name="Frame", options=vectors.frames(self.run),
+                                          value=vectors.frame_of(self.run, "storm"),
                                           width=150)
         self.st_color = pn.widgets.Select(name="Color by",
                                           options={"Height": "z", "Vertical velocity": "w"},
@@ -239,7 +240,8 @@ class Layout:
                 trk_set,
                 self.trk_status,
                 self.trk_pane,
-                pn.FlexBox(self.trk_path, self.trk_save, self.trk_dl, self.trk_load,
+                pn.FlexBox(self.trk_path, self.trk_storm, self.trk_save, self.trk_dl,
+                           self.trk_load,
                            flex_wrap="wrap",
                            align_items="flex-end", gap="0 4px", sizing_mode="stretch_width"),
                 self.trk_table, scroll="y-auto", sizing_mode="stretch_both")),
@@ -327,12 +329,15 @@ class Layout:
             _html('<div class="cv-hint" style="margin:0 0 12px">Several at once.  '
                   'Storm-relative wind uses the sounding panel’s storm motion.</div>'),
             margin=0, sizing_mode="stretch_width"))
+        geo = self._geo_bar(d)  # (None: a run not on a map projection)
         for b, _ in d.items.values():
             b.param.update(height=32, margin=(4, 2), button_type="light")
         d.panel.styles = dict(d.panel.styles, **DRAWER)
+        if geo is not None:
+            d.label("geo", self._geo_label())
         # the fill's style sits in the fill's own pill; what goes over it in the next
         bar = _bar(_group(self.fill_var, self.fill_op, self.fill_mode, self.fill_lvl, style),
-                   _group(more, cont, vec))
+                   _group(more, cont, vec, *([geo] if geo is not None else [])))
         # the tools, down the left edge: each sets what a map click does and opens its
         # panel; the eraser clears every marker on the map
         self.clear_pts.param.update(name="Clear", width=64, height=58, margin=(2, 4),
@@ -458,5 +463,8 @@ class Layout:
         self.map_ws.visible = not (is3d or isfig)
         if is3d and self.box is None:
             self._update_region_html()
+        if is3d and self._3d_stale:  # (another member was switched to meanwhile)
+            self._3d_stale = False
+            self.request_3d()
         if isfig:
             self.figed.opened()
