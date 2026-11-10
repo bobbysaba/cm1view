@@ -45,21 +45,78 @@ VIEWS = {
 ECHO_TIMEOUT = 60.0  # s: an update not drawn by then is logged without the browser part
 PING_EVERY = 60_000  # ms
 
-_reads = threading.local()  # read seconds and fields read by the current job's thread
 _sent = weakref.WeakKeyDictionary()  # Bokeh document -> websocket bytes sent to it
 _write_lock = threading.Lock()
 
 
 # ------------------------------------------------------------------ reads
+class Reads:
+    """Read seconds and fields read from disk by one job, on its own thread and on the
+    helper threads it hands its count to (core.run.carry: ahead() of a loop over
+    times, a section's layers).  secs is wall time while at least one of them reads,
+    so reads side by side count once."""
+
+    def __init__(self):
+        self.secs, self.fields = 0.0, 0
+        self._busy, self._t0 = 0, 0.0
+        self._lock = threading.Lock()
+
+    def add(self, n):
+        with self._lock:
+            self.fields += n
+
+    def start(self):
+        with self._lock:
+            if self._busy == 0:
+                self._t0 = time.perf_counter()
+            self._busy += 1
+
+    def stop(self):
+        with self._lock:
+            self._busy -= 1
+            if self._busy == 0:
+                self.secs += time.perf_counter() - self._t0
+
+
+_reads = threading.local()  # .count: the Reads of the job on this thread; .depth
+
+
+def _count():
+    c = getattr(_reads, "count", None)
+    if c is None:  # (a thread no job handed its count to: counted, unseen)
+        c = _reads.count = Reads()
+    return c
+
+
+def _swap_count(c):
+    old, _reads.count = getattr(_reads, "count", None), c
+    return old
+
+
+def _carry_count():
+    """Helper threads of a job add to its count (registered once)."""
+    from ..core import run as R
+    if not any(pair[0] is _count for pair in R.CARRIED):
+        R.CARRIED.append((_count, _swap_count))
+
+
+def counting():
+    """A new read count for the job starting on this thread (returned)."""
+    _carry_count()
+    _reads.count = Reads()
+    return _reads.count
+
+
 def _timed_read(run, f, kind):
-    """f, with its time added to the calling thread's read total (outermost call only:
-    read_level can call load_volumes), and the disk reads it makes counted: kind
-    "volumes" (load_volumes: the fields not cached), "levels" (read_levels /
+    """f, with its time added to the read time of the calling thread's job (outermost
+    call only: read_level can call load_volumes), and the disk reads it makes counted:
+    kind "volumes" (load_volumes: the fields not cached), "levels" (read_levels /
     read_heights: the fields not cached), "plane" (read_level / read_box: one, unless
     its field is cached), "boxes" (read_boxes: its fields) or "other" (one)."""
     @wraps(f)
     def g(*a, **k):
         depth = getattr(_reads, "depth", 0)
+        count = _count()
         try:
             if kind == "volumes":
                 names, t = a[0], a[1] if len(a) > 1 else k.get("t")
@@ -73,17 +130,18 @@ def _timed_read(run, f, kind):
                 n = len(dict.fromkeys(a[0])) if depth == 0 else 0
             else:
                 n = int(depth == 0)
-            _reads.fields = getattr(_reads, "fields", 0) + n
+            count.add(n)
         except Exception:  # noqa: BLE001
             pass
         _reads.depth = depth + 1
-        t0 = time.perf_counter()
+        if depth == 0:
+            count.start()
         try:
             return f(*a, **k)
         finally:
             _reads.depth = depth
             if depth == 0:
-                _reads.secs = getattr(_reads, "secs", 0.0) + time.perf_counter() - t0
+                count.stop()
     return g
 
 
@@ -101,10 +159,6 @@ def time_reads(run):
         if f is not None:
             setattr(run, name, _timed_read(run, f, kind))
     run._cv_timed = True
-
-
-def _reset_reads():
-    _reads.secs, _reads.fields = 0.0, 0
 
 
 # ------------------------------------------------------------------ bytes
@@ -259,10 +313,11 @@ class Timing:
         def job(*a, **k):
             g = a[-1]
             rec = self.req.get((view, g))
-            _reset_reads()
+            count = counting()
             t0 = time.perf_counter()
             if rec is not None:
                 rec["t_job"], rec["job_thread"] = t0, threading.get_ident()
+                rec["count"] = count
             try:
                 return f_job(*a, **k)
             finally:
@@ -293,8 +348,8 @@ class Timing:
     def _job_done(self, rec):
         if "t_job_end" not in rec and "t_job" in rec:
             rec["t_job_end"] = time.perf_counter()
-            rec["read"] = getattr(_reads, "secs", 0.0)
-            rec["disk_reads"] = getattr(_reads, "fields", 0)
+            count = rec.pop("count", None) or Reads()
+            rec["read"], rec["disk_reads"] = count.secs, count.fields
 
     def _applied(self, view, g, rec, res, t0, t1, b0):
         with self.lock:
@@ -392,7 +447,7 @@ class Timing:
             job = max(job_end - rec["t_job"], 0.0)
             read = min(rec.get("read", 0.0), job)
             out = {k: rec[k] for k in rec
-                   if not k.startswith("t_") and k not in ("b0", "job_thread")}
+                   if not k.startswith("t_") and k not in ("b0", "job_thread", "count")}
             # apply: to the stamp when there is one (Panel's deferred changes included)
             end = rec.get("t_stamp", rec["t_apply_end"])
             out.update(queue=_r(rec["t_job"] - rec["t_req"]), read=_r(read),

@@ -26,6 +26,8 @@ class Events:
         self._draw_points()
         self._par_redraw()
         self.request_map()
+        if self.t != self._pre_t:  # background reads for another time: stop them
+            self.gen["pre"] += 1
 
     def _refresh_panels(self):
         """The slower panels follow time only once it settles (slider released,
@@ -40,6 +42,7 @@ class Events:
             self.request_3d()
         if self.dist_follow.value and self.dists:
             self._dist_follow()
+        self._early_load()
 
     def _step(self, d):
         if self.playing:
@@ -107,6 +110,7 @@ class Events:
             self._show_panel(True, PANELS[mode])
         elif mode is None:
             self._show_panel(False)
+        self._early_load()  # (Sounding, Section: their fields at the shown time)
 
     def _on_tool_reclick(self, tool):
         """The lit tool's button pressed again: reopen its closed panel (True), or

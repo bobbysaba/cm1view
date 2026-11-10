@@ -530,10 +530,13 @@ class View3DPanel:
     def _sl_job(self, g, s3, name, lines):
         run, F, t, st = self.run, self.F, s3["t"], s3["stream"]
         try:
+            wind = ["uinterp", "vinterp", "winterp"]
+            vort = ["xvort", "yvort", "zvort"] if name == "_ws" else []
+            # (fields too large for the 3D cache: only the columns around the lines)
+            parts = not F.fits(wind + vort if name in ("_ws", "_speed") else [name], t)
             if name in ("_ws", "_speed"):
-                wind = ["uinterp", "vinterp", "winterp"]
-                vort = ["xvort", "yvort", "zvort"] if name == "_ws" else []
-                run.load_volumes(wind + vort, t)
+                if not parts:
+                    run.load_volumes(wind + vort, t)
                 cu, cv = s3["off"]
                 label = "speed (m/s)" if name == "_speed" else "streamwise vorticity (1/s)"
             else:
@@ -550,16 +553,28 @@ class View3DPanel:
                 def samp(vol):
                     return volume3d.sample_points(run, vol, x, y, z, t)
 
+                if parts:
+                    at = volume3d.point_index(run, t, x, y, z, parts=True)
+
+                    def native(n):  # (as read: the volume's values)
+                        return F.at_levels(n, t, at[2], at[1], at[0]) \
+                            / np.float32(F[n].scale)
+                else:
+                    def native(n):
+                        return samp(run.volume(n, t))
+
                 if name in ("_ws", "_speed"):
-                    u = samp(run.volume("uinterp", t)) - cu
-                    v = samp(run.volume("vinterp", t)) - cv
-                    w = samp(run.volume("winterp", t))
+                    u = native("uinterp") - cu
+                    v = native("vinterp") - cv
+                    w = native("winterp")
                     spd = np.sqrt(u * u + v * v + w * w)
                     if name == "_speed":
                         val = spd
                     else:
-                        ox, oy, oz = (samp(run.volume(n, t)) for n in vort)
+                        ox, oy, oz = (native(n) for n in vort)
                         val = (ox * u + oy * v + oz * w) / np.maximum(spd, 1e-6)
+                elif parts:
+                    val = F.at_levels(name, t, at[2], at[1], at[0], storm=fst[0])
                 else:
                     val = F.at_points(name, t, samp, storm=fst[0])
                 out.append(dict(key=L["key"], color=L["color"], no=L["no"], s=s, a=a,

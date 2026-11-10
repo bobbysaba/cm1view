@@ -80,6 +80,42 @@ def test_derivative_series_match_the_map(viewer, reg):
         assert abs(ds.value.values[t] - ref) <= 1e-5 * max(abs(ref), 1e-3), field
 
 
+def test_layer_mean_and_percentile_and_memory_bound(reg, monkeypatch):
+    """A layer's overall mean (a running sum, no values kept) and percentile give
+    numpy's over the box's levels; with room for one task, one worker computes them
+    all; a column field on its whole layer is sized as more than a height's planes."""
+    run, F = reg.get()
+    box = (float(run.xh[5]), float(run.xh[30]), float(run.yh[8]), float(run.yh[40]))
+    for how in ("mean", "pct"):
+        r = S.normalize(dict(field="thpert", vmode="layer", z0=0.0, z1=4.0,
+                             region="box", box=box, reduce=how, pct=90.0))
+        ds, skipped = S.compute(run, F, r, S.empty(run, r), times=[2, 4], workers=1)
+        assert not skipped
+        i0, i1, j0, j1 = S.region_at(run, r, None)[:4]
+        for t in (2, 4):
+            a = np.stack([F.plane("thpert", t, "level", k)[j0:j1, i0:i1]
+                          for k in S.levels(run, r)])
+            ref = np.nanmean(a) if how == "mean" else np.nanpercentile(a, 90.0)
+            assert abs(ds.value.values[t] - ref) <= 1e-5 * max(abs(ref), 1e-3), how
+    seen = []
+    monkeypatch.setattr(S, "worker_room", lambda run: 1)
+    from cm1view.core import pool as P
+    real = P.spread
+
+    def spread(ex, fn, items, width):
+        seen.append(width)
+        return real(ex, fn, items, width)
+
+    monkeypatch.setattr(P, "spread", spread)
+    r = S.normalize(dict(field="thpert", vmode="height", z=1.0, region="domain",
+                         reduce="max"))
+    ds, skipped = S.compute(run, F, r, S.empty(run, r), times=[1, 2, 3], workers=3)
+    assert not skipped and seen == [1] and int(ds.computed.sum()) == 3
+    plane = dict(halo=(0, 40, 0, 40), natives={"th": (None, 1.0, 3)}, vmode="height")
+    col = dict(plane, column=([0, 1, 2, 3, 4, 5], None, None, None), vmode="2d")
+    assert S.task_bytes(col) > S.task_bytes(plane) == S.RAW_PLANES * 4 * 40 * 40
+
+
 def test_column_field_series_match_the_map(reg):
     """Column fields (and a horizontal derivative of one) reduced over the domain and a
     box give the map's values."""

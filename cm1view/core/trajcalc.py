@@ -13,7 +13,8 @@ taken at its own level heights (a terrain run's columns: run.heights(t, "msl")),
 linear in time between two outputs.  A parcel stays between the lowest and highest
 levels of its column (sliding along them) and is missing once it leaves the domain
 sideways.  Positions and the winds at them are kept at the output times only, so the
-parcel times are the 3D times.
+parcel times are the 3D times.  Winds too large for the 3D cache are read in parts:
+boxes around bands of parcels, the same traces (see _in_parts).
 
 Storage.  A file in the layout of CM1's cm1out_pdata.nc (time, xh = parcel; x, y, z in
 m, z above sea level; u, v, w in m/s) in the cache folder (parcels/), named by the
@@ -35,7 +36,7 @@ from scipy.ndimage import map_coordinates
 
 from . import parcels as P
 from .run import IO_LOCK, ahead, ahead_width, temp_name
-from .volume3d import _fij, columns, frac_level
+from .volume3d import _fij, columns, frac_level, part_heights
 
 VERSION = 1  # (part of the file's name: bump when tracing changes)
 SEEDS_ACROSS = 60  # seeds along the longer side of the domain
@@ -108,45 +109,189 @@ def signature(run):
 
 
 class _Winds:
-    """The winds (and a terrain run's level heights) at one output time."""
+    """The winds (and a terrain run's level heights) at one output time: whole
+    volumes, or with box (K1, J0, J1, I0, I1) only levels 0:K1 of those rows and
+    columns (read for winds too large for the 3D cache; nothing enters it)."""
 
-    def __init__(self, run, t):
-        names = list(WINDS) + (["zmsl"] if run.terrain and "zmsl" in run.vars else [])
-        run.load_volumes(names, t)
-        self.run = run
-        self.U, self.V, self.W = (run.volume(n, t) for n in WINDS)
-        self.H = run.heights(t, "msl") if run.terrain else None
+    def __init__(self, run, t, box=None):
+        self.run, self.box = run, box
+        zmsl = run.terrain and "zmsl" in run.vars
+        names = list(WINDS) + (["zmsl"] if zmsl else [])
+        if box is None:
+            run.load_volumes(names, t)
+            self.U, self.V, self.W = (run.volume(n, t) for n in WINDS)
+            self.H = run.heights(t, "msl") if run.terrain else None
+            return
+        K1, J0, J1, I0, I1 = box
+        rows, cols = np.arange(J0, J1), np.arange(I0, I1)
+        lv = run.read_levels(names, t, range(K1), rows, cols)  # (heights read with them)
+        self.U, self.V, self.W = (lv[n] for n in WINDS)
+        self.H = None if not run.terrain else lv["zmsl"] / np.float32(1000.0) if zmsl \
+            else part_heights(run, t, K1, rows, cols)
 
     def at(self, p):
-        """(u, v, w) (n, 3) m/s at points p (n, 3) km, and the lowest and highest level
-        heights (km) of their columns."""
-        run = self.run
+        """(u, v, w) (n, 3) m/s at points p (n, 3) km, the lowest and highest level
+        heights (km) of their columns, and which points need more than the box: their
+        values are not the whole volumes' (all False without a box)."""
+        run, box = self.run, self.box
         fi, fj = _fij(run, p[:, 0], p[:, 1])
+        out = np.zeros(len(p), dtype=bool)
+        K1 = run.nk
+        if box is not None:  # (in the box, held at the domain's edges as volumes are)
+            K1, J0, J1, I0, I1 = box
+            for f, a0, a1, na in ((fi, I0, I1, run.ni), (fj, J0, J1, run.nj)):
+                fc = np.clip(f, 0.0, na - 1)
+                out |= (np.floor(fc) < a0) | (np.ceil(fc) > a1 - 1)
+            fi, fj = fi - I0, fj - J0  # (exact: the same weights)
         if self.H is None:
             z = np.asarray(run.z, np.float64)
             fk = np.interp(p[:, 2], z, np.arange(run.nk, dtype=np.float64))
             lo, hi = np.full(len(p), z[0]), np.full(len(p), z[-1])
+            if K1 < run.nk:
+                out |= fk > K1 - 1
         else:
             Hc = columns(self.H, fi, fj)
             fk = frac_level(Hc, p[:, 2])
             lo, hi = Hc[:, 0], Hc[:, -1]
+            if K1 < run.nk:  # (hi is the box's top level then: above it, not known)
+                out |= p[:, 2] > hi
         c = np.stack([fk, fj, fi])
         uvw = np.stack([map_coordinates(a, c, order=1, mode="nearest")
                         for a in (self.U, self.V, self.W)], axis=1)
-        return uvw.astype(np.float64), lo, hi
+        return uvw.astype(np.float64), lo, hi, out
 
 
-def trace(run, lat, progress=None, cancelled=None):
+def _advance(run, w0, w1, p, alive, T):
+    """Midpoint steps of the parcels p (n, 3) km over one output interval of T s
+    between winds w0 and w1: (positions, alive, winds at the end (n, 3) m/s, bad), bad:
+    parcels alive whose path left the winds' box (their results are not to be kept)."""
+    xlo, xhi = float(run.xh[0]), float(run.xh[-1])
+    ylo, yhi = float(run.yh[0]), float(run.yh[-1])
+    alive = alive.copy()
+    bad = np.zeros(len(p), dtype=bool)
+    m = max(1, int(np.ceil(T / MAX_DT)))
+    dt = T / m
+
+    def vel(q, a):  # winds (km/s) at time fraction a of the interval, and bounds
+        u0, l0, h0, o0 = w0.at(q)
+        u1, l1, h1, o1 = w1.at(q)
+        bad[alive & (o0 | o1)] = True
+        return (((1 - a) * u0 + a * u1) / 1000.0, (1 - a) * l0 + a * l1,
+                (1 - a) * h0 + a * h1)
+
+    for s in range(m):
+        a = s / m
+        v1, _, _ = vel(p, a)
+        mid = p + 0.5 * dt * v1
+        v2, lo, hi = vel(mid, a + 0.5 / m)
+        q = p + dt * v2
+        _, lo, hi = vel(q, (s + 1) / m)
+        q[:, 2] = np.clip(q[:, 2], lo, hi)  # (slides along the lowest / top level)
+        gone = (q[:, 0] < xlo) | (q[:, 0] > xhi) | (q[:, 1] < ylo) | (q[:, 1] > yhi)
+        alive &= ~gone & np.isfinite(q).all(axis=1)
+        p = np.where(alive[:, None], q, p)
+    uvw, _, _, o = w1.at(p)
+    bad |= alive & o
+    return p, alive, uvw, bad
+
+
+# ---- read in parts: winds too large for the 3D cache
+# The parcels go in bands of rows; each band's box (its parcels' extent plus a margin:
+# how far the fastest wind seen so far, times MARGIN, goes in the interval) is read at
+# both outputs of an interval, and parcels whose path left it are traced again in a box
+# twice as wide, until none do (a box of the whole domain always holds them).  So the
+# traces are the whole volumes' to the bit.
+MARGIN = 1.5  # times the fastest wind seen (and at least U_MIN, W_MIN m/s)
+U_MIN, W_MIN = 10.0, 5.0
+
+
+def _in_parts(run):
+    """Whether the winds of two outputs are too large for the 3D cache together."""
+    nb = 4 * run.nk * run.nj * run.ni * (len(WINDS) + bool(run.terrain))
+    return hasattr(run, "fits") and not run.fits(2 * nb)
+
+
+def _box(run, p, mh, mv):
+    """(K1, J0, J1, I0, I1) around points p (n, 3) km, mh km sideways and mv km up."""
+    fi, fj = _fij(run, p[:, 0], p[:, 1])
+    mi, mj = mh / (run.dx / 1000.0), mh / (run.dy / 1000.0)
+    I0 = int(np.clip(np.floor(np.nanmin(fi) - mi) - 1, 0, run.ni - 1))
+    I1 = int(np.clip(np.ceil(np.nanmax(fi) + mi) + 2, I0 + 1, run.ni))
+    J0 = int(np.clip(np.floor(np.nanmin(fj) - mj) - 1, 0, run.nj - 1))
+    J1 = int(np.clip(np.ceil(np.nanmax(fj) + mj) + 2, J0 + 1, run.nj))
+    # (a terrain run's levels are at least z above sea level over ground at or above it)
+    K1 = int(min(run.nk, np.searchsorted(run.z, np.nanmax(p[:, 2]) + mv, "right") + 2))
+    return K1, J0, J1, I0, I1
+
+
+def _bands(run, p, idx, mh, mv):
+    """idx (parcels) in bands of rows whose boxes, read at two outputs, keep within
+    a part's share of the 3D cache."""
+    from .fields import PART_BYTES
+    if not len(idx):
+        return []
+    q = p[idx]
+    K1 = _box(run, q, mh, mv)[0]
+    budget = max(1, min(PART_BYTES, run.cache_bytes // 8))
+    rows = budget // (2 * 4 * (len(WINDS) + bool(run.terrain)) * K1 * run.ni)
+    core = max(4, int(rows - 2 * np.ceil(mh / (run.dy / 1000.0)) - 3))
+    _, fj = _fij(run, q[:, 0], q[:, 1])
+    band = np.floor(np.nan_to_num(fj) / core).astype(np.intp)
+    order = np.argsort(band, kind="stable")
+    cut = np.flatnonzero(np.diff(band[order])) + 1
+    return [idx[g] for g in np.split(order, cut)]
+
+
+def _parts(run, ts, p, idx, mh, mv, fn, cancelled):
+    """fn(winds at the times ts in a box, idx part) -> (results, bad) over the bands
+    of parcels idx, a part whose bad parcels left the box done again in a box twice
+    as wide: yields (part, results) with the bad ones left out; None once cancelled."""
+    for g in _bands(run, p, idx, mh, mv):
+        h, v = mh, mv
+        while len(g):
+            if cancelled is not None and cancelled():
+                yield None
+                return
+            box = _box(run, p[g], h, v)
+            res, bad = fn([_Winds(run, t, box) for t in ts], g)
+            yield g[~bad], [r[~bad] for r in res]
+            g, h, v = g[bad], 2 * h + 1.0, 2 * v + 0.5
+
+
+def _margins(uvw, alive, T):
+    """(mh, mv) km: how far parcels go sideways and up in T s at MARGIN times the
+    fastest of the winds uvw (n, 3) m/s of the parcels alive."""
+    a = np.abs(uvw[alive]) if alive.any() else np.zeros((1, 3))
+    a = np.where(np.isfinite(a), a, 0.0)
+    sh = max(U_MIN, float(a[:, :2].max(initial=0.0)))
+    sv = max(W_MIN, float(a[:, 2].max(initial=0.0)))
+    return MARGIN * sh * T / 1000.0, MARGIN * sv * T / 1000.0
+
+
+def trace(run, lat, progress=None, cancelled=None, span=None):
     """{name: (nt, n) float32} of VARS at every output time (km for positions here;
-    NaN: missing) for the parcels seeded on lattice lat at the first output time."""
-    nt = len(run.times)
+    NaN: missing) for the parcels seeded on lattice lat at the first output time.
+    span: (first, last) output only, seeded at the first (cm1view bench)."""
+    k0, k1 = span or (0, len(run.times) - 1)
+    nt = k1 - k0 + 1
     p = seeds(lat)
     n = len(p)
     out = {k: np.full((nt, n), np.nan, np.float32) for k in VARS}
-    xlo, xhi = float(run.xh[0]), float(run.xh[-1])
-    ylo, yhi = float(run.yh[0]), float(run.yh[-1])
-    w0 = _Winds(run, 0)
-    uvw, lo, hi = w0.at(p)
+    parts = _in_parts(run)
+    if parts:  # (the seeds' columns alone; a box at least 2 points around them)
+        uvw, lo, hi = np.zeros((n, 3)), np.zeros(n), np.zeros(n)
+
+        def first(w, g):
+            *res, bad = w[0].at(p[g])
+            return res, bad
+
+        for got in _parts(run, [k0], p, np.arange(n), 0.0, 0.0, first, cancelled):
+            if got is None:
+                return None
+            g, (uvw[g], lo[g], hi[g]) = got
+    else:
+        w0 = _Winds(run, k0)
+        uvw, lo, hi, _ = w0.at(p)
     alive = p[:, 2] >= lo - 1e-9  # (on a terrain run: seeds under the ground are not)
     p[:, 2] = np.clip(p[:, 2], lo, hi)
 
@@ -156,43 +301,45 @@ def trace(run, lat, progress=None, cancelled=None):
             out[c][k] = np.where(alive, a, np.nan)
 
     keep(0, p, uvw)
+    if parts:
+        for r in range(nt - 1):
+            k = k0 + r
+            T = float(run.times[k + 1] - run.times[k])
+            mh, mv = _margins(uvw, alive, T)
+            pn, an, un = p.copy(), alive.copy(), uvw.copy()
+
+            def step(w, g):
+                q, al, u, bad = _advance(run, w[0], w[1], p[g], alive[g], T)
+                return (q, al, u), bad
+
+            for got in _parts(run, [k, k + 1], p, np.flatnonzero(alive), mh, mv, step,
+                              cancelled):
+                if got is None:
+                    return None
+                g, (pn[g], an[g], un[g]) = got
+            p, alive, uvw = pn, an, un
+            keep(r + 1, p, uvw)
+            if progress is not None:
+                progress(r + 1, nt - 1)
+        return out
     # the next output's winds are read while a step is integrated, when three outputs'
     # winds (the two of the step and the next) fit in half the 3D cache
     nbytes = 4 * run.nk * run.nj * run.ni * (len(WINDS) + (w0.H is not None))
     fits = 3 * nbytes <= getattr(run, "cache_bytes", 0) // 2
-    winds = ahead(lambda k: _Winds(run, k), range(1, nt),
+    winds = ahead(lambda k: _Winds(run, k), range(k0 + 1, k1 + 1),
                   min(1, ahead_width(run)) if fits else 0)
-    for k in range(nt - 1):
+    for r in range(nt - 1):
         if cancelled is not None and cancelled():
             winds.close()
             return None
+        k = k0 + r
         _, w1 = next(winds)
         T = float(run.times[k + 1] - run.times[k])
-        m = max(1, int(np.ceil(T / MAX_DT)))
-        dt = T / m
-
-        def vel(q, a):  # winds (km/s) at time fraction a of the interval, and bounds
-            u0, l0, h0 = w0.at(q)
-            u1, l1, h1 = w1.at(q)
-            return (((1 - a) * u0 + a * u1) / 1000.0, (1 - a) * l0 + a * l1,
-                    (1 - a) * h0 + a * h1)
-
-        for s in range(m):
-            a = s / m
-            v1, _, _ = vel(p, a)
-            mid = p + 0.5 * dt * v1
-            v2, lo, hi = vel(mid, a + 0.5 / m)
-            q = p + dt * v2
-            _, lo, hi = vel(q, (s + 1) / m)
-            q[:, 2] = np.clip(q[:, 2], lo, hi)  # (slides along the lowest / top level)
-            gone = (q[:, 0] < xlo) | (q[:, 0] > xhi) | (q[:, 1] < ylo) | (q[:, 1] > yhi)
-            alive &= ~gone & np.isfinite(q).all(axis=1)
-            p = np.where(alive[:, None], q, p)
-        uvw, _, _ = w1.at(p)
-        keep(k + 1, p, uvw)
+        p, alive, uvw, _ = _advance(run, w0, w1, p, alive, T)
+        keep(r + 1, p, uvw)
         w0 = w1
         if progress is not None:
-            progress(k + 1, nt - 1)
+            progress(r + 1, nt - 1)
     return out
 
 

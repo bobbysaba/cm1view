@@ -61,9 +61,13 @@ So for a very large grid, size the job by what you want to stay instant:
   levels (`nx × ny × 4` bytes each: 64 MB at 4000 × 4000) for each reader.
 - **Instant soundings at a time** need the five sounding fields in half the cache:
   a cache of ten fields, so memory of about 25 fields.
-- **3D views, isosurfaces and traced trajectories** still read whole fields: each field
-  they use has to fit in the cache. Draw the 3D view of a region, not of the whole
-  domain.
+- **Series over a layer or of column fields** run fewer readers at once when each
+  would hold a lot (a whole-domain region on many levels), so their memory stays
+  within about a quarter of the cache.
+- **3D views and traced trajectories** read in parts when their fields do not fit the
+  cache (isosurfaces at the scene's stride, winds in bands around the parcels), but a
+  whole-domain 3D view still reads its streamline winds at full resolution for a
+  moment. Draw the 3D view of a region, not of the whole domain.
 
 Measured on a 1280 × 1280 × 115 run (0.75 GB a field) with 4 CPUs and `--cache-gb 1`,
 so that no whole field is kept, on files read shortly before: a map step 0.1 s, a
@@ -83,7 +87,8 @@ the field size, not measured; time your own run as below.
 `cm1view bench /path/to/run` plays a fixed list of viewer actions on a run, with no
 browser, and prints how long each takes, split into reading and computing: map steps,
 column fields, soundings and a cross-section (read whole, then in parts as on a grid
-larger than the cache), a 3D view, and tracking and a swath over several outputs.
+larger than the cache), a 3D view, and tracking, a swath and traced trajectories (read
+whole, then in parts) over several outputs.
 Run it in the job you would view in, with the same `--workers` and `--cache-gb`:
 
 ```bash

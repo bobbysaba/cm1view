@@ -473,6 +473,43 @@ def test_scene_on_terrain(wofs_root):
     np.testing.assert_allclose(a["terrain"]["z"], run.terrain_height(), atol=1e-6)
     assert np.shape(a["vecs"][0]["z"]) == np.shape(v["x"]) and a["ground"]["z"] is not None
     assert a["stream"]["seed_ring"].shape == s["seed_ring"].shape
+
+
+def test_scene_on_terrain_read_in_parts(wofs_root, monkeypatch):
+    """A terrain run's 3D scene whose fields do not fit the 3D cache (its box and the
+    level heights there read alone) is the whole-volume scene; so are the points of a
+    streamline placed among their columns' levels from those columns alone."""
+    from cm1view.core import volume3d
+    path = os.path.join(wofs_root, "mem02")
+    ref, run, c = models.open_run(path, workers=1), models.open_run(path, workers=1), 2
+    monkeypatch.setattr(run, "fits", lambda nbytes: False)
+    for res, box in ((1, (float(ref.xh[0]), float(ref.xh[-1]), float(ref.yh[0]),
+                          float(ref.yh[-1]))),
+                     (2, (float(ref.xh[1]), float(ref.xh[-3]), float(ref.yh[2]),
+                          float(ref.yh[-2])))):
+        scene = dict(t=c, box=box, ztop=3.0, exag=2.0, smooth=0.0, res=res,
+                     ground=dict(on=False, var="dbz", z=0.5, cmap="Field default",
+                                 rev=False, range="data", lo=0.0, hi=1.0),
+                     isos=[dict(var="winterp", val=6.0, color="#ffffff", op=0.5)],
+                     storm=(0.0, 0.0), fstorm=((0.0, 0.0), ""), vecs=[],
+                     stream=dict(on=True, z=0.5, n=3, length=6.0, dir="both",
+                                 frame="grid", color_by="w", seed_box=[-2.0, 2.0, -1.0, 1.0]))
+        want = volume3d.build_scene(ref, Fields(ref), scene)
+        got = volume3d.build_scene(run, Fields(run), scene)
+        assert len(got["meshes"]) == len(want["meshes"]) == 1
+        a, b = got["meshes"][0], want["meshes"][0]
+        assert np.array_equal(a["faces"], b["faces"])
+        for k in "xyz":
+            np.testing.assert_allclose(a[k], b[k], atol=1e-4)
+        a, b = got["stream"], want["stream"]
+        assert a["n"] == b["n"] > 0 and np.array_equal(a["segs"], b["segs"])
+        for k in "xyzw":
+            np.testing.assert_allclose(a[k], b[k], atol=1e-4)
+        ok = np.isfinite(b["x"])
+        pts = (b["x"][ok], b["y"][ok], b["z"][ok])
+        for p, q in zip(volume3d.point_index(run, c, *pts, parts=True),
+                        volume3d.point_index(ref, c, *pts)):
+            np.testing.assert_allclose(p, q, atol=1e-6)
     assert volume3d.top_height(run) == pytest.approx(run.z[-1] + GROUND.max())
 
 
@@ -507,6 +544,51 @@ def test_traced_trajectories(wofs_root, tmp_path, monkeypatch):
     assert "180 s" in trajcalc.off(run) and P.for_run(run, F) is None and P.offered(run)
     monkeypatch.setenv("CM1VIEW_TRAJ_MAX_INTERVAL", "0")  # (0: never off)
     assert trajcalc.off(run) == ""
+
+
+def test_traced_trajectories_read_in_parts(wofs_root, tmp_path, monkeypatch):
+    """A terrain run's winds too large for the 3D cache: traced in boxes (their level
+    heights read with them), the trajectories are the whole-volume ones, also when
+    every band has to be traced again in a wider box; and a field sampled along them
+    from the columns around the parcels on those columns' own heights is the one
+    sampled from its volume."""
+    from cm1view.core import fields as fmod, parcels as P, trajcalc
+    from test_parcels import _spy_parts
+    monkeypatch.setattr(P, "CACHE_DIR", str(tmp_path / "parcels"))
+    path = os.path.join(wofs_root, "mem02")
+    ref, run = models.open_run(path, workers=1), models.open_run(path, workers=1)
+    monkeypatch.setattr(run, "fits", lambda nbytes: False)
+    lat = trajcalc.lattice(ref)
+    want = trajcalc.trace(ref, lat)
+    boxes, redone = _spy_parts(monkeypatch, trajcalc)
+    monkeypatch.setattr(fmod, "PART_BYTES", 1)
+    monkeypatch.setattr(trajcalc, "MARGIN", 0.0)
+    monkeypatch.setattr(trajcalc, "U_MIN", 0.0)
+    monkeypatch.setattr(trajcalc, "W_MIN", 0.0)
+    real_box = trajcalc._box
+
+    def tight(run, p, mh, mv):  # (on an 8 x 6 grid the points around a box span it:
+        K1, J0, J1, I0, I1 = real_box(run, p, mh, mv)  # first tries without them)
+        if mh == 0.0:
+            fi, fj = trajcalc._fij(run, p[:, 0], p[:, 1])
+            J0, J1 = int(np.floor(np.nanmin(fj))), int(np.ceil(np.nanmax(fj))) + 1
+            I0, I1 = int(np.floor(np.nanmin(fi))), int(np.ceil(np.nanmax(fi))) + 1
+        return K1, J0, J1, I0, I1
+
+    monkeypatch.setattr(trajcalc, "_box", tight)
+    got = trajcalc.trace(run, lat)
+    assert boxes and None not in boxes and sum(redone) > 0
+    for k in trajcalc.VARS:
+        np.testing.assert_allclose(got[k], want[k], rtol=0, atol=1e-5, equal_nan=True)
+    assert np.isnan(got["x"][0]).any()  # (seeds under the ground)
+    pf = P.for_run(ref, Fields(ref))
+    ps = P.select(pf, dict(box=[-3.0, 3.0, -2.0, 2.0], z=[0.0, 3.0]), "s")
+    assert len(ps)
+    want_w = pf._sample(ps, "winterp")
+    pf.attach(Fields(run))
+    got_w = pf._sample(ps, "winterp")
+    assert np.isfinite(got_w).any()
+    np.testing.assert_allclose(got_w, want_w, rtol=0, atol=1e-4, equal_nan=True)
 
 
 # ------------------------------------------------------------- W5: the ensemble mean

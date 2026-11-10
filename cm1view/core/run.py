@@ -46,6 +46,28 @@ class Cancelled(Exception):
 
 _hook = threading.local()  # .on: (progress, cancelled) of the reporting() block
 
+# per-thread state that a helper thread working for a job takes over from the job's
+# thread (ahead(), a section's layer threads): (capture, restore) pairs, restore(value)
+# returning the value it replaced.  The viewer's timing adds its read count here.
+CARRIED = []
+
+
+def carry(fn):
+    """fn, made to run on another thread with this thread's CARRIED state (put back
+    as it was once fn returns: pool threads are reused)."""
+    if not CARRIED:
+        return fn
+    saved = [(restore, capture()) for capture, restore in CARRIED]
+
+    def g(*a, **k):
+        old = [(restore, restore(v)) for restore, v in saved]
+        try:
+            return fn(*a, **k)
+        finally:
+            for restore, v in old:
+                restore(v)
+    return g
+
 
 @contextmanager
 def reporting(progress=None, cancelled=None):
@@ -125,6 +147,7 @@ def ahead(fn, items, width):
     def stop():
         return bool(closed) or bool(on and on[1] and on[1]())
 
+    @carry
     def work(x):
         _hook.on, _hook.ahead = (on[0] if on else None, stop), True
         with np.errstate(**err):

@@ -327,7 +327,7 @@ def _worker(task):
 
             def read(n, k):
                 if (n, k) not in raw:
-                    if len(raw) > 24:
+                    if len(raw) >= RAW_PLANES:
                         raw.pop(next(iter(raw)))
                     raw[n, k] = _read(d[n], info[n][0], k, f0, f1, e0, e1, info[n][2])
                 return raw[n, k]
@@ -400,7 +400,8 @@ def _worker(task):
             ks, zs = task["levels"], task["zlev"]
             prof = np.full(len(ks), np.nan)
             best = (np.nan, -1, -1)  # value, level position, flat index
-            pool = []  # values for an overall mean / percentile
+            pool = []  # values (subsampled) for an overall percentile
+            tot, cnt = 0.0, 0  # an overall mean: a running sum, not every value kept
             for n, k in enumerate(ks):
                 a = level(k)
                 if zname:  # (only the columns where this level is in the layer)
@@ -410,10 +411,14 @@ def _worker(task):
                     if (not np.isfinite(best[0]) or (prof[n] < best[0] if how == "min"
                                                      else prof[n] > best[0])):
                         best = (prof[n], n, i)
-                elif how in ("mean", "pct"):
+                elif how == "mean":
+                    ok = np.isfinite(a)
+                    tot += float(np.sum(a, where=ok, dtype=np.float64))
+                    cnt += int(ok.sum())
+                elif how == "pct":
                     v = a[np.isfinite(a)]
-                    cap = max(10_000, 2_000_000 // len(ks))  # percentile: subsample
-                    if how == "pct" and v.size > cap:
+                    cap = max(10_000, 2_000_000 // len(ks))  # (subsampled)
+                    if v.size > cap:
                         v = v[:: v.size // cap + 1]
                     pool.append(v)
             out["prof"] = prof
@@ -424,10 +429,11 @@ def _worker(task):
                     out.update(x=float(task["xh"][ii]), y=float(task["yh"][jj]),
                                z=float(zfull[ks[best[1]]][crop][jj, ii] if zname
                                        else zs[best[1]]))
+            elif how == "mean":
+                out["value"] = tot / cnt if cnt else float("nan")
             else:
                 v = np.concatenate(pool) if pool else np.array([])
-                out["value"] = (float("nan") if v.size == 0 else
-                                float(np.mean(v, dtype=np.float64)) if how == "mean"
+                out["value"] = (float("nan") if v.size == 0
                                 else float(np.percentile(v, pct)))
             return out
     except Exception as e:  # noqa: BLE001
@@ -554,6 +560,32 @@ def store(run, recipe, ds):
 
 
 # ------------------------------------------------------------------ compute
+RAW_PLANES = 25  # (the worker's planes kept for ∂/∂z inputs: `raw`)
+
+
+def task_bytes(task):
+    """About the most a worker holds at once for a task: its kept planes of the box
+    read, a column field's inputs on every level of its layer, and a terrain run's
+    heights of the box's columns (levels and faces)."""
+    e0, e1, f0, f1 = task.get("halo") or task["box"][:4]
+    plane = 4 * (e1 - e0) * (f1 - f0)
+    n = RAW_PLANES * plane
+    if task.get("column") is not None:
+        n3 = sum(v[2] == 3 for v in task["natives"].values())
+        s = task.get("stride", 1)
+        n += 2 * n3 * len(task["column"][0]) * plane // (s * s)  # (inputs + its work)
+    if task.get("zname") and (task["vmode"] != "2d" or task.get("column") is not None):
+        n += 2 * (task["nk"] + 1) * plane
+    return max(1, n)
+
+
+def worker_room(run):
+    """Bytes the series' workers together may hold: a quarter of the 3D cache, at
+    least AHEAD_BYTES (the workers are their own processes, outside the cache)."""
+    from .run import AHEAD_BYTES
+    return max(AHEAD_BYTES, int(getattr(run, "cache_bytes", 4 * AHEAD_BYTES)) // 4)
+
+
 def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancelled=None,
             workers=None, times=None):
     """Fill the not-yet-computed times of `ds` (from cached()), or of those among
@@ -624,6 +656,7 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
     if not tasks:
         return ds, skipped
     nw = max(1, min(int(workers or pool.width(run.workers)), len(tasks)))
+    nw = min(nw, max(1, worker_room(run) // max(task_bytes(tk) for tk in tasks)))
     by_t = {tk["t"]: tk for tk in tasks}
     last_store = _time.time()
     results = pool.spread(pool.get(run.workers), _worker, tasks, nw)

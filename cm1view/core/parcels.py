@@ -503,7 +503,7 @@ class ParcelFile:
 
     def _sample(self, pset, field, progress=None):
         """(nt, len(pset)) of 3D field `field` at the parcels' positions (module doc)."""
-        from .volume3d import sample_points
+        from .volume3d import point_index, sample_points
         F = self.fields
         run = F.run
         tr = self.trajectories(pset, POS)
@@ -519,14 +519,13 @@ class ParcelFile:
             x, y, z = (tr[c][ii] for c in POS)
             ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
             vals = np.full(x.shape, np.nan, dtype=np.float32)
-            if ok.any() and (run.terrain or F.fits([field], k)):
+            if ok.any() and F.fits([field], k):
                 vals[ok] = F.at_points(field, k, lambda vol: sample_points(
                     run, vol, x[ok], y[ok], z[ok], k))
-            elif ok.any():  # (too large for the 3D cache: the columns around them)
-                vals[ok] = F.at_levels(
-                    field, k, (x[ok] - run.xh[0]) / (run.dx / 1000.0),
-                    (y[ok] - run.yh[0]) / (run.dy / 1000.0),
-                    np.interp(z[ok], run.z, np.arange(run.nk, dtype=np.float64)))
+            elif ok.any():  # (too large for the 3D cache: the columns around them, on a
+                # terrain run placed among those columns' own level heights)
+                fk, fj, fi = point_index(run, k, x[ok], y[ok], z[ok], parts=True)
+                vals[ok] = F.at_levels(field, k, fi, fj, fk)
             return vals
 
         # several 3D outputs at once where their volumes are small, added in their order

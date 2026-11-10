@@ -511,6 +511,63 @@ def test_parts_of_fields_match_their_volumes(reg, demo_run, monkeypatch):
         F.box("cref", T, 0, 1, 0, 4, 0, 4)
 
 
+def test_3d_scene_read_in_parts_matches(reg, demo_run, monkeypatch):
+    """A 3D scene whose fields do not fit the 3D cache reads its box alone (at its
+    stride; the streamlines' winds just around it): fields thinned to a stride, its
+    isosurfaces and streamlines, and fields along a streamline are the whole-volume
+    ones, and no volume enters the cache."""
+    from cm1view.core import fields as FF, run as R, volume3d
+    T, (ref, G) = 2, reg.get()
+    run = R.CM1Run(demo_run, cache_gb=1, workers=2)
+    F = FF.Fields(run)
+    monkeypatch.setattr(run, "fits", lambda nbytes: False)
+    for part in (FF.PART_BYTES, 1):  # (1: a field with gradients a band per stride)
+        monkeypatch.setattr(FF, "PART_BYTES", part)
+        for n in ("th", "qv", "thetae", "hdiv", "ddz.winterp"):
+            vol = G.volume(n, T)
+            for s in (1, 3):
+                np.testing.assert_allclose(
+                    F.strided(n, T, 0, 9, 5, 70, 3, 61, s), vol[0:9, 5:70:s, 3:61:s],
+                    rtol=1e-6, atol=1e-6 * max(1.0, float(np.abs(vol).max())))
+    th = G.volume("thetae", T)
+    scene = dict(t=T, box=(float(run.xh[20]), float(run.xh[75]), float(run.yh[15]),
+                           float(run.yh[80])), ztop=6.0, exag=1.0, smooth=0.5, res=2,
+                 isos=[dict(var="thetae", val=float(np.percentile(th[:10], 80)),
+                            color="#ffffff", op=0.5),
+                       dict(var="winterp", val=1.0, color="#ff0000", op=0.5)],
+                 vecs=[], storm=(0.0, 0.0), fstorm=(None, ""),
+                 stream=dict(on=True, z=1.0, n=4, length=12.0, dir="both", frame="grid",
+                             color_by="w", seed_box=None),
+                 ground=dict(on=False, var="dbz", z=0.0, cmap="Field default", rev=False,
+                             range="data", lo=0.0, hi=1.0))
+    want = volume3d.build_scene(ref, G, scene)
+    cache, seen = {}, []
+    got = volume3d.build_scene(run, F, scene, progress=lambda *a: seen.append(a),
+                               cache=cache)
+    assert len(got["meshes"]) == len(want["meshes"]) == 2 and seen[-1][0] == seen[-1][1]
+    for a, b in zip(got["meshes"], want["meshes"]):
+        assert np.array_equal(a["faces"], b["faces"])
+        for k in "xyz":
+            np.testing.assert_allclose(a[k], b[k], atol=1e-4)
+    a, b = got["stream"], want["stream"]
+    assert a["n"] == b["n"] > 0 and np.array_equal(a["segs"], b["segs"])
+    for k in "xyzw":
+        np.testing.assert_allclose(a[k], b[k], atol=1e-4)
+    # an isosurface edit keeps the lines (no winds read)
+    first = cache["stream"]
+    volume3d.build_scene(run, F, dict(scene, isos=[]), cache=cache)
+    assert cache["stream"] is first
+    assert run._vc.info()[1] == 0  # (no volume entered the cache)
+    # a field along the lines from the columns around them (the streamline card)
+    ok = np.isfinite(b["x"])
+    x, y, z = b["x"][ok], b["y"][ok], b["z"][ok]
+    at = volume3d.point_index(run, T, x, y, z, parts=True)
+    for n in ("thetae", "uinterp"):
+        np.testing.assert_allclose(
+            F.at_levels(n, T, at[2], at[1], at[0]),
+            volume3d.sample_points(ref, G.volume(n, T), x, y, z, T), rtol=1e-5, atol=1e-4)
+
+
 def test_work_too_large_for_the_cache_matches(reg, demo_run, monkeypatch):
     """An azimuthal mean, a distribution and an export of fields that do not fit the
     3D cache are the ones made from their volumes."""

@@ -52,16 +52,38 @@ def columns(H, fi, fj):
     flat = H.ndim == 2
     if flat:
         H = H[None]
-    nk, nj, ni = H.shape
+    a = _bilinear(lambda j, i: H[:, j, i], fi, fj, *H.shape[1:])
+    return a[0] if flat else a.T
+
+
+def _corners(fi, fj, nj, ni):
+    """The four columns around fractional grid points and their weights, held at the
+    edges: (i0, i1, j0, j1, wi, wj)."""
     fi = np.clip(np.nan_to_num(np.asarray(fi, np.float64)), 0.0, ni - 1)
     fj = np.clip(np.nan_to_num(np.asarray(fj, np.float64)), 0.0, nj - 1)
     i0 = np.minimum(np.floor(fi).astype(np.intp), max(ni - 2, 0))
     j0 = np.minimum(np.floor(fj).astype(np.intp), max(nj - 2, 0))
     i1, j1 = np.minimum(i0 + 1, ni - 1), np.minimum(j0 + 1, nj - 1)
-    wi, wj = np.clip(fi - i0, 0.0, 1.0), np.clip(fj - j0, 0.0, 1.0)
-    a = ((1 - wi) * (1 - wj) * H[:, j0, i0] + wi * (1 - wj) * H[:, j0, i1]
-         + (1 - wi) * wj * H[:, j1, i0] + wi * wj * H[:, j1, i1])
-    return a[0] if flat else a.T
+    return i0, i1, j0, j1, np.clip(fi - i0, 0.0, 1.0), np.clip(fj - j0, 0.0, 1.0)
+
+
+def _bilinear(col, fi, fj, nj, ni):
+    """(nk, n): col(j, i) -> (nk, n) columns, bilinear at fractional grid points."""
+    i0, i1, j0, j1, wi, wj = _corners(fi, fj, nj, ni)
+    return ((1 - wi) * (1 - wj) * col(j0, i0) + wi * (1 - wj) * col(j0, i1)
+            + (1 - wi) * wj * col(j1, i0) + wi * wj * col(j1, i1))
+
+
+def part_columns(run, t, fi, fj):
+    """A terrain run's level heights (km MSL) at fractional grid points, (n, nk), as
+    columns(run.heights(t, "msl"), fi, fj) gives them, reading only the four columns
+    around each point."""
+    ni = run.ni
+    i0, i1, j0, j1, _, _ = _corners(fi, fj, run.nj, ni)
+    flat = np.unique(np.concatenate([j * ni + i for j in (j0, j1) for i in (i0, i1)]))
+    a = part_heights_points(run, t, flat // ni, flat % ni)
+    return _bilinear(lambda j, i: a[:, np.searchsorted(flat, j * ni + i)], fi, fj,
+                     run.nj, ni).T
 
 
 def frac_level(Hc, z):
@@ -100,18 +122,26 @@ def auto_stride(run, box, zmax, max_voxels):
     return max(1, int(np.ceil(np.sqrt(n / max_voxels))))
 
 
-def isosurface(run, vol, box, value, stride, smooth, zmax, H=None):
+def iso_levels(run, zmax, Hb=None):
+    """How many levels from the lowest an isosurface up to zmax needs: up to the first
+    level above zmax (on a terrain run everywhere in Hb, the box's level heights)."""
+    if Hb is None:
+        return min(run.nk, int(np.searchsorted(run.z, zmax)) + 1)
+    low = Hb.reshape(Hb.shape[0], -1).min(axis=1) if Hb.size else np.asarray(run.z)
+    return min(run.nk, int(np.searchsorted(low, zmax)) + 1)
+
+
+def isosurface(run, vol, box, value, stride, smooth, zmax, H=None, part=False):
     """Vertices (km) and faces of the `value` isosurface inside `box`.  H: a terrain
     run's level heights (km MSL, (nk, nj, ni)) at the time: the surface is found on the
-    model levels and its vertices placed at those heights."""
+    model levels and its vertices placed at those heights.  part: vol (and H) are
+    already the box at the stride, (at least iso_levels) levels from the lowest."""
     i0, i1, j0, j1 = box_indices(run, box)
-    if H is None:
-        kmax = min(run.nk, int(np.searchsorted(run.z, zmax)) + 1)
-    else:  # (up to the first level above zmax everywhere in the box)
-        Hb = H[:, j0:j1:stride, i0:i1:stride]
-        low = Hb.reshape(Hb.shape[0], -1).min(axis=1) if Hb.size else np.asarray(run.z)
-        kmax = min(run.nk, int(np.searchsorted(low, zmax)) + 1)
-    sub = np.asarray(vol[:kmax, j0:j1:stride, i0:i1:stride], dtype=np.float32)
+    Hb = H if part or H is None else H[:, j0:j1:stride, i0:i1:stride]
+    kmax = iso_levels(run, zmax, Hb)
+    # (marching_cubes takes no read-only buffer: a part can be a cached one, so copy then)
+    sub = np.require(vol[:kmax] if part else vol[:kmax, j0:j1:stride, i0:i1:stride],
+                     np.float32, ["W"])
     if smooth > 0:
         sub = gaussian_filter(sub, smooth)
     if sub.size == 0 or min(sub.shape) < 2 or not (np.nanmin(sub) < value < np.nanmax(sub)):
@@ -159,8 +189,38 @@ def surface_vectors(run, u, v, box, n_across=20, ref_speed=20.0):
     return X, Y, spd
 
 
+def _stream_step(run, length, direction):
+    """streamlines' step (km)."""
+    if direction == "both":
+        length = 0.5 * length
+    return max(0.6 * run.dx / 1000.0, length / 500.0)
+
+
+def stream_part(run, box, length, direction):
+    """The rows and columns streamlines in `box` look at, (j0, j1, i0, i1): the box
+    and a step and two points more each side (a step's end is looked at before it is
+    cut back to the box)."""
+    i0, i1, j0, j1 = box_indices(run, box)
+    ds = _stream_step(run, length, direction)
+    mi = int(np.ceil(ds / (run.dx / 1000.0))) + 2
+    mj = int(np.ceil(ds / (run.dy / 1000.0))) + 2
+    return max(j0 - mj, 0), min(j1 + mj, run.nj), max(i0 - mi, 0), min(i1 + mi, run.ni)
+
+
+def stream_levels(run, ztop, H=None):
+    """How many levels from the lowest streamlines up to ztop look at: to two past the
+    first level above ztop (a midpoint climbs up to 0.4 of a level past the top), on a
+    terrain run in every column of H, the level heights of stream_part's box."""
+    if H is None:
+        low = np.asarray(run.z)
+    else:
+        low = H.reshape(H.shape[0], -1).min(axis=1) if H.size else np.asarray(run.z)
+    return min(run.nk, int(np.searchsorted(low, ztop)) + 3)
+
+
 def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
-                direction="forward", offset=(0.0, 0.0), seed_box=None, H=None):
+                direction="forward", offset=(0.0, 0.0), seed_box=None, H=None,
+                origin=(0, 0)):
     """Instantaneous 3D streamlines of (U - offset[0], V - offset[1], W).
 
     U, V, W are full (nk, nj, ni) volumes in m/s.  Seeds form an n_seed x n_seed grid
@@ -173,13 +233,16 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     H: a terrain run's level heights (km MSL) at the time: z is then above sea level
     (ztop too), seed_z above the ground under each seed, and the lowest level is each
     column's own.
+    origin: (i0, j0) of U, V, W (and H) when they are only part of the grid, from
+    column i0 and row j0 on (stream_part, stream_levels: what the lines look at).
     Returns x, y, z (km), w (m/s) as NaN-separated arrays, plus `segs`: per line
     (first, end, seed) indices into those arrays, or None."""
     x0, x1, y0, y1 = box
     dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
+    ds = _stream_step(run, length, direction)  # km per step
     if direction == "both":
         length = 0.5 * length
-    ds = max(0.6 * dxk, length / 500.0)  # km per step
+    oi, oj = origin
     nstep = 4 * int(np.ceil(length / ds))  # room for the shortened (steep) steps
     zlo = float(run.z[0])
     kidx = np.arange(run.nk, dtype=np.float64)
@@ -189,7 +252,8 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
     cu, cv = offset
 
     def cols(p):  # (terrain) the level heights of the points' columns
-        return columns(H, *_fij(run, p[:, 0], p[:, 1]))
+        fi, fj = _fij(run, p[:, 0], p[:, 1])
+        return columns(H, fi - oi, fj - oj)
 
     def lowest(p):  # the lowest level's height under the points
         return zlo if H is None else cols(p)[:, 0]
@@ -208,7 +272,7 @@ def streamlines(run, U, V, W, box, ztop, seed_z, n_seed=12, length=30.0,
         fi = (p[:, 0] - run.xh[0]) / dxk
         fj = (p[:, 1] - run.yh[0]) / dyk
         fk = np.interp(p[:, 2], run.z, kidx) if H is None else frac_level(cols(p), p[:, 2])
-        c = np.stack([fk, fj, fi])
+        c = np.stack([fk, fj - oj, fi - oi])
         u = map_coordinates(U, c, order=1, mode="nearest") - cu
         v = map_coordinates(V, c, order=1, mode="nearest") - cv
         w = map_coordinates(W, c, order=1, mode="nearest")
@@ -309,6 +373,19 @@ def sample_points(run, vol, x, y, z, t=None, H=None):
     return map_coordinates(vol, np.stack([fk, fj, fi]), order=1, mode="nearest")
 
 
+def point_index(run, t, x, y, z, parts=False):
+    """Fractional grid indices (fk, fj, fi) of points (km), as sample_points places
+    them (a terrain run's z above sea level among its column's levels at time t).
+    parts: a terrain run's column heights read around the points only (part_columns),
+    for fields too large for the 3D cache, sampled with Fields.at_levels."""
+    fi, fj = _fij(run, np.ravel(x), np.ravel(y))
+    z = np.asarray(z, np.float64).ravel()
+    if not run.terrain:
+        return np.interp(z, run.z, np.arange(run.nk, dtype=np.float64)), fj, fi
+    Hc = part_columns(run, t, fi, fj) if parts else columns(run.heights(t, "msl"), fi, fj)
+    return frac_level(Hc, z), fj, fi
+
+
 def frame_offset(run, frame, storm):
     """What to subtract from grid-relative (u, v) to get the wanted frame."""
     from .vectors import frame_of
@@ -384,6 +461,82 @@ def seed_ring(run, seed_box, seed_z, n=24):
     return np.stack([x, y, ground_at(run, x, y) + seed_z], axis=1)
 
 
+def part_heights(run, t, k1, rows, cols):
+    """A terrain run's level heights (km MSL) on levels 0:k1 at rows x cols (index
+    arrays), as run.heights(t, "msl") has them there, without its whole volume."""
+    rows, cols = np.asarray(rows, np.intp), np.asarray(cols, np.intp)
+    if "zmsl" in run.vars:
+        return run.read_levels(["zmsl"], t, range(k1), rows, cols)["zmsl"] \
+            / np.float32(1000.0)
+    return np.asarray(run.heights(t, "msl"))[np.ix_(np.arange(k1), rows, cols)]
+
+
+def part_heights_points(run, t, rows, cols):
+    """A terrain run's level heights (km MSL) in the columns (rows[n], cols[n]),
+    (nk, n), without its whole volume (part_heights)."""
+    rows, cols = np.asarray(rows, np.intp), np.asarray(cols, np.intp)
+    if "zmsl" in run.vars:
+        return run.read_levels(["zmsl"], t, range(run.nk), rows, cols,
+                               points=True)["zmsl"] / np.float32(1000.0)
+    return np.asarray(run.heights(t, "msl"))[:, rows, cols]
+
+
+def _scene_parts(run, F, scene, stride, need_h, key, progress, cancelled):
+    """build_scene's reads when its fields do not fit the 3D cache: each isosurface's
+    field over the box at the stride, levels to just above ztop (display units; "_H":
+    a terrain run's level heights there), and unless key is None (the cached lines
+    hold) the streamlines, traced on the winds of the part of the grid they look at
+    (stream_part, stream_levels).  Nothing enters the 3D cache.
+    (vols, stream), or None once cancelled."""
+    t, box, ztop, ss = scene["t"], scene["box"], scene["ztop"], scene["stream"]
+    i0, i1, j0, j1 = box_indices(run, box)
+    todo = list(dict.fromkeys(iso["var"] for iso in scene["isos"]))
+    total = bool(need_h and todo) + len(todo) + (key is not None)
+    vols, stream = {}, None
+
+    def step(n, name):  # (False once cancelled)
+        if cancelled and cancelled():
+            return False
+        if progress:
+            progress(n, total, name)
+        return True
+
+    rows, cols = np.arange(j0, j1, stride), np.arange(i0, i1, stride)
+    n = 0
+    if need_h and todo:
+        if not step(n, "heights"):
+            return None
+        vols["_H"] = part_heights(run, t, run.nk, rows, cols)
+        n += 1
+    kmax = iso_levels(run, ztop, vols.get("_H"))
+    for name in todo:
+        if not step(n, name):
+            return None
+        vols[name] = F.strided(name, t, 0, kmax, j0, j1, i0, i1, stride,
+                               scene["fstorm"][0])
+        n += 1
+    if key is not None:
+        if not step(n, "winds"):
+            return None
+        J0, J1, I0, I1 = stream_part(run, box, ss["length"], ss["dir"])
+        r, c = np.arange(J0, J1), np.arange(I0, I1)
+        Hs = part_heights(run, t, run.nk, r, c) if run.terrain else None
+        k1 = stream_levels(run, ztop, Hs)
+        w = run.read_levels(["uinterp", "vinterp", "winterp"], t, range(k1), r, c,
+                            cancelled=cancelled)
+        if w is None:
+            return None
+        stream = streamlines(run, w["uinterp"], w["vinterp"], w["winterp"], box, ztop,
+                             ss["z"], ss["n"], ss["length"], ss["dir"],
+                             frame_offset(run, ss["frame"], scene["storm"]),
+                             seed_box=ss["seed_box"], H=None if Hs is None else Hs[:k1],
+                             origin=(I0, J0))
+        n += 1
+    if progress:
+        progress(n, total, "")
+    return vols, stream
+
+
 def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
     """Everything a 3D scene draws, as arrays (no plotting): the isosurface meshes, the
     floor, the vector planes and the streamlines, for the plotly scene of the viewer
@@ -401,24 +554,40 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
     Returns dict(meshes, ground, vecs, stream, notes, stride, off, terrain)."""
     t, box, ztop = scene["t"], scene["box"], scene["ztop"]
     ss = scene["stream"]
-    names = []
-    for iso in scene["isos"]:
-        names += F.native_deps(iso["var"])
-    if ss["on"]:
-        names += ["uinterp", "vinterp", "winterp"]
+    wind = ["uinterp", "vinterp", "winterp"]
     need_h = run.terrain and bool(scene["isos"] or ss["on"])
-    if need_h and "zmsl" in run.vars:
-        names += ["zmsl"]  # (the levels' heights: run.heights)
-    if not run.load_volumes(names, t, progress=progress, cancelled=cancelled):
-        return None
-    H = run.heights(t, "msl") if need_h else None
     stride = scene["res"] or auto_stride(run, box, ztop, 12e6)
+    off = frame_offset(run, ss["frame"], scene["storm"])
+    key = (id(run), t, box, ztop, ss["z"], ss["n"], ss["length"], ss["dir"], off,
+           ss["seed_box"]) if ss["on"] else None
+    # (fields too large for the 3D cache: only the box is read, isosurfaces at the stride)
+    if hasattr(F, "fits") and not F.fits(
+            [iso["var"] for iso in scene["isos"]] + (wind if ss["on"] else []), t):
+        parts = _scene_parts(run, F, scene, stride, need_h,
+                             None if cache is not None and cache.get("stream_key") == key
+                             else key, progress, cancelled)
+        if parts is None:
+            return None
+        vols, streamed = parts
+        H = vols.get("_H")  # (the box's heights at the stride)
+    else:
+        names = [n for iso in scene["isos"] for n in F.native_deps(iso["var"])] \
+            + (wind if ss["on"] else [])
+        if need_h and "zmsl" in run.vars:
+            names += ["zmsl"]  # (the levels' heights: run.heights)
+        if not run.load_volumes(names, t, progress=progress, cancelled=cancelled):
+            return None
+        H, vols, streamed = run.heights(t, "msl") if need_h else None, None, None
     meshes, notes = [], []
     for iso in scene["isos"]:
         d = F[iso["var"]]
-        vol, sc = F.raw(iso["var"], t, scene["fstorm"][0])  # (a g/kg field: as read)
+        if vols is not None:  # (the box at the stride, in display units)
+            vol, sc, part = vols[iso["var"]], np.float32(1.0), True
+        else:
+            vol, sc = F.raw(iso["var"], t, scene["fstorm"][0])  # (a g/kg field: as read)
+            part = False
         m = isosurface(run, vol, box, iso["val"] / float(sc), stride, scene["smooth"],
-                       ztop, H)
+                       ztop, H, part)
         name = f'{d.label} = {iso["val"]:g} {d.units}'
         if d.storm:
             name += f' ({scene["fstorm"][1]})'
@@ -444,13 +613,14 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
                          color=vs["color"],
                          name=f'{vectors.label(vs["q"], vs["frame"])} @ '
                               f'{zlev * 1000:.0f} m' + (" AGL" if run.terrain else "")))
-    off = frame_offset(run, ss["frame"], scene["storm"])
     stream = None
     if ss["on"]:
-        key = (id(run), t, box, ztop, ss["z"], ss["n"], ss["length"], ss["dir"], off,
-               ss["seed_box"])
         if cache is not None and cache.get("stream_key") == key:
             stream = cache["stream"]
+        elif vols is not None:  # (traced on the box read: _scene_parts)
+            stream = streamed
+            if cache is not None:
+                cache.update(stream_key=key, stream=stream)
         else:
             stream = streamlines(run, run.volume("uinterp", t), run.volume("vinterp", t),
                                  run.volume("winterp", t), box, ztop, ss["z"], ss["n"],

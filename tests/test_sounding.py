@@ -140,3 +140,30 @@ def test_profiles_are_finite(viewer):
     sounding(v)
     prof = v.results[0][2]["prof"]
     assert np.all(np.isfinite(prof["T"])) and np.all(np.diff(prof["p"]) < 0)
+
+
+def test_picking_a_tool_reads_its_fields_and_panels_read_ahead(viewer):
+    """Picking the Sounding (or Section) tool reads its fields at the shown time in the
+    background; a drawn sounding reads the next time's; a time change stops reads for
+    another time."""
+    from cm1view.bench import _wait_idle
+    v, run = viewer, viewer.run
+    _wait_idle(v)
+    run.clear_cache()
+    v.mode.set("Sounding")
+    _wait_idle(v)
+    assert all(run.cached(n, v.t) is not None for n in v._snd_fields())
+    run.clear_cache()
+    v.mode.set("Cross-section")
+    _wait_idle(v)
+    names, shown = v._xs_fields()
+    assert names and all(run.cached(n, v.t) is not None for n in names)
+    run.clear_cache()
+    v.points = [("pt", (5.0, -15.0), None)]
+    v.request_soundings()
+    _wait_idle(v)
+    assert v._pre_t == v.t + 1
+    assert all(run.cached(n, v.t + 1) is not None for n in v._snd_fields())
+    g = v.gen["pre"]
+    v.tslider.value = v.t + 3  # (not the time read ahead: those reads stop)
+    assert v.gen["pre"] == g + 1

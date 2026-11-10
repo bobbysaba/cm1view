@@ -1068,3 +1068,53 @@ def test_figure_w_budget(reg, pcache):
     figdraw.draw(si, {0: d})
 
 
+
+
+def _spy_parts(monkeypatch, trajcalc):
+    """Record the boxes the winds are read in and the parcels traced again (left a
+    box) while trajcalc.trace runs."""
+    boxes, redone = [], []
+    real_w, real_adv = trajcalc._Winds, trajcalc._advance
+
+    class Spy(real_w):
+        def __init__(self, run, t, box=None):
+            boxes.append(box)
+            super().__init__(run, t, box)
+
+    def adv(*a):
+        r = real_adv(*a)
+        redone.append(int(r[3].sum()))
+        return r
+
+    monkeypatch.setattr(trajcalc, "_Winds", Spy)
+    monkeypatch.setattr(trajcalc, "_advance", adv)
+    return boxes, redone
+
+
+def test_traced_through_winds_read_in_parts(demo_run, monkeypatch):
+    """Winds too large for the 3D cache: trajectories traced in boxes around bands of
+    parcels (traced again in a wider box when their path leaves it) are the
+    whole-volume ones to the bit, with the default margins and with none at all."""
+    from cm1view.core import fields as fmod, models, trajcalc
+    ref = models.open_run(demo_run, workers=1)
+    run = models.open_run(demo_run, workers=1)
+    monkeypatch.setattr(run, "fits", lambda nbytes: False)
+    lat = dict(x0=float(ref.xh[4]), dx=4.0, nx=10, y0=float(ref.yh[4]), dy=4.0, ny=10,
+               z0=0.25, dz=2.0, nz=5)
+    want = trajcalc.trace(ref, lat)
+    assert not trajcalc._in_parts(ref) and trajcalc._in_parts(run)
+    boxes, redone = _spy_parts(monkeypatch, trajcalc)
+    for tight in (False, True):
+        if tight:  # (bands of 4 rows, boxes of the parcels' own extent)
+            monkeypatch.setattr(fmod, "PART_BYTES", 1)
+            monkeypatch.setattr(trajcalc, "MARGIN", 0.0)
+            monkeypatch.setattr(trajcalc, "U_MIN", 0.0)
+            monkeypatch.setattr(trajcalc, "W_MIN", 0.0)
+        del boxes[:], redone[:]
+        got = trajcalc.trace(run, lat)
+        assert boxes and None not in boxes
+        for k in trajcalc.VARS:
+            np.testing.assert_array_equal(got[k], want[k])
+        assert np.isfinite(got["x"][4]).any()  # (all have left the domain by output 8)
+    assert sum(redone) > 0 and len({b[1] for b in boxes}) > 1
+    assert any(b[0] < run.nk or b[2] - b[1] < run.nj for b in boxes)  # (parts, not all)

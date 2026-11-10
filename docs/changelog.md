@@ -48,8 +48,24 @@ has a matching git tag.
   min is reduced in the reader processes one level at a time. Derived fields and derivatives
   are computed from those parts of their inputs (with the neighbours a gradient needs), so the
   values are the same as from the volumes. Nothing changes for fields that fit: their volumes
-  are still read once and kept, so the next section or sounding at that time is instant. 3D
-  views, isosurfaces and traced trajectories still need whole volumes.
+  are still read once and kept, so the next section or sounding at that time is instant.
+- **3D views and traced trajectories read in parts too** when their fields do not fit: a 3D
+  view reads its box at the scene's stride for isosurfaces and the levels up to its top for
+  streamlines, and trajectories read the winds in bands around the parcels, reading a wider
+  band again for parcels that leave one. The scenes and traces are the same as from whole
+  volumes. A whole-domain 3D view still reads its streamline winds at full resolution for a
+  moment.
+- **Soundings and sections load early**: picking the Sounding or Section tool, or having its
+  panel open, starts reading its fields at the shown time (when they fit), so the first click
+  joins a read already under way. Soundings now read ahead to the next time as sections do.
+  Also fixed: a section's read-ahead had stopped working.
+- **Time series over a layer or of column fields use less memory**: a layer mean keeps a
+  running sum instead of every value of the region, and fewer readers run at once when each
+  would hold a lot, keeping the series within about a quarter of the 3D cache.
+- `cm1view render --gif` **draws frames in parallel** in the reader processes, as saving an
+  animation from the editor does.
+- The memory a job may use is read from the job's own cgroup (v1 or v2), not the whole node's; `--timing` and `cm1view bench` count reads on helper threads as reading,
+  and give tracking, swaths and trajectories a reading column.
 - The **map planes kept in memory are bounded by size** as well as by number (40): at most 1/16 of
   the 3D cache. On a 4000 x 4000 grid that is about 11 planes with the default 12 GB cache, where
   40 planes took 2.5 GB.

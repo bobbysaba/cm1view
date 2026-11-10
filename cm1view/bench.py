@@ -13,9 +13,12 @@ and updating the page's models, with the size of what would be sent to the brows
 The network and the browser are not part of this: for those, run the viewer with
 --timing.
 
-A sounding and a cross-section are then read in parts, as they are when their fields do
+Picking the Sounding and the Section tool is timed too (it reads their fields at the
+shown time in the background), with the first click after it.  A sounding and a
+cross-section are then read in parts, as they are when their fields do
 not fit the 3D cache (a very large grid, or a small --cache-gb), and the work over
-several outputs is timed whole: tracking and a swath over --window outputs.
+several outputs is timed: tracking, a swath and trajectories traced through the winds
+(from whole volumes and read in parts) over --window outputs.
 
 Run it where you run the viewer (a compute node with the run's data), not on a login
 node: it reads several full 3D fields."""
@@ -197,11 +200,13 @@ class Bench:
 
     def core(self, label, fn):
         """An action that is not an update of one of the page's views (tracking, a
-        swath): fn() timed whole, with nothing cached.  It reads on several threads,
-        so its reads are not split out."""
+        swath): fn() timed whole, with nothing cached.  Its reads, on its own thread and
+        the ones reading ahead for it, are split out as for a view."""
+        from .viewer import timing
         self.run.clear_cache()
         self.F.clear_planes()
         row = dict(label=label, view="core")
+        count = timing.counting()
         t0 = time.perf_counter()
         try:
             fn()
@@ -209,7 +214,30 @@ class Bench:
             self.say(f"  {label}: failed ({type(e).__name__}: {e})")
             self.rows.append(dict(row, error=str(e)))
             return
-        row["wall"] = row["total"] = round(time.perf_counter() - t0, 4)
+        wall = time.perf_counter() - t0
+        read = min(count.secs, wall)
+        row.update(wall=round(wall, 4), total=round(wall, 4), read=round(read, 4),
+                   compute=round(wall - read, 4), disk_reads=count.fields)
+        self.rows.append(row)
+        self._print_row(row)
+
+    def picked(self, label, fn):
+        """fn picks a tool, with nothing cached: the time until the reads it starts in
+        the background are done (no view updates, so no read/compute split)."""
+        self.run.clear_cache()
+        self.F.clear_planes()
+        n0 = self.run.cache_info()[2]
+        t0 = time.perf_counter()
+        try:
+            fn()
+            _wait_idle(self.v)
+        except Exception as e:  # noqa: BLE001
+            self.say(f"  {label}: failed ({type(e).__name__}: {e})")
+            self.rows.append(dict(label=label, view="pre", error=str(e)))
+            return
+        wall = time.perf_counter() - t0
+        row = dict(label=label, view="pre", wall=round(wall, 4), total=round(wall, 4),
+                   disk_reads=self.run.cache_info()[2] - n0)
         self.rows.append(row)
         self._print_row(row)
 
@@ -355,10 +383,21 @@ class Bench:
             t1 = later[0]
             self.act(f"sounding: at a new time ({t1})", "snd",
                      lambda: (self._time(t1), sounding(xc, yc)))
-            if len(later) > 1:
-                t2 = later[1]
+            if len(later) > 1:  # (not t1 + 1: the sounding read that ahead)
+                t2 = later[2] if len(later) > 2 else later[1]
                 self.act(f"cross-section: at a new time ({t2})", "xs",
                          lambda: (self._time(t2), section()))
+
+        # ---- picking the tool reads its fields at the shown time in the background
+        # (here the user waits for that read before clicking: the click is then cached)
+        for tool, click, other in (("Sounding", lambda: sounding(xc, yc - h / 10), "snd"),
+                                   ("Cross-section", section, "xs")):
+            what = tool.lower()
+            v.mode.set(None)
+            self.picked(f"{what}: tool picked (early load)", lambda tool=tool: v.mode.set(tool))
+            self.act(f"{what}: first click after picking the tool", other, click)
+        v.mode.set(None)
+        _wait_idle(v)
 
         # ---- the same two read in parts, as when their fields do not fit the 3D cache
         # (other places than above, with nothing cached: compare with the first ones)
@@ -377,6 +416,10 @@ class Bench:
                 v.request_3d()
             self.act("3D: view of a quarter of the domain", "3d",
                      lambda: (zoom(quarter), scene()))
+            # (the same scene from the box alone, nothing cached, its lines traced again)
+            with self._in_parts():
+                self.act("3D: read in parts", "3d",
+                         lambda: (v._st_cache.clear(), scene()), cold=True)
 
         # ---- work over several outputs, each timed whole
         n = min(self.args.window, nt - 1)
@@ -397,7 +440,7 @@ class Bench:
                      f"job memory limit to measure under)")
         self.say("columns: seconds; MB = what the update sends to the browser; "
                  "reads = whole fields or single levels read from disk\n"
-                 "(tracking and the swath are timed whole: they read on several threads)")
+                 "(tracking and the swath have no apply: they are not views of the page)")
         v.close()
         return dict(info=self.info, actions=self.rows)
 
@@ -429,6 +472,16 @@ class Bench:
             finally:
                 swath.CACHE_DIR = kept
                 shutil.rmtree(tmp, ignore_errors=True)
+        # trajectories traced through the winds (as for a run without parcel output),
+        # the whole domain's seeding, from whole volumes and read in parts
+        from .core import trajcalc
+        if all(x in run.vars for x in trajcalc.WINDS):
+            lat, span = trajcalc.lattice(run), (ta, ta + n)
+            what = f"trajectories: {n} outputs, {lat['nx'] * lat['ny'] * lat['nz']} parcels"
+            self.core(what, lambda: trajcalc.trace(run, lat, span=span))
+            with self._in_parts():
+                self.core("trajectories: read in parts",
+                          lambda: trajcalc.trace(run, lat, span=span))
 
     # ---------------------------------------------------------------- printing
     COLS = (("read", 7), ("compute", 8), ("apply", 7), ("total", 7))
@@ -445,7 +498,7 @@ class Bench:
         for c, n in self.COLS:
             x = r.get(c)
             line += f"{'-' if x is None else f'{x:.3f}':>{n}}"
-        b, n = r.get("bytes"), r.get("disk_reads", "-" if r.get("view") == "core" else 0)
+        b, n = r.get("bytes"), r.get("disk_reads", 0)
         line += f"{'-' if b is None else f'{b / 1e6:.2f}':>8}{n:>6}"
         if r.get("error"):
             line += f"  ({r['error'][:60]})"

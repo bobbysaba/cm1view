@@ -16,7 +16,7 @@ from bokeh.transform import transform
 
 from .. import pdecomp
 from ..core import render, vectors
-from ..core.run import FileBusy, MissingAtTime
+from ..core.run import FileBusy, MissingAtTime, carry
 from ..core.fields import CMAPS, palette
 from ..theme import ACCENT, BG, GROUND, MUTED
 from .numinput import FloatInput
@@ -315,33 +315,30 @@ class SectionPanel:
         spec["fnote"] = self._storm_note(self._xs_names(spec), self.t)
         return spec
 
-    _pre_t = None  # the time the read-ahead is for
-
-    def _xs_read_ahead(self, names, t, g):
-        """With the section's fields in, read the next time's (in the direction of the
-        last step) in the background; not while playing."""
-        t2 = t + self._step_dir
-        if self.playing or self._closed or not 0 <= t2 < len(self.run.times):
-            return
-        self._pre_t = t2
-        self.gen["pre"] += 1
-        gp = self.gen["pre"]
-        self.pools["pre"].submit(self._prefetch, list(names), t2,
-                                 lambda: gp != self.gen["pre"] or self.playing)
+    def _xs_fields(self, spec=None):
+        """(names, shown): the native fields a section reads (of its spec, or of the
+        widgets), and the fields it shows (what F.fits sizes)."""
+        F = self.F
+        qs = ([o["q"] for o in spec["vecs"] if o["on"]] if spec is not None else
+              [o["q"].value for o in self.xs_vecs if o["on"].value])
+        shown = self._xs_names(spec)
+        names = []
+        for n in shown:
+            names += F.native_deps(n)
+        for q in qs:
+            names += vectors.deps(F, q)
+        shown = shown + [c for q in qs for c in vectors.fields(q)]
+        if self.run.terrain:  # (each column on its own heights)
+            names.append("zmsl")
+            shown.append("zmsl")
+        return names, shown
 
     def _xs_job(self, spec, g):
         if g != self.gen["xs"]:
             return
         run, F, t = self.run, self.F, spec["t"]
         try:
-            names = []
-            for n in self._xs_names(spec):
-                names += F.native_deps(n)
-            for o in spec["vecs"]:
-                if o["on"]:
-                    names += vectors.deps(F, o["q"])
-            if run.terrain:  # (each column on its own heights)
-                names.append("zmsl")
+            names, shown = self._xs_fields(spec)
 
             def prog(done, total, name):
                 if total:
@@ -352,14 +349,12 @@ class SectionPanel:
 
             # the fields' volumes where they fit the 3D cache together (later sections
             # at this time are then instant); else only the columns along the line
-            shown = self._xs_names(spec) + [c for o in spec["vecs"] if o["on"]
-                                            for c in vectors.fields(o["q"])]
-            whole = F.fits(shown + (["zmsl"] if run.terrain else []), t)
+            whole = F.fits(shown, t)
             if whole:
                 if not run.load_volumes(names, t, progress=prog,
                                         cancelled=lambda: g != self.gen["xs"]):
                     return
-                self._xs_read_ahead(names, t, g)
+                self._schedule(partial(self._read_ahead, names, t))
             else:
                 self._schedule(partial(
                     setattr, self.xs_status, "object",
@@ -420,7 +415,7 @@ class SectionPanel:
             call = dict(fill=lambda f: fill(f["var"], f), ov=overlay, vec=vec)
             if len(work) > 1:
                 with ThreadPoolExecutor(min(4, len(work))) as tp:
-                    futs = {id(o): tp.submit(call[k], o) for k, o in work}
+                    futs = {id(o): tp.submit(carry(call[k]), o) for k, o in work}
                     out = dict(s=s, zq=zq, ground=ground,
                                fill=fill(spec["fill"], spec, m))
                     got = {i: f.result() for i, f in futs.items()}

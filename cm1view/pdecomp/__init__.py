@@ -137,27 +137,13 @@ def running(run, t=None):
 
 # ------------------------------------------------------------------ memory
 def _cgroup_mem():
-    """(limit, used) bytes of this job's memory cgroup, or None."""
-    try:
-        v = open("/sys/fs/cgroup/memory.max").read().strip()
-        if v != "max":
-            return int(v), int(open("/sys/fs/cgroup/memory.current").read())
-    except OSError:
-        pass
-    try:
-        cg = [ln.split(":")[2].strip() for ln in open("/proc/self/cgroup")
-              if ":memory:" in ln][0]
-        base = f"/sys/fs/cgroup/memory{cg}"
-        lim = int(open(f"{base}/memory.limit_in_bytes").read())
-        stat = dict(ln.split() for ln in open(f"{base}/memory.stat"))
-        # page cache (e.g. of the netCDF files) is reclaimable: count rss only
-        used = int(stat.get("total_rss", stat.get("rss", 0))) + \
-            int(stat.get("total_shmem", stat.get("shmem", 0)))
-        if lim < 1 << 50:
-            return lim, used
-    except (OSError, IndexError, ValueError):
-        pass
-    return None
+    """(limit, used) bytes of this job's memory cgroup (the one that limits it, found
+    from the job's own cgroup up), or None.  used leaves out the page cache (e.g. of
+    the netCDF files), which is reclaimable."""
+    lim, used = config.job_memory_limit(), config.job_memory_used_gb()
+    if lim is None or used is None:
+        return None
+    return lim, int(used * 1024**3)
 
 
 def free_gb():

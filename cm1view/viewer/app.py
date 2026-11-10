@@ -365,19 +365,60 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
     # the cache budget may hold the current and the next time together.
     PREFETCH_SHARE = 0.5
 
-    def _prefetch(self, names, t, cancelled=None):
+    def _prefetch(self, names, t, cancelled=None, ahead=True):
         """Worker thread: read `names` at time t into the cache, quietly.  Does nothing
-        if the time does not exist, or if the current and next fields would not fit."""
+        if the time does not exist, or (ahead: a read-ahead) if the current and next
+        fields would not fit."""
         run = self.run
         if not 0 <= t < len(run.times):
             return
         try:
             need = 2 * len(names) * run.nk * run.nj * run.ni * 4
-            if need > self.PREFETCH_SHARE * run.cache_bytes():
+            if ahead and need > self.PREFETCH_SHARE * run.cache_bytes:
                 return
             run.load_volumes(names, t, cancelled=cancelled)
         except Exception:  # noqa: BLE001  (missing at t, file being written, cancelled…)
             pass
+
+    _pre_t = None  # the time the background reads ("pre" pool) are for
+
+    def _pre_load(self, names, t, ahead=True):
+        """Read `names` at time t on the "pre" thread.  A load for another time
+        cancels the one in flight; one for the same time queues behind it (a sounding
+        and a section both reading ahead).  Cancelled while playing, and by a time
+        change (_on_time); a request at that time joins the read instead (Run's
+        in-flight table)."""
+        if self._closed or self.playing or not 0 <= t < len(self.run.times):
+            return
+        if t != self._pre_t:
+            self._pre_t = t
+            self.gen["pre"] += 1
+        gp = self.gen["pre"]
+        self.pools["pre"].submit(self._prefetch, list(names), t,
+                                 lambda: gp != self.gen["pre"] or self.playing, ahead)
+
+    def _read_ahead(self, names, t):
+        """With a panel's fields in at t, read the next time's (in the direction of
+        the last step) in the background; not while playing."""
+        self._pre_load(names, t + self._step_dir)
+
+    def _early_load(self):
+        """The Sounding or Section tool is picked (or its panel open) at a settled
+        time: read its whole fields at the shown time in the background, when they fit
+        the 3D cache, so the first click finds them there."""
+        if self._closed or self.playing or self._applying:
+            return
+        tab = PANELS.get(self.mode.value)
+        if tab == 0:
+            names, ok = self._snd_fields(), self._snd_whole()
+        elif tab == 1:
+            names, shown = self._xs_fields()
+            ok = self.F.fits(shown, self.t)
+        else:
+            return
+        t = self.t
+        if ok and any(self.run.cached(n, t) is None for n in names):
+            self._pre_load(names, t, ahead=False)
 
     def _set_status(self, html):
         self.status.object = f'<div class="cv-status">{html}</div>'

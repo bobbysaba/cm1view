@@ -514,23 +514,23 @@ def scan_runs(roots=None, depth=5, limit=500, seconds=4.0, model=None):
 
 # ------------------------------------------------------------------ auto values
 def job_memory_gb():
-    """Memory this job may use (cgroup limit, else the node's)."""
-    limit = None
-    try:
-        v = open("/sys/fs/cgroup/memory.max").read().strip()
-        limit = None if v == "max" else int(v)
-    except (OSError, ValueError):
-        pass
-    if limit is None or limit > 1 << 50:
-        try:  # cgroup v1
-            cg = [line.split(":")[2].strip() for line in open("/proc/self/cgroup")
-                  if ":memory:" in line][0]
-            limit = int(open(f"/sys/fs/cgroup/memory{cg}/memory.limit_in_bytes").read())
-        except (OSError, IndexError, ValueError):
-            limit = None
-    if limit is None or limit > 1 << 50:
+    """Memory this job may use (the limit of its own memory cgroup, cgroup v1 or v2,
+    else the node's)."""
+    limit = job_memory_limit()
+    if limit is None:
         limit = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
     return limit / 1024**3
+
+
+def job_memory_limit():
+    """Bytes the job's memory cgroup allows, or None where none limits it."""
+    cg = _job_cgroup()
+    if cg is None:
+        return None
+    try:
+        return int(open(os.path.join(cg[0], cg[1])).read())
+    except (OSError, ValueError):
+        return None
 
 
 def _job_cgroup():

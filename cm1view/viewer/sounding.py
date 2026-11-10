@@ -147,12 +147,21 @@ class SoundingPanel:
         self.snd_col.loading = True
         self.pools["snd"].submit(self._snd_job, spec, g)
 
+    def _snd_fields(self):
+        """The 3D fields a sounding reads (a terrain run's columns: on their own heights
+        above ground)."""
+        return SOUNDING_VARS + (("zagl",) if self.run.terrain else ())
+
+    def _snd_whole(self):
+        """Whether live soundings read whole fields: they fit the 3D cache together."""
+        run = self.run
+        return run.fits(4 * run.nk * run.nj * run.ni * len(self._snd_fields()))
+
     def _snd_job(self, spec, g):
         if g != self.gen["snd"]:
             return
         run, t = self.run, spec["t"]
-        # (a terrain run's columns: on their own heights above ground)
-        names = SOUNDING_VARS + (("zagl",) if run.terrain else ())
+        names = self._snd_fields()
         try:
             def prog_for(tt, what):
                 def prog(done, total, name):
@@ -166,13 +175,15 @@ class SoundingPanel:
             # live soundings at the shown time read (and cache) whole 3D fields, so
             # later clicks are instant; pinned other times read just their box, and so
             # do live ones whose fields together do not fit the 3D cache
-            if any(kind != "mean" and tp is None for kind, _, tp in spec["points"]):
-                if any(run.cached(v, t) is None for v in names) and \
-                        run.fits(4 * run.nk * run.nj * run.ni * len(names)):
+            # (and read the next time's in the background, as sections do)
+            if any(kind != "mean" and tp is None for kind, _, tp in spec["points"]) \
+                    and self._snd_whole():
+                if any(run.cached(v, t) is None for v in names):
                     ok = run.load_volumes(names, t, progress=prog_for(t, "3D fields"),
                                           cancelled=lambda: g != self.gen["snd"])
                     if not ok or g != self.gen["snd"]:
                         return
+                self._schedule(partial(self._read_ahead, names, t))
             z = run.z * 1000.0
             h = int(round(spec["avg"] * 1000.0 / run.dx / 2.0))
             items = []

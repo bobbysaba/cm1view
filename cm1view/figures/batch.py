@@ -259,6 +259,18 @@ def has_scene(spec):
     return any(p.get("kind") == "scene" for p in figdraw.upgrade(spec)[0]["panels"])
 
 
+def frame_pool(spec, workers, n):
+    """(the reader processes, how many frames they draw at once) for `n` frames
+    (core.pool: the pool every run reads with, most of it; (None, 1): draw in this
+    process, for a 3D scene or a few frames)."""
+    from ..core import pool
+    workers = int(workers or 1)
+    nw = min(pool.width(workers), n, 8)
+    if nw < 2 or has_scene(spec):
+        return None, 1
+    return pool.get(workers), nw
+
+
 def frame_offsets(fd, spec, step=1, end_s=None):
     runs = {p: fd.open_run(p)[0] for p in {p for p, _ in fg.time_refs(spec)}}
     return fg.frame_offsets(spec, runs, int(step), end_s, MAX_FRAMES + 1)
@@ -280,15 +292,25 @@ def save_gif(fd, spec, base, offsets, fps=4.0, dpi=110, loop=True, frames=False,
     if frames:
         os.makedirs(fdir, exist_ok=True)
     images, missing = [], 0
-    for j in range(len(offsets)):
-        say(f"drawing frame {j + 1}/{len(offsets)}")
-        s = anim_frame(spec, offsets, j, dpi)
-        data = fd.panel_data(s)
-        missing += any(d.get("missing") for d in data.values())
-        im = frame_image(s, data, ends, dpi)
-        if frames:
-            im.save(os.path.join(fdir, f"{name}_{j:03d}.png"))
-        images.append(im)
+    ex, width = frame_pool(spec, fd.workers, len(offsets))
+    todo = list(range(len(offsets)))
+    while todo:
+        chunk, todo = todo[:width], todo[width:]
+        say(f"drawing frame {chunk[0] + 1}–{chunk[-1] + 1}/{len(offsets)}"
+            if len(chunk) > 1 else f"drawing frame {chunk[0] + 1}/{len(offsets)}")
+        jobs = []  # (frame spec, its data, the future drawing it)
+        for j in chunk:  # (reads here; the drawing overlaps in the pool)
+            s = anim_frame(spec, offsets, j, dpi)
+            data = fd.panel_data(s)
+            missing += any(d.get("missing") for d in data.values())
+            jobs.append((s, data, None if ex is None else
+                         ex.submit(frame_pixels, s, data, ends, dpi)))
+        for j, (s, data, fut) in zip(chunk, jobs):
+            im = frame_image(s, data, ends, dpi) if fut is None \
+                else pixels_image(fut.result())
+            if frames:
+                im.save(os.path.join(fdir, f"{name}_{j:03d}.png"))
+            images.append(im)
     return fg.write_gif(images, base + ".gif", fps, loop), len(images), missing
 
 

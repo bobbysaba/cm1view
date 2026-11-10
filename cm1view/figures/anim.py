@@ -11,10 +11,9 @@ from functools import partial
 
 import panel as pn
 
-from ..core import pool
 from . import draw as figdraw, spec as fg
 from .batch import (MAX_FRAMES, anim_frame, auto_ends, frame_image, frame_pixels,
-                    has_scene, pixels_image)
+                    frame_pool, pixels_image)
 from .cards import _chk, _f
 
 END = "End of run"
@@ -159,11 +158,7 @@ class FigureAnimation:
         """(the reader processes, how many frames they draw at once) for `n` frames
         (core.pool: the pool every run reads with, most of it; (None, 1): draw in this
         process, for a 3D scene or a few frames)."""
-        workers = self.v.run.workers
-        nw = min(pool.width(workers), n, 8)
-        if nw < 2 or has_scene(spec):
-            return None, 1
-        return pool.get(workers), nw
+        return frame_pool(spec, self.v.run.workers, n)
 
     def _stop_anim(self):
         self._anim_gen += 1

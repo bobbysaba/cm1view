@@ -1214,6 +1214,35 @@ class Fields:
         return np.ascontiguousarray(a[k0 - K0:k1 - K0, j0 - J0:j1 - J0, i0 - I0:i1 - I0],
                                     dtype=np.float32)
 
+    def strided(self, name, t, k0, k1, j0, j1, i0, i1, step=1, storm=None):
+        """float32: 3D field `name` in its display units on levels k0:k1, every step-th
+        row of j0:j1 and column of i0:i1: its volume's [k0:k1, j0:j1:step, i0:i1:step]
+        without the volume (a 3D scene thinned to its stride).  A field without
+        gradients reads only those rows and columns; one with gradients is computed
+        at full resolution in bands of rows (box()), each thinned as it comes."""
+        if step <= 1:
+            return self.box(name, t, k0, k1, j0, j1, i0, i1, storm)
+        run = self.run
+        rows, cols = np.arange(j0, j1, step), np.arange(i0, i1, step)
+        shape = (k1 - k0, rows.size, cols.size)
+        if not rows.size or not cols.size or k1 <= k0:
+            return np.zeros(shape, dtype=np.float32)
+        if self._halo(name) == 0:
+            got = self._read_part(name, t, range(k0, k1), rows, cols)
+            return np.ascontiguousarray(
+                np.broadcast_to(self._region(name, t, None, storm, got), shape),
+                dtype=np.float32)
+        n3 = sum(run.vars[n].ndim == 3 for n in self.native_deps(name))
+        per = min(PART_BYTES, run.cache_bytes // 8) \
+            // (4 * (k1 - k0 + 2) * (i1 - i0 + 2) * max(1, n3))
+        per = max(1, per // step) * step  # (rows a band; whole steps, so they line up)
+        out = np.empty(shape, dtype=np.float32)
+        for b0 in range(j0, j1, per):
+            a = self.box(name, t, k0, k1, b0, min(b0 + per, j1), i0, i1, storm)
+            r0 = (b0 - j0) // step
+            out[:, r0:r0 + -(-a.shape[1] // step)] = a[:, ::step, ::step]
+        return out
+
     def crop(self, name, t, k0, k1, j0, j1, i0, i1, storm=None):
         """3D field `name` in its display units on levels k0:k1, rows j0:j1, columns
         i0:i1: of its volume where that fits the 3D cache (fits), else box()."""
