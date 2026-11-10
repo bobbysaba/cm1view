@@ -3,7 +3,11 @@
 What changed in each release, newest first. The version is in `pyproject.toml`; a release
 has a matching git tag.
 
-## Unreleased
+## 0.6.0 (2026-11-10)
+
+WoFS and WRF ensemble output (members, the ensemble mean, terrain, map boundaries, several
+storms per member); faster reads in parallel, and grids larger than the job's memory read in
+parts; `cm1view bench` and `--timing` to size a job.
 
 ### Viewer
 
