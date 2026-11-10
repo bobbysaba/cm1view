@@ -1,7 +1,7 @@
 # Running cm1view on a cluster
 
-cm1view reads whole 3D fields into memory and uses several CPUs to read them in parallel,
-so run it on a **compute node**, not on a shared login node. You then open it in your own
+cm1view keeps 3D fields in memory and uses several CPUs to read and compute them in
+parallel, so run it on a **compute node**, not on a shared login node. You then open it in your own
 browser through an SSH tunnel or, where your site has one, JupyterHub.
 
 ## Resources
@@ -15,9 +15,13 @@ What cm1view needs depends on the grid, not on how many output times the run has
 | 512 × 512 × 100 | 26 million | 4 | 16 GB | 16 GB |
 | 1024 × 1024 × 100 | 105 million | 8 | 32 GB | 48 GB |
 | 1280 × 1280 × 115 | 188 million | 8 | 32 GB | 64 GB |
-| 2048 × 2048 × 150 | 629 million | 8 | 96 GB | 192 GB |
+| 2048 × 2048 × 150 | 629 million | 16 | 96 GB | 192 GB |
 
 Time: as long as you'll be looking.
+
+These are sizes for comfortable use, where the fields of the times you are looking at
+stay in memory. A smaller job still works ([below](#grids-larger-than-the-job)), with
+more reading per click.
 
 **Working it out for another grid.** Each 3D float32 field is `nx × ny × nz × 4` bytes:
 about 0.75 GB for 1280 × 1280 × 115. Viewing needs room for Python and the server (about
@@ -27,15 +31,73 @@ million points free while it runs (about 44 GB on 1280 × 1280 × 115), and it e
 cache first when the job is short, so the two don't fully add. The number of output
 times only changes how long the first scan of a run and a series over all times take.
 
-**CPUs.** cm1view reads with up to 8 processes, so 8 CPUs give the fastest first read at
-each time and more don't help. 4 is fine for small grids.
+**CPUs.** cm1view reads with up to 16 processes, so more than 16 CPUs don't help. 4 is
+fine for small grids. On large grids the extra readers are what make column fields
+(column-max w, CAPE maps), tracking, swaths and series quick: their levels and output
+times are read side by side. `workers` is the budget for all of it. Every open run,
+series and animation shares the same reader processes, and derived 3D fields are
+computed on up to 8 threads.
 
 By default cm1view caches 3D fields in about 40% of the job's memory (`--cache-gb` to
 change that).
 
 cm1view sets the cache size (at most 48 GB) and the number of reader processes (at most
-8) from what the scheduler gave the job: its cgroup memory limit and CPU affinity, or the
+16) from what the scheduler gave the job: its cgroup memory limit and CPU affinity, or the
 whole machine where there is no limit. It prints both at start.
+
+### Grids larger than the job
+
+A 3D field does not have to fit in memory. When the fields a request needs together
+take more than half the cache, cm1view reads only the part it needs instead of whole
+fields: a cross-section the columns along its line, a sounding its few columns, an
+azimuthal mean, a distribution or an export its box and levels, a column maximum one
+level at a time. The values are the same. What you give up is the cache: the next
+section or sounding at that time reads again instead of being instant.
+
+So for a very large grid, size the job by what you want to stay instant:
+
+- **Maps, sections, soundings, tracking, swaths, series, exports** work in a job far
+  smaller than the table's rule gives. Allow 4 GB, the cache, and a few horizontal
+  levels (`nx × ny × 4` bytes each: 64 MB at 4000 × 4000) for each reader.
+- **Instant soundings at a time** need the five sounding fields in half the cache:
+  a cache of ten fields, so memory of about 25 fields.
+- **3D views, isosurfaces and traced trajectories** still read whole fields: each field
+  they use has to fit in the cache. Draw the 3D view of a region, not of the whole
+  domain.
+
+Measured on a 1280 × 1280 × 115 run (0.75 GB a field) with 4 CPUs and `--cache-gb 1`,
+so that no whole field is kept, on files read shortly before: a map step 0.1 s, a
+column maximum 0.7 s, a sounding 3.5 to 4.5 s and a cross-section 2.1 to 2.3 s every
+time, tracking over 8 outputs 4 s. The same job with its default cache (26 GB) reads
+whole fields at about 0.7 s each: the first sounding at a time 3 to 4.5 s and the first
+section 1.2 to 2.8 s, no slower than in parts, and each later one 0.03 to 0.2 s. It
+held 13 GB at most.
+
+For example a 4000 × 4000 × 150 grid (2.4 billion points, 9.6 GB a field): 16 CPUs and
+64 GB to browse maps, sections and soundings read in parts; 128 GB with `--cache-gb 48`
+to also keep a few whole fields for a 3D view. These two figures are worked out from
+the field size, not measured; time your own run as below.
+
+### How fast is it here?
+
+`cm1view bench /path/to/run` plays a fixed list of viewer actions on a run, with no
+browser, and prints how long each takes, split into reading and computing: map steps,
+column fields, soundings and a cross-section (read whole, then in parts as on a grid
+larger than the cache), a 3D view, and tracking and a swath over several outputs.
+Run it in the job you would view in, with the same `--workers` and `--cache-gb`:
+
+```bash
+cm1view bench /path/to/cm1/run
+cm1view bench /path/to/cm1/run --workers 8 --cache-gb 8    # a smaller job?
+```
+
+Run inside a job with a memory limit, it ends with the most memory the job held: every
+process and the cached fields, which is the number to size the next job by. The first
+run on files not read lately is slower than a repeat, so run it twice.
+
+`--no-3d` skips the 3D view and `--window 0` the tracking and swath. To time a real
+session with the browser and the network included, start the viewer with `--timing`
+and summarize its log with `cm1view bench --report FILE`.
 
 ## 1. Get a compute node
 

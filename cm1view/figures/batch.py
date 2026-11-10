@@ -241,6 +241,24 @@ def frame_image(s, data, ends, dpi):
     return im.convert("RGBA") if im.mode in ("RGBA", "LA", "P") else im.convert("RGB")
 
 
+def frame_pixels(s, data, ends, dpi):
+    """frame_image() as (mode, size, raw bytes): what a worker process sends back (a
+    spawn pool draws frames in parallel, matplotlib being bound by the GIL)."""
+    im = frame_image(s, data, ends, dpi)
+    return im.mode, im.size, im.tobytes()
+
+
+def pixels_image(px):
+    from PIL import Image
+    mode, size, raw = px
+    return Image.frombytes(mode, size, raw)
+
+
+def has_scene(spec):
+    """Whether a panel is a 3D scene (drawn with pyvista: kept in the one process)."""
+    return any(p.get("kind") == "scene" for p in figdraw.upgrade(spec)[0]["panels"])
+
+
 def frame_offsets(fd, spec, step=1, end_s=None):
     runs = {p: fd.open_run(p)[0] for p in {p for p, _ in fg.time_refs(spec)}}
     return fg.frame_offsets(spec, runs, int(step), end_s, MAX_FRAMES + 1)

@@ -235,13 +235,10 @@ class Sessions:
         return t if abs(times[t] - float(ts)) <= 1.0 else None
 
     def _snd_state(self):
-        lim = {k: v for k, v in self.snd_lim.items() if k != "prof_x"}
-        if "prof_x" in self.snd_lim:  # (JSON keys are strings)
-            lim["prof_x"] = {str(i): x for i, x in self.snd_lim["prof_x"].items()}
         return dict(points=[dict(kind=k, where=w, time_s=self._time_s(tp))
                             for k, w, tp in self.points],
                     **{k: getattr(self, a).value for k, a in SND},
-                    style={k: self.ps[k].value for k in SND_STYLE}, zoom=lim)
+                    style={k: self.ps[k].value for k in SND_STYLE})
 
     def _xs_state(self):
         return dict(points=[list(p) for p in self.xs_pts],
@@ -412,11 +409,6 @@ class Sessions:
                 continue  # (pinned at a time this run lacks)
             pts.append((kind, None if where is None else tuple(float(x) for x in where), tp))
         self.points = pts[:4]
-        zoom = sd.get("zoom") or {}  # (after prof_top: changing it un-zooms)
-        lim = {k: tuple(v) for k, v in zoom.items() if k in ("skew", "hodo", "prof_z")}
-        if zoom.get("prof_x"):
-            lim["prof_x"] = {int(i): tuple(x) for i, x in zoom["prof_x"].items()}
-        self.snd_lim = lim
         self._draw_points()
 
     def _put_section(self, xs, put):

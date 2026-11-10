@@ -23,6 +23,7 @@ from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutTimeout
 import numpy as np
 
 from .. import config
+from ..core import pool as readers
 from ..core.run import IO_LOCK, VarInfo
 
 NAMES = ("p_b", "p_l", "p_nl", "acc_b", "acc_l", "acc_nl")
@@ -304,7 +305,7 @@ def _compute(run, t, progress, write):
                            f"{config.pdecomp_script()}")
     if write and not writable(run, t):
         raise RuntimeError(f"no write permission for {run.files[t]}")
-    ncpu = len(os.sched_getaffinity(0))
+    ncpu = config.job_cpus()
     free = free_gb()
     want = need_gb(run, ncpu > 1)
     if free < want:  # make room from the 3D cache first
@@ -330,15 +331,21 @@ def _compute(run, t, progress, write):
         if parallel:  # read the script's inputs in parallel, straight to /dev/shm
             at, a0 = _inputs(run, t)
             run._not_writing(t)
-            with ProcessPoolExecutor(min(ncpu, 8), mp_context=ctx) as ex:
-                futs = {("t", n): ex.submit(_read_raw, run.files[t], n, outdir) for n in at}
-                futs.update({("0", n): ex.submit(_read_raw, run.files[0], n, outdir)
-                             for n in a0})
+            ex = readers.get(max(2, run.workers))  # (the reader processes every run uses)
+            futs = {("t", n): ex.submit(_read_raw, run.files[t], n, outdir) for n in at}
+            futs.update({("0", n): ex.submit(_read_raw, run.files[0], n, outdir)
+                         for n in a0})
+            try:
                 while not all(f.done() for f in futs.values()):
                     tick("reading")
                     time.sleep(1.0)
                 for (w, n), f in futs.items():
                     (pre_t if w == "t" else pre0)[n] = f.result()
+            except BaseException:
+                for f in futs.values():  # (those read meanwhile: their files removed)
+                    if not f.cancel():
+                        f.add_done_callback(_remove_raw)
+                raise
         mgr = ctx.Manager()
         ready, go = mgr.Event(), mgr.Event()
         pool = ProcessPoolExecutor(max_workers=1, mp_context=ctx)
@@ -384,6 +391,11 @@ def _compute(run, t, progress, write):
     source(run, t)  # read the (new) version tag here, not in the page-updating thread
     return dict(elapsed=time.time() - t0, wrote=wrote, parallel=parallel, log=log,
                 write_error=werr)
+
+
+def _remove_raw(fut):
+    with contextlib.suppress(Exception):
+        os.remove(fut.result())
 
 
 def _read_raw(path, name, outdir):

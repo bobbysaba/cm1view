@@ -221,5 +221,9 @@ a new time loads five fields (`th`, `prs`, `qv`, `uinterp`, `vinterp`).
   per axis.
 - The cache budget and number of reader processes come from the job's memory and CPUs;
   see [Running on a cluster](../hpc.md#resources) for how much to ask for.
+- Fields too large to cache (together more than half the cache) are read in parts
+  instead: a section its columns, a sounding its box. That works on any grid, but
+  nothing is kept, so each new section or sounding reads again
+  ([Grids larger than the job](../hpc.md#grids-larger-than-the-job)).
 - Computed series and distributions are kept in the cache folder, so asking again for the
   same one reads nothing.

@@ -643,9 +643,12 @@ def sounding_column(run, entry, fixes, progress=None, storm=("rm", (0.0, 0.0))):
         i0, i1 = max(0, i - h), min(run.ni, i + h + 1)
         j0, j1 = max(0, j - h), min(run.nj, j + h + 1)
         c = {}
+        got = run.read_boxes([v for v in names if run.cached(v, t) is None], t, i0, i1, j0, j1)
         for v in names:
             vol = run.cached(v, t)
-            a = vol[:, j0:j1, i0:i1] if vol is not None else run.read_box(v, t, i0, i1, j0, j1)
+            a = vol[:, j0:j1, i0:i1] if vol is not None else got.get(v)
+            if a is None:  # (evicted since the check)
+                a = run.read_box(v, t, i0, i1, j0, j1)
             c[v] = a.mean(axis=(1, 2), dtype=np.float64)
     z = c["zagl"] if "zagl" in c else run.z * 1000.0
     return thermo.analyze(z, c["prs"], c["th"], c["qv"], c["uinterp"] + run.umove,

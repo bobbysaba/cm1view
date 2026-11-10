@@ -762,6 +762,57 @@ def once(fetch):
     return f
 
 
+SLAB_CELLS = 2_000_000  # values a slab of levels holds (by_slabs): 8 MB a temporary
+SLAB_THREADS = 8  # most threads computing slabs at once
+PLANE_COUNT = 40  # most planes a Fields keeps
+PLANE_SHARE = 16  # ... within this share (1 / PLANE_SHARE) of the 3D cache's bytes
+PLANE_BYTES = 64 * 1024**2  # ... and never under this many
+TILE = 8  # columns a side of the boxes Fields.along computes a field with gradients in
+PART_BYTES = 1024**3  # most a slab of levels reads at once (a column max of a field
+#                       too large for the 3D cache), or an eighth of the cache if less
+
+
+def slabs(shape):
+    """[(k0, k1)] slabs of whole levels of a (nk, ...) volume, about SLAB_CELLS values
+    each (at least one level)."""
+    per = max(1, SLAB_CELLS // max(1, int(np.prod(shape[1:]))))
+    return [(k, min(k + per, shape[0])) for k in range(0, shape[0], per)]
+
+
+def by_slabs(shape, part, threads=1):
+    """float32 (nk, ...) array of `shape`, part(k0, k1) -> its levels k0:k1 written
+    slab after slab into the one array: the temporaries of the computation are a
+    slab's size, not the volume's (θe: about ten of them), and the slabs are computed
+    on up to `threads` threads (numpy releases the GIL on arrays this size)."""
+    out = np.empty(shape, dtype=np.float32)
+    todo = slabs(shape)
+    err = np.geterr()  # (numpy's error state is each thread's own: the caller's here)
+
+    def one(b):
+        with np.errstate(**err):
+            out[b[0]:b[1]] = part(*b)
+
+    n = min(int(threads), SLAB_THREADS, len(todo))
+    if n <= 1:
+        for b in todo:
+            one(b)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(n) as ex:
+            list(ex.map(one, todo))
+    return out
+
+
+def _batch(d, n, got):
+    """The native inputs of field d to read together when its function asks for n: n
+    and the inputs listed after it in d.deps not read yet (those before it were not
+    asked for: the parcel fields' thermodynamic inputs once the parcel is in the memo)."""
+    deps = [m for m in d.deps if not split_deriv(m)[0]]
+    if n not in deps:
+        return [n]
+    return [m for m in deps[deps.index(n):] if m not in got]
+
+
 class Fields:
     def __init__(self, run):
         from .. import pdecomp
@@ -786,6 +837,7 @@ class Fields:
                 continue  # (no storm motion for this run: see Run.storm_relative)
             self.defs[d.name] = d
         self._planes = OrderedDict()
+        self._plane_bytes = 0
         self._lock = threading.Lock()
         self._derivs = {}  # (derivative name -> its FieldDef, built when first asked)
         self._memo = OrderedDict()  # (t, stride) -> costly column fields' shared results
@@ -854,34 +906,70 @@ class Fields:
                 return a
         op, base = split_deriv(name)
         if mode in ("colmax", "colmin"):
-            vol = self.volume(name, t, storm)
-            a = vol.max(axis=0) if mode == "colmax" else vol.min(axis=0)
+            a = self._extreme(name, t, mode[3:], storm)
         elif op:
             a = self._deriv_plane(op, base, t, mode, value, storm)
         elif d.column:
             a = self._column(d, t, ctx)
         else:
-            run = self.run
+            got = {}  # (a derived field's native inputs, read together when first asked)
 
             def fetch(n):
                 if split_deriv(n)[0]:  # (a derivative input, e.g. ∂w/∂z)
                     return self.plane(n, t, mode, value, storm)
-                if mode == "level":
-                    return run.read_level(n, t, int(value))
-                if mode == "2d":
-                    return run.read_level(n, t)
-                if mode == "msl":
-                    return run.read_height(n, t, float(value), "msl")
-                return run.read_height(n, t, float(value))
+                if n not in got:
+                    got.update(self._native_planes(_batch(d, n, got), t, mode, value))
+                return got[n]
 
             a = d.func(once(fetch), ctx) if d.derived else fetch(name) * d.scale
         # a copy: a slice of a cached volume would keep the whole volume alive
         a = np.array(a, dtype=np.float32)
         with self._lock:
+            old = self._planes.pop(key, None)  # (another thread made it meanwhile)
             self._planes[key] = a
-            while len(self._planes) > 40:
-                self._planes.popitem(last=False)
+            self._plane_bytes += a.nbytes - (old.nbytes if old is not None else 0)
+            limit = max(PLANE_BYTES, getattr(self.run, "cache_bytes", 0) // PLANE_SHARE)
+            while len(self._planes) > 1 and (len(self._planes) > PLANE_COUNT
+                                             or self._plane_bytes > limit):
+                self._plane_bytes -= self._planes.popitem(last=False)[1].nbytes
         return a
+
+    def read_bytes(self, name, mode=None):
+        """About the bytes read for a plane of the field (plane's `mode`), or with mode
+        None for its volume: what a loop over times sizes its read-ahead by
+        (run.ahead_width)."""
+        d, run = self[name], self.run
+        per = 4 * run.nj * run.ni
+        n3 = sum(run.vars[n].ndim == 3 for n in self.native_deps(name) if n in run.vars)
+        if d.column:
+            levels = len(d.levels(run.z, run.zf)[0])
+            if d.costly:
+                per //= column_stride(run) ** 2
+        elif mode is None or mode in ("colmax", "colmin"):
+            levels = run.nk
+        else:
+            levels = (2 if mode in ("height", "msl") else 1) \
+                * (3 if split_deriv(name)[0] == "ddz" else 1)
+        return max(per, per * n3 * levels)
+
+    def clear_planes(self):
+        """Drop every plane kept."""
+        with self._lock:
+            self._planes.clear()
+            self._plane_bytes = 0
+
+    def _native_planes(self, names, t, mode, value):
+        """{name: (nj, ni)} of native fields on one surface (plane's mode, value; mode
+        "2d": 2D fields, a 3D one's lowest level), their levels read together."""
+        run = self.run
+        if mode in ("height", "msl"):
+            return run.read_heights(names, t, float(value), "msl" if mode == "msl" else "agl")
+        out = {n: run.read_level(n, t) for n in names if run.vars[n].ndim == 2}
+        n3 = [n for n in names if n not in out]
+        if n3:
+            lv = run.read_levels(n3, t, [int(value) if mode == "level" else 0])
+            out.update((n, lv[n][0]) for n in n3)
+        return out
 
     def _column(self, d, t, ctx):
         """A column field: its inputs on the levels of its layer only (a costly one on
@@ -894,7 +982,13 @@ class Fields:
             ks, dz = d.levels(run.z, run.zf)
             zk = run.z[ks]
         c = dict(ctx, dz=dz, zk=zk, top=layer_top(d, run))
-        layers = once(lambda n: np.stack([run.read_level(n, t, k) for k in ks]))
+        got = {}  # (the inputs' levels, read together when the first is asked for)
+
+        def layers(n, rows=None, cols=None):
+            if n not in got:
+                got.update(run.read_levels(_batch(d, n, got), t, ks, rows, cols))
+            return got[n]
+
         if not d.costly:
             return d.func(layers, c)
         s = column_stride(run)
@@ -911,8 +1005,7 @@ class Fields:
         if run.terrain:  # (the heights of the columns computed)
             c.update(dz=dz[:, r0:r1, c0:c1][:, tj][:, :, ti],
                      zk=zk[:, r0:r1, c0:c1][:, tj][:, :, ti])
-        a = d.func(once(lambda n: np.stack([run.read_level(n, t, k)[r0:r1, c0:c1][
-            np.ix_(tj, ti)] for k in ks])), c)
+        a = d.func(lambda n: layers(n, r0 + tj, c0 + ti), c)  # (only those columns)
         return np.asarray(a)[np.ix_(bj, bi)]
 
     def _deriv_plane(self, op, base, t, mode, value, storm):
@@ -942,45 +1035,285 @@ class Fields:
         dep |= {n for n in list(self._derivs) if split_deriv(n)[1] in dep}
         with self._lock:
             for k in [k for k in self._planes if k[1] == t and k[0] in dep]:
-                del self._planes[k]
+                self._plane_bytes -= self._planes.pop(k).nbytes
             if any(self.defs[n].costly for n in dep if n in self.defs):
                 for k in [k for k in self._memo if k[0] == t]:
                     del self._memo[k]
         self.run.forget(dep, t)
 
     def volume(self, name, t, storm=None):
+        """(nk, nj, ni) of a field in its display units (a column field: its plane).
+        A derived one or a derivative is computed once and kept in the 3D cache; a
+        native with a scale (qv: g/kg) is a scaled copy each call, not kept: where
+        only part of it is wanted, use take() or raw()."""
         d = self[name]
         if d.column:  # (2D: its plane)
             return self.plane(name, t, storm=storm)
-        op, base = split_deriv(name)
-        if op:  # (cached as '~ddz.w', '~ddz.name@u,v' if storm-relative)
-            ctx = self._ctx(d, storm)
-            key = f"~{name}" + ("@{:.3f},{:.3f}".format(*ctx["storm"]) if d.storm else "")
-            vol = self.run.cached(key, t)
-            if vol is None:
-                b = np.asarray(self.volume(base, t, storm), dtype=np.float32)
-                vol = np.asarray(ddz_volume(b, self.run.heights(t) if self.run.terrain
-                                            else self.run.z) if op == "ddz" else
-                                 hgrad(op, b, self.run.xh, self.run.yh), dtype=np.float32)
-                self.run._insert(key, t, vol)
-            return vol
-        if d.derived:
-            # derived volumes are cached too (as '~name', '~name@u,v' if storm-relative)
-            ctx = self._ctx(d, storm)
-            key = f"~{name}" + ("@{:.3f},{:.3f}".format(*ctx["storm"]) if d.storm else "")
-            vol = self.run.cached(key, t)
-            if vol is None:
-                self.run.load_volumes(d.natives, t)
-                vol = np.asarray(d.func(lambda n: self._input(n, t, storm), ctx),
-                                 dtype=np.float32)
-                self.run._insert(key, t, vol)
-            return vol
-        vol = self.run.volume(name, t)
-        return vol if d.scale == 1.0 else vol * np.float32(d.scale)
+        if not d.derived:
+            vol = self.run.volume(name, t)
+            return vol if d.scale == 1.0 else vol * np.float32(d.scale)
+        # derived volumes are cached ('~name', '~ddz.w'; '~name@u,v' if storm-relative)
+        ctx = self._ctx(d, storm)
+        key = f"~{name}" + ("@{:.3f},{:.3f}".format(*ctx["storm"]) if d.storm else "")
+        vol = self.run.cached(key, t)
+        if vol is None:
+            op, base = split_deriv(name)
+            vol = (self._deriv_volume(op, base, t, storm) if op
+                   else self._derived_volume(d, t, storm, ctx))
+            self.run._insert(key, t, vol)
+        return vol
+
+    def _threads(self):
+        return max(1, int(getattr(self.run, "workers", 1) or 1))
+
+    def _derived_volume(self, d, t, storm, ctx):
+        """A derived field's volume, computed in slabs of levels (by_slabs): its
+        function works on whole levels (plane() gives it single ones)."""
+        self.run.load_volumes(d.natives, t)
+        ins = {n: self._input(n, t, storm) for n in d.deps}  # (held: not evicted)
+        shape = np.broadcast_shapes(*(v.shape for v in ins.values()))
+        if len(shape) != 3:
+            return np.asarray(d.func(ins.__getitem__, ctx), dtype=np.float32)
+        def levels(n, k0, k1):  # (an input with no levels: as it is)
+            v = ins[n]
+            return v[k0:k1] if np.ndim(v) == 3 and v.shape[0] == shape[0] else v
+
+        return by_slabs(shape, lambda k0, k1: d.func(
+            once(lambda n: levels(n, k0, k1)), ctx), self._threads())
+
+    def _deriv_volume(self, op, base, t, storm):
+        """Derivative op of field base as a volume, in slabs of levels: ∂/∂z of a slab
+        from the slab and the level below and above it (np.gradient's own values)."""
+        b, scale = self.raw(base, t, storm)
+        run = self.run
+        z = np.asarray(run.heights(t) if run.terrain else run.z)
+        nk = b.shape[0]
+
+        def levels(k0, k1):  # (in display units: a slab's copy, not the volume's)
+            return b[k0:k1] if scale == 1.0 else b[k0:k1] * scale
+
+        def part(k0, k1):
+            if op != "ddz":
+                return hgrad(op, levels(k0, k1), run.xh, run.yh)
+            lo, hi = max(k0 - 1, 0), min(k1 + 1, nk)
+            if hi - lo < 2:  # (a single level: no ∂/∂z)
+                return 0.0
+            return ddz_volume(levels(lo, hi), z[lo:hi])[k0 - lo:k1 - lo]
+
+        return by_slabs(b.shape, part, self._threads())
+
+    def raw(self, name, t, storm=None):
+        """(volume, scale) of a field: volume * scale is the field in its display
+        units.  A native with a scale comes as it was read with its factor (no scaled
+        copy of the whole volume); any other field as volume() gives it, scale 1."""
+        d = self[name]
+        if d.derived or d.column or d.scale == 1.0:
+            return self.volume(name, t, storm), np.float32(1.0)
+        return self.run.volume(name, t), np.float32(d.scale)
+
+    def take(self, name, t, fn, storm=None):
+        """fn(volume) of a field in its display units, for an fn that takes part of
+        the volume as it is (a slice, samples, an interpolation, a max or min): the
+        part is taken first and then scaled (raw())."""
+        vol, scale = self.raw(name, t, storm)
+        a = fn(vol)
+        return a if scale == 1.0 else a * scale
 
     def _input(self, n, t, storm):
         """Volume of a derived field's input n: raw native, or a derivative."""
         return self.volume(n, t, storm) if split_deriv(n)[0] else self.run.volume(n, t)
+
+    # ---- parts of a field without its volume: a request too large for the 3D cache
+    def fits(self, names, t=None):
+        """Whether the volumes behind 3D fields `names` together belong in the 3D
+        cache (Run.fits): their native inputs, and each derived field's or
+        derivative's own volume.  If not, read parts: crop() / box(), along(),
+        at_levels(), and plane()'s column max and min do."""
+        run = self.run
+        if not hasattr(run, "fits"):
+            return True
+        natives, more = set(), 0
+        for name in dict.fromkeys(names):
+            op, base = split_deriv(name)
+            d = self[base]
+            if d.ndim != 3:
+                continue
+            natives.update(n for n in (d.natives if d.derived else (base,))
+                           if n in run.vars and run.vars[n].ndim == 3)
+            more += bool(op) + bool(d.derived)
+        if not natives and not more:  # (2D fields only: no volume to fit)
+            return True
+        return run.fits(4 * run.nk * run.nj * run.ni * (len(natives) + more))
+
+    def _halo(self, name):
+        """Grid points beyond a part of the grid that 3D field `name` there depends
+        on: one for a derivative, one more for a field with gradients of its own."""
+        op, base = split_deriv(name)
+        d = self[base]
+        if d.ndim != 3:
+            raise ValueError(f"{name} is not a 3D field")
+        return bool(op) + bool(d.derived and not d.pointwise)
+
+    def _region(self, name, t, reg, storm, got):
+        """Field `name` in its display units on a part of the grid, from its native
+        inputs there: got = {native: raw values}.  reg = (k0, k1, j0, j1, i0, i1), the
+        box the values cover ((levels, ny, nx)); None: loose columns ((levels, n)), a
+        field without gradients only.  Gradients are one-sided at the box's edges as at
+        the grid's: box() and along() read a halo (_halo) and cut it off."""
+        run = self.run
+        op, base = split_deriv(name)
+        if op:
+            b = self._region(base, t, reg, storm, got)
+            k0, k1, j0, j1, i0, i1 = reg
+            if op != "ddz":
+                a = hgrad(op, b, run.xh[i0:i1], run.yh[j0:j1])
+            elif k1 - k0 < 2:  # (a single level: no ∂/∂z)
+                a = np.zeros_like(b)
+            else:
+                a = ddz_volume(b, run.heights(t)[k0:k1, j0:j1, i0:i1] if run.terrain
+                               else np.asarray(run.z)[k0:k1])
+            return np.asarray(a, dtype=np.float32)
+        d = self.defs[name]
+        if not d.derived:
+            return got[name] if d.scale == 1.0 else got[name] * np.float32(d.scale)
+        return np.asarray(d.func(once(
+            lambda n: self._region(n, t, reg, storm, got) if split_deriv(n)[0] else got[n]),
+            self._ctx(d, storm)), dtype=np.float32)
+
+    def _read_part(self, name, t, ks, rows, cols, points=False):
+        """{native: raw values} of field `name`'s native inputs on levels ks at rows
+        and columns (Run.read_levels; a 2D input: its plane's part)."""
+        run = self.run
+        got = {}
+        for n in self.native_deps(name):
+            if run.vars[n].ndim == 2:
+                a = run.read_level(n, t)
+                got[n] = a[rows, cols] if points else a[np.ix_(rows, cols)]
+                continue
+            vol = run.cached(n, t)
+            shape = vol.shape if vol is not None else run._vol_shape(n, t)
+            if tuple(shape) != (run.nk, run.nj, run.ni):
+                raise ValueError(f"{n} is not on the scalar grid")
+        n3 = [n for n in self.native_deps(name) if n not in got]
+        got.update(run.read_levels(n3, t, ks, rows, cols, points=points))
+        return got
+
+    def box(self, name, t, k0, k1, j0, j1, i0, i1, storm=None):
+        """float32 (k1 - k0, j1 - j0, i1 - i0): 3D field `name` in its display units on
+        levels k0:k1, rows j0:j1, columns i0:i1, the values its volume has there,
+        computed from that box of its native inputs (and a halo for gradients): no
+        whole volume is read and nothing enters the 3D cache."""
+        run = self.run
+        h = self._halo(name)
+        K0, K1 = max(k0 - h, 0), min(k1 + h, run.nk)
+        J0, J1 = max(j0 - h, 0), min(j1 + h, run.nj)
+        I0, I1 = max(i0 - h, 0), min(i1 + h, run.ni)
+        got = self._read_part(name, t, range(K0, K1), np.arange(J0, J1), np.arange(I0, I1))
+        a = np.broadcast_to(self._region(name, t, (K0, K1, J0, J1, I0, I1), storm, got),
+                            (K1 - K0, J1 - J0, I1 - I0))
+        return np.ascontiguousarray(a[k0 - K0:k1 - K0, j0 - J0:j1 - J0, i0 - I0:i1 - I0],
+                                    dtype=np.float32)
+
+    def crop(self, name, t, k0, k1, j0, j1, i0, i1, storm=None):
+        """3D field `name` in its display units on levels k0:k1, rows j0:j1, columns
+        i0:i1: of its volume where that fits the 3D cache (fits), else box()."""
+        if self.fits([name], t):
+            return self.take(name, t, lambda v: v[k0:k1, j0:j1, i0:i1], storm)
+        return self.box(name, t, k0, k1, j0, j1, i0, i1, storm)
+
+    def along(self, name, t, fi, fj, storm=None, k0=0, k1=None):
+        """float32 (k1 - k0, n): the columns of 3D field `name` (display units, levels
+        k0:k1) at the n points with fractional grid indices (fj, fi), bilinear between
+        the four columns around each (a point off the grid: the edge's), as sampling
+        its volume gives, reading only the columns needed: a section or parcels of a
+        field too large for the 3D cache (fits).  A field with gradients is computed
+        in boxes of TILE columns a side around the points, their halo read too."""
+        run = self.run
+        ni, nj = run.ni, run.nj
+        k1 = run.nk if k1 is None else k1
+        fi = np.clip(np.asarray(fi, np.float64).ravel(), 0, ni - 1)
+        fj = np.clip(np.asarray(fj, np.float64).ravel(), 0, nj - 1)
+        out = np.empty((k1 - k0, fi.size), dtype=np.float32)
+        if not out.size:
+            return out
+        ia = np.minimum(np.floor(fi).astype(np.intp), max(ni - 2, 0))
+        ja = np.minimum(np.floor(fj).astype(np.intp), max(nj - 2, 0))
+        ib, jb = np.minimum(ia + 1, ni - 1), np.minimum(ja + 1, nj - 1)
+        wi, wj = fi - ia, fj - ja
+
+        def mix(c, g=slice(None)):  # (c(j, i) -> the columns of the points g there)
+            return (1 - wj[g]) * ((1 - wi[g]) * c(ja[g], ia[g]) + wi[g] * c(ja[g], ib[g])) \
+                + wj[g] * ((1 - wi[g]) * c(jb[g], ia[g]) + wi[g] * c(jb[g], ib[g]))
+
+        h = self._halo(name)
+        K0, K1 = max(k0 - h, 0), min(k1 + h, run.nk)
+        if h == 0:  # (no gradients: the field at the columns around the points)
+            flat = np.unique(np.concatenate([ja * ni + ia, ja * ni + ib,
+                                             jb * ni + ia, jb * ni + ib]))
+            got = self._read_part(name, t, range(K0, K1), flat // ni, flat % ni, True)
+            a = np.broadcast_to(self._region(name, t, None, storm, got),
+                                (K1 - K0, flat.size))
+            out[:] = mix(lambda j, i: a[:, np.searchsorted(flat, j * ni + i)])
+            return out
+        # the points by tile: each tile's box (and halo) is computed as a small volume
+        tile = (ja // TILE) * (ni // TILE + 1) + ia // TILE
+        order = np.argsort(tile, kind="stable")
+        cuts = np.flatnonzero(np.diff(tile[order])) + 1
+        groups = np.split(order, cuts)
+        boxes = []
+        for g in groups:
+            tj, ti = (ja[g[0]] // TILE) * TILE, (ia[g[0]] // TILE) * TILE
+            boxes.append((max(tj - h, 0), min(tj + TILE + 1 + h, nj),
+                          max(ti - h, 0), min(ti + TILE + 1 + h, ni)))
+        cells = [(np.arange(J0, J1)[:, None] * ni + np.arange(I0, I1)).ravel()
+                 for J0, J1, I0, I1 in boxes]
+        flat = np.unique(np.concatenate(cells))
+        got = self._read_part(name, t, range(K0, K1), flat // ni, flat % ni, True)
+        for g, (J0, J1, I0, I1), cell in zip(groups, boxes, cells):
+            at = np.searchsorted(flat, cell)
+            shape = (J1 - J0, I1 - I0)
+            part = {n: a[..., at].reshape(a.shape[:-1] + shape) for n, a in got.items()}
+            a = np.broadcast_to(self._region(name, t, (K0, K1, J0, J1, I0, I1), storm, part),
+                                (K1 - K0,) + shape)[k0 - K0:k1 - K0]
+            out[:, g] = mix(lambda j, i: a[:, j - J0, i - I0], g)
+        return out
+
+    def at_levels(self, name, t, fi, fj, fk, storm=None):
+        """float32 (n,): 3D field `name` at n points with fractional grid indices (fk,
+        fj, fi), trilinear as sampling its volume gives, reading only the columns
+        around them on the levels they span (along)."""
+        run = self.run
+        fk = np.clip(np.asarray(fk, np.float64).ravel(), 0, run.nk - 1)
+        if not fk.size:
+            return np.zeros(0, dtype=np.float32)
+        ka = min(int(np.floor(fk.min())), max(run.nk - 2, 0))
+        kb = min(int(np.floor(fk.max())) + 2, run.nk)
+        cols = self.along(name, t, fi, fj, storm, ka, kb)
+        k = np.clip(np.floor(fk).astype(np.intp), ka, max(kb - 2, ka))
+        w, n = fk - k, np.arange(fk.size)
+        return ((1 - w) * cols[k - ka, n]
+                + w * cols[np.minimum(k + 1, kb - 1) - ka, n]).astype(np.float32)
+
+    def _extreme(self, name, t, op, storm):
+        """(nj, ni): the max or min (op) over the levels of a 3D field: of its volume
+        where that fits the 3D cache; else a native field's is reduced in the reader
+        processes (Run.reduce_levels) and any other's slab of levels by slab (box)."""
+        f = np.maximum if op == "max" else np.minimum
+        if self[name].ndim != 3 or self.fits([name], t):
+            return self.take(name, t, lambda v: f.reduce(v, axis=0), storm)
+        run, d = self.run, self[name]
+        if not d.derived:
+            a = run.reduce_levels(name, t, op)
+            return a if d.scale == 1.0 else a * np.float32(d.scale)
+        n3 = sum(run.vars[n].ndim == 3 for n in self.native_deps(name))
+        per = max(1, min(PART_BYTES, run.cache_bytes // 8)
+                  // (4 * run.nj * run.ni * max(1, n3)))
+        out = None
+        for k in range(0, run.nk, per):
+            a = f.reduce(self.box(name, t, k, min(k + per, run.nk), 0, run.nj, 0, run.ni,
+                                  storm), axis=0)
+            out = a if out is None else f(out, a)
+        return out
 
     def at_points(self, name, t, sample, storm=None):
         """Field values at arbitrary points: sample(vol) -> values.  Pointwise derived

@@ -353,6 +353,11 @@ class WRFSource:
     def open(self):
         return WRFView(self.path, self.path0)
 
+    def key(self):
+        """What a reader process keeps this source open under (core.run.opened)."""
+        from .run import file_key
+        return file_key(self.path) + (self.path0,)
+
 
 class _Mean:
     """The same field of several members, indexed like a netCDF variable: the mean of

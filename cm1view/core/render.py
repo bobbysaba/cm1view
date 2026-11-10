@@ -55,6 +55,28 @@ def image_data(x, y, a):
                 dw=[x[-1] - x[0] + dx], dh=[y[-1] - y[0] + dy])
 
 
+CODE_MAX = 65535  # image codes: 0 = no value, 1..65535 = lo..hi
+
+
+def image_codes(x, y, a, lo, hi):
+    """image_data with the values as uint16 codes between lo and hi (half the bytes of
+    float32; the browser maps the codes, the hover decodes them): lo/hi ride along."""
+    out = image_data(x, y, a)
+    c = np.clip((np.asarray(a, np.float32) - lo) / (hi - lo), 0.0, 1.0)
+    c = np.rint(c * (CODE_MAX - 1)) + 1
+    c = np.where(np.isfinite(a), c, 0)
+    out["image"] = [np.ascontiguousarray(c, dtype=np.uint16)]
+    out.update(lo=[float(lo)], hi=[float(hi)])
+    return out
+
+
+def decode_image(data):
+    """The values of an image made by image_codes (NaN where there is none)."""
+    c = np.asarray(data["image"][0], np.float64)
+    v = data["lo"][0] + (c - 1) / (CODE_MAX - 1) * (data["hi"][0] - data["lo"][0])
+    return np.where(c > 0, v, np.nan)
+
+
 def _masked(a):
     return np.ma.masked_invalid(a) if not np.isfinite(a).all() else a
 
@@ -163,12 +185,13 @@ def _map_fill(F, f, t, win, fstorm):
     if hi <= lo:
         hi = lo + 1e-6
     x, y, ac = _crop(F.run, a, win)
-    return fill_bands(x, y, ac, lo, hi, f)
+    return fill_bands(x, y, ac, lo, hi, f, codes=True)
 
 
-def fill_bands(x, y, a, lo, hi, f):
+def fill_bands(x, y, a, lo, hi, f, codes=False):
     """A fill (map or cross-section) as an image or filled-contour bands from lo to hi.
-    f: style, nlev, cmap, rev, clip (values outside lo..hi left uncoloured)."""
+    f: style, nlev, cmap, rev, clip (values outside lo..hi left uncoloured).
+    codes: the image as uint16 codes (image_codes), not float32 values."""
     clip = f.get("clip", False)
     fill = dict(style=f["style"], lo=lo, hi=hi, cmap=f["cmap"], rev=f["rev"])
     if f["style"] == "contourf":
@@ -177,7 +200,7 @@ def fill_bands(x, y, a, lo, hi, f):
     else:
         if clip:
             a = np.where((a >= lo) & (a <= hi), a, np.nan)
-        fill.update(image=image_data(x, y, a))
+        fill.update(image=image_codes(x, y, a, lo, hi) if codes else image_data(x, y, a))
     fill["palette"] = fill_palette(fill)
     return fill
 
@@ -264,11 +287,12 @@ def minus_plane(F, F2, name, t2, mode, level, fstorm=None):
 def minus_section(F, F2, name, t2, A, B, s, zq, fstorm=None):
     """Field `name` of the run of F2 at time index t2 along the section A–B, on the
     distances s and heights zq of F's section (NaN outside the other run's domain).
-    Its 3D field must be loaded (Run.load_volumes)."""
+    Its volume is used where it fits the 3D cache (load it first: Run.load_volumes),
+    else only its columns along the line are read (section_field)."""
     _other_has(F, F2, name)
     r2 = F2.run
     s2, fi, fj, _ = section_coords(r2, A, B)
-    b = sample_section(r2, F2.volume(name, t2, fstorm), fi, fj, zq, t2)
+    b = section_field(F2, name, t2, fi, fj, zq, fstorm, F2.fits([name], t2))
     out = (fi < -0.5) | (fi > r2.ni - 0.5) | (fj < -0.5) | (fj > r2.nj - 0.5)
     b[:, out] = np.nan
     if s2.size != np.size(s):
@@ -314,11 +338,17 @@ def section_span(run, fi, fj, ztop):
 def sample_section(run, vol, fi, fj, zq, t=None):
     """Bilinear sampling along the line, then linear in z onto zq (km).  On a terrain
     run with t: each column on its own heights at time t, zq above sea level, NaN under
-    the ground (between the ground and the lowest level: the lowest level's value)."""
-    nk = vol.shape[0]
-    kk = np.repeat(np.arange(nk)[:, None], fi.size, axis=1)
-    coords = np.stack([kk, np.broadcast_to(fj, kk.shape), np.broadcast_to(fi, kk.shape)])
-    sec = map_coordinates(vol, coords, order=1, mode="nearest")  # (nk, n)
+    the ground (between the ground and the lowest level: the lowest level's value).
+    vol: the field's volume, or a function (fi, fj) -> its (nk, n) columns at those
+    points, bilinear (section_columns: a field too large for the 3D cache)."""
+    lazy = callable(vol)
+    sec = np.asarray(vol(fi, fj)) if lazy else None
+    nk = sec.shape[0] if lazy else vol.shape[0]
+    if not lazy or (run.terrain and t is not None):
+        kk = np.repeat(np.arange(nk)[:, None], fi.size, axis=1)
+        coords = np.stack([kk, np.broadcast_to(fj, kk.shape), np.broadcast_to(fi, kk.shape)])
+    if not lazy:
+        sec = map_coordinates(vol, coords, order=1, mode="nearest")  # (nk, n)
     if run.terrain and t is not None:
         Z = map_coordinates(np.asarray(run.heights(t, "msl")), coords, order=1,
                             mode="nearest")
@@ -331,6 +361,34 @@ def sample_section(run, vol, fi, fj, zq, t=None):
     k0 = np.clip(np.floor(kf).astype(int), 0, nk - 2)
     w = (kf - k0)[:, None]
     return ((1 - w) * sec[k0] + w * sec[k0 + 1]).astype(np.float32)
+
+
+def section_columns(F, name, t, zq, storm=None):
+    """What sample_section takes in place of a field's volume when the section's
+    fields do not fit the 3D cache (Fields.fits): a function (fi, fj) -> the field's
+    (nk, n) columns at those points, read without any whole volume (Fields.along).
+    On a flat run the levels above the section's top zq are not read (NaN)."""
+    run = F.run
+    nk = run.nk
+    k1 = nk if run.terrain else min(nk, int(np.searchsorted(run.z, np.max(zq))) + 2)
+
+    def columns(fi, fj):
+        a = F.along(name, t, fi, fj, storm, 0, k1)
+        if k1 < nk:
+            a = np.concatenate([a, np.full((nk - k1, a.shape[1]), np.nan, np.float32)])
+        return a
+    return columns
+
+
+def section_field(F, name, t, fi, fj, zq, storm=None, whole=True):
+    """Field `name` (display units) of F at time t on the section line (fi, fj) and
+    heights zq (sample_section).  whole: from its volume, which the caller found to
+    fit the 3D cache with the rest it draws (Fields.fits); else from the columns
+    along the line only (section_columns)."""
+    run = F.run
+    if whole:
+        return F.take(name, t, lambda v: sample_section(run, v, fi, fj, zq, t), storm)
+    return sample_section(run, section_columns(F, name, t, zq, storm), fi, fj, zq, t)
 
 
 def section_vectors(s, zq, upar, w, n_across=28, aspect=1.0, ref_speed=20.0):

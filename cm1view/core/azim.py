@@ -18,6 +18,7 @@ A recipe says which values:
 import numpy as np
 
 from . import series as ser
+from .run import ahead, ahead_width
 
 OPS = ("mean", "max", "min")
 REFS = ("motion", "north")
@@ -93,10 +94,19 @@ def at_time(run, F, recipe, t, center, ref, storm=None):
     j0, j1 = max(0, int(np.floor(b)) - rj), min(run.nj, int(np.ceil(b)) + rj + 1)
     if i0 >= i1 or j0 >= j1:
         raise ValueError("the centre is off the domain")
-    vol = F.volume(d.name, t, storm=storm)
-    if vol.shape[1:] != (run.nj, run.ni) or vol.shape[0] != len(run.z):
-        raise ValueError(f"{d.name} is not on the scalar grid (pick an interpolated "
-                         "field, e.g. winterp, not w)")
+    # the field's volume where it fits the 3D cache; else only the box of the rings
+    vol = None
+    if F.fits([d.name], t):
+        vol, scale = F.raw(d.name, t, storm)
+        if vol.shape[1:] != (run.nj, run.ni) or vol.shape[0] != len(run.z):
+            raise ValueError(f"{d.name} is not on the scalar grid (pick an interpolated "
+                             "field, e.g. winterp, not w)")
+
+    def box(k0, k1):  # (levels k0:k1 of the box, and their factor to display units)
+        if vol is not None:
+            return vol[k0:k1, j0:j1, i0:i1], scale
+        return F.box(d.name, t, k0, k1, j0, j1, i0, i1, storm), 1.0
+
     X, Y = np.meshgrid(run.xh[i0:i1] - cx, run.yh[j0:j1] - cy)
     R = np.hypot(X, Y)
     az = (np.degrees(np.arctan2(X, Y)) - ref) % 360.0
@@ -109,11 +119,11 @@ def at_time(run, F, recipe, t, center, ref, storm=None):
     rb = np.minimum((R[m] / dr).astype(np.int64), nr - 1)
     if run.terrain:  # (each column interpolated to the levels' mean heights, z below)
         from .fields import at_height
-        Z, box = run.heights(t)[:, j0:j1, i0:i1], vol[:, j0:j1, i0:i1]
-        sub = np.stack([at_height(box, Z, float(h)) for h in run.z[ks[0]:ks[-1] + 1]])
+        Z, (cols, scale) = run.heights(t)[:, j0:j1, i0:i1], box(0, len(run.z))
+        sub = np.stack([at_height(cols, Z, float(h)) for h in run.z[ks[0]:ks[-1] + 1]])
     else:
-        sub = vol[ks[0]:ks[-1] + 1, j0:j1, i0:i1]
-    v = np.asarray(sub[:, m], dtype=np.float64)
+        sub, scale = box(ks[0], ks[-1] + 1)
+    v = np.asarray(sub[:, m], dtype=np.float64) * float(scale)
     idx = (np.arange(nz)[:, None] * nr + rb[None, :])
     ok = np.isfinite(v)
     idx, v = idx[ok], v[ok]
@@ -136,16 +146,25 @@ def compute(run, F, recipe, ts, centers, refs, storm=None, cancelled=None):
     dr, nr = bins(run, r)
     ks = ser.mean_levels(run, r)
     S = N = None
-    for t in ts:
-        if cancelled and cancelled():
-            return None
-        s, n = at_time(run, F, r, t, centers[t], refs[t], (storm or {}).get(t))
-        if S is None:
-            S, N = s, n
-        elif r["op"] == "mean":
-            S, N = S + s, N + n
-        else:
-            S, N = (np.fmax if r["op"] == "max" else np.fmin)(S, s), N + n
+    if cancelled and cancelled():
+        return None
+    # several outputs at once where their volumes are small (the next one is read while
+    # one is binned), combined in the order of ts
+    cost = getattr(F, "read_bytes", None)
+    each = ahead(lambda t: at_time(run, F, r, t, centers[t], refs[t], (storm or {}).get(t)),
+                 ts, ahead_width(run, cost(r["field"]) if cost else 0) if len(ts) > 1 else 0)
+    try:
+        for _, (s, n) in each:
+            if S is None:
+                S, N = s, n
+            elif r["op"] == "mean":
+                S, N = S + s, N + n
+            else:
+                S, N = (np.fmax if r["op"] == "max" else np.fmin)(S, s), N + n
+            if cancelled and cancelled():
+                return None
+    finally:
+        each.close()
     with np.errstate(invalid="ignore", divide="ignore"):
         v = S / N if r["op"] == "mean" else np.where(N > 0, S, np.nan)
     v = np.where(N > 0, v, np.nan)

@@ -13,7 +13,7 @@ from bokeh.events import MouseLeave, MouseMove
 from bokeh.models import ColumnDataSource, CustomJS, HoverTool, LinearAxis, Range1d, Span
 from bokeh.plotting import figure
 
-from .. import pdecomp
+from .. import config, pdecomp
 from ..core import vectors, volume3d
 from ..core.run import FileBusy, MissingAtTime
 from ..theme import GRID, MUTED
@@ -301,7 +301,7 @@ class View3DPanel:
         if any(pdecomp.is_pdecomp(self.F, n) for n in names) and pdecomp.can_compute(run):
             kind, _ = pdecomp.source(run, t, block=False)
             write = self.pd_write.value and pdecomp.writable(run, t)
-            par = len(os.sched_getaffinity(0)) > 1  # ~45 s with 4 CPUs; writing ~+40 s
+            par = config.job_cpus() > 1  # ~45 s with 4 CPUs; writing ~+40 s
             est = {(True, False): "~45 s", (True, True): "~1.5 min",
                    (False, False): "~1.5 min", (False, True): "~2 min"}[(par, write)]
             if kind is None:

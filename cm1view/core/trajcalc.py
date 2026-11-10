@@ -34,7 +34,7 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 from . import parcels as P
-from .run import IO_LOCK, temp_name
+from .run import IO_LOCK, ahead, ahead_width, temp_name
 from .volume3d import _fij, columns, frac_level
 
 VERSION = 1  # (part of the file's name: bump when tracing changes)
@@ -156,10 +156,17 @@ def trace(run, lat, progress=None, cancelled=None):
             out[c][k] = np.where(alive, a, np.nan)
 
     keep(0, p, uvw)
+    # the next output's winds are read while a step is integrated, when three outputs'
+    # winds (the two of the step and the next) fit in half the 3D cache
+    nbytes = 4 * run.nk * run.nj * run.ni * (len(WINDS) + (w0.H is not None))
+    fits = 3 * nbytes <= getattr(run, "cache_bytes", 0) // 2
+    winds = ahead(lambda k: _Winds(run, k), range(1, nt),
+                  min(1, ahead_width(run)) if fits else 0)
     for k in range(nt - 1):
         if cancelled is not None and cancelled():
+            winds.close()
             return None
-        w1 = _Winds(run, k + 1)
+        _, w1 = next(winds)
         T = float(run.times[k + 1] - run.times[k])
         m = max(1, int(np.ceil(T / MAX_DT)))
         dt = T / m

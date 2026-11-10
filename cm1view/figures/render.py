@@ -160,14 +160,7 @@ class FigureData:
                 return dict(time_s=ts, missing=f"could not open {entry['path']}: {e}")
             t = fg.tindex(run, ts)
             c = centers.get(t) if t is not None else None
-            key = fg.data_key(s, i, c, run.path)
-            lays = figdraw.spec_layers(s, i)
-            if any(lay["type"] in ("track", "sector") or (lay.get("reduce") or {}).get(
-                    "op") == "composite" for lay in lays) or fg.parcels_follow_track(lays) or \
-                    (s["kind"] == "xsec" and fg.uses_motion(fg.panel_section(s, i)[1])) or \
-                    (any(lay["type"] == "line" for lay in lays)
-                     and any(fg.uses_motion(x) for x in fg.sections(s))):
-                key += sig  # (a composite follows the whole track; a sector, section its motion)
+            key = self._panel_key(s, i, run, c, sig)
             d = self.cache.get(key)
             if d is None:
                 if progress:
@@ -226,8 +219,61 @@ class FigureData:
                                          else {}))
         return data
 
+    @staticmethod
+    def _panel_key(s, i, run, c, sig):
+        """The panel-data cache key of panel i of spec s (c: tracked storm centre here)."""
+        key = fg.data_key(s, i, c, run.path)
+        lays = figdraw.spec_layers(s, i)
+        if any(lay["type"] in ("track", "sector") or (lay.get("reduce") or {}).get(
+                "op") == "composite" for lay in lays) or fg.parcels_follow_track(lays) or \
+                (s["kind"] == "xsec" and fg.uses_motion(fg.panel_section(s, i)[1])) or \
+                (any(lay["type"] == "line" for lay in lays)
+                 and any(fg.uses_motion(x) for x in fg.sections(s))):
+            key += sig  # (a composite follows the whole track; a sector, section its motion)
+        return key
+
+    def _prewarm(self, doc, res, cancelled):
+        """Read the 3D fields of all the cross-section panels that must be drawn anew,
+        one batch per time, before the panels are drawn one by one (the reader processes
+        then work on several panels' fields together).  Skipped when they would not all
+        fit the volume cache, or for panels with layers of another run or time."""
+        need = {}  # (run path, time index) -> (run, field names)
+        for q in res["panels"]:
+            for i in [q["id"], *(-int(ins["id"]) for ins in q.get("insets") or [])]:
+                try:
+                    s = fg.one_panel(doc, i, res)
+                    if s["kind"] != "xsec" or fg.layer_groups(s, i):
+                        continue
+                    ref = fg.panel_ref(s, i)
+                    if ref is None:
+                        continue
+                    run, F = self.open_run(s["runs"][ref[0]]["path"])
+                    t = fg.tindex(run, ref[1])
+                    if t is None:
+                        continue
+                    fx = self.run_fixes(s["runs"][ref[0]], run)
+                    c = ser.track_centers(fx, len(run.times)).get(t)
+                    if self.cache.get(self._panel_key(s, i, run, c, track_sig(fx))) is not None:
+                        continue
+                    names = fg.xsec_names(run, F, figdraw.spec_layers(s, i))
+                except Exception:  # noqa: BLE001  (the panel's own read reports it)
+                    continue
+                got = need.setdefault((run.path, t), (run, set()))[1]
+                got.update(names)
+        total = sum(len(ns) * run.nk * run.nj * run.ni * 4 for run, ns in need.values())
+        if not need or total > 0.8 * next(iter(need.values()))[0].cache_bytes:
+            return
+        for (_, t), (run, ns) in need.items():
+            if cancelled and cancelled():
+                return
+            try:
+                run.load_volumes(sorted(ns), t, cancelled=cancelled)
+            except Exception:  # noqa: BLE001
+                return
+
     def _doc_data(self, doc, progress=None, cancelled=None):
         res, data = figdraw.resolve(doc), {}
+        self._prewarm(doc, res, cancelled)
         n = len(res["panels"])
         for at, q in enumerate(res["panels"]):
             for i in [q["id"], *(-int(ins["id"]) for ins in q.get("insets") or [])]:

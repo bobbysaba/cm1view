@@ -78,6 +78,11 @@ def volumes(F, key, t):
     return tuple(F.volume(c, t) if c else None for c in d.comps)
 
 
+def fields(key):
+    """The names of the 3D fields vector `key` is made of."""
+    return [c for c in VECTORS[key].comps if c]
+
+
 def deps(F, key):
     """The native fields vector `key` is computed from."""
     return [n for c in VECTORS[key].comps if c for n in F.native_deps(c)]

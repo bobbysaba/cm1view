@@ -35,16 +35,16 @@
 | 3D box | Drag | Choose the region and open the 3D workspace. |
 | 3D box → Seed box | Drag | Seeds for the 3D streamlines, inside the region. |
 
-## Soundings (expanded view)
+## Soundings (skew-T, hodograph, profiles)
 
 | Do | Result |
 |---|---|
-| Drag a box | Zoom that panel. |
-| Drag (after a zoom) | Pan. <kbd>Shift</kbd>-drag does the other mode; ✥ / ⬚ switches. |
-| **−** | Widen the view by 60%. |
-| Double-click, **⟲** | Back to the full view. |
-| **⤓** | Save the image as SVG. |
-| Hover | Values read off the graphic. |
+| Toolbar: box zoom, then drag | Zoom that graphic (the hodograph keeps u and v to scale; the profile panels zoom together in height). |
+| Toolbar: pan, then drag | Pan. |
+| Toolbar: wheel zoom, then scroll | Zoom at the pointer. |
+| Toolbar: reset | Back to the fitted view. |
+| Toolbar: save | Save the graphic as PNG. |
+| Hover | Values at that level. |
 
 ## Sections
 

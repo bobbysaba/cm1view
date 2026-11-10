@@ -19,6 +19,12 @@ class _Fields(dict):
     def volume(self, name, t, storm=None):
         return dict.__getitem__(self, name)(t)
 
+    def raw(self, name, t, storm=None):
+        return self.volume(name, t, storm), np.float32(1.0)
+
+    def fits(self, names, t=None):
+        return True
+
 
 @pytest.fixture(scope="module")
 def grid():

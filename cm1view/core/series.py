@@ -560,11 +560,11 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
     `times` (output indices; None: every time).  centers: {t: (x, y)} for track
     regions; storm: {t: (u, v)} ground-relative storm motion for storm-relative
     fields.  on_result(ds, done, total) after each time.  Returns (ds, {t: reason}) for
-    times that could not be computed."""
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    import multiprocessing as mp
-
+    times that could not be computed.  The times are computed in the reader processes
+    (core.pool), `workers` at once (default: most of the run's readers, the rest left
+    to the reads of the page)."""
     centers, storm = centers or {}, storm or {}
+    from . import pool
     from .fields import column_stride, layer_top, split_deriv
 
     d = F[recipe["field"]]
@@ -623,18 +623,14 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
     total, done = len(tasks), 0
     if not tasks:
         return ds, skipped
-    nw = max(1, min(int(workers or run.workers), len(tasks)))
+    nw = max(1, min(int(workers or pool.width(run.workers)), len(tasks)))
     by_t = {tk["t"]: tk for tk in tasks}
     last_store = _time.time()
-    ex = ProcessPoolExecutor(max_workers=nw, mp_context=mp.get_context("spawn"))
+    results = pool.spread(pool.get(run.workers), _worker, tasks, nw)
     try:
-        futs = [ex.submit(_worker, tk) for tk in tasks]
-        for fut in as_completed(futs):
+        for r in results:
             if cancelled and cancelled():
-                for f in futs:
-                    f.cancel()
                 break
-            r = fut.result()
             t = r["t"]
             done += 1
             if "error" in r:
@@ -647,7 +643,7 @@ def compute(run, F, recipe, ds, centers=None, storm=None, on_result=None, cancel
                 store(run, recipe, ds)
                 last_store = _time.time()
     finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+        results.close()  # (drops the times not started)
     store(run, recipe, ds)
     return ds, skipped
 

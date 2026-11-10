@@ -282,15 +282,11 @@ def test_maps_at_a_height_column_by_column(wofs_root):
 def test_reader_processes(wofs_root):
     """Reader processes open the member's files themselves (a picklable source)."""
     run = models.open_run(os.path.join(wofs_root, "mem01"), workers=2)
-    try:
-        prof = run.mean_profiles(["th", "prs0"], 2)
-        np.testing.assert_allclose(prof["th"], 301.2 + np.arange(NK), rtol=1e-6)
-        np.testing.assert_allclose(prof["prs0"], 1.0e5 - 1000.0 * np.arange(NK))
-        np.testing.assert_allclose(run.read_box("winterp", 1, 0, 2, 0, 2)[:, 0, 0],
-                                   np.arange(NK) + 1.5)
-    finally:
-        if run._pool is not None:
-            run._pool.shutdown()
+    prof = run.mean_profiles(["th", "prs0"], 2)
+    np.testing.assert_allclose(prof["th"], 301.2 + np.arange(NK), rtol=1e-6)
+    np.testing.assert_allclose(prof["prs0"], 1.0e5 - 1000.0 * np.arange(NK))
+    np.testing.assert_allclose(run.read_box("winterp", 1, 0, 2, 0, 2)[:, 0, 0],
+                               np.arange(NK) + 1.5)
 
 
 def test_registry_keeps_members_apart(wofs_root):
@@ -539,35 +535,31 @@ def test_mean_values(wofs_root, workers):
     of the members); the base state is the mean at the first time."""
     run = models.open_run(os.path.join(wofs_root, "mean"), workers=workers)
     m2 = models.open_run(os.path.join(wofs_root, "mem02"), workers=1)
-    try:
-        for c in range(NC):
-            for n in ("th", "prs", "qv", "uinterp", "vinterp", "winterp", "dbz", "zagl",
-                      "zmsl", "th0", "u0", "qv0"):
-                np.testing.assert_allclose(run.volume(n, c), m2.volume(n, c), rtol=1e-6,
-                                           atol=1e-5, err_msg=f"{n} at {c}")
-            np.testing.assert_allclose(run.read_level("th", c, 1), m2.read_level("th", c, 1),
-                                       rtol=1e-6)
-            np.testing.assert_allclose(run.read_level("UP_HELI_MAX", c), float(c))
-            np.testing.assert_allclose(run.heights(c, "msl", w=True),
-                                       m2.heights(c, "msl", w=True), atol=1e-4)
-            np.testing.assert_allclose(run.heights(c, w=True), m2.heights(c, w=True),
-                                       atol=1e-4)
-        run.clear_cache()  # (columns from the files, then from the cached volume)
-        np.testing.assert_allclose(run.read_box("th", 1, 0, 2, 0, 2)[:, 0, 0],
-                                   302.1 + np.arange(NK), rtol=1e-6)
-        run.volume("th", 1)
-        np.testing.assert_allclose(run.read_box("th", 1, 0, 2, 0, 2)[:, 0, 0],
-                                   302.1 + np.arange(NK), rtol=1e-6)
-        prof = run.mean_profiles(["th", "prs0"], 2)
-        np.testing.assert_allclose(prof["th"], 302.2 + np.arange(NK), rtol=1e-6)
-        np.testing.assert_allclose(prof["prs0"], 1.0e5 - 1000.0 * np.arange(NK))
-        # derived fields: from the mean state
-        F, F2 = Fields(run), Fields(m2)
-        for n in ("thpert", "wmax", "sbcape"):
-            np.testing.assert_allclose(F.plane(n, 2), F2.plane(n, 2), rtol=1e-5, atol=1e-5)
-    finally:
-        if run._pool is not None:
-            run._pool.shutdown()
+    for c in range(NC):
+        for n in ("th", "prs", "qv", "uinterp", "vinterp", "winterp", "dbz", "zagl",
+                  "zmsl", "th0", "u0", "qv0"):
+            np.testing.assert_allclose(run.volume(n, c), m2.volume(n, c), rtol=1e-6,
+                                       atol=1e-5, err_msg=f"{n} at {c}")
+        np.testing.assert_allclose(run.read_level("th", c, 1), m2.read_level("th", c, 1),
+                                   rtol=1e-6)
+        np.testing.assert_allclose(run.read_level("UP_HELI_MAX", c), float(c))
+        np.testing.assert_allclose(run.heights(c, "msl", w=True),
+                                   m2.heights(c, "msl", w=True), atol=1e-4)
+        np.testing.assert_allclose(run.heights(c, w=True), m2.heights(c, w=True),
+                                   atol=1e-4)
+    run.clear_cache()  # (columns from the files, then from the cached volume)
+    np.testing.assert_allclose(run.read_box("th", 1, 0, 2, 0, 2)[:, 0, 0],
+                               302.1 + np.arange(NK), rtol=1e-6)
+    run.volume("th", 1)
+    np.testing.assert_allclose(run.read_box("th", 1, 0, 2, 0, 2)[:, 0, 0],
+                               302.1 + np.arange(NK), rtol=1e-6)
+    prof = run.mean_profiles(["th", "prs0"], 2)
+    np.testing.assert_allclose(prof["th"], 302.2 + np.arange(NK), rtol=1e-6)
+    np.testing.assert_allclose(prof["prs0"], 1.0e5 - 1000.0 * np.arange(NK))
+    # derived fields: from the mean state
+    F, F2 = Fields(run), Fields(m2)
+    for n in ("thpert", "wmax", "sbcape"):
+        np.testing.assert_allclose(F.plane(n, 2), F2.plane(n, 2), rtol=1e-5, atol=1e-5)
 
 
 def test_mean_source_split():
@@ -667,29 +659,25 @@ def test_mean_reports_members_and_stops_when_cancelled(wofs_root, workers):
     explicit cancelled argument still makes load_volumes return False."""
     from cm1view.core.run import Cancelled, reporting
     run = models.open_run(os.path.join(wofs_root, "mean"), workers=workers)
-    try:
-        seen = []
-        with reporting(lambda d, n, w: seen.append((d, n, w))):
-            run.volume("th", 1)
-        assert seen and seen[-1][0] == 1 and seen[-1][1] == 1
-        whats = [w for _, _, w in seen]
-        assert all(w.startswith("th") for w in whats)
-        assert any(w.endswith("members") and "/3 " in w for w in whats)
-        with pytest.raises(Cancelled):
-            with reporting(None, cancelled=lambda: True):
-                run.volume("qv", 2)
-        assert run.cached("qv", 2) is None
-        assert run.load_volumes(["qv"], 2, cancelled=lambda: True) is False
-        assert run.volume("qv", 2).shape == (NK, NJ, NI)  # (and then reads in full)
-        # explicit progress and the block's both hear the reads
-        mine, block = [], []
-        run.clear_cache()
-        with reporting(lambda *a: block.append(a)):
-            run.load_volumes(["prs"], 0, progress=lambda *a: mine.append(a))
-        assert mine and all(a in block for a in mine)
-    finally:
-        if run._pool is not None:
-            run._pool.shutdown()
+    seen = []
+    with reporting(lambda d, n, w: seen.append((d, n, w))):
+        run.volume("th", 1)
+    assert seen and seen[-1][0] == 1 and seen[-1][1] == 1
+    whats = [w for _, _, w in seen]
+    assert all(w.startswith("th") for w in whats)
+    assert any(w.endswith("members") and "/3 " in w for w in whats)
+    with pytest.raises(Cancelled):
+        with reporting(None, cancelled=lambda: True):
+            run.volume("qv", 2)
+    assert run.cached("qv", 2) is None
+    assert run.load_volumes(["qv"], 2, cancelled=lambda: True) is False
+    assert run.volume("qv", 2).shape == (NK, NJ, NI)  # (and then reads in full)
+    # explicit progress and the block's both hear the reads
+    mine, block = [], []
+    run.clear_cache()
+    with reporting(lambda *a: block.append(a)):
+        run.load_volumes(["prs"], 0, progress=lambda *a: mine.append(a))
+    assert mine and all(a in block for a in mine)
 
 
 def test_map_says_the_mean_is_being_read(wofs_root):
@@ -736,7 +724,7 @@ def test_map_boundaries_and_lat_lon(wofs_root):
         v.geo_step.value = 0.25
         s = v.session_state()
         assert s["boundaries"] == dict(kinds=["counties"], color="#000000", width=2.0,
-                                       grid=True, step=0.25)
+                                       grid=True, step=0.25, inset=True)
     finally:
         v.close()
     v = A.Viewer(run, F, reg=reg)

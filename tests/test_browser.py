@@ -120,13 +120,11 @@ def test_map_and_a_sounding(ff, server, shots):
     time.sleep(1)
     x, y, w, h = map_canvas(ff)
     click(ff, x + w * 0.70, y + h * 0.25)  # the environment, ahead of the storm
-    assert until(lambda: rects(ff, ".zv"), 120), "no sounding graphics"
-    time.sleep(2)
+    assert until(lambda: rects(ff, ".cv-maptitle"), 120), "no sounding"
+    time.sleep(3)  # (the skew-T and profiles are Bokeh figures: drawn with the page)
     ff.shot(f"{shots}/b_sounding.png")
-    z = rects(ff, ".zv")[0]
-    click(ff, z[0] + z[2] / 2, z[1] + z[3] / 2)  # expanded view
-    time.sleep(3)
-    ff.shot(f"{shots}/c_expanded.png")
+    sizes = [r for r in rects(ff, "canvas") if r[2] > 100 and r[3] > 100]
+    assert len(sizes) >= 8, "skew-T, hodograph and five profile panels not drawn"
 
 
 def test_workspaces_fill_a_short_window(ff, server):

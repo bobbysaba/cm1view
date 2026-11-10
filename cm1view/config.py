@@ -91,7 +91,7 @@ KEYS = [
         "room for the pressure decomposition.", kind="auto_float", restart=True,
         advanced=True),
     Key("workers", "server", "auto", "Reader processes",
-        "Parallel file readers. auto = the CPUs this job was given (at most 8).",
+        "Parallel file readers. auto = the CPUs this job was given (at most 16).",
         kind="auto_int", restart=True, advanced=True),
     Key("port", "server", 5006, "Port",
         "Server port; the next free one is used if it is taken.", kind="int",
@@ -533,6 +533,50 @@ def job_memory_gb():
     return limit / 1024**3
 
 
+def _job_cgroup():
+    """(folder, limit file, the two memory.stat rows) of the memory cgroup that limits
+    this job, or None where nothing does (a laptop, a node with no memory limit)."""
+    try:
+        lines = [line.strip().split(":", 2) for line in open("/proc/self/cgroup")]
+    except OSError:
+        return None
+    for line in lines:
+        if len(line) < 3:
+            continue
+        _, ctl, rel = line
+        if ctl == "":  # cgroup v2
+            base, names = "/sys/fs/cgroup", ("memory.max", "anon", "shmem")
+        elif "memory" in ctl.split(","):  # cgroup v1
+            base = "/sys/fs/cgroup/memory"
+            names = ("memory.limit_in_bytes", "total_rss", "total_shmem")
+        else:
+            continue
+        d = os.path.normpath(base + "/" + rel)
+        while d.startswith(base):  # (the limit can be set on a parent)
+            try:
+                if int(open(os.path.join(d, names[0])).read()) < 1 << 50:
+                    return (d, *names)
+            except (OSError, ValueError):  # ("max", or no such file here)
+                pass
+            d = os.path.dirname(d)
+    return None
+
+
+def job_memory_used_gb():
+    """Memory the job's processes hold now: this process, the readers and the fields
+    cached in shared memory, without the file cache (which the system gives back).
+    None where no cgroup limits the job."""
+    cg = _job_cgroup()
+    if cg is None:
+        return None
+    d, _, *rows = cg
+    try:
+        stat = dict(line.split()[:2] for line in open(os.path.join(d, "memory.stat")))
+        return sum(int(stat[r]) for r in rows) / 1024**3
+    except (OSError, KeyError, ValueError):
+        return None
+
+
 def job_cpus():
     try:
         return len(os.sched_getaffinity(0))
@@ -554,7 +598,7 @@ def workers():
     v = get("workers")
     if v != "auto":
         return int(v), "set"
-    n = max(1, min(8, job_cpus()))
+    n = max(1, min(16, job_cpus()))
     return n, f"auto: {n} of {job_cpus()} CPUs"
 
 

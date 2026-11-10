@@ -44,10 +44,12 @@ processes and renders figures.
 
 | File | Covers |
 |---|---|
-| `test_fields.py` | Derived fields, shared reads, the cache, the base state |
+| `test_fields.py` | Derived fields, shared reads, the cache, the base state; levels read together, volumes in slabs, parts of fields larger than the cache |
+| `test_pool.py` | The shared reader processes: one pool for every run, files kept open, the scan of a run's files, work spread to a width, reading ahead over times |
+| `test_timing.py` | The timing hooks of `--timing` and `cm1view bench`, the log summary |
 | `test_map.py` | Map, cross-section and 3D: layers, differences, streamlines, the region and floor |
 | `test_streamlines.py` | The 3D streamline tracer on analytic winds, and the 3D pane's restyle echo |
-| `test_sounding.py` | Soundings, comparison styles, zoom and the hover data |
+| `test_sounding.py` | Soundings, comparison styles, and the data the browser-drawn graphics get |
 | `test_tracking.py` | Automatic and hand-placed tracking, save and load, storm-following soundings |
 | `test_session.py` | Session files: save, load, rows and values a run cannot take, another run's session; soundings, section, 3D, series and distributions back |
 | `test_export.py` | netCDF export: values == the volumes / map planes, heights, box, stop, missing times, the dialog, `cm1view export` |
@@ -73,10 +75,13 @@ cm1view/                  config.py (settings: file, precedence, save folders, r
                           registry.py (open runs shared by sessions, run discovery),
                           theme.py (colours and CSS), demo.py (synthetic CM1 runs for
                           cm1view --demo and the tests), __main__.py (command line; `render` goes
-                          to figures/batch.py, `export` to core/export.py)
+                          to figures/batch.py, `export` to core/export.py), bench.py
+                          (`cm1view bench`: the viewer's actions timed without a browser)
 
 core/                     model output, no UI
   run.py                  file discovery, staggered->scalar reads, 3D cache, parallel reads
+                          (levels together, parts of fields, reading ahead over times)
+  pool.py                 the one set of reader processes every run and tool shares
   fields.py               field catalog, derived fields, colormaps
   thermo.py               parcel theory (numba), kinematics, composite parameters
   sounding_plot.py        skew-T / hodograph / profiles / parameter table
@@ -105,7 +110,7 @@ viewer/                   the interactive page (Panel / Bokeh)
   layout.py               Viewer mixin: panels, top bar, toolbars, the main column
   events.py               Viewer mixin: time, playback, tool modes, map clicks and drags
   ui.py                   shared UI pieces: constants, figure styling, drawers, tool rail
-  sounding.py             Viewer mixin: soundings, their graphics, style and zoom
+  sounding.py             Viewer mixin: soundings, their graphics and style
   tracking.py             Viewer mixin: storm tracking and the storm chip
   series.py               Viewer mixin: the Series panel and plots
   dist.py                 Viewer mixin: the Distribution panel, plots and statistics
@@ -119,7 +124,10 @@ viewer/                   the interactive page (Panel / Bokeh)
   view3d.py               Viewer mixin: 3D scene, pressure-decomposition button, streamlines
                           (picking, the card, pins; the pointer is followed in the browser)
   items.py                Viewer mixin: the items tray
-  zoomview.py             zoomable image component (sounding graphics)
+  skewt_view.py           skew-T + hodograph drawn in the browser (Bokeh)
+  profiles_view.py        the five profile panels drawn in the browser (Bokeh)
+  zoomview.py             the sounding parameter table component
+  timing.py               `--timing`: every update timed into a log; the hooks of bench
   numinput.py             FloatInput: a number box that keeps what you typed, tidy to 7
                           significant digits
   settings.py             settings window (first run and ⚙) and the overwrite prompt

@@ -10,7 +10,8 @@ A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widg
 
 import numpy as np
 import panel as pn
-from bokeh.models import ColumnDataSource, CustomJSHover
+from bokeh.models import ColumnDataSource, CustomJS, CustomJSHover, Range1d
+from bokeh.plotting import figure
 
 from ..core import geo as G
 
@@ -20,7 +21,7 @@ GEO_ON = list(G.SHOWN)  # shown at first
 GEO_COLOR = "#cbd5e1"
 # the session's "boundaries" entry: key -> Viewer attribute
 GEO_KEYS = (("kinds", "geo_kinds"), ("color", "geo_color"), ("width", "geo_width"),
-            ("grid", "geo_grid"), ("step", "geo_step"))
+            ("grid", "geo_grid"), ("step", "geo_step"), ("inset", "geo_inset"))
 
 # lat, lon of the hovered x, y: bilinear in a table of the projection over the domain
 # (the formatter of every "$x": "$x{lonlat}" gives lat, lon, any other format x)
@@ -38,9 +39,32 @@ return Math.abs(lat).toFixed(3) + "° " + (lat >= 0 ? "N" : "S") + ", "
      + Math.abs(lon).toFixed(3) + "° " + (lon >= 0 ? "E" : "W");
 """
 
+# the inset's box round the map's view: its corners through the lat/lon table (clamped
+# to the domain), into the inset's x = (lon - clon) cos(clat), y = lat
+INSET_JS = """
+const n = t.n, xs = [], ys = [];
+const ll = (x, y) => {
+  const fx = Math.min(Math.max((x - t.x0) / (t.x1 - t.x0), 0), 1) * (n - 1),
+        fy = Math.min(Math.max((y - t.y0) / (t.y1 - t.y0), 0), 1) * (n - 1);
+  const i = Math.min(Math.floor(fx), n - 2), j = Math.min(Math.floor(fy), n - 2),
+        a = fx - i, b = fy - j;
+  const g = (v) => (1 - a) * (1 - b) * v[j * n + i] + a * (1 - b) * v[j * n + i + 1]
+                 + (1 - a) * b * v[(j + 1) * n + i] + a * b * v[(j + 1) * n + i + 1];
+  xs.push((g(t.lon) - c[0]) * c[1]); ys.push(g(t.lat));
+};
+const x0 = xr.start, x1 = xr.end, y0 = yr.start, y1 = yr.end, m = 8;
+for (let k = 0; k <= m; k++) ll(x0 + (x1 - x0) * k / m, y0);
+for (let k = 0; k <= m; k++) ll(x1, y0 + (y1 - y0) * k / m);
+for (let k = 0; k <= m; k++) ll(x1 - (x1 - x0) * k / m, y1);
+for (let k = 0; k <= m; k++) ll(x0, y1 - (y1 - y0) * k / m);
+src.data = {x: xs, y: ys};
+"""
+INSET_KINDS = ("coastlines", "countries", "states", "lakes")
+
 
 class MapLines:
     geo = None  # the run's Geo (None: an idealized run, nothing here is built)
+    inset = None  # the locator map (a Bokeh pane floated over the map)
 
     def _build_geo(self, fig, hover):
         """Widgets and glyphs for the map on the Earth (nothing without Run.geo):
@@ -60,6 +84,8 @@ class MapLines:
         self.geo_step = pn.widgets.Select(
             name="Every", options={"Auto": 0.0, **{f"{s:g}°": s for s in G.STEPS}},
             value=0.0, width=80)
+        self.geo_inset = pn.widgets.Checkbox(name="Inset map", value=True,
+                                             margin=(5, 4, 12, 4))
         self.geo_r = {}
         for k in G.KINDS:
             x, y = self.geo.lines(k)
@@ -82,19 +108,73 @@ class MapLines:
         table = G.lonlat_table(self.geo, (x0, x1), (y0, y1), n=49)
         hover.tooltips = list(hover.tooltips) + [("lat, lon", "$x{lonlat}")]
         hover.formatters = {"$x": CustomJSHover(args=dict(t=table), code=LONLAT_JS)}
+        self._build_inset(fig, table)
         self._geo_style()
+
+    def _build_inset(self, fig, table):
+        """A small locator map (lon, lat; states and coasts round the domain) with the
+        domain's outline and the map's view on it, floated over the map's corner."""
+        x0, x1, y0, y1 = self.extent
+        lo, hi, la, lb = self.geo.box((x0, x1), (y0, y1))
+        clon, clat = 0.5 * (lo + hi), 0.5 * (la + lb)
+        k = max(np.cos(np.radians(clat)), 0.2)
+        h = max(6.0, 2.5 * (lb - la))  # half-height (degrees of lat)
+        w = 1.35 * h  # half-width (scaled degrees)
+        ins = figure(width=190, height=int(190 * h / w), tools="", toolbar_location=None,
+                     x_range=Range1d(-w, w), y_range=Range1d(clat - h, clat + h),
+                     background_fill_color="#0b0f17", border_fill_color="#0b0f17",
+                     outline_line_color="#475569", min_border=0)
+        ins.axis.visible = False
+        ins.grid.visible = False
+        for kind in INSET_KINDS:
+            lon, lat = G.lonlat_lines(kind, clon - w / k, clon + w / k, clat - h, clat + h)
+            ins.line((lon - clon) * k, lat, line_color="#94a3b8",
+                     line_width=0.8 if kind == "states" else 1.0,
+                     line_alpha=0.6 if kind == "states" else 0.9)
+        s = np.linspace(0.0, 1.0, 17)
+        ex = np.concatenate([x0 + (x1 - x0) * s, np.full(17, x1), x1 - (x1 - x0) * s,
+                             np.full(17, x0)])
+        ey = np.concatenate([np.full(17, y0), y0 + (y1 - y0) * s, np.full(17, y1),
+                             y1 - (y1 - y0) * s])
+        dl, da = self.geo.lonlat(ex, ey)
+        dl = clon + (dl - clon + 180.0) % 360.0 - 180.0
+        ins.patch((dl - clon) * k, da, fill_color="#f87171", fill_alpha=0.15,
+                  line_color="#f87171", line_width=1.5)
+        view = ColumnDataSource(dict(x=[], y=[]))
+        ins.line("x", "y", source=view, line_color="#fbbf24", line_width=1.5)
+        cb = CustomJS(args=dict(t=table, c=[clon, k], xr=fig.x_range, yr=fig.y_range,
+                                src=view), code=INSET_JS)
+        for r in (fig.x_range, fig.y_range):
+            r.js_on_change("start", cb)
+            r.js_on_change("end", cb)
+        fig.js_on_event("document_ready", cb)
+        
+        # Create the Bokeh pane without the absolute positioning styles
+        inset_map = pn.pane.Bokeh(ins, margin=0)
+
+        # Wrap it in a Panel Column and apply the styles to the wrapper
+        self.inset = pn.Column(
+            inset_map, 
+            margin=0, 
+            visible=True, 
+            styles={
+                "position": "absolute", "top": "64px", "left": "44px", "z-index": "20",
+                "border": "1px solid #475569", "border-radius": "4px", "overflow": "hidden"
+            }
+        )
 
     def _geo_bar(self, drawer):
         """The Boundaries pill and its drawer row (None without Run.geo)."""
         if self.geo is None:
             return None
         return drawer.add("geo", "Boundaries", self.geo_kinds, self.geo_color, self.geo_width,
-                          self.geo_grid, self.geo_step)
+                          self.geo_grid, self.geo_step, self.geo_inset)
 
     def _wire_geo(self):
         if self.geo is None:
             return
-        for w in (self.geo_kinds, self.geo_color, self.geo_width, self.geo_grid):
+        for w in (self.geo_kinds, self.geo_color, self.geo_width, self.geo_grid,
+                  self.geo_inset):
             w.param.watch(lambda e: self._geo_style(), "value")  # (glyph styles only)
         self.geo_step.param.watch(lambda e: self._geo_grid_lines(), "value")
 
@@ -109,6 +189,7 @@ class MapLines:
         if grid and not len(self.grid_src.data["x"]):
             self._geo_grid_lines()
         self.grid_r.visible = grid
+        self.inset.visible = bool(self.geo_inset.value)
         self.grid_r.glyph.update(line_color=c, line_width=max(0.5, 0.75 * w))
         for src, r in self.grid_lab.values():
             r.visible = grid

@@ -7,6 +7,67 @@ has a matching git tag.
 
 ### Viewer
 
+- A **cross-section with several layers computes them side by side** (extra fills, contours and vectors, up to 4 threads) instead of one after another.
+- A **new cross-section starts at once** when you move the line or step the time while the last one is still computing; before, it waited behind it.
+- **Saving an animation draws frames in parallel**: the data is still read in order, but the frames are drawn and encoded in the reader processes (most of `workers`, at most 8). A 3D scene animation, or one with a single worker, draws in one process as before.
+- A **cross-section reads ahead**: once drawn, the next time's fields (in the direction you last stepped) load in the background, so stepping on is a cache hit. Not while playing, and only when two times' fields fit in half the 3D cache.
+- The live **skew-T, hodograph and profile panels are drawn in the browser** (Bokeh): zoom, pan,
+  hover and save (PNG) are instant, and a new sounding sends only its profiles. The five profile
+  panels share one height axis. The old image zoom (drag a box, pan mode, − and ⟲ buttons, SVG
+  save, click to expand) is gone, as are the sounding zoom limits saved in sessions (old sessions
+  still open). The Figure workspace still uses matplotlib.
+- **Faster 3D reads**: each field is split into blocks of levels shared by all the reader
+  processes. The blocks are written straight into one shared array, with no temporary file to load
+  back. Up to 16 reader processes now (was 8); each holds only a few levels at a time.
+- **Faster column fields, derived maps and tracking on large output**: the levels they need
+  (every level of w for column-max w; the 2–5 km levels of w and ζ for updraft helicity; the two
+  levels around a height of each input of θe) are read together in the reader processes instead
+  of one after another. The sounding-parameter maps (CAPE, STP, ...) read only the columns they
+  compute. Small reads (under 16 MB) stay in the main process.
+- **Less memory and more threads for derived 3D fields**: a derived field's volume (θe, buoyancy,
+  ...) and a derivative's are computed a few levels at a time, on up to 8 threads, straight into
+  the array that is kept. The working memory is a few levels' worth instead of several copies of
+  the whole volume (θe: about ten). Cross-sections, distributions, azimuthal means, exports,
+  isosurfaces and column max/min of a g/kg field (qv, qc, ...) take the part they need before
+  converting units, instead of converting a copy of the whole volume each time.
+- **Work over many output times reads several times at once**: tracking reads the next times'
+  fields while it searches the current one (the track is the same; when it stops, the few times
+  read past its end are dropped), a swath or storm-following composite reads its outputs'
+  planes side by side, and azimuthal-mean composites and fields sampled along parcels do the
+  same where a time's volumes are small. Traced trajectories read the next output's winds while
+  a step is integrated, when three outputs' winds fit in half the 3D cache. At most 8 times at
+  once, most of `workers`, and no more than about 1 GB of reads in flight (a quarter of the 3D
+  cache if that is less), so on a very large grid it falls back to one time ahead. With one
+  worker everything runs in turn as before.
+- **Fields larger than the 3D cache are read in parts** instead of as whole volumes. When
+  what a request needs does not fit in half the 3D cache, a cross-section (in the viewer and
+  in figures, strips and differences too) reads only the columns along its line, up to its
+  top; a live sounding reads its box of columns, as a pinned one does; an azimuthal mean, a
+  distribution over a box and a data export read their box and levels; a field sampled along
+  parcels reads the columns around the parcels on the levels they span; and a column max or
+  min is reduced in the reader processes one level at a time. Derived fields and derivatives
+  are computed from those parts of their inputs (with the neighbours a gradient needs), so the
+  values are the same as from the volumes. Nothing changes for fields that fit: their volumes
+  are still read once and kept, so the next section or sounding at that time is instant. 3D
+  views, isosurfaces and traced trajectories still need whole volumes.
+- The **map planes kept in memory are bounded by size** as well as by number (40): at most 1/16 of
+  the 3D cache. On a 4000 x 4000 grid that is about 11 planes with the default 12 GB cache, where
+  40 planes took 2.5 GB.
+- **One set of reader processes for everything**, started when cm1view starts instead of at
+  the first 3D read. Every open run reads with it, and time series, animation frames and the
+  inputs of the pressure decomposition use it too instead of starting processes of their own, so
+  `workers` is the most processes busy at once. Series and animations leave a quarter of the
+  readers free, so the page keeps reading while they run. A reader keeps the last 3 files it
+  read open (closed before a file is written to), and a run of 24 or more files is scanned by
+  the readers the first time it is opened. If a reader dies (out of memory), new ones start at
+  the next read; before, reads failed until restart.
+- **`cm1view bench RUN`** times a fixed list of viewer actions on a run without a browser (map
+  steps, column fields, soundings and a section read whole and in parts, a 3D view, tracking and
+  a swath over `--window` outputs), split into reading and computing, and ends with the most
+  memory the job held (processes and cached fields); `cm1view RUN --timing` logs
+  every update of a real session, browser included (`cm1view bench --report FILE` summarizes
+  it). [Running on a cluster](hpc.md#how-fast-is-it-here) says how to use them to size a job,
+  and what a grid larger than the job's memory needs.
 - The run picker has a **model** box (*Auto-detect* or a model) and lists the runs of that model;
   `cm1view --model` and `cm1view export --model` do the same on the command line.
 - **WoFS and WRF ensemble output** opens: an experiment folder (date folders of cycle folders of

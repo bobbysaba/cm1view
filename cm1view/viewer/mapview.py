@@ -11,7 +11,7 @@ from functools import partial
 import numpy as np
 from bokeh.events import PanStart, RangesUpdate, SelectionGeometry, Tap
 from bokeh.models import (
-    BoxSelectTool, BoxZoomTool, ColorBar, ColumnDataSource, CustomJS, HoverTool,
+    BoxSelectTool, BoxZoomTool, ColorBar, ColumnDataSource, CustomJS, CustomJSHover, HoverTool,
     LinearColorMapper, PanTool, Range1d, ResetTool, SaveTool, WheelZoomTool,
 )
 from bokeh.plotting import figure
@@ -23,6 +23,20 @@ from ..core.run import Cancelled, FileBusy, MissingAtTime, reporting
 from ..core.fields import deriv_name, palette
 from ..theme import ACCENT, BG, GRID, MUTED
 from .ui import EMPTY_LINES, EMPTY_VEC, KEEP_ASPECT_JS, _cbar_label, _html, style_fig
+
+
+# value of an image pixel from its uint16 code (render.image_codes); the range is in the source
+DECODE_JS = """
+const c = value, d = src.data
+if (!(c > 0)) return "NaN"
+return (d.lo[0] + (c - 1) / 65534 * (d.hi[0] - d.lo[0])).toFixed(3)
+"""
+
+
+def _code_mapper(pal):
+    """Colours uint16 image codes: 1..65535 span the palette, 0 (no value) is clear."""
+    return LinearColorMapper(palette=pal, low=1, high=65535, low_color="#00000000",
+                             nan_color="#00000000")
 
 
 class MapView:
@@ -55,10 +69,14 @@ class MapView:
 
         self.mapper = LinearColorMapper(palette=palette("reflectivity"), low=0, high=75,
                                         nan_color="#00000000")
-        self.img_src = ColumnDataSource(dict(image=[np.full((2, 2), np.nan, np.float32)],
-                                             x=[x0], y=[y0], dw=[x1 - x0], dh=[y1 - y0]))
+        # the image holds uint16 codes (render.image_codes): its own mapper works in code
+        # space; self.mapper (values) serves the colorbar and the filled bands
+        self.code_mapper = _code_mapper(palette("reflectivity"))
+        self.img_src = ColumnDataSource(dict(image=[np.zeros((2, 2), np.uint16)], lo=[0.0],
+                                             hi=[1.0], x=[x0], y=[y0], dw=[x1 - x0],
+                                             dh=[y1 - y0]))
         self.img_r = fig.image(image="image", x="x", y="y", dw="dw", dh="dh",
-                               source=self.img_src, color_mapper=self.mapper)
+                               source=self.img_src, color_mapper=self.code_mapper)
         self.poly_src = ColumnDataSource(dict(xs=[], ys=[], val=[]))
         self.poly_r = fig.multi_polygons(xs="xs", ys="ys", source=self.poly_src,
                                          fill_color=transform("val", self.mapper),
@@ -71,7 +89,9 @@ class MapView:
         for _ in self.vecs:
             self._vec_glyphs(fig)
         hover = HoverTool(renderers=[self.img_r],
-                          tooltips=[("x, y", "$x{0.0}, $y{0.0} km"), ("value", "@image{0.000}")])
+                          tooltips=[("x, y", "$x{0.0}, $y{0.0} km"), ("value", "@image{custom}")],
+                          formatters={"@image": CustomJSHover(args=dict(src=self.img_src),
+                                                              code=DECODE_JS)})
         self._build_geo(fig, hover)  # (boundaries, lat/lon lines: runs with a map projection)
 
         self.box_src = ColumnDataSource(dict(left=[], right=[], bottom=[], top=[]))
@@ -153,11 +173,12 @@ class MapView:
         fig = self.fig
         mapper = LinearColorMapper(palette=palette("viridis"), low=0, high=1,
                                    nan_color="#00000000")
-        src = ColumnDataSource(dict(image=[np.full((2, 2), np.nan, np.float32)],
+        code_mapper = _code_mapper(palette("viridis"))
+        src = ColumnDataSource(dict(image=[np.zeros((2, 2), np.uint16)], lo=[0.0], hi=[1.0],
                                     **{k: self.img_src.data[k] for k in ("x", "y", "dw", "dh")}))
         poly_src = ColumnDataSource(dict(xs=[], ys=[], val=[]))
         img = fig.image(image="image", x="x", y="y", dw="dw", dh="dh", source=src,
-                        color_mapper=mapper)
+                        color_mapper=code_mapper)
         poly = fig.multi_polygons(xs="xs", ys="ys", source=poly_src,
                                   fill_color=transform("val", mapper), line_color=None,
                                   visible=False)
@@ -171,7 +192,7 @@ class MapView:
                         major_label_text_color=MUTED, major_tick_line_color=None,
                         bar_line_color=None)
         fig.add_layout(cbar, "right")
-        self.fill_r.append(dict(mapper=mapper, src=src, poly_src=poly_src, img=img,
+        self.fill_r.append(dict(mapper=mapper, code_mapper=code_mapper, src=src, poly_src=poly_src, img=img,
                                 poly=poly, cbar=cbar))
 
     def _ov_glyphs(self, fig=None):
@@ -281,6 +302,7 @@ class MapView:
         if self._hold or self._applying:
             return
         self.gen["map"] += 1
+        self._asked_view = self.view  # (_on_resized: the same view needs no second render)
         g, spec = self.gen["map"], self._map_spec()
         self.pools["map"].submit(self._map_job, spec, g)
 
@@ -378,6 +400,7 @@ class MapView:
         if fill:
             self._last_range = (fill["lo"], fill["hi"])
             self.mapper.update(palette=fill["palette"], low=fill["lo"], high=fill["hi"])
+            self.code_mapper.palette = fill["palette"]
             if fill["style"] == "image":
                 self.img_src.data = fill["image"]
                 self.poly_src.data = dict(xs=[], ys=[], val=[])
@@ -396,6 +419,7 @@ class MapView:
                 g["img"].visible = g["poly"].visible = False
                 continue
             g["mapper"].update(palette=fres["palette"], low=fres["lo"], high=fres["hi"])
+            g["code_mapper"].palette = fres["palette"]
             g["cbar"].title = F[f["var"]].name
             image = fres["style"] == "image"
             if image:

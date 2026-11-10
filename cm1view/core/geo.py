@@ -322,3 +322,40 @@ def lonlat_table(geo, xlim, ylim, n=33):
     return dict(x0=float(xlim[0]), x1=float(xlim[1]), y0=float(ylim[0]), y1=float(ylim[1]),
                 n=n, lon=[round(float(v), 5) for v in lon.ravel()],
                 lat=[round(float(v), 5) for v in lat.ravel()])
+
+
+def lonlat_lines(kind, lo, hi, la, lb, res=0.05):
+    """Boundary lines of one layer (KINDS) in lon, lat (degrees) over the box lon lo..hi,
+    lat la..lb, thinned to about `res` degrees (for a small locator map): lon, lat
+    float32, lines separated by NaN, points outside the box dropped.  Lons are
+    unwrapped into lo..hi where that box passes 180 W/E."""
+    n, bb, q, start = _layer(kind)
+    out_x, out_y = [], []
+    for shift in (-360.0, 0.0, 360.0):
+        ids = np.flatnonzero((bb[:, 0] + shift <= hi) & (bb[:, 2] + shift >= lo)
+                             & (bb[:, 1] <= lb) & (bb[:, 3] >= la))
+        if not len(ids):
+            continue
+        idx = np.concatenate([np.arange(start[i], start[i] + n[i]) for i in ids])
+        line = np.repeat(np.arange(len(ids)), n[ids])
+        lon, lat = q[0, idx] / Q + shift, q[1, idx] / Q
+        r = np.floor(lon / res) * 1e5 + np.floor(lat / res)  # thin: one point per cell
+        new = np.ones(len(idx), bool)
+        new[1:] = (r[1:] != r[:-1]) | (line[1:] != line[:-1])
+        inside = (lon >= lo) & (lon <= hi) & (lat >= la) & (lat <= lb)
+        keep = np.flatnonzero(new & inside)
+        if len(keep) < 2:
+            continue
+        # a break where the kept points are not on one line or skip an outside point
+        out = ~inside
+        skipped = np.add.reduceat(out.astype(np.int64), keep[:-1])  # outside points between
+        brk = (line[keep[1:]] != line[keep[:-1]]) | (skipped > 0)
+        m = len(keep) + int(brk.sum())
+        pos = np.arange(len(keep)) + np.concatenate([[0], np.cumsum(brk)])
+        ox, oy = np.full(m, np.nan, np.float32), np.full(m, np.nan, np.float32)
+        ox[pos], oy[pos] = lon[keep], lat[keep]
+        out_x += [ox, np.float32([np.nan])]
+        out_y += [oy, np.float32([np.nan])]
+    if not out_x:
+        return np.zeros(0, np.float32), np.zeros(0, np.float32)
+    return np.concatenate(out_x), np.concatenate(out_y)

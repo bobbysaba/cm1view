@@ -509,15 +509,35 @@ def _strip(run, vol, fi, fj, zq, across, width, t=None):
     """render.sample_section (at time t: a terrain run's heights), or with width (km)
     > 0 its mean over lines parallel to the section within width / 2 either side
     (about one per grid column, at most 21; under the ground of any line: blank);
-    across: the unit vector across the section (grid x, y)."""
+    across: the unit vector across the section (grid x, y).  vol: the volume, or a
+    function giving columns (render.section_columns: every line's in one read)."""
     if not width or width <= 0:
         return render.sample_section(run, vol, fi, fj, zq, t)
     dxk, dyk = run.dx / 1000.0, run.dy / 1000.0
     n = int(min(21, max(3, round(width / min(dxk, dyk)) + 1)))
-    secs = [render.sample_section(run, vol, fi + o * across[0] / dxk,
-                                  fj + o * across[1] / dyk, zq, t)
-            for o in np.linspace(-0.5 * width, 0.5 * width, n)]
+    lines = [(fi + o * across[0] / dxk, fj + o * across[1] / dyk)
+             for o in np.linspace(-0.5 * width, 0.5 * width, n)]
+    vols = [vol] * n
+    if callable(vol):
+        cols = vol(np.concatenate([a for a, _ in lines]), np.concatenate([b for _, b in lines]))
+        vols = [lambda *_, c=cols[:, m * fi.size:(m + 1) * fi.size]: c for m in range(n)]
+    secs = [render.sample_section(run, v, a, b, zq, t) for v, (a, b) in zip(vols, lines)]
     return np.mean(secs, axis=0).astype(np.float32)
+
+
+def xsec_names(run, F, layers):
+    """The run's 3D fields a cross-section panel with these layers reads."""
+    names = []
+    for lay in layers:
+        if not lay.get("on", True):
+            continue
+        if lay["type"] in ("fill", "contour", "shade"):
+            names += F.native_deps(lay["field"])
+        elif lay["type"] == "vectors":
+            names += vectors.deps(F, lay.get("vector", "wind"))
+    if run.terrain:  # (each column on its own heights, above sea level)
+        names.append("zmsl")
+    return [n for n in dict.fromkeys(names) if n in run.vars]
 
 
 def _extract_xsec(run, F, spec, i, t, center, fixes, storm, out, progress):
@@ -529,17 +549,16 @@ def _extract_xsec(run, F, spec, i, t, center, fixes, storm, out, progress):
         return
     xs = spec["xsec"]
     layers = figdraw.spec_layers(spec, i)
-    names = []
-    for lay in layers:
-        if not lay.get("on", True):
-            continue
-        if lay["type"] in ("fill", "contour", "shade"):
-            names += F.native_deps(lay["field"])
-        elif lay["type"] == "vectors":
-            names += vectors.deps(F, lay.get("vector", "wind"))
-    if run.terrain:  # (each column on its own heights, above sea level)
-        names.append("zmsl")
-    run.load_volumes([n for n in names if n in run.vars], t, progress=progress)
+    names = xsec_names(run, F, layers)
+    # the layers' volumes where they fit the 3D cache together; else each layer reads
+    # only the columns along the line
+    shown = [lay["field"] for lay in layers if lay.get("on", True)
+             and lay["type"] in ("fill", "contour", "shade")]
+    shown += [c for lay in layers if lay.get("on", True) and lay["type"] == "vectors"
+              for c in vectors.fields(lay.get("vector", "wind"))]
+    whole = F.fits(shown + (["zmsl"] if run.terrain else []), t)
+    if whole:
+        run.load_volumes(names, t, progress=progress)
     s, fi, fj, (ex, ey) = render.section_coords(run, *ends)
     dz = float(xs.get("dz", 0.025))
     z0, ztop, ground = render.section_span(run, fi, fj, float(xs["ztop"]))
@@ -558,13 +577,17 @@ def _extract_xsec(run, F, spec, i, t, center, fixes, storm, out, progress):
         if not lay.get("on", True):
             continue
         if lay["type"] in ("fill", "contour", "shade"):
-            out[f"L{j}"] = _strip(run, F.volume(lay["field"], t, storm), fi, fj, zq,
-                                  across, width, t)
+            out[f"L{j}"] = F.take(lay["field"], t, lambda v: _strip(
+                run, v, fi, fj, zq, across, width, t), storm) if whole else _strip(
+                run, render.section_columns(F, lay["field"], t, zq, storm), fi, fj, zq,
+                across, width, t)
         elif lay["type"] == "vectors":
             q = lay.get("vector", "wind")  # in the plane: along-section and vertical
             u, v, w = (np.zeros((zq.size, s.size), np.float32) if a is None else
                        _strip(run, a, fi, fj, zq, across, width, t)
-                       for a in vectors.volumes(F, q, t))
+                       for a in (vectors.volumes(F, q, t) if whole else [
+                           c and render.section_columns(F, c, t, zq)
+                           for c in vectors.VECTORS[q].comps]))
             if vectors.VECTORS[q].framed:
                 u, v = vectors.to_frame(run, u, v, lay["frame"], storm)
             if lay.get("style") == "streamlines":

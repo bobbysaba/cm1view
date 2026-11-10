@@ -8,6 +8,8 @@ import panel as pn
 
 from ..core import vectors, volume3d
 from ..core.fields import CMAPS
+from .profiles_view import ProfilesView
+from .skewt_view import SkewTView
 from .zoomview import ParamTable
 from ..theme import BG, CSS, GRID, PANEL
 from .numinput import FloatInput
@@ -21,9 +23,12 @@ class Layout:
     def _build_panels(self):
         F, run = self.F, self.run
         g3 = F.groups(ndim=3)
-        self.skew_png = self._zoom_image("skewt_hodograph.svg",
-                                         styles={"flex": "1 1 640px", "min-width": "0"})
-        self.prof_png = self._zoom_image("profiles.svg")
+        # the live skew-T + hodograph, drawn in the browser (viewer.skewt_view)
+        self.skew_view = SkewTView()
+        self.skew_view.panel.param.update(visible=False,
+                                          styles={"flex": "1 1 640px", "min-width": "0"})
+        self.prof_view = ProfilesView()  # the five profile panels (viewer.profiles_view)
+        self.prof_view.panel.visible = False
         self.params = ParamTable(stylesheets=[CSS], sizing_mode="stretch_width",
                                  styles={"flex": "1 1 380px", "min-width": "0"})
         self.snd_head = _html(
@@ -32,7 +37,7 @@ class Layout:
             sizing_mode="stretch_width")
         self.snd_msg = _html(sizing_mode="stretch_width")
         self.snd_tabs = pn.Tabs(sizing_mode="stretch_width", dynamic=False, visible=False)
-        self._snd_tab_names = []
+        self._snd_tab_names, self._snd_tab_views = [], []
         self.prof_row = pn.Row(
             _html('<div class="cv-hint" style="margin:8px 0 0 4px">Profile panels below '
                   'go up to</div>'), self.prof_top,
@@ -41,9 +46,9 @@ class Layout:
         # skew-T and table side by side when there is room (expanded view)
         self.snd_col = pn.Column(
             self.snd_head, self.snd_tabs,
-            pn.FlexBox(self.skew_png, self.params, flex_wrap="wrap", gap="4px 16px",
+            pn.FlexBox(self.skew_view.panel, self.params, flex_wrap="wrap", gap="4px 16px",
                        align_items="flex-start", sizing_mode="stretch_width"),
-            self.prof_row, self.prof_png, sizing_mode="stretch_width")
+            self.prof_row, self.prof_view.panel, sizing_mode="stretch_width")
 
         # ---- 3D
         iso_defaults = [("dbz", 30.0, "#7dd3fc", 0.22, True),
@@ -278,7 +283,9 @@ class Layout:
                 self.dist_plot, self.dist_table, scroll="y-auto",
                 sizing_mode="stretch_both")),
             ("Parcels", self._par_layout()),
-            sizing_mode="stretch_both", dynamic=False, margin=0,
+            # dynamic: a tab's models are made when it is first opened (the page then
+            # carries the Sounding tab only: half the models of the whole page)
+            sizing_mode="stretch_both", dynamic=True, margin=0,
             # (only the floor: a flex basis of 0 here left the panel empty)
             styles={"min-height": "0"},
             # no tab strip: the tool rail picks the panel (_show_panel). The tabs' row
@@ -403,24 +410,30 @@ class Layout:
             self.map_bar, _bokeh(self.fig, sizing_mode="stretch_both",
                                         styles=dict(FILL, position="relative",
                                                     **{"z-index": "0"})),
-            self.items_bar, caption, sizing_mode="stretch_both",
+            self.items_bar, caption,
+            *([self.inset] if getattr(self, "inset", None) is not None else []),
+            sizing_mode="stretch_both",
             styles={"position": "relative", "flex": "1 1 55%", "min-width": "0"})
         self.map_ws = pn.Row(self.rail, map_area, self.panel_col,
                              sizing_mode="stretch_width", margin=0,
                              styles=FILL)
         self.plot3d.margin = 0
         self.plot3d.styles = dict(FILL, position="relative", **{"z-index": "0"})
+        # the 3D and Figure workspaces are put on the page when first opened (_on_workspace:
+        # their models are a fifth of the page); the quick start stays, for any early call
+        self._lazy = {
+            "3D": lambda: self.v3_ws.extend([
+                self.v3_bar, self.plot3d,
+                pn.Column(self.v3_status, styles=dict(floor, left="12px", bottom="12px"),
+                          margin=0), self.sl_card]),
+            "Figure": lambda: self.fig_ws.insert(0, self.figed.shell.panel)}
         self.v3_ws = pn.Column(
-            self.v3_bar, self.plot3d,
-            pn.Column(self.v3_status, styles=dict(floor, left="12px", bottom="12px"),
-                      margin=0),
-            self.sl_card,
             sizing_mode="stretch_width", visible=False, margin=0,
             styles=dict(FILL, position="relative"))
         err = _html(f'<div class="cv-status" style="color:#f87171;padding:4px 8px">'
                     f'{self.error}</div>') if self.error else None
         objs = [o for o in (err,) if o is not None]
-        self.fig_ws = pn.Column(self.figed.shell.panel, out_of_flow(self.figed.quick),
+        self.fig_ws = pn.Column(out_of_flow(self.figed.quick),
                                 sizing_mode="stretch_width", visible=False,
                                 margin=0, styles=dict(FILL, position="relative"))
         return pn.Column(self._top_bar(), *objs, self.map_ws, self.v3_ws, self.fig_ws,
@@ -431,8 +444,7 @@ class Layout:
                                            "display": "flex", "flex-direction": "column"})
 
     def _set_full(self, on):
-        """Analysis panel over the whole window (map hidden); the sounding graphics
-        become zoomable.  The button turns into 'Map' to come back."""
+        """Analysis panel over the whole window (map hidden).  The button turns into 'Map' to come back."""
         self.full = on
         self.map_area.visible = not on
         if on:
@@ -441,8 +453,6 @@ class Layout:
                                      flex="1 1 100%" if on else "1 1 48%")
         self.full_btn.param.update(name="Map" if on else "",
                                    icon="arrows-minimize" if on else "arrows-maximize")
-        for z in self._zoom_images():
-            z.interactive = on
 
     def _show_panel(self, show, tab=None):
         """Show (or close) the panel, on tab `tab`.  The tool rail follows the panel:
@@ -459,6 +469,9 @@ class Layout:
 
     def _on_workspace(self, ev):
         is3d, isfig = ev.new == "3D", ev.new == "Figure"
+        fill = self._lazy.pop(ev.new, None)  # (its first opening: put it on the page)
+        if fill is not None:
+            fill()
         self.v3_ws.visible, self.fig_ws.visible = is3d, isfig
         self.map_ws.visible = not (is3d or isfig)
         if is3d and self.box is None:

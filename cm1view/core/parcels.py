@@ -65,7 +65,7 @@ from collections import OrderedDict
 import numpy as np
 import netCDF4
 
-from .run import IO_LOCK, temp_name
+from .run import IO_LOCK, ahead, ahead_width, temp_name
 
 CACHE_DIR = None  # None: <cache_dir setting>/parcels (tests point this elsewhere)
 GAP = 1 << 20  # parcels: read through gaps between wanted IDs shorter than this
@@ -513,13 +513,25 @@ class ParcelFile:
             return out
         acc = np.zeros(out.shape, dtype=np.float32)
         seen = np.zeros(self.nt, dtype=bool)
-        for n, (k, (ii, ww)) in enumerate(wts.items()):
+
+        def at(item):  # (the field at the parcels' positions around 3D output k)
+            k, (ii, _) = item
             x, y, z = (tr[c][ii] for c in POS)
             ok = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
             vals = np.full(x.shape, np.nan, dtype=np.float32)
-            if ok.any():
-                vals[ok] = F.at_points(field, k, lambda vol, k=k: sample_points(
+            if ok.any() and (run.terrain or F.fits([field], k)):
+                vals[ok] = F.at_points(field, k, lambda vol: sample_points(
                     run, vol, x[ok], y[ok], z[ok], k))
+            elif ok.any():  # (too large for the 3D cache: the columns around them)
+                vals[ok] = F.at_levels(
+                    field, k, (x[ok] - run.xh[0]) / (run.dx / 1000.0),
+                    (y[ok] - run.yh[0]) / (run.dy / 1000.0),
+                    np.interp(z[ok], run.z, np.arange(run.nk, dtype=np.float64)))
+            return vals
+
+        # several 3D outputs at once where their volumes are small, added in their order
+        width = ahead_width(run, F.read_bytes(field))
+        for n, ((k, (ii, ww)), vals) in enumerate(ahead(at, wts.items(), width)):
             acc[ii] += ww[:, None] * vals
             seen[ii] = True
             if progress is not None:

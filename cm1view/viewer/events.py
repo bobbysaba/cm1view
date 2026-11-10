@@ -6,16 +6,18 @@ A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widg
 
 from functools import partial
 
+import numpy as np
 import panel as pn
 
 from ..core import vectors, volume3d
 from ..core.fields import deriv_options
 from .diff import DIFF_CMAP
-from .zoomview import ZoomImage
 from .ui import PANELS, held
 
 
 class Events:
+    _step_dir = 1  # the direction of the last step (the read-ahead goes that way)
+
     def _on_time(self, ev):
         """Every time change (drag, step, playback) updates the map."""
         self._update_time_html()
@@ -42,6 +44,7 @@ class Events:
     def _step(self, d):
         if self.playing:
             self._on_play(None)
+        self._step_dir = 1 if d > 0 else -1
         self.tslider.value = (self.t + d) % (self.tslider.end + 1)
         self._refresh_panels()
 
@@ -113,20 +116,6 @@ class Events:
             return False
         self._show_panel(True, tab)
         return True
-
-    def _zoom_image(self, filename, **kw):
-        z = ZoomImage(filename=filename, interactive=self.full, sizing_mode="stretch_width",
-                      visible=kw.pop("visible", False), **kw)
-        z.param.watch(lambda e: self._set_full(True), "clicks")  # click: expand
-        z.param.watch(partial(self._on_zoom_box, z), "box")
-        z.param.watch(partial(self._on_zoom_pan, z), "pan")
-        z.param.watch(lambda e: self._on_zoom_out(z), "zoom_out")
-        z.param.watch(lambda e: self._on_zoom_reset(z), "resets")
-        return z
-
-    def _zoom_images(self):
-        return [self.skew_png, self.prof_png] + [
-            z for tab in self.snd_tabs for z in tab if isinstance(z, ZoomImage)]
 
     def _on_pick_region(self, ev):
         self.workspace.value = "Map"
@@ -299,8 +288,11 @@ class Events:
         range values arrive in the same message, so read them on the next tick)."""
         def update():
             xr, yr = self.fig.x_range, self.fig.y_range
+            old = self._asked_view
             self.view = (float(xr.start), float(xr.end), float(yr.start), float(yr.end))
-            self.request_map()
+            # (the page load re-fits the map several times to the same view: one render)
+            if old is None or not np.allclose(self.view, old, rtol=1e-9, atol=1e-9):
+                self.request_map()
             if self.box is None:
                 self._update_region_html()
         self._schedule(update)

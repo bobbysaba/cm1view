@@ -3,6 +3,7 @@
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
 import numpy as np
@@ -279,6 +280,8 @@ class SectionPanel:
         self.gen["xs"] += 1
         g = self.gen["xs"]
         spec = self.xs_spec()
+        if spec["t"] != self._pre_t:  # a jump: the read-ahead was for another time
+            self.gen["pre"] += 1
         self.xs_status.object = '<div class="cv-status"><span class="busy">● Computing ' \
                                 'cross-section…</span></div>'
         self.pools["xs"].submit(self._xs_job, spec, g)
@@ -312,6 +315,20 @@ class SectionPanel:
         spec["fnote"] = self._storm_note(self._xs_names(spec), self.t)
         return spec
 
+    _pre_t = None  # the time the read-ahead is for
+
+    def _xs_read_ahead(self, names, t, g):
+        """With the section's fields in, read the next time's (in the direction of the
+        last step) in the background; not while playing."""
+        t2 = t + self._step_dir
+        if self.playing or self._closed or not 0 <= t2 < len(self.run.times):
+            return
+        self._pre_t = t2
+        self.gen["pre"] += 1
+        gp = self.gen["pre"]
+        self.pools["pre"].submit(self._prefetch, list(names), t2,
+                                 lambda: gp != self.gen["pre"] or self.playing)
+
     def _xs_job(self, spec, g):
         if g != self.gen["xs"]:
             return
@@ -333,13 +350,27 @@ class SectionPanel:
                         f'<div class="cv-status"><span class="busy">● Loading 3D fields '
                         f'({done}/{total}) {name}…</span></div>'))
 
-            if not run.load_volumes(names, t, progress=prog,
-                                    cancelled=lambda: g != self.gen["xs"]):
-                return
+            # the fields' volumes where they fit the 3D cache together (later sections
+            # at this time are then instant); else only the columns along the line
+            shown = self._xs_names(spec) + [c for o in spec["vecs"] if o["on"]
+                                            for c in vectors.fields(o["q"])]
+            whole = F.fits(shown + (["zmsl"] if run.terrain else []), t)
+            if whole:
+                if not run.load_volumes(names, t, progress=prog,
+                                        cancelled=lambda: g != self.gen["xs"]):
+                    return
+                self._xs_read_ahead(names, t, g)
+            else:
+                self._schedule(partial(
+                    setattr, self.xs_status, "object",
+                    '<div class="cv-status"><span class="busy">● Reading the columns '
+                    'along the section (its fields are larger than the 3D cache)…'
+                    '</span></div>'))
             m = spec["minus"] and self._minus_ref(spec["minus"], t)
             if m:  # (a difference: the fill of the other run / time it subtracts)
                 spec = dict(spec, minus=m)
-                if spec["fill"] in m["F"] and not m["F"].run.load_volumes(
+                if spec["fill"] in m["F"] and m["F"].fits([spec["fill"]], m["t"]) \
+                        and not m["F"].run.load_volumes(
                         m["F"].native_deps(spec["fill"]), m["t"], progress=prog,
                         cancelled=lambda: g != self.gen["xs"]):
                     return
@@ -348,8 +379,7 @@ class SectionPanel:
             zq = np.linspace(z0, top, max(120, int((top - z0) / 0.04)))
 
             def sample(name):
-                return render.sample_section(run, F.volume(name, t, spec["fstorm"]),
-                                             fi, fj, zq, t)
+                return render.section_field(F, name, t, fi, fj, zq, spec["fstorm"], whole)
 
             def fill(name, f, m=None):
                 a = sample(name)
@@ -360,34 +390,47 @@ class SectionPanel:
                           if f["auto"] else (f["vmin"], f["vmax"]))
                 return render.fill_bands(s, zq, a, lo, max(hi, lo + 1e-6), f)
 
-            out = dict(s=s, zq=zq, ground=ground, fill=fill(spec["fill"], spec, m))
-            # more fills drawn over the first; clip: clear outside their range
-            out["fills"] = [fill(f["var"], f) if f["on"] else None for f in spec["fills"]]
-            out["ov"] = []
-            for o in spec["ov"]:
-                if not o["on"]:
-                    out["ov"].append(None)
-                    continue
+            def overlay(o):
                 c = sample(o["var"])
                 lv = render.parse_levels(o["levels"], *F.auto_range(o["var"], c))
-                out["ov"].append(dict(pos=render.contour_lines(s, zq, c, lv[lv >= 0]),
-                                      neg=render.contour_lines(s, zq, c, lv[lv < 0])))
+                return dict(pos=render.contour_lines(s, zq, c, lv[lv >= 0]),
+                            neg=render.contour_lines(s, zq, c, lv[lv < 0]))
+
             W, H = spec["px"]
             aspect = (W * (top - z0)) / (max(s[-1], 1e-6) * H)
-            out["vecs"] = []
-            for o in spec["vecs"]:
-                if not o["on"]:
-                    out["vecs"].append(None)
-                    continue
+
+            def vec(o):
                 # in the plane: the along-section and vertical components
                 u, v, w = (np.zeros((zq.size, s.size), np.float32) if a is None else
                            render.sample_section(run, a, fi, fj, zq, t)
-                           for a in vectors.volumes(F, o["q"], t))
+                           for a in (vectors.volumes(F, o["q"], t) if whole else [
+                               c and render.section_columns(F, c, t, zq)
+                               for c in vectors.VECTORS[o["q"]].comps]))
                 if vectors.VECTORS[o["q"]].framed:
                     u, v = vectors.to_frame(run, u, v, o["frame"], spec["storm"])
-                out["vecs"].append(render.section_vectors(
+                return render.section_vectors(
                     s, zq, u * ex + v * ey, w, n_across=o["density"], aspect=aspect,
-                    ref_speed=o["ref"]))
+                    ref_speed=o["ref"])
+
+            # the layers are independent: sampling (scipy) and contouring (contourpy)
+            # let go of the GIL, so they run side by side; the first fill stays here
+            work = [("fill", f) for f in spec["fills"] if f["on"]] + \
+                   [("ov", o) for o in spec["ov"] if o["on"]] + \
+                   [("vec", o) for o in spec["vecs"] if o["on"]]
+            call = dict(fill=lambda f: fill(f["var"], f), ov=overlay, vec=vec)
+            if len(work) > 1:
+                with ThreadPoolExecutor(min(4, len(work))) as tp:
+                    futs = {id(o): tp.submit(call[k], o) for k, o in work}
+                    out = dict(s=s, zq=zq, ground=ground,
+                               fill=fill(spec["fill"], spec, m))
+                    got = {i: f.result() for i, f in futs.items()}
+            else:
+                out = dict(s=s, zq=zq, ground=ground, fill=fill(spec["fill"], spec, m))
+                got = {id(o): call[k](o) for k, o in work}
+            # (more fills drawn over the first; clip: clear outside their range)
+            out["fills"] = [got[id(f)] if f["on"] else None for f in spec["fills"]]
+            out["ov"] = [got[id(o)] if o["on"] else None for o in spec["ov"]]
+            out["vecs"] = [got[id(o)] if o["on"] else None for o in spec["vecs"]]
             if any(pdecomp.is_pdecomp(F, n) for n in self._xs_names(spec)):
                 pdecomp.source(run, t)  # file version tag, off the page thread
             res = out

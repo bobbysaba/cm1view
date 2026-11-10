@@ -96,11 +96,11 @@ def metric_field(run, t, metric, zkm=1.0, cancelled=None, field=None, fields=Non
     uh = np.zeros((run.nj, run.ni), np.float32)
     wmax = np.full((run.nj, run.ni), -np.inf, np.float32)
     zmax = np.full((run.nj, run.ni), -np.inf, np.float32)
+    lv = run.read_levels(["winterp", "zvort"], t, ks, cancelled=cancelled)
+    if lv is None:  # (cancelled)
+        return None, None
     for n, k in enumerate(ks):
-        if cancelled and cancelled():
-            return None, None
-        w = run.read_level("winterp", t, int(k))
-        zeta = run.read_level("zvort", t, int(k))
+        w, zeta = lv["winterp"][n], lv["zvort"][n]
         if run.terrain:
             inside = dzs[n] > 0  # (dz 0 outside the layer)
             uh += w * zeta * dzs[n]
@@ -189,20 +189,36 @@ def track(run, t0, x0, y0, opts, direction="both", existing=None, on_fix=None,
     / last when missing) bounding the tracked times.  `existing` fixes ({t: fix}) on
     the side not being tracked are kept.  on_fix(fixes) is called after every new
     fix.  Returns {t: fix}."""
+    from .run import ahead, ahead_width
+
     fixes = dict(existing or {})
     lo, hi = opts.get("t_from", 0), opts.get("t_to", len(run.times) - 1)
     sgn = -1.0 if sense(opts) == "min" else 1.0
+    metric = opts["metric"]
+    if metric in ("pmin", "field"):
+        fields = _fields(run, fields)  # (one for every time)
 
-    def get(t, x, y, snap=True, whole=False):
-        f, ex = metric_field(run, t, opts["metric"], opts["zkm"], cancelled,
-                             opts.get("field"), fields)
-        if f is None:
-            return None
-        return locate(run, f, ex, x, y, opts, snap, whole)
+    def field_at(t):  # (the same whatever the fixes before it: read ahead of them)
+        return metric_field(run, t, metric, opts["zkm"], cancelled, opts.get("field"),
+                            fields)
 
-    first = get(t0, x0, y0, opts.get("snap", True), whole=x0 is None)
+    f, ex = field_at(t0)
+    first = None if f is None else locate(run, f, ex, x0, y0, opts, opts.get("snap", True),
+                                          whole=x0 is None)
+    del f, ex
     if first is None:
         return fixes
+    # the times ahead being read while one is searched: by what each reads
+    per = 4 * run.nj * run.ni
+    if metric == "uh":
+        nbytes = 2 * per * max(1, int(np.sum((np.asarray(run.z) >= UH_LAYER[0])
+                                             & (np.asarray(run.z) <= UH_LAYER[1]))))
+    elif metric in ("pmin", "field"):
+        nbytes = fields.read_bytes("prspert" if metric == "pmin" else opts.get("field"),
+                                   "height")
+    else:
+        nbytes = 2 * per
+    width = ahead_width(run, nbytes)
     if direction == "forward":
         fixes = {t: f for t, f in fixes.items() if t < t0}
     elif direction == "backward":
@@ -218,29 +234,34 @@ def track(run, t0, x0, y0, opts, direction="both", existing=None, on_fix=None,
     done = 0
     for s in steps:
         t = t0
-        while lo <= t + s <= hi:
-            if cancelled and cancelled():
-                return fixes
-            tn = t + s
-            # extrapolate with the grid-relative motion of the last two fixes
-            px, py = fixes[t]["x"], fixes[t]["y"]
-            if t - s in fixes:
-                dt_prev = run.times[t] - run.times[t - s]
-                dt_next = run.times[tn] - run.times[t]
-                if dt_prev:
-                    px += (fixes[t]["x"] - fixes[t - s]["x"]) * dt_next / dt_prev
-                    py += (fixes[t]["y"] - fixes[t - s]["y"]) * dt_next / dt_prev
-            if progress:
-                progress(done, total, tn)
-            fx = get(tn, px, py)
-            done += 1
-            if fx is None or not _beyond(fx["value"], opts.get("stop"), sgn):
-                break
-            fx["source"] = "auto"
-            fixes[tn] = fx
-            if on_fix:
-                on_fix(dict(fixes))
-            t = tn
+        coming = ahead(field_at, range(t0 + s, hi + 1 if s > 0 else lo - 1, s), width)
+        try:
+            while lo <= t + s <= hi:
+                if cancelled and cancelled():
+                    return fixes
+                tn = t + s
+                # extrapolate with the grid-relative motion of the last two fixes
+                px, py = fixes[t]["x"], fixes[t]["y"]
+                if t - s in fixes:
+                    dt_prev = run.times[t] - run.times[t - s]
+                    dt_next = run.times[tn] - run.times[t]
+                    if dt_prev:
+                        px += (fixes[t]["x"] - fixes[t - s]["x"]) * dt_next / dt_prev
+                        py += (fixes[t]["y"] - fixes[t - s]["y"]) * dt_next / dt_prev
+                if progress:
+                    progress(done, total, tn)
+                _, (f, ex) = next(coming)
+                fx = None if f is None else locate(run, f, ex, px, py, opts)
+                done += 1
+                if fx is None or not _beyond(fx["value"], opts.get("stop"), sgn):
+                    break
+                fx["source"] = "auto"
+                fixes[tn] = fx
+                if on_fix:
+                    on_fix(dict(fixes))
+                t = tn
+        finally:
+            coming.close()  # (stops the reads of the times past the last fix)
     return fixes
 
 

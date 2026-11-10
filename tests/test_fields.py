@@ -6,6 +6,7 @@ import threading
 
 import netCDF4
 import numpy as np
+import pytest
 
 from cm1view import config
 from cm1view.core import track as trk
@@ -367,3 +368,172 @@ def test_own_heights_helpers_match_one_profile(reg):
     vol = F.volume("winterp", T)
     assert np.array_equal(render.sample_section(run, vol, fi, fj, zq),
                           render.sample_section(run, vol, fi, fj, zq, T))
+
+
+def test_levels_read_together_match_single_levels(demo_run, monkeypatch):
+    """Run.read_levels (several fields' levels at once, in the reader processes when
+    they are worth it) gives what read_level gives one level at a time: staggered
+    fields, levels out of order, a subset of the columns, a cached field; and
+    read_heights what read_height gives."""
+    from cm1view.core import run as R
+    T, ks = 4, [3, 4, 5, 9, 2]
+    names = ["th", "u", "v", "w"]
+    rows, cols = np.array([0, 5, 6, 20]), np.array([1, 2, 30])
+    run = R.CM1Run(demo_run, cache_gb=1, workers=2)
+    ref = {n: np.stack([run.read_level(n, T, k) for k in ks]) for n in names}
+    for least in (R.BLOCK_BYTES, 0):  # (read here; then in the reader processes)
+        monkeypatch.setattr(R, "BLOCK_BYTES", least)
+        got = run.read_levels(names, T, ks)
+        assert list(got) == names and run._vc.info()[1] == 0  # (nothing cached)
+        assert (run._pool_uses > 0) == (least == 0)
+        sub = run.read_levels(names, T, ks, rows, cols)
+        for n in names:
+            assert got[n].dtype == np.float32
+            np.testing.assert_allclose(got[n], ref[n], rtol=1e-6, atol=1e-6)
+            np.testing.assert_allclose(sub[n], ref[n][:, rows][:, :, cols],
+                                       rtol=1e-6, atol=1e-6)
+        assert run.read_levels(names, T, ks, cancelled=lambda: True) is None
+    run.load_volumes(["th"], T)
+    np.testing.assert_array_equal(run.read_levels(["th"], T, ks, rows, cols)["th"],
+                                  ref["th"][:, rows][:, :, cols])
+    hs = run.read_heights(["w", "u", "cref"], T, 1.3)
+    for n in ("w", "u", "cref"):
+        np.testing.assert_allclose(hs[n], run.read_height(n, T, 1.3), rtol=1e-6,
+                                   atol=1e-6)
+
+
+def test_volumes_in_slabs_match_whole_volumes(reg, monkeypatch):
+    """A derived volume and a derivative's, computed slab by slab on threads
+    (fields.by_slabs), are the values of the whole volume computed at once."""
+    from cm1view.core import fields as FF
+    T, run = 4, reg.get()[0]
+
+    def drop():  # (the derived volumes kept in the 3D cache)
+        run._vc.drop(lambda k: k[0] == run.path and k[2] == T and k[1].startswith("~"))
+
+    drop()
+    names = ["thetae", "hdiv", "buoy", "ddz.winterp", "ddz.qv", "ddx.thetae", "gradh.qv"]
+    whole = {}
+    for n in names:  # (the demo's volume is one slab)
+        whole[n] = FF.Fields(run).volume(n, T).copy()
+    drop()
+    level = len(run.yh) * len(run.xh)
+    for cells in (level, 3 * level):  # (a level a slab; three)
+        monkeypatch.setattr(FF, "SLAB_CELLS", cells)
+        assert len(FF.slabs((len(run.z), len(run.yh), len(run.xh)))) > 4
+        F = FF.Fields(run)
+        for n in names:
+            a = F.volume(n, T)
+            assert a.dtype == np.float32 and np.array_equal(a, whole[n], equal_nan=True), n
+        drop()
+    w = np.asarray(run.volume("winterp", T), np.float64)
+    assert np.allclose(whole["ddz.winterp"], np.gradient(w, run.z, axis=0),
+                       rtol=1e-4, atol=1e-3)
+
+
+def test_take_scales_the_part_taken(reg):
+    """Fields.take / raw: part of a scaled native (qv, g/kg) without a scaled copy of
+    the volume, the same values as the part of volume()."""
+    from cm1view.core import fields as FF
+    run = reg.get()[0]
+    T, F = 4, FF.Fields(run)
+    vol, scale = F.raw("qv", T)
+    assert vol is run.volume("qv", T) and float(scale) == 1000.0
+    assert np.array_equal(F.take("qv", T, lambda v: v[2:5, 3:9, 4]),
+                          F.volume("qv", T)[2:5, 3:9, 4])
+    assert F.raw("thpert", T)[0] is F.volume("thpert", T)
+    assert np.array_equal(F.plane("qv", T, "colmax"), F.volume("qv", T).max(axis=0))
+
+
+def test_planes_kept_within_a_byte_budget(reg, monkeypatch):
+    from cm1view.core import fields as FF
+    F = FF.Fields(reg.get()[0])
+    one = F.plane("winterp", 4, "level", 0).nbytes
+    monkeypatch.setattr(FF, "PLANE_SHARE", 1 << 60)  # (the floor is the budget)
+    monkeypatch.setattr(FF, "PLANE_BYTES", 3 * one)
+    for k in range(1, 6):
+        F.plane("winterp", 4, "level", k)
+    assert len(F._planes) == 3 and F._plane_bytes == 3 * one
+    assert [k[3] for k in F._planes] == [3.0, 4.0, 5.0]
+    F.forget(4, ["winterp"])
+    assert not F._planes and F._plane_bytes == 0
+
+
+def test_parts_of_fields_match_their_volumes(reg, demo_run, monkeypatch):
+    """A request too large for the 3D cache reads parts: a box, columns along a line,
+    points and the column max / min of a field (native, staggered, scaled, derived,
+    with gradients, a derivative) are its volume's values, and no volume is read.  With
+    reads small enough to stay in this process, then in the reader processes."""
+    from scipy.ndimage import map_coordinates
+    from cm1view.core import fields as FF, render, run as R
+    T, G = 2, reg.get()[1]
+    run = R.CM1Run(demo_run, cache_gb=1, workers=2)
+    F = FF.Fields(run)
+    assert F.fits(["thetae", "ddz.zstretch"], T) and run.fits(run.cache_bytes // 2)
+    monkeypatch.setattr(run, "fits", lambda nbytes: False)
+    assert not F.fits(["th"], T) and F.fits(["cref"], T)  # (a 2D field: no volume)
+    rng = np.random.default_rng(0)
+    fi, fj = rng.uniform(-1, run.ni, 200), rng.uniform(-1, run.nj, 200)
+    fk = rng.uniform(0, run.nk - 1, 200)
+    fk[:2] = 0, run.nk - 1
+    kk = np.repeat(np.arange(run.nk)[:, None], fi.size, axis=1)
+    line = np.stack([kk, np.broadcast_to(fj, kk.shape), np.broadcast_to(fi, kk.shape)])
+    s, sfi, sfj, _ = render.section_coords(run, (run.xh[2], run.yh[3]),
+                                           (run.xh[-4], run.yh[-9]))
+    zq = np.linspace(0.0, 6.0, 90)
+    for block in (R.BLOCK_BYTES, 1):
+        monkeypatch.setattr(R, "BLOCK_BYTES", block)
+        uses = run._pool_uses
+        for n in ("th", "qv", "w", "u", "thetae", "hdiv", "wstream", "zstretch",
+                  "ddz.winterp", "ddx.thetae", "gradh.hdiv"):
+            vol = G.volume(n, T)
+            tol = dict(rtol=1e-5, atol=1e-5 * max(1.0, float(np.abs(vol).max())))
+            assert np.array_equal(F.box(n, T, 3, 9, 5, 22, 0, 17), vol[3:9, 5:22, 0:17])
+            assert np.array_equal(F.crop(n, T, 0, run.nk, 90, run.nj, 80, run.ni),
+                                  vol[:, 90:, 80:])
+            want = map_coordinates(vol, line, order=1, mode="nearest")
+            np.testing.assert_allclose(F.along(n, T, fi, fj), want, **tol)
+            np.testing.assert_allclose(F.along(n, T, fi, fj, None, 4, 11), want[4:11], **tol)
+            np.testing.assert_allclose(
+                F.at_levels(n, T, fi, fj, fk),
+                map_coordinates(vol, np.stack([fk, fj, fi]), order=1, mode="nearest"), **tol)
+            F.clear_planes()
+            assert np.array_equal(F.plane(n, T, "colmax"), vol.max(axis=0))
+            assert np.array_equal(F.plane(n, T, "colmin"), vol.min(axis=0))
+            np.testing.assert_allclose(
+                render.section_field(F, n, T, sfi, sfj, zq, None, False),
+                render.section_field(G, n, T, sfi, sfj, zq, None, True), **tol)
+        assert block != 1 or run._pool_uses > uses
+    assert np.array_equal(run.reduce_levels("w", T, "max"), G.run.volume("w", T).max(axis=0))
+    assert run._vc.info()[1] == 0  # (no volume entered the cache)
+    assert F.along("th", T, [], []).shape == (run.nk, 0)
+    with pytest.raises(ValueError):
+        F.box("cref", T, 0, 1, 0, 4, 0, 4)
+
+
+def test_work_too_large_for_the_cache_matches(reg, demo_run, monkeypatch):
+    """An azimuthal mean, a distribution and an export of fields that do not fit the
+    3D cache are the ones made from their volumes."""
+    from cm1view.core import azim, dist, export, fields as FF, run as R
+    T, (ref, G) = 2, reg.get()
+    run = R.CM1Run(demo_run, cache_gb=1, workers=2)
+    F = FF.Fields(run)
+    monkeypatch.setattr(run, "fits", lambda nbytes: False)
+    c = (float(run.xh[40]), float(run.yh[50]))
+    for op in ("mean", "max"):
+        r = azim.normalize(dict(field="thetae", center="point", point=c, rmax=8, dr=1,
+                                z0=0, z1=4, op=op))
+        a = azim.compute(run, F, r, [1, 2], {1: c, 2: c}, {1: 0.0, 2: 0.0})
+        b = azim.compute(ref, G, r, [1, 2], {1: c, 2: c}, {1: 0.0, 2: 0.0})
+        assert np.array_equal(a["n"], b["n"])
+        np.testing.assert_allclose(a["v"], b["v"], rtol=1e-6)
+    box = [float(run.xh[10]), float(run.xh[30]), float(run.yh[20]), float(run.yh[60])]
+    for rec in (dict(field="qv", vmode="layer", z0=0.0, z1=3.0, region="box", box=box),
+                dict(field="hdiv", vmode="all", region="domain")):
+        r = dist.normalize(rec)
+        assert np.array_equal(dist.sample(run, F, r, T), dist.sample(ref, G, r, T))
+    p = export.plan(run, F, ["thetae", "qv"], [T], box=None, ztop=5.0)
+    for n in p["names"]:
+        assert np.array_equal(export._values(F, n, T, p, None),
+                              export._values(G, n, T, p, None))
+    assert run._vc.info()[1] == 0

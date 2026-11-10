@@ -15,6 +15,12 @@ def region(v, x0, x1, y0, y1):
         type="rect", x0=x0, x1=x1, y0=y0, y1=y1)})())
 
 
+def _same_image(data, want):
+    """The map's image (uint16 codes) holds `want` to one code step, clipped to its range."""
+    lo, hi = data["lo"][0], data["hi"][0]
+    np.testing.assert_allclose(render.decode_image(data), np.clip(want, lo, hi),
+                               atol=1.01 * (hi - lo) / (render.CODE_MAX - 1))
+
 def test_map_streamlines_follow_the_wind(viewer, reg):
     v = viewer
     run, F = reg.get()
@@ -299,7 +305,7 @@ def test_map_difference_minus_another_time_or_run(viewer, reg, demo_root):
     want = F.plane("winterp", 2, "height", lvl) - F.plane("winterp", 1, "height", lvl)
     win = render.view_window(run, v.view, v.maxpix)
     _, _, want = render._crop(run, want, win)
-    np.testing.assert_allclose(v.img_src.data["image"][0], want, atol=1e-5)
+    _same_image(v.img_src.data, want)
     lo, hi = v._last_range
     assert lo == -hi and (lo, hi) == render.diff_range(
         F.plane("winterp", 2, "height", lvl) - F.plane("winterp", 1, "height", lvl))
@@ -310,7 +316,7 @@ def test_map_difference_minus_another_time_or_run(viewer, reg, demo_root):
     wait(lambda: "of " in (v.map_title.object or ""), msg="other run")
     want = F.plane("winterp", 2, "height", lvl) - F2.plane("winterp", 2, "height", lvl)
     _, _, want = render._crop(run, want, win)
-    np.testing.assert_allclose(v.img_src.data["image"][0], want, atol=1e-5)
+    _same_image(v.img_src.data, want)
     # into a figure: the other run added, the layer a difference with the map's colours
     v.figed.from_map()
     s = v.figed.shell.doc
@@ -375,3 +381,26 @@ def test_difference_on_another_grid_is_interpolated():
     assert inside[:6, :6].all() and not inside[:, 6:].any() and not inside[6:, :].any()
     np.testing.assert_allclose(b[inside], A.a[inside], atol=1e-5)  # (a linear field)
     assert render.minus_plane(A, A, "f", 0, "height", 1.0) is A.a
+
+
+def test_image_codes_round_trip_and_leave_gaps_clear():
+    x, y = np.arange(4.0), np.arange(3.0)
+    a = np.linspace(-5, 20, 12).reshape(3, 4).astype(np.float32)
+    a[1, 2] = np.nan
+    d = render.image_codes(x, y, a, 0.0, 15.0)
+    c = d["image"][0]
+    assert c.dtype == np.uint16 and c[1, 2] == 0 and c.min() == 0
+    assert c[0, 0] == 1 and c[2, 3] == render.CODE_MAX  # below / above the range: its ends
+    _same_image(d, a)
+
+
+def test_page_carries_only_what_is_shown(viewer):
+    """Panel tabs are made on first opening; the 3D and Figure workspaces are put on the
+    page when first shown."""
+    assert viewer.tabs.dynamic
+    assert not viewer.v3_ws.objects and "Figure" in viewer._lazy
+    viewer.workspace.value = "3D"
+    assert viewer.v3_ws.objects and viewer.v3_ws.visible
+    viewer.workspace.value = "Figure"
+    assert viewer.figed.shell.panel in viewer.fig_ws.objects
+    viewer.workspace.value = "Map"

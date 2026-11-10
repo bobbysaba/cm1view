@@ -145,6 +145,12 @@ class _Fields:
     def volume(self, name, t, storm=None):
         return self.vols[name]
 
+    def raw(self, name, t, storm=None):
+        return self.vols[name], np.float32(1.0)
+
+    def take(self, name, t, fn, storm=None):
+        return fn(self.vols[name])
+
     def plane(self, name, t, mode, level, storm=None):
         return self.vols[name][int(np.searchsorted(Z, level))]
 

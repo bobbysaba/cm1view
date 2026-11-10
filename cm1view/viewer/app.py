@@ -9,6 +9,7 @@ events and makes the page; shared UI pieces are in ui.py, the Figure workspace i
 figures/editor.py."""
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
@@ -35,6 +36,7 @@ from .series import SeriesPanel
 from .session import Sessions
 from .session import read as read_session
 from .swap import RunSwap
+from . import timing
 from .parcels import ParcelsPanel
 from .tracking import TrackPanel
 from .view3d import View3DPanel
@@ -50,9 +52,13 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
         self.maxpix = maxpix
         self.error = error
         self.doc = pn.state.curdoc
-        self.pools = {k: ThreadPoolExecutor(1, thread_name_prefix=f"cm1view-{k}")
+        # one thread per tool; the cross-section has two, so a new section starts at once
+        # instead of waiting behind one nobody wants any more (its jobs check their
+        # generation, and reads of the same field are shared by Run's in-flight table)
+        self.pools = {k: ThreadPoolExecutor(2 if k == "xs" else 1,
+                                            thread_name_prefix=f"cm1view-{k}")
                       for k in ("map", "snd", "xs", "3d", "trk", "sl", "pd", "ser", "dist",
-                            "fig", "exp", "par", "pexp")}
+                            "fig", "exp", "par", "pexp", "pre")}
         self.gen = dict.fromkeys(self.pools, 0)
         # soundings: (kind, where, tpin) with kind "pt" (where = x, y km), "mean"
         # (where = None) or "trk" (where = offset from the tracked meso, km);
@@ -67,6 +73,7 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
         self.extent = (run.xh[0] - dxk / 2, run.xh[-1] + dxk / 2,
                        run.yh[0] - dyk / 2, run.yh[-1] + dyk / 2)
         self.view = self.extent
+        self._asked_view = None  # the view the latest map was asked for
         self._build_widgets()
         self._build_map()
         self._build_xsec()
@@ -138,15 +145,6 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
         for w in (self.xs_height, self.xs_font, self.xs_grid, self.xs_ab):
             w.param.watch(self._xs_look, "value")
 
-        def unzoom(*keys):
-            def f(*e):
-                for k in keys:
-                    self.snd_lim.pop(k, None)
-            return f
-        # zoom limits in wind units / below the profile top no longer fit
-        # (before the sounding request those changes also trigger)
-        self.wunits.param.watch(unzoom("hodo", "prof_x"), "value")
-        self.prof_top.param.watch(unzoom("prof_z", "prof_x"), "value")
         rx = lambda *e: self.request_xsec()  # noqa: E731
         for w in (self.xs_cmap, self.xs_rev, self.xs_fill_style):
             w.param.watch(rx, "value")
@@ -316,7 +314,7 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
         for p in self.pools.values():
             p.shutdown(wait=False, cancel_futures=True)
         config.off(self._on_config)
-        self._figs, self.results, self._snd_last, self._s3 = {}, [], None, None
+        self.results, self._snd_last, self._s3 = [], None, None
         self._closed = True
 
     _closed = False
@@ -346,9 +344,40 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
         if self._closed:  # session gone: late results are dropped
             return
         if self.doc is not None:
-            self.doc.add_next_tick_callback(fn)
+            self.doc.add_next_tick_callback(self._logged(fn))
         else:  # e.g. tests without a server
             fn()
+
+    @staticmethod
+    def _logged(fn):
+        """fn that prints its traceback if it raises (a failing page-thread callback
+        would otherwise be lost silently)."""
+        def run():
+            try:
+                return fn()
+            except Exception:  # noqa: BLE001
+                import traceback
+                traceback.print_exc()
+        return run
+
+    # read-ahead: after a section is drawn, the next time's fields are read in the
+    # background (stepping forward or back is then a cache hit).  At most this share of
+    # the cache budget may hold the current and the next time together.
+    PREFETCH_SHARE = 0.5
+
+    def _prefetch(self, names, t, cancelled=None):
+        """Worker thread: read `names` at time t into the cache, quietly.  Does nothing
+        if the time does not exist, or if the current and next fields would not fit."""
+        run = self.run
+        if not 0 <= t < len(run.times):
+            return
+        try:
+            need = 2 * len(names) * run.nk * run.nj * run.ni * 4
+            if need > self.PREFETCH_SHARE * run.cache_bytes():
+                return
+            run.load_volumes(names, t, cancelled=cancelled)
+        except Exception:  # noqa: BLE001  (missing at t, file being written, cancelled…)
+            pass
 
     def _set_status(self, html):
         self.status.object = f'<div class="cv-status">{html}</div>'
@@ -370,6 +399,7 @@ class Viewer(Widgets, MapView, MapLines, Layout, Events, SoundingPanel, TrackPan
 
 
 def create_app(reg, maxpix=None):
+    t_session = time.perf_counter()
     pn.extension("plotly", "modal", "tabulator", "codeeditor", notifications=False,
                  raw_css=[CSS])
     maxpix = maxpix or config.get("maxpix")
@@ -404,6 +434,8 @@ def create_app(reg, maxpix=None):
     else:
         v = Viewer(run, fields, maxpix=maxpix, error=error.strip(), reg=reg)
         pn.state.on_session_destroyed(lambda ctx: v.close())
+        if timing.LOG:  # (cm1view --timing)
+            timing.attach(v, t_session)
         if session is not None:
             # (a member switch's session, in the cache: not the one to save over)
             if not config.expand(ses).startswith(config.cache_dir("switch") + os.sep):

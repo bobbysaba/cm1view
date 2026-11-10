@@ -20,17 +20,22 @@ import re
 import threading
 import uuid
 from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 
 import numpy as np
 import netCDF4
+
+from . import pool
 
 # netCDF/HDF5 is not thread safe: every in-process read goes through this lock.
 IO_LOCK = threading.RLock()
 
 # staggered dimensions: CM1's own names (ni/nj/nk on scalar points) and the CF-style
 # ones of newer versions (xh/yh/zh on scalar points, xf/yf/zf staggered)
+# reader processes at most: each holds only a block of levels at a time (level_blocks),
+# so this is bounded by the CPUs worth using rather than memory
+MAX_READERS = 16
+
 STAG_DIMS = {"nip1": "x", "njp1": "y", "nkp1": "z", "xf": "x", "yf": "y", "zf": "z"}
 
 
@@ -80,6 +85,74 @@ def check_cancelled():
         raise Cancelled()
 
 
+AHEAD_BYTES = 1024**3  # most that a loop over times reads ahead of its use (ahead_width)
+
+
+def ahead_width(run, nbytes=0, cap=8):
+    """How many items of a loop over a run's times ahead() works on at once when each
+    reads about `nbytes`: most of the readers (pool.width), at most `cap`, and no more
+    than read AHEAD_BYTES together (a quarter of the 3D cache if that is less); at
+    least 1.  0 (each in turn, on the calling thread) for a run with one worker."""
+    workers = int(getattr(run, "workers", 1) or 1)
+    if workers <= 1:
+        return 0
+    room = min(AHEAD_BYTES, int(getattr(run, "cache_bytes", 4 * AHEAD_BYTES)) // 4)
+    return max(1, min(int(cap), pool.width(workers), room // max(1, int(nbytes))))
+
+
+def ahead(fn, items, width):
+    """(item, fn(item)) of every item, in order, with fn at work on the next `width`
+    items (each on a thread) while the caller uses one: for a loop over output times
+    whose reads do not depend on the time before.
+
+    Reads made by fn go to the reader processes even when they are single small levels
+    (in this process they would take IO_LOCK in turn and the times would not overlap).
+    fn's threads hear the caller's reporting() block.  Closing the generator drops the
+    items not started and cancels the reads of those that are (Cancelled, unseen).  An
+    exception of fn is raised when its item's turn comes.  width < 1: fn(item) in turn
+    on the calling thread, as a plain loop."""
+    if width < 1:
+        for x in items:
+            yield x, fn(x)
+        return
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    on = getattr(_hook, "on", None)
+    err = np.geterr()  # (numpy's error state is each thread's own: the caller's here)
+    closed = []
+
+    def stop():
+        return bool(closed) or bool(on and on[1] and on[1]())
+
+    def work(x):
+        _hook.on, _hook.ahead = (on[0] if on else None, stop), True
+        with np.errstate(**err):
+            return fn(x)
+
+    ex = ThreadPoolExecutor(int(width), thread_name_prefix="cm1view-ahead")
+    items, live = iter(items), deque()
+
+    def fill():
+        while len(live) < width:
+            try:
+                x = next(items)
+            except StopIteration:
+                return
+            live.append((x, ex.submit(work, x)))
+
+    try:
+        fill()
+        while live:
+            x, f = live.popleft()
+            r = f.result()
+            fill()  # (the next ones start before this one is used)
+            yield x, r
+    finally:
+        closed.append(True)
+        ex.shutdown(wait=False, cancel_futures=True)
+
+
 def _destagger(a, stag):
     """Average a (nk*, nj*, ni*) or (nj*, ni*) array onto scalar points."""
     if stag == "x":
@@ -108,14 +181,208 @@ def open_source(src):
     return src.open()
 
 
+KEEP_OPEN = 0  # output files kept open by opened(): set in the reader processes (pool)
+_kept = OrderedDict()  # (in a reader process) key -> open dataset, last used last
+
+
+def file_key(path):
+    """What tells one state of a file from another: its path, time of change and size."""
+    st = os.stat(path)
+    return (os.fspath(path), st.st_mtime_ns, st.st_size)
+
+
+def _keep_key(src):
+    """The key a reader keeps `src` open under, or None for one it does not keep: a
+    file's file_key; a model's own source says with .key() (none: not kept).  Its first
+    item names the source whatever state its files are in."""
+    try:
+        if isinstance(src, (str, os.PathLike)):
+            return file_key(src)
+        key = getattr(src, "key", None)
+        return key() if key else None
+    except OSError:
+        return None
+
+
+@contextmanager
+def opened(src):
+    """open_source(src) for the block, in a reader process left open afterwards (the
+    last KEEP_OPEN sources read): the many tasks of one time's fields then open its
+    file once per reader, not once each.  A file that changed since is opened anew.
+    pool.release() closes them all (before a file is written to)."""
+    key = _keep_key(src) if KEEP_OPEN > 0 else None
+    if key is None:
+        with open_source(src) as d:
+            yield d
+        return
+    d = _kept.pop(key, None)
+    if d is None:
+        for k in [k for k in _kept if k[0] == key[0]]:  # (as it was before it changed)
+            _kept.pop(k).close()
+        d = open_source(src)
+    try:
+        yield d
+    except BaseException:
+        d.close()
+        raise
+    _kept[key] = d
+    while len(_kept) > KEEP_OPEN:
+        _kept.popitem(last=False)[1].close()
+
+
+def close_kept():
+    """Close the sources opened() keeps open."""
+    while _kept:
+        _kept.popitem()[1].close()
+
+
 def _read_volume_worker(src, name, stag, outdir):
     """Process-pool worker: read one full 3D field, write it to tmpfs as .npy."""
-    with open_source(src) as d:
+    with opened(src) as d:
         a = np.asarray(d[name][0], dtype=np.float32)
     a = np.ascontiguousarray(_destagger(a, stag), dtype=np.float32)
     out = os.path.join(outdir, f"cm1view-{os.getpid()}-{uuid.uuid4().hex}.npy")
     np.save(out, a)
     return out
+
+
+def _read_block_worker(src, name, stag, path, k0, k1):
+    """Process-pool worker: levels k0:k1 (scalar points) of one 3D field, written in
+    place into `path`, the shared file that holds the whole float32 (nk, nj, ni) field
+    (see _SharedVolume).  A file already removed (the read was cancelled) is skipped."""
+    with opened(src) as d:
+        a = np.asarray(d[name][0, k0:k1 + (stag == "z")], dtype=np.float32)
+    _write_rows(path, np.ascontiguousarray(_destagger(a, stag), dtype=np.float32), k0)
+
+
+def _write_rows(path, a, row):
+    """Write float32 (n, ny, nx) `a` into the shared file `path` from its row `row` on
+    (a file already removed, the read cancelled, is skipped)."""
+    try:
+        f = open(path, "r+b")
+    except FileNotFoundError:
+        return
+    with f:
+        f.seek(row * a[0].nbytes)
+        a.tofile(f)
+
+
+def _level_runs(ks):
+    """[(k0, k1)] of the runs of consecutive levels in ks, in its order (k0..k1-1)."""
+    runs, p = [], 0
+    while p < len(ks):
+        q = p + 1
+        while q < len(ks) and ks[q] == ks[q - 1] + 1:
+            q += 1
+        runs.append((ks[p], ks[q - 1] + 1))
+        p = q
+    return runs
+
+
+def _levels(v, stag, ks, rows=None, cols=None, points=False):
+    """Levels ks of an open (time, z, y, x) variable on scalar points, float32
+    (len(ks), ny, nx): each run of consecutive levels is one read.  rows, cols: keep
+    only those rows and columns (index arrays), or with points only the columns
+    (rows[n], cols[n]) ((len(ks), n)); only the box around them is read."""
+    if rows is not None and not (len(rows) and len(cols)):
+        return np.zeros((len(ks), len(rows)) + (() if points else (len(cols),)), np.float32)
+    box = (slice(None), slice(None))
+    if rows is not None:
+        j0, i0 = int(rows.min()), int(cols.min())
+        box = (slice(j0, int(rows.max()) + 1 + (stag == "y")),
+               slice(i0, int(cols.max()) + 1 + (stag == "x")))
+        rows, cols = rows - j0, cols - i0
+    out = []
+    for k0, k1 in _level_runs(ks):
+        a = _destagger(np.asarray(v[(0, slice(k0, k1 + (stag == "z"))) + box],
+                                  dtype=np.float32), stag)
+        out.append(a if rows is None else a[:, rows, cols] if points
+                   else a[:, rows][:, :, cols])
+    a = out[0] if len(out) == 1 else np.concatenate(out)
+    return np.ascontiguousarray(a, dtype=np.float32)
+
+
+def _read_levels_worker(src, name, stag, path, p0, ks, rows, cols, points=False):
+    """Process-pool worker: levels ks of one 3D field (see _levels), written into
+    `path`, the shared file of all the levels asked for, from its row p0 on."""
+    with opened(src) as d:
+        a = _levels(d[name], stag, ks, rows, cols, points)
+    _write_rows(path, a, p0)
+
+
+def _reduce_block_worker(src, name, stag, path, row, k0, k1, op):
+    """Process-pool worker: the max or min (op) over levels k0:k1 of one 3D field, one
+    level in memory at a time, written as row `row` of the shared file `path`."""
+    f = np.maximum if op == "max" else np.minimum  # (NaN stays, as the volume's max)
+    out = None
+    with opened(src) as d:
+        v = d[name]
+        for k in range(k0, k1):
+            a = _destagger(np.asarray(v[0, k:k + 1 + (stag == "z")], dtype=np.float32),
+                           stag)[0]
+            out = a if out is None else f(out, a)
+    _write_rows(path, np.ascontiguousarray(out[None], dtype=np.float32), row)
+
+
+def _read_plane_worker(src, name, stag):
+    """Process-pool worker: a 2D field on scalar points (one plane: returned directly)."""
+    with opened(src) as d:
+        a = np.asarray(d[name][0], dtype=np.float32)
+    return np.ascontiguousarray(_destagger(a, stag), dtype=np.float32)
+
+
+BLOCK_BYTES = 16 * 1024**2  # least worth a reader task of its own (opening costs)
+FIT_SHARE = 2  # a request's volumes fit the 3D cache within this share of it (Run.fits)
+
+
+def level_blocks(shape, zchunk, nfields, workers):
+    """Level ranges [(k0, k1)] to split each of `nfields` 3D fields of `shape` (nk, nj,
+    ni) into so that `workers` readers share them: about two tasks per reader over all
+    the fields (so an uneven block does not keep the rest waiting), whole chunks of
+    `zchunk` levels, and no block under BLOCK_BYTES (a small field is one task)."""
+    nk = shape[0]
+    want = max(1, -(-2 * workers // max(1, nfields)))
+    least = -(-BLOCK_BYTES // max(1, 4 * shape[1] * shape[2]))
+    step = max(1, least, -(-nk // want))
+    if zchunk > 1:
+        step = -(-step // zchunk) * zchunk
+    return [(k, min(k + step, nk)) for k in range(0, nk, step)]
+
+
+class _SharedVolume:
+    """A float32 volume in a file on tmpfs that reader processes write their level
+    blocks into; array() maps it into this process without a copy.  The file is
+    removed by array() or discard(); the mapping outlives it (the memory is freed when
+    the last view of the array goes)."""
+
+    def __init__(self, outdir, shape):
+        self.shape = tuple(int(s) for s in shape)
+        nbytes = 4 * int(np.prod(self.shape))
+        self.path = os.path.join(outdir, f"cm1view-{os.getpid()}-{uuid.uuid4().hex}.vol")
+        self.fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            # reserve the space now: a full tmpfs fails here rather than as a crash
+            # (SIGBUS) of a reader writing into it
+            os.posix_fallocate(self.fd, 0, nbytes)
+        except BaseException:
+            self.discard()
+            raise
+
+    def array(self):
+        import mmap
+
+        mm = mmap.mmap(self.fd, 0)
+        self.discard()
+        return np.frombuffer(mm, np.float32).reshape(self.shape)
+
+    def discard(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
 
 
 def _drop_pending(futs):
@@ -147,14 +414,17 @@ def _box(v, stag, i0, i1, j0, j1):
 
 def _read_box_worker(src, name, stag, box):
     """Process-pool worker: columns of one 3D field (small: returned directly)."""
-    with open_source(src) as d:
+    with opened(src) as d:
         return _box(d[name], stag, *box)
 
 
-def _mean_profile_worker(src, name, stag):
-    """Process-pool worker: horizontal mean profile of one 3D field."""
-    with open_source(src) as d:
-        a = np.asarray(d[name][0], dtype=np.float32)
+def _mean_profile_worker(src, name, stag, k0=0, k1=None):
+    """Process-pool worker: horizontal mean profile of levels k0:k1 (all by default)
+    of one 3D field."""
+    with opened(src) as d:
+        v = d[name]
+        a = np.asarray(v[0] if k1 is None else v[0, k0:k1 + (stag == "z")],
+                       dtype=np.float32)
     return _destagger(a, stag).mean(axis=(1, 2), dtype=np.float64)
 
 
@@ -318,9 +588,10 @@ class Run:
         self._inflight_lock = threading.Lock()
         self._open = OrderedDict()  # tindex -> open dataset
         if workers is None:
-            workers = len(os.sched_getaffinity(0))
-        self.workers = max(1, min(int(workers), 8))
-        self._pool = None
+            from .. import config
+            workers = config.job_cpus()
+        self.workers = max(1, min(int(workers), MAX_READERS))
+        self._pool_uses = 0  # times this run went to the reader processes
         self._means = {}  # (name, tindex) -> domain-mean profile (nk,)
         self._shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
 
@@ -406,6 +677,27 @@ class Run:
         self._check(name, t)
         if info.ndim == 3 and info.zchunk > 4:  # a level costs several: read the volume
             return self.volume(name, t)[k]
+        if self.workers > 1 and self._shm and getattr(_hook, "ahead", False):
+            a = self._level_pooled(name, t, k)  # (a loop over times, reading ahead)
+            if a is not None:
+                return a
+        return self._level_here(name, t, k)
+
+    def _level_pooled(self, name, t, k):
+        """read_level in a reader process, for the reads of ahead(): several times'
+        levels are then read at once.  None when tmpfs has no room for it."""
+        self._not_writing(t)
+        info = self.vars[name]
+        if info.ndim == 2:
+            return self._get_pool().submit(_read_plane_worker, self.source(t), name,
+                                           info.stag).result()
+        check_cancelled()
+        a = (self._read_levels_pool([name], t, [int(k)], None, None, None) or {}).get(name)
+        return None if a is None else a[0]
+
+    def _level_here(self, name, t, k=0):
+        """read_level of a field not cached, read in this process."""
+        info = self.vars[name]
         with IO_LOCK:
             v = self._ds(t)[name]
             if info.ndim == 2:
@@ -471,10 +763,20 @@ class Run:
             if w == 0.0 or k1 == k0:
                 return a
             return (1.0 - w) * a + w * level(k1)
-        k0, k1, w, under = self.column_weights(t, zkm, ref)
+        return self._interp_columns(level, self.column_weights(t, zkm, ref))
+
+    @staticmethod
+    def _column_levels(cw):
+        """The levels column weights cw (column_weights) take values from."""
+        k0, k1, w, _ = cw
+        return [int(k) for k in np.union1d(np.unique(k0), np.unique(k1[w > 0]))]
+
+    def _interp_columns(self, level, cw):
+        """level(k) -> (nj, ni) plane, combined column by column with the weights cw."""
+        k0, k1, w, under = cw
         out = np.zeros(w.shape, dtype=np.float64)
-        for k in np.union1d(np.unique(k0), np.unique(k1[w > 0])):
-            a = np.asarray(level(int(k)), dtype=np.float64)
+        for k in self._column_levels(cw):
+            a = np.asarray(level(k), dtype=np.float64)
             m0, m1 = k0 == k, (k1 == k) & (w > 0)
             out[m0] += (1.0 - w[m0]) * a[m0]
             out[m1] += w[m1] * a[m1]
@@ -489,6 +791,188 @@ class Run:
             return self.read_level(name, t)
         return self.interp_height(lambda k: self.read_level(name, t, k), t, zkm, ref)
 
+    def read_heights(self, names, t, zkm, ref="agl"):
+        """{name: read_height(name, t, zkm, ref)} of several native fields, the levels
+        they need read together (read_levels)."""
+        names = list(dict.fromkeys(names))
+        out = {n: self.read_level(n, t) for n in names if self.vars[n].ndim == 2}
+        n3 = [n for n in names if n not in out]
+        if not n3:
+            return out
+        if not self.terrain:
+            k0, k1, w = self.level_weights(zkm)
+            one = w == 0.0 or k1 == k0
+            lv = self.read_levels(n3, t, [k0] if one else [k0, k1])
+            for n in n3:
+                out[n] = lv[n][0] if one else (1.0 - w) * lv[n][0] + w * lv[n][1]
+            return out
+        cw = self.column_weights(t, zkm, ref)
+        ks = self._column_levels(cw)
+        at = {k: i for i, k in enumerate(ks)}
+        lv = self.read_levels(n3, t, ks)
+        for n in n3:
+            out[n] = self._interp_columns(lambda k, a=lv[n]: a[at[k]], cw)
+        return out
+
+    def read_levels(self, names, t, ks, rows=None, cols=None, cancelled=None,
+                    points=False):
+        """{name: float32 (len(ks), nj, ni)}: model levels ks of several native 3D
+        fields at time t, as read_level gives them one at a time.  Levels not in the
+        cache are read in the reader processes, all the fields at once, into shared
+        memory (a level read here holds IO_LOCK while the readers idle); nothing enters
+        the 3D cache.  A few small levels are read here (a reader has to open the file),
+        unless the read is one made ahead of a loop over times (ahead()).
+        rows, cols: only those rows and columns ((len(ks), len(rows), len(cols))), or
+        with points only the columns (rows[n], cols[n]) ((len(ks), n)): what a request
+        too large for the 3D cache reads in place of volumes (Fields.box, .along).
+        Returns None once cancelled() is true; a cancelled reporting() block raises
+        Cancelled instead."""
+        names = list(dict.fromkeys(names))
+        ks = [int(k) for k in ks]
+        if rows is not None:
+            rows, cols = np.asarray(rows, np.intp), np.asarray(cols, np.intp)
+        on = getattr(_hook, "on", None)
+        hooked = cancelled is None and on is not None and on[1] is not None
+        if hooked:
+            cancelled = on[1]
+        out = self._read_levels(names, t, ks, rows, cols, cancelled, points)
+        if out is None and hooked:
+            raise Cancelled()
+        return out
+
+    def _read_levels(self, names, t, ks, rows, cols, cancelled, points=False):
+        def part(a):  # (of whole levels: the rows and columns asked for)
+            return a if rows is None else a[..., rows, cols] if points \
+                else a[..., rows[:, None], cols]
+
+        def take(vol):
+            if rows is None:
+                return vol[ks]
+            return vol[np.asarray(ks, np.intp)[:, None], rows, cols] if points \
+                else vol[np.ix_(ks, rows, cols)]
+
+        out, todo, whole = {}, [], []
+        for n in names:
+            vol = self.cached(n, t)
+            if vol is not None:
+                out[n] = take(vol)
+                continue
+            self._check(n, t)
+            # (a field whose level costs several: its volume, as read_level does)
+            (whole if self.vars[n].zchunk > 4 else todo).append(n)
+        if whole:
+            if not self.load_volumes(whole, t, cancelled=cancelled):
+                return None
+            for n in whole:
+                out[n] = take(self.volume(n, t))
+        if not todo or not ks:
+            for n in todo:
+                out[n] = part(np.zeros((0,) + self._vol_shape(n, t)[1:], np.float32))
+            return {n: out[n] for n in names}
+        self._not_writing(t)
+        reads = len(ks) * len(todo)
+        # (worth the readers: several levels of some size, or any read made ahead())
+        if self.workers > 1 and self._shm and (getattr(_hook, "ahead", False) or (
+                reads > 1 and 4 * reads * self.nj * self.ni >= BLOCK_BYTES)):
+            got = self._read_levels_pool(todo, t, ks, rows, cols, cancelled, points)
+            if got is None:
+                return None
+            out.update(got)
+        for n in todo:  # (read here: few or small, or no room in tmpfs)
+            if n in out:
+                continue
+            planes = []
+            for k in ks:
+                if cancelled and cancelled():
+                    return None
+                planes.append(part(self._level_here(n, t, k)))
+            out[n] = np.stack(planes)
+        return {n: out[n] for n in names}
+
+    def _read_levels_pool(self, names, t, ks, rows, cols, cancelled, points=False):
+        """read_levels' fields not cached, read in the reader processes: each field's
+        levels split into blocks shared by the readers and written into one shared
+        array per field.  {name: array} (without those that found no room in tmpfs),
+        or None if cancelled."""
+        from concurrent.futures import as_completed
+
+        src, pool = self.source(t), self._get_pool()
+        futs, vols = [], {}
+        try:
+            for n in names:
+                _, ny, nx = self._vol_shape(n, t)
+                shape = (len(ks), ny, nx) if rows is None else \
+                    (len(ks), len(rows)) + (() if points else (len(cols),))
+                try:
+                    vols[n] = _SharedVolume(self._shm, shape)
+                except OSError:
+                    continue
+                for p0, p1 in level_blocks((len(ks), ny, nx), 1, len(names), self.workers):
+                    futs.append(pool.submit(_read_levels_worker, src, n, self.vars[n].stag,
+                                            vols[n].path, p0, ks[p0:p1], rows, cols,
+                                            points))
+            pending = set(futs)
+            for fut in as_completed(futs):
+                pending.discard(fut)
+                fut.result()
+                if cancelled and pending and cancelled():
+                    return None
+            return {n: vols.pop(n).array() for n in list(vols)}
+        finally:
+            for f in futs:
+                f.cancel()  # (those running write into a removed file, then stop)
+            for v in vols.values():
+                v.discard()
+
+    def reduce_levels(self, name, t, op):
+        """(nj, ni) float32: the max or min (op) over every level of a native 3D field
+        (the volume's .max(axis=0) or .min), without its volume: the reader processes
+        each reduce a block of levels, one level in memory at a time.  For a field
+        whose volume does not fit the 3D cache (fits); a cached one is used as it is."""
+        f = np.maximum if op == "max" else np.minimum
+        vol = self.cached(name, t)
+        if vol is None:
+            self._check(name, t)
+            if self.vars[name].zchunk > 4:  # (a level costs several: its volume)
+                vol = self.volume(name, t)
+        if vol is not None:
+            return f.reduce(vol, axis=0)
+        self._not_writing(t)
+        nk, ny, nx = self._vol_shape(name, t)
+        sv = None
+        if self.workers > 1 and self._shm:
+            blocks = level_blocks((nk, ny, nx), 1, 1, self.workers)
+            try:
+                sv = _SharedVolume(self._shm, (len(blocks), ny, nx))
+            except OSError:  # (no room in tmpfs: read here)
+                sv = None
+        if sv is None:
+            out = None
+            for k in range(nk):
+                check_cancelled()
+                a = self._level_here(name, t, k)
+                out = a if out is None else f(out, a)
+            return out
+        src, pool, futs = self.source(t), self._get_pool(), []
+        try:
+            for row, (k0, k1) in enumerate(blocks):
+                futs.append(pool.submit(_reduce_block_worker, src, name,
+                                        self.vars[name].stag, sv.path, row, k0, k1, op))
+            for fut in futs:
+                fut.result()
+                check_cancelled()
+            return f.reduce(sv.array(), axis=0)
+        finally:
+            for fut in futs:
+                fut.cancel()
+            sv.discard()
+
+    def fits(self, nbytes):
+        """Whether volumes of nbytes together belong in the 3D cache: within 1 /
+        FIT_SHARE of its budget.  A larger request reads only the part of each field
+        it needs (read_levels with rows and columns, reduce_levels)."""
+        return nbytes <= self.cache_bytes // FIT_SHARE
+
     def read_box(self, name, t, i0, i1, j0, j1):
         """Columns [j0:j1, i0:i1] of a 3D field without populating the cache.  With
         one horizontal level per chunk this costs about as much as a full read, but
@@ -502,6 +986,19 @@ class Run:
                                            (i0, i1, j0, j1)).result()
         with IO_LOCK:
             return _box(self._ds(t)[name], info.stag, i0, i1, j0, j1)
+
+    def read_boxes(self, names, t, i0, i1, j0, j1):
+        """{name: columns} for several 3D fields at one time and box: the reads go to the
+        reader processes together (read_box one at a time would queue them one by one).
+        Goes through read_box, so a subclass's read_box is honoured."""
+        names = list(dict.fromkeys(names))
+        if self.workers <= 1 or len(names) < 2:
+            return {n: self.read_box(n, t, i0, i1, j0, j1) for n in names}
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(len(names)) as ex:  # (each just waits on its process)
+            futs = {n: ex.submit(self.read_box, n, t, i0, i1, j0, j1) for n in names}
+            return {n: f.result() for n, f in futs.items()}
 
     def _insert(self, name, t, vol, protect=()):
         self._vc.put((self.path, name, t), vol, {(self.path, n, t) for n in protect})
@@ -572,36 +1069,7 @@ class Run:
         if progress:
             progress(done, total, missing[0])
         if self.workers > 1 and self._shm:
-            futs = {
-                self._get_pool().submit(
-                    _read_volume_worker,
-                    self.source(t),
-                    n,
-                    self.vars[n].stag,
-                    self._shm,
-                ): n
-                for n in missing
-            }
-            from concurrent.futures import as_completed
-
-            pending = set(futs)
-            try:
-                for fut in as_completed(futs):
-                    pending.discard(fut)
-                    n = futs[fut]
-                    path = fut.result()
-                    try:
-                        self._insert(n, t, np.load(path), protect)
-                    finally:
-                        os.remove(path)
-                    done += 1
-                    if progress:
-                        progress(done, total, n)
-                    if cancelled and pending and cancelled():
-                        return False
-                return True
-            finally:
-                _drop_pending(pending)
+            return self._read_blocks(missing, t, protect, progress, cancelled)
         for n in missing:
             if cancelled and cancelled():
                 return False
@@ -613,13 +1081,71 @@ class Run:
                 progress(done, total, n)
         return True
 
-    def _get_pool(self):
-        if self._pool is None:
-            import multiprocessing as mp
+    def _vol_shape(self, name, t):
+        """(nk, nj, ni) of a 3D field on scalar points, from its variable's shape where
+        the reader gives one (else the grid's)."""
+        info = self.vars[name]
+        with IO_LOCK:
+            shp = getattr(self._ds(t)[name], "shape", None)
+        if shp is None or len(shp) != 4:
+            return self.nk, self.nj, self.ni
+        nk, nj, ni = (int(s) for s in shp[1:])
+        return nk - (info.stag == "z"), nj - (info.stag == "y"), ni - (info.stag == "x")
 
-            self._pool = ProcessPoolExecutor(max_workers=self.workers,
-                                             mp_context=mp.get_context("spawn"))
-        return self._pool
+    def _read_blocks(self, missing, t, protect, progress, cancelled):
+        """Read 3D fields in the reader processes, each split into level blocks shared
+        by all the readers and written straight into one shared array per field (no
+        copy back).  Fields complete (and enter the cache) in the order given."""
+        from concurrent.futures import as_completed
+
+        total, done = len(missing), 0
+        src, pool = self.source(t), self._get_pool()
+        futs, left, vols = {}, {}, {}
+        try:
+            for n in missing:
+                shape = self._vol_shape(n, t)
+                try:
+                    vols[n] = _SharedVolume(self._shm, shape)
+                except OSError:  # tmpfs full (or no fallocate): read it here instead
+                    continue
+                blocks = level_blocks(shape, self.vars[n].zchunk, len(missing),
+                                      self.workers)
+                left[n] = len(blocks)
+                for k0, k1 in blocks:
+                    futs[pool.submit(_read_block_worker, src, n, self.vars[n].stag,
+                                     vols[n].path, k0, k1)] = n
+            pending = set(futs)
+            for fut in as_completed(futs):
+                pending.discard(fut)
+                fut.result()
+                n = futs[fut]
+                left[n] -= 1
+                if left[n] == 0:
+                    self._insert(n, t, vols.pop(n).array(), protect)
+                    done += 1
+                    if progress:
+                        progress(done, total, n)
+                if cancelled and pending and cancelled():
+                    return False
+        finally:
+            for f in futs:
+                f.cancel()  # (those running write into a removed file, then stop)
+            for v in vols.values():
+                v.discard()
+        for n in missing:  # (those that found no room in tmpfs)
+            if self.cached(n, t) is None and n not in left:
+                if cancelled and cancelled():
+                    return False
+                self._insert(n, t, self._read_volume_local(n, t), protect)
+                done += 1
+                if progress:
+                    progress(done, total, n)
+        return True
+
+    def _get_pool(self):
+        """The reader processes: one pool for every run (core.pool)."""
+        self._pool_uses += 1
+        return pool.get(self.workers)
 
     def mean_profiles(self, names, t, progress=None):
         """Domain-mean profiles {name: (nk,)} at time t.  Uses cached volumes when
@@ -640,13 +1166,23 @@ class Run:
         if self.workers > 1 and todo:
             from concurrent.futures import as_completed
 
-            futs = {self._get_pool().submit(_mean_profile_worker, self.source(t), n,
-                                            self.vars[n].stag): n for n in todo}
-            for done, fut in enumerate(as_completed(futs), 1):
-                n = futs[fut]
-                out[n] = self._means[(n, t)] = fut.result()
-                if progress:
-                    progress(done, total, n)
+            src, pool = self.source(t), self._get_pool()
+            futs, parts = {}, {n: {} for n in todo}
+            for n in todo:  # (level blocks: a reader holds a few levels, not a field)
+                for k0, k1 in level_blocks(self._vol_shape(n, t), self.vars[n].zchunk,
+                                           len(todo), self.workers):
+                    futs[pool.submit(_mean_profile_worker, src, n, self.vars[n].stag,
+                                     k0, k1)] = (n, k0)
+            done = 0
+            for fut in as_completed(futs):
+                n, k0 = futs[fut]
+                parts[n][k0] = fut.result()
+                if len(parts[n]) == sum(1 for m, _ in futs.values() if m == n):
+                    out[n] = self._means[(n, t)] = np.concatenate(
+                        [parts[n][k] for k in sorted(parts[n])])
+                    done += 1
+                    if progress:
+                        progress(done, total, n)
         else:
             for done, n in enumerate(todo, 1):
                 out[n] = self._means[(n, t)] = \
@@ -675,6 +1211,35 @@ class Run:
         i = int(np.clip(np.rint((x - self.xh[0]) * 1000.0 / self.dx), 0, self.ni - 1))
         j = int(np.clip(np.rint((y - self.yh[0]) * 1000.0 / self.dy), 0, self.nj - 1))
         return i, j
+
+SCAN_POOL = 24  # files from which the first scan of a run goes to the reader processes
+
+
+def _scan_worker(files):
+    """[(time s, names of the (time, ...) 2D/3D fields)] of CM1 output files."""
+    out = []
+    for f in files:
+        with netCDF4.Dataset(f) as d:
+            out.append((float(d["time"][0]),
+                        sorted(n for n, v in d.variables.items()
+                               if v.dimensions[:1] == ("time",) and v.ndim in (3, 4))))
+    return out
+
+
+def scan_files(files, workers=1):
+    """(times, field names) of CM1 output files, one entry a file: each is opened once,
+    shared out over the reader processes when there are many (a run of hundreds of
+    files opens in a fraction of the time)."""
+    files = list(files)
+    if workers > 1 and len(files) >= SCAN_POOL:
+        step = max(4, -(-len(files) // (4 * workers)))
+        parts = [files[i:i + step] for i in range(0, len(files), step)]
+        got = [r for part in pool.get(workers).map(_scan_worker, parts) for r in part]
+    else:
+        with IO_LOCK:  # (netCDF/HDF5 is not thread safe)
+            got = _scan_worker(files)
+    return [g[0] for g in got], [g[1] for g in got]
+
 
 class CM1Run(Run):
     """A folder of CM1 netCDF output (one time per file, names by output_glob)."""
@@ -740,12 +1305,7 @@ class CM1Run(Run):
             return np.array(c["times"], dtype=np.float64), [set(n) for n in c["vars"]]
         except (OSError, ValueError, KeyError):
             pass
-        times, names = [], []
-        for f in self.files:
-            with IO_LOCK, netCDF4.Dataset(f) as d:  # (netCDF/HDF5 is not thread safe)
-                times.append(float(d["time"][0]))
-                names.append(sorted(n for n, v in d.variables.items()
-                                    if v.dimensions[:1] == ("time",) and v.ndim in (3, 4)))
+        times, names = scan_files(self.files, self.workers)
         try:
             os.makedirs(cdir, exist_ok=True)
             with open(cfile, "w") as f:
@@ -762,6 +1322,7 @@ class CM1Run(Run):
             d = self._open.pop(t, None)
             if d is not None:
                 d.close()
+        pool.release()  # (the reader processes keep the files they last read open)
 
     def end_write(self, t, names=()):
         """File t is readable again; `names` were written into it."""

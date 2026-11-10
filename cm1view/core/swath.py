@@ -19,7 +19,7 @@ import os
 
 import numpy as np
 
-from .run import FileBusy, MissingAtTime, temp_name
+from .run import FileBusy, MissingAtTime, ahead, ahead_width, temp_name
 
 OPS = ("max", "min", "mean", "sum", "composite")
 CACHE_DIR = None  # None: <cache_dir setting>/swath (tests point this elsewhere)
@@ -121,13 +121,22 @@ def reduce(run, F, lay, tp, centers=None, storm=None, progress=None):
         pass
     acc = cnt = None
     n = 0
-    for k, (t, (di, dj)) in enumerate(sorted(sh.items())):
+    mode = lay.get("mode", "height")
+
+    def plane(item):  # (an output's plane, or None for one that cannot be read)
+        try:
+            return F.plane(lay["field"], item[0], mode, float(lay.get("z", 0)),
+                           storm=storm.get(item[0]) if storm else None)
+        except (MissingAtTime, FileBusy):
+            return None
+
+    # the outputs' planes are read several at once, and added up in their order
+    cost = getattr(F, "read_bytes", None)
+    width = ahead_width(run, cost(lay["field"], mode) if cost else 0)
+    for k, ((t, (di, dj)), a) in enumerate(ahead(plane, sorted(sh.items()), width)):
         if progress:
             progress(k, len(sh))
-        try:
-            a = F.plane(lay["field"], t, lay.get("mode", "height"), float(lay.get("z", 0)),
-                        storm=storm.get(t) if storm else None)
-        except (MissingAtTime, FileBusy):
+        if a is None:
             continue
         b = shifted(np.asarray(a, dtype=np.float32), di, dj)
         if acc is None:

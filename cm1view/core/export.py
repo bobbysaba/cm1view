@@ -129,11 +129,16 @@ def _values(F, name, t, p, storm):
     if d.ndim != 3:
         return F.plane(name, t, storm=storm)[j0:j1, i0:i1]
     if p["heights"] is None:  # (model levels: the volume, as cross-sections use it)
-        return F.volume(name, t, storm)[p["ks"], j0:j1, i0:i1]
+        ks = np.arange(F.run.nk)[p["ks"]]  # (the box only, if the volume is too large)
+        lo = int(ks.min()) if ks.size else 0
+        return F.crop(name, t, lo, int(ks.max()) + 1 if ks.size else 0, j0, j1, i0, i1,
+                      storm)[ks - lo]
     # heights: the map's plane at each (same values as the map shows)
     op, base = split_deriv(name)
     natives = F[base].natives if F[base].derived else (base,)
-    F.run.load_volumes([n for n in natives if n in F.run.vars and F.run.vars[n].ndim == 3], t)
+    if F.fits([name], t):  # (else each plane reads its own levels)
+        F.run.load_volumes([n for n in natives
+                            if n in F.run.vars and F.run.vars[n].ndim == 3], t)
     return np.stack([F.plane(name, t, "height", h, storm)[j0:j1, i0:i1]
                      for h in p["heights"]])
 

@@ -11,9 +11,10 @@ from functools import partial
 
 import panel as pn
 
-from .. import config
+from ..core import pool
 from . import draw as figdraw, spec as fg
-from .batch import MAX_FRAMES, anim_frame, auto_ends, frame_image
+from .batch import (MAX_FRAMES, anim_frame, auto_ends, frame_image, frame_pixels,
+                    has_scene, pixels_image)
 from .cards import _chk, _f
 
 END = "End of run"
@@ -154,6 +155,16 @@ class FigureAnimation:
     def _anim_frame(spec, offsets, j, opts):
         return anim_frame(spec, offsets, j, opts["dpi"])
 
+    def _anim_pool(self, spec, n):
+        """(the reader processes, how many frames they draw at once) for `n` frames
+        (core.pool: the pool every run reads with, most of it; (None, 1): draw in this
+        process, for a 3D scene or a few frames)."""
+        workers = self.v.run.workers
+        nw = min(pool.width(workers), n, 8)
+        if nw < 2 or has_scene(spec):
+            return None, 1
+        return pool.get(workers), nw
+
     def _stop_anim(self):
         self._anim_gen += 1
         self.an_stop.disabled = True
@@ -196,21 +207,34 @@ class FigureAnimation:
             name = os.path.basename(base)
             if opts["frames"]:
                 os.makedirs(fdir, exist_ok=True)
-            for j in range(len(images), len(offsets)):
+            ex, width = self._anim_pool(spec, len(offsets) - len(images))
+            todo = list(range(len(images), len(offsets)))
+            while todo:
                 if g != self._anim_gen:
-                    done(f"Stopped after {j} of {len(offsets)} frames; nothing saved.")
+                    done(f"Stopped after {len(images)} of {len(offsets)} frames; "
+                         "nothing saved.")
                     return
+                chunk, todo = todo[:width], todo[width:]
                 self.v._schedule(partial(
-                    self._anim_msg, f'<span class="busy">● Drawing frame {j + 1}/'
-                                    f'{len(offsets)}…</span>'))
-                s = self._anim_frame(spec, offsets, j, opts)
-                data = self.panel_data(s)
-                missing += any(d.get("missing") for d in data.values())
-                im = frame_image(s, data, ends, opts["dpi"])
-                if opts["frames"]:
-                    im.save(os.path.join(fdir, f"{name}_{j:03d}.png"))
-                images.append(im)
-                if self._preview_waiting and len(images) < len(offsets):
+                    self._anim_msg, f'<span class="busy">● Drawing frame {chunk[0] + 1}'
+                                    f'–{chunk[-1] + 1}/{len(offsets)}…</span>'
+                    if len(chunk) > 1 else f'<span class="busy">● Drawing frame '
+                                           f'{chunk[0] + 1}/{len(offsets)}…</span>'))
+                jobs = []  # (frame spec, its data, the future drawing it)
+                for j in chunk:  # (reads in this thread; drawing overlaps in the pool)
+                    s = self._anim_frame(spec, offsets, j, opts)
+                    data = self.panel_data(s)
+                    missing += any(d.get("missing") for d in data.values())
+                    fut = None if ex is None else ex.submit(
+                        frame_pixels, s, data, ends, opts["dpi"])
+                    jobs.append((s, data, fut))
+                for j, (s, data, fut) in zip(chunk, jobs):
+                    im = frame_image(s, data, ends, opts["dpi"]) if fut is None \
+                        else pixels_image(fut.result())
+                    if opts["frames"]:
+                        im.save(os.path.join(fdir, f"{name}_{j:03d}.png"))
+                    images.append(im)
+                if self._preview_waiting and todo:
                     self.v.pools["fig"].submit(self._anim_job, g, spec, offsets, base,
                                                opts, images, missing, ends, len(offsets))
                     return

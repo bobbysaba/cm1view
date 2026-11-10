@@ -479,7 +479,6 @@ class Widgets:
         self.ps_reset = pn.widgets.Button(name="Default style", button_type="light",
                                           button_style="outline", height=32,
                                           margin=(5, 4, 8, 10))
-        self.snd_lim = {}  # zoom: skew, hodo, prof_z, prof_x (see _on_zoom_box)
 
         self.status = _html()
         # pressure decomposition for the shown time (map caption / cross-section tab)

@@ -127,7 +127,6 @@ def test_session_soundings_section_and_3d(viewer, reg):
     v._pin_time()
     v.parcel.value = "mu"
     v.ps["tmin"].value = -30.0
-    v.snd_lim["prof_x"] = {0: (1.0, 2.0)}
     v.xs_pts = [(10.0, 10.0), (40.0, 35.0)]
     v._draw_xs()
     v.xs_fill.value = "thpert"
@@ -140,7 +139,6 @@ def test_session_soundings_section_and_3d(viewer, reg):
     v._add_sv()
     v.st_on.value = True
     s1 = v.session_state()
-    assert s1["soundings"]["zoom"]["prof_x"] == {"0": [1.0, 2.0]}  # (JSON keys)
     s1 = json.loads(json.dumps(s1))  # (as from a file)
 
     v2 = _fresh(reg)
@@ -150,11 +148,10 @@ def test_session_soundings_section_and_3d(viewer, reg):
         for k in PARTS[:3]:
             assert s2[k] == s1[k], k
         assert v2.points[2][2] == v.t and len(v2.points[1][1]) == 4
-        assert v2.snd_lim["prof_x"] == {0: (1.0, 2.0)}
         assert len(v2.xs_ovs) == len(v.xs_ovs) and v2.xs_smin.value == 5.0
         assert v2.box == v.box and v2.seed_box == v.seed_box
         assert [e[0] for e in v2._item_entries()].count("snd") == 3
-        wait(lambda: v2.snd_tabs.visible or v2.skew_png.visible, msg="soundings drawn")
+        wait(lambda: v2.snd_tabs.visible or v2.skew_view.panel.visible, msg="soundings drawn")
         wait(lambda: "A (10.0, 10.0)" in (v2.xs_status.object or ""), msg="section drawn")
         assert v2.gen["3d"] == 0  # (on the Map workspace: not rendered)
     finally:

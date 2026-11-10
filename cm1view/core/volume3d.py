@@ -416,8 +416,9 @@ def build_scene(run, F, scene, progress=None, cancelled=None, cache=None):
     meshes, notes = [], []
     for iso in scene["isos"]:
         d = F[iso["var"]]
-        m = isosurface(run, F.volume(iso["var"], t, scene["fstorm"][0]), box, iso["val"],
-                       stride, scene["smooth"], ztop, H)
+        vol, sc = F.raw(iso["var"], t, scene["fstorm"][0])  # (a g/kg field: as read)
+        m = isosurface(run, vol, box, iso["val"] / float(sc), stride, scene["smooth"],
+                       ztop, H)
         name = f'{d.label} = {iso["val"]:g} {d.units}'
         if d.storm:
             name += f' ({scene["fstorm"][1]})'

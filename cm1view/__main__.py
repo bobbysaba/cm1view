@@ -5,7 +5,9 @@
     cm1view export RUN --fields A,B [options]         writes fields to netCDF without the
                                                       viewer (cm1view export -h)
     cm1view export RUN --parcels SET [options]        writes a saved parcel set's
-                                                      trajectories to netCDF or CSV"""
+                                                      trajectories to netCDF or CSV
+    cm1view bench RUN [options]                       times the viewer's updates without
+                                                      a browser (cm1view bench -h)"""
 
 import argparse
 import os
@@ -22,6 +24,9 @@ def main(argv=None):
     if argv[:1] == ["export"]:  # (likewise: ./export)
         from .core.export import main as export
         return export(argv[1:])
+    if argv[:1] == ["bench"]:  # (likewise: ./bench)
+        from .bench import main as bench
+        return bench(argv[1:])
     ap = argparse.ArgumentParser(prog="cm1view", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run", nargs="?", default=None,
@@ -52,6 +57,10 @@ def main(argv=None):
                          "to the cache folder)")
     ap.add_argument("--address", default="127.0.0.1",
                     help="bind address (127.0.0.1 is right for JupyterHub and SSH tunnels)")
+    ap.add_argument("--timing", nargs="?", const="auto", default=None, metavar="FILE",
+                    help="log how long each map, sounding, cross-section and 3D update "
+                         "takes, browser included, to FILE (default: timing-DATE.jsonl in "
+                         "the cache folder); summary: cm1view bench --report FILE")
     args = ap.parse_args(argv)
 
     from . import config
@@ -86,6 +95,9 @@ def main(argv=None):
     if start:
         start = config.expand(start)
     t0 = time.time()
+    from .core import pool
+    from .core.run import MAX_READERS
+    pool.warm(min(workers, MAX_READERS))  # (the readers start while the run is opened)
     reg = Registry(start, cache, workers, model=args.model)
     if start:
         try:
@@ -107,6 +119,15 @@ def main(argv=None):
         print(f"cm1view: first run: the browser asks for your settings "
               f"({config.config_path()})", flush=True)
 
+    if args.timing:
+        from .viewer import timing
+        path = args.timing
+        if path == "auto":
+            path = config.cache_dir("timing", time.strftime("timing-%Y%m%d-%H%M%S.jsonl"))
+        path = timing.start(path, reg.get()[0] if start and reg.default else None)
+        print(f"cm1view: timing every update into {path}\n"
+              f"         (keep the tab in front; summary: cm1view bench --report {path})",
+              flush=True)
     port = _free_port(config.get("port"), args.address)
     host, user = socket.getfqdn(), os.environ.get("USER", "you")
     print("\nOpen the viewer:", flush=True)

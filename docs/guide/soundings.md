@@ -157,25 +157,25 @@ and storm-relative winds at each time.
 
 ## Zooming into a graphic
 
-Click the skew-T/hodograph or the profile panels to expand the panel; the sounding
-controls stay available. In the expanded view:
+The **skew-T, hodograph and profile panels** are all drawn in the browser, so zooming and
+hovering need no redraw. Each has a toolbar (it shows when the pointer is over the
+graphic) with pan, box zoom, wheel zoom, reset and save (PNG). The box zoom on the
+hodograph keeps u and v at the same scale. The barbs, the LCL/LFC/EL marks and the height
+labels keep their size at any zoom.
 
-- **Drag a box** on the skew-T, the hodograph or a profile panel to zoom that panel. The
-  figure is redrawn with that panel's new axis limits (temperature and pressure, u and v,
-  or value and height), so axes, labels and line widths stay intact, a zoomed skew-T fills
-  its panel, and the barbs and labels follow the zoom.
-- After a zoom, dragging **pans** instead (the picture follows the pointer).
-  <kbd>Shift</kbd>-drag does the other mode, and the ✥ / ⬚ button switches between pan
-  and box zoom.
-- **−** widens the view by 60%; **double-click** or **⟲** returns to the full view;
-  **⤓** saves the image as SVG.
-- The zoom is kept while the sounding updates (stepping in time, for example). Switching
-  m/s ↔ kt or the profile top resets the panels it affects.
-- **Hovering** reads values off the graphics into a strip under each image. On the
-  skew-T it gives the pressure and temperature under the pointer and, for each sounding,
-  the height, T, Td, parcel T, RH, θ, θe, qv and wind at that pressure. On the hodograph it
-  gives the level nearest the pointer (height and wind). On the profile panels it gives
-  every quantity at the pointer's height. A dashed line or dot marks the position read.
+- **Skew-T:** hovering over a temperature line shows the pressure, height, T, Td, parcel
+  T, RH, θ, θe and qv at that level.
+- **Hodograph:** hovering shows the nearest level's height and wind.
+- **Profile panels:** they share one height axis, so zooming or panning one moves all five;
+  the value axes are separate. Hovering reads the panel's quantity of every sounding at the
+  pointer's height.
+
+The zoom is kept while the soundings update (stepping in time, for example). Switching
+m/s ↔ kt refits the hodograph and the profile panels, and so does changing the profile
+top. The reset button goes back to the fitted view. Use the expand button in the panel's
+title bar to give the graphics the whole window; the sounding controls stay available.
+
+The Figure workspace draws soundings with matplotlib, for SVG and publication output.
 
 ## Plot style
 
