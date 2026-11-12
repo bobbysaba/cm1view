@@ -132,7 +132,17 @@ def for_run(run, fields=None):
     with _lock:
         pf = _open.get(run.path)
         if pf is None or pf.sig != sig:
-            pf = _open[run.path] = trajcalc.Traced(run, sig) if traced else ParcelFile(files)
+            if traced:
+                pf = trajcalc.Traced(run, sig)
+            else:
+                try:
+                    pf = ParcelFile(files)
+                except OSError as e:  # (a run still going: the model is writing them)
+                    import warnings
+                    warnings.warn(f"parcel output not opened now ({e}); reload the run "
+                                  f"to try again")
+                    return None
+            _open[run.path] = pf
         if fields is not None:
             pf.attach(fields)
         elif pf._run is not run:

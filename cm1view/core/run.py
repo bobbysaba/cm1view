@@ -18,6 +18,7 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -603,6 +604,8 @@ class Run:
         # (name, t) -> float32 (nk, nj, ni); never evicted by the cache
         self.extra = OrderedDict()
         self._writing = set()  # times whose file is being written: no reads meanwhile
+        # output files left out because the model is still writing them (newest last)
+        self.busy = []
 
         # full 3D volumes (float32, nk x nj x ni), possibly shared with other runs
         self._vc = cache if cache is not None else VolumeCache(cache_gb)
@@ -1264,6 +1267,67 @@ def scan_files(files, workers=1):
     return [g[0] for g in got], [g[1] for g in got]
 
 
+def settle_seconds():
+    """Seconds an output file must have gone unchanged to count as finished
+    (config settle_seconds)."""
+    from .. import config
+    try:
+        return max(0, int(config.get("settle_seconds")))
+    except (TypeError, ValueError):
+        return 60
+
+
+def readable(path):
+    """Does this netCDF file open, with its time record written?  (A file another
+    process is writing may be locked, or not have its header or first record yet.)"""
+    try:
+        with IO_LOCK, netCDF4.Dataset(path) as d:
+            tdim = d.dimensions.get("time") or d.dimensions.get("Time")
+            return tdim is None or len(tdim) > 0
+    except (OSError, RuntimeError, KeyError, ValueError):
+        return False
+
+
+def in_progress(path, settle=None, now=None):
+    """Might this output file still be being written: changed within `settle` seconds
+    (default settle_seconds()), or not (yet) readable?"""
+    settle = settle_seconds() if settle is None else settle
+    try:
+        age = (time.time() if now is None else now) - os.path.getmtime(path)
+    except OSError:
+        return True
+    if abs(age) < settle:  # (abs: a clock a little ahead of this one)
+        return True
+    return not readable(path)
+
+
+def finished(files, run_path=None):
+    """How many of `files` (in output order) are finished: a running model writes only
+    its newest output, so files are dropped from the end while in_progress.  A file
+    that will not open further back is left for the reader to report.  run_path: the
+    run's folder (cm1view's demo runs are written whole: all finished)."""
+    if run_path is not None:
+        from .. import demo
+        if demo.is_demo(run_path):
+            return len(files)
+    settle, now = settle_seconds(), time.time()
+    n = len(files)
+    while n and in_progress(files[n - 1], settle, now):
+        n -= 1
+    return n
+
+
+def busy_note(busy):
+    """A line about output files left out because they are still being written."""
+    if not busy:
+        return ""
+    names = ", ".join(os.path.basename(f) for f in busy[:3]) + (" ..." if len(busy) > 3
+                                                                else "")
+    return (f"{len(busy)} file{'s' if len(busy) > 1 else ''} still being written, not "
+            f"loaded ({names}): Reload run picks {'them' if len(busy) > 1 else 'it'} up "
+            f"once finished")
+
+
 class CM1Run(Run):
     """A folder of CM1 netCDF output (one time per file, names by output_glob)."""
 
@@ -1277,6 +1341,14 @@ class CM1Run(Run):
         self.files = sorted(glob.glob(os.path.join(self.path, pat)))
         if not self.files:
             raise FileNotFoundError(f"no {pat} files found in {self.path}")
+        # a run still going: its newest file is being written (left out until finished)
+        n = finished(self.files, self.path)
+        self.files, self.busy = self.files[:n], self.files[n:]
+        if not self.files:
+            raise FileNotFoundError(
+                f"the only {pat} file{'s' if len(self.busy) > 1 else ''} in {self.path} "
+                f"{'are' if len(self.busy) > 1 else 'is'} still being written; open the "
+                f"run again once one is finished")
 
         with IO_LOCK, netCDF4.Dataset(self.files[0]) as d:
             self.xh = np.asarray(d["xh"][:], dtype=np.float64)  # km

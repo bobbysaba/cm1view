@@ -3,6 +3,7 @@ options) and the run picker.
 
 A mixin of the Viewer (cm1view/viewer/app.py): its methods use the Viewer's widgets and state."""
 
+import html
 import json
 import os
 
@@ -11,6 +12,7 @@ import panel as pn
 
 from .. import config, pdecomp
 from ..core import models, parcels, sounding_plot as sp, track as trk, vectors
+from ..core.run import busy_note
 from ..core.fields import CMAPS, deriv_options
 from .numinput import FloatInput
 from .picker import RunPicker
@@ -529,15 +531,41 @@ class Widgets:
         s["track"] = dict(member=True, storm=self.trk_storm.value, load=bool(self.fixes))
         if self.swap_run(e.new, s):
             return
-        path = config.cache_dir("switch", config.run_key(e.new) + ".json")
+        self._open_with_view(e.new, s)
+
+    def _open_with_view(self, path, s):
+        """Reopen the page on run `path`, putting back the view `s` (a session written
+        to the cache, opened with ?session=)."""
+        fn = config.cache_dir("switch", config.run_key(path) + ".json")
         try:
-            os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
-            with open(path, "w") as f:
+            os.makedirs(os.path.dirname(fn), mode=0o755, exist_ok=True)
+            with open(fn, "w") as f:
                 json.dump(s, f, indent=1)
         except OSError:  # (no view kept: just open it)
-            self.picker.go.value = json.dumps([e.new, self.run.model])
+            self.picker.go.value = json.dumps([path, self.run.model])
             return
-        self.ses_go.value = path
+        self.ses_go.value = fn
+
+    def _reload_run(self, e=None):
+        """Open the run again for the output written since it opened (a run still
+        going), keeping the view: in place when nothing changed, else the page reopens
+        on it."""
+        if self.reg is None:
+            return
+        old = self.run
+        s = self.session_state()
+        try:
+            run, _ = self.reg.reopen(old.path)
+        except Exception as ex:  # noqa: BLE001
+            self._set_status(f"Reload failed: {html.escape(str(ex))}")
+            return
+        added = len(run.times) - len(old.times)
+        if added <= 0 and self.swap_run(run.path, s):
+            self._set_status("No new output since the run opened"
+                             + (f" ({html.escape(busy_note(run.busy))})" if run.busy else ""))
+            return
+        self._set_status(f"{added} new time{'s' if added != 1 else ''}: reopening")
+        self._open_with_view(run.path, s)
 
     def _run_info_html(self):
         """The run picker's "This run" box."""
@@ -550,6 +578,8 @@ class Widgets:
                 f'Δx {run.dx:.0f} m · {len(run.times)} times · domain motion '
                 f'({run.umove:g}, {run.vmove:g}) m/s'
                 + (f'<br><span style="opacity:0.8">{run.note}</span>' if run.note else '')
+                + (f'<br><span style="color:#f59e0b">{html.escape(busy_note(run.busy))}'
+                   f'</span>' if run.busy else '')
                 + '</div>')
 
     def _build_run_picker(self):
@@ -569,6 +599,12 @@ class Widgets:
         p = self.picker
         self.rp_modal = p.modal
         self.run_btn.on_click(lambda e: p.show())
+        self.reload_btn = pn.widgets.Button(
+            name="", icon="refresh", button_type="light", button_style="outline",
+            width=40, height=32, margin=(4, 2), visible=self.reg is not None,
+            description="Reload run: add the output written since it opened (a run "
+                        "still going); the view is kept")
+        self.reload_btn.on_click(self._reload_run)
         # a run read as several (WoFS: its members and their mean): which one
         parts = models.siblings(run.path)
         if run.path not in parts:

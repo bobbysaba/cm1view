@@ -131,3 +131,18 @@ class Registry:
                 self._runs[path] = (run, Fields(run))
             remember(path)
             return self._runs[path]
+
+    def reopen(self, path):
+        """(Run, Fields) of `path` opened again: a run still going gains the output
+        finished since.  Cached volumes stay (keyed by path and time index, and the
+        times loaded before were finished files: new ones only add at the end)."""
+        path = models.canonical(os.path.abspath(path), chosen(path))
+        with self._lock:
+            old = self._runs.pop(path, None)
+        try:
+            return self.get(path)
+        except Exception:
+            if old is not None:  # (put back what was open: the page keeps showing it)
+                with self._lock:
+                    self._runs.setdefault(path, old)
+            raise

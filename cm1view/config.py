@@ -78,6 +78,11 @@ KEYS = [
         "Which ensemble member a WoFS run opens on: a member number, or mean for the "
         "ensemble mean (slower: reads every member's file). A member the run lacks: "
         "its first. Switch members in the viewer's Member box."),
+    Key("settle_seconds", "data", 60, "Seconds before a new output file is read",
+        "A run still going is opened without the output file being written: the newest "
+        "file is left out while it was changed within this many seconds or will not "
+        "open yet. Reload run (the button by the run's name) adds files finished since. "
+        "0: only files that will not open are left out.", kind="int", advanced=True),
     Key("allow_writes_to_output", "data", False, "Allow writing into output files",
         "Lets the pressure decomposition write its fields into the CM1 output files. "
         "Off: results stay in memory.", kind="bool"),

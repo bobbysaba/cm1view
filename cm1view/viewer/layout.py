@@ -318,7 +318,7 @@ class Layout:
         times.styles = dict(times.styles, flex="1 1 420px", **{"min-width": "0"})
         return pn.Column(
             _bar(self.ws_group,
-                 _group(self.run_btn, self.part_sel, self.ses_btn, self.exp_btn, self.gear_btn),
+                 _group(self.run_btn, self.reload_btn, self.part_sel, self.ses_btn, self.exp_btn, self.gear_btn),
                  _group(self.storm_btn), times),
             styles=dict(BAR, **{"z-index": "40"}), margin=0, sizing_mode="stretch_width")
 

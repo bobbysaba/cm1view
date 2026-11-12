@@ -33,6 +33,9 @@ def pytest_configure(config):
     os.environ["CM1VIEW_CONFIG"] = os.path.join(cfg, "config.toml")
     os.environ["CM1VIEW_CACHE_DIR"] = os.path.join(cfg, "cache")
     os.environ["CM1VIEW_ALLOW_WRITES_TO_OUTPUT"] = "1"
+    # runs written by tests are opened at once: no file counts as still being written
+    # for being new (test_running.py sets its own)
+    os.environ["CM1VIEW_SETTLE_SECONDS"] = "0"
 
 
 @pytest.fixture(scope="session")

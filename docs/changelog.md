@@ -3,6 +3,19 @@
 What changed in each release, newest first. The version is in `pyproject.toml`; a release
 has a matching git tag.
 
+## Unreleased
+
+### Runs still going
+- A run the model is still writing opens with its finished output: the newest file is left
+  out while it changed in the last `settle_seconds` (60) or will not open yet (locked by
+  the writer, or half written). For WoFS the newest cycle waits until that member's file is
+  done; the ensemble mean waits until every member's file of the cycle is done. The run
+  picker's "This run" box names the files left out.
+- **Reload run** (⟳ by the run's name) opens the run again with the output finished since,
+  keeping the view (in place when nothing is new, else the page reopens on the same view).
+- Parcel output that will not open (being written) no longer stops the run from opening:
+  the run opens without parcels until a reload.
+
 ## 0.6.0 (2026-11-10)
 
 WoFS and WRF ensemble output (members, the ensemble mean, terrain, map boundaries, several

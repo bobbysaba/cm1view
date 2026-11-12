@@ -32,6 +32,7 @@ the domain-mean height above ground of the levels at the first time."""
 import datetime
 import os
 import re
+import time
 from collections import OrderedDict
 
 import netCDF4
@@ -39,7 +40,7 @@ import numpy as np
 
 from . import geo
 from .run import (IO_LOCK, Run, VarInfo, _drop_pending, _read_volume_worker,
-                  check_cancelled, report)
+                  check_cancelled, finished, in_progress, report, settle_seconds)
 
 G = 9.81  # m/s^2, as WRF
 
@@ -532,7 +533,13 @@ class WoFSRun(Run):
         found = member_files(self.root, self.member)
         if not found:
             raise FileNotFoundError(f"no wrfout_d01_*_{self.member} files under {self.root}")
-        return found
+        # a run still going: the newest cycle's file may be being written (left out)
+        n = finished([f for _, f in found], self.path)
+        self.busy = [f for _, f in found[n:]]
+        if not n:
+            raise FileNotFoundError(f"the wrfout_d01_*_{self.member} files under "
+                                    f"{self.root} are all still being written")
+        return found[:n]
 
     def terrain_height(self):
         return self._hgt
@@ -562,6 +569,26 @@ MEAN_NOTE = ("Ensemble mean of {n} members. Fields in the files (winds, potentia
              "are the member mean at each time; fields cm1view computes (CAPE, updraft "
              "helicity, vorticity, ...) are computed from that mean state. Base state: "
              "the mean at the first time. Trajectories follow the mean winds.")
+
+
+def _is_demo(path):
+    from .. import demo
+    return demo.is_demo(path)
+
+
+def _drop_busy(found):
+    """mean_files() without the newest cycles where some member's file is still being
+    written (a mean of only the members done would change as the rest finish):
+    ([(valid time, {member: file})], [files being written])."""
+    settle, now = settle_seconds(), time.time()
+    n, busy = len(found), []
+    while n:
+        late = sorted(f for f in found[n - 1][1].values() if in_progress(f, settle, now))
+        if not late:
+            break
+        busy[:0] = late
+        n -= 1
+    return found[:n], busy
 
 
 class WoFSMeanRun(WoFSRun):
@@ -603,6 +630,11 @@ class WoFSMeanRun(WoFSRun):
         found = mean_files(root)
         if not found:
             raise FileNotFoundError(f"no wrfout_d01_* member files under {root}")
+        if not _is_demo(root):
+            found, self.busy = _drop_busy(found)
+        if not found:
+            raise FileNotFoundError(f"the wrfout_d01_* member files under {root} are all "
+                                    f"still being written")
         first = {}
         for _, fs in found:
             for m, f in fs.items():
